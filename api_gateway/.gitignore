@@ -1,0 +1,7 @@
+build
+lambda/**/go.mod
+lambda/**/go.sum
+e2e_tests/go.mod
+e2e_tests/go.sum
+api-debug.log
+

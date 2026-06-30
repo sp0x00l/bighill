@@ -1,0 +1,141 @@
+services:
+  nessie-data-source:
+    image: projectnessie/nessie:latest
+    deploy:
+      labels:
+        - bighill:"data"
+    restart: always
+    container_name: nessie-data-source
+    networks:
+      data-network:
+    ports:
+      - 19120:19120
+
+  minio-data-source:
+    image: minio/minio:latest
+    deploy:
+      labels:
+        - bighill:"data"
+    restart: always
+    container_name: minio-data-source
+    networks:
+      data-network:
+    ports:
+      - 9001:9001
+      - 9000:9000
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+      - MINIO_DOMAIN=storage
+      - MINIO_REGION_NAME=us-east-1
+      - MINIO_REGION=us-east-1
+    command: ["server", "/data", "--console-address", ":9001"]
+
+  mongodb-data-source:
+    build:
+      context: ./scripts/docker/data_infra
+      dockerfile: mongodb.Dockerfile  
+    image: mongodb-data-source
+    restart: always
+    container_name: mongodb-data-source
+    networks:
+      data-network:
+    ports:
+      - 27017:27017
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - mongo-vol:/opt/bighill/data/mysql
+      - ./scripts/docker/data_infra/initdb/mongo:/docker-entrypoint-initdb.d:ro
+
+  postgres-data-source:
+    build:
+      context: ./scripts/docker/data_infra
+      dockerfile: postgres.Dockerfile  
+    image: postgres-data-source
+    restart: always
+    container_name: postgres-data-source
+    networks:
+      data-network:
+    ports:
+      - 5435:5432
+    environment:
+      POSTGRES_DB: pagila
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mypassword
+    volumes:
+      - postgres-vol:/opt/bighill/data/mysql
+      - ./scripts/docker/data_infra/initdb/postgres:/docker-entrypoint-initdb.d:ro
+
+  mysql-data-source:
+    build:
+      context: ./scripts/docker/data_infra
+      dockerfile: mysql.Dockerfile  
+    image: mysql-data-source
+    container_name: mysql-data-source
+    restart: always
+    networks:
+      data-network:
+    ports:
+      - 3306:3306
+    environment:
+      MYSQL_DATABASE: sakila
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+      MYSQL_ROOT_PASSWORD: password
+    volumes:
+      - mysql-vol:/opt/bighill/data/mysql
+      - ./scripts/docker/data_infra/initdb/mysql:/docker-entrypoint-initdb.d:ro
+
+  clickhouse-data-source:
+    build:
+      context: ./scripts/docker/data_infra
+      dockerfile: clickhouse.Dockerfile
+    image: clickhouse-data-source
+    deploy:
+      labels:
+        - bighill:"data"
+    restart: always
+    container_name: clickhouse-data-source
+    networks:
+      data-network:
+    ports:
+      - 18123:8123
+      - 19000:9000
+    environment:
+      CLICKHOUSE_DB: mlops
+      CLICKHOUSE_USER: user
+      CLICKHOUSE_PASSWORD: password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-vol:/var/lib/clickhouse
+      - ./scripts/docker/data_infra/initdb/clickhouse:/docker-entrypoint-initdb.d:ro
+
+  oracle-data-source:
+    build:
+      context: ./scripts/docker/data_infra
+      dockerfile: oracle-local.Dockerfile  
+    image: oracle-data-source-local
+    container_name: oracle-data-source    
+    restart: always
+    ports:
+      - 1521:1521
+    environment:
+      ORACLE_PDB: //localhost:1521/FREEPDB1
+      ORACLE_PASSWORD: oracle_Password_1
+      APP_USER: oracle_user
+      APP_USER_PASSWORD: password
+    volumes:
+      - oracle-vol:/opt/bighill/data/oracle
+      - ./scripts/docker/data_infra/initdb/oracle:/docker-entrypoint-initdb.d:ro
+
+networks:
+  data-network:
+
+volumes:
+  mongo-vol:
+  postgres-vol:
+  mysql-vol:
+  clickhouse-vol:
+  oracle-vol:

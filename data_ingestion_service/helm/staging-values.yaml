@@ -1,0 +1,36 @@
+image:
+  repository: 385800116362.dkr.ecr.us-east-1.amazonaws.com/bighill/mlops
+  tag: "data-ingestion-service-0.0.1-staging"
+  pullPolicy: Always
+
+serviceAccount:
+  create: true
+  name: "data-ingestion-service"
+  annotations: {}
+
+ingress:
+  enabled: true
+  host: "data-ingestion.internal.northern.exchange"
+
+env:
+  environment: "staging"
+  kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
+  redisAddress: "redis.exchange-staging.svc.cluster.local:6379"
+  datasetFileUploadedPublisherTopic: "dataset_file_uploaded"
+  dlq: "http://localhost:4566/data-ingestion-dev-env-queue/"
+  outbox: ""
+  authKmsKeyId: "alias/exchange-staging-jwt-signing"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  filesBucketName: "adt-datalake-rawdata-prod-255525589248-eu-west-1"
+  filesBucketRegion: "eu-west-1"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  dbCredentialsSecret:
+    name: "aurora-creds-staging"
+    userKey: "data_ingestion_db_user"
+    passwordKey: "data_ingestion_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "data_ingestion_db_name"

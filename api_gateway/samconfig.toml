@@ -1,0 +1,19 @@
+version = 0.1
+
+[default]
+[default.local_start_api]
+# Parameters for the 'sam local start-api' command
+port = "3000"
+host = "127.0.0.1"
+template = "template.local.generated.yml"
+env_vars = ""
+debug_port = "5858"
+debugger_path = ""
+debug_args = ""
+docker_volume_basedir = ""
+docker_network = ""
+log_file = ""
+layer_cache_basedir = ""
+skip_pull_image = false
+profile = "default"
+region = "eu-west-1"

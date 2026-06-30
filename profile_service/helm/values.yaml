@@ -1,0 +1,86 @@
+replicaCount: 1
+image:
+  repository: "profile-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: false
+  name: "profile-service"
+  annotations: {}
+service:
+  type: ClusterIP
+  httpPort: 8082
+  healthPort: 5052
+ingress:
+  enabled: false
+  host: ""
+  certificateArn: ""
+env:
+  environment: "staging"
+  serviceName: "profile-service"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  redisAddress: "redis:6379"
+  redisUsername: ""
+  redisPassword: ""
+  dbCredentialsSecret:
+    name: ""  # optional K8s Secret
+    userKey: "bighill_profile_db_user"
+    passwordKey: "bighill_profile_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_profile_db"
+  dbCredentialsExternalSecret:
+    enabled: false
+    targetSecretName: ""  # should match dbCredentialsSecret.name
+    refreshInterval: "1h"
+    secretStoreRef:
+      name: ""
+      kind: "SecretStore"
+    remoteKeys:
+      user: ""
+      password: ""
+      name: ""
+      host: ""
+      port: ""
+      sslmode: ""
+  oauthCredentialsSecret:
+    name: ""  # optional K8s Secret for OAuth provider credentials
+    googleClientIdKey: "google_client_id"
+    googleClientSecretKey: "google_client_secret"
+    discordClientIdKey: "discord_client_id"
+    discordClientSecretKey: "discord_client_secret"
+  dbName: "bighill_profile_db"
+  dbUser: "bighill_profile_db_user"
+  dbPassword: ""
+  dbMaxConnections: "60"
+  sharedLibDbStatementTimeoutMs: "15000"
+  sharedLibDbLockTimeoutMs: "5000"
+  sharedLibDbIdleInTxTimeoutMs: "10000"
+  pgHost: "localhost"  # Default for local dev; overridden by dbCredentialsSecret in staging/prod
+  pgPort: "5432"
+  pgSslMode: "require"
+  kafkaBroker: "kafka:9092"
+  kafkaGroupId: "profile-group"
+  kafkaPublisherTopic: "profile"
+  dlq: "http://localhost:4566/profile-dev-env-queue/"
+  outbox: "noop://local"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  authExpirationMinutes: "1440"
+  emailValidationTtlMinutes: "60"
+  oauthStateTtlMinutes: "10"
+  healthcheckCpuThreshold: "95"
+  healthcheckFreeMemThreshold: "15"
+  healthcheckServiceLatencyThreshold: "5"
+  healthcheckDbLatencyThreshold: "5"
+  healthcheckKafkaLatencyThreshold: "2"
+  authKmsKeyId: ""  # KMS key ID for JWT signing (leave empty for local dev)
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "768Mi"
+    cpu: "400m"

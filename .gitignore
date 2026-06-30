@@ -1,0 +1,13 @@
+
+**/__pycache__/
+.DS_Store
+test_results
+build
+tmp
+.env
+.idea
+**/go.mod
+**/go.sum
+reports/
+sqlite:
+results/

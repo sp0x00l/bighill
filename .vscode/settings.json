@@ -1,0 +1,38 @@
+{
+	"terminal.integrated.env.osx": {
+        "PROFILE_DB_USER":"bighill_profile_db_user",
+        "PROFILE_DB_NAME":"bighill_profile_db",
+        "PROFILE_DB_PASSWORD":"LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw",
+		"PROFILE_SERVICE_BUILD_VERSION":"0.0.0",
+        "KAFKA_BROKER":"kafka:9092",
+	},
+    "go.testFlags": [
+        "-p"
+    ],	
+	"go.lintOnSave": "package",
+    "go.formatTool": "gofmt",
+    "go.useLanguageServer": true,
+    "go.testTimeout": "30s",
+    "go.testEnvVars": {
+        "GODEBUG": "gctrace=1"
+    },	
+	"go.coverOnSave": true,
+    "go.coverOnTestPackage": true,
+    "go.coverageOptions": "showUncoveredCodeOnly",
+    "go.coverageDecorator": {
+        "type": "gutter",
+        "coveredHighlightColor": "rgba(64,128,128,0.5)",
+        "uncoveredHighlightColor": "rgba(128,64,64,0.25)",
+        "coveredGutterStyle": "blockblue",
+        "uncoveredGutterStyle": "slashyellow"
+    },
+    "go.vetOnSave": "package",
+    "go.lintTool": "golangci-lint",
+    "go.lintFlags": [
+        "--fast"
+    ],
+
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "makefile.configureOnOpen": false
+}

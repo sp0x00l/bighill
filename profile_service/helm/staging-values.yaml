@@ -1,0 +1,39 @@
+image:
+  repository: 385800116362.dkr.ecr.us-east-1.amazonaws.com/bighill/mlops
+  tag: "profile-service-0.0.1-staging"
+  pullPolicy: Always
+
+serviceAccount:
+  create: true
+  name: "profile-service"
+  # IRSA annotation - role ARN will be set via --set during deploy
+  annotations: {}
+
+ingress:
+  enabled: true
+  host: "profile.internal.northern.exchange"
+
+env:
+  environment: "staging"
+  kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
+  redisAddress: "redis.exchange-staging.svc.cluster.local:6379"
+  dlq: "http://localhost:4566/profile-dev-env-queue/"
+  outbox: ""
+  # KMS key for JWT signing - created by Terraform
+  authKmsKeyId: "alias/exchange-staging-jwt-signing"
+  emailValidationTtlMinutes: "60"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  dbCredentialsSecret:
+    name: "aurora-creds-staging"
+    userKey: "profile_db_user"
+    passwordKey: "profile_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "profile_db_name"
+  oauthCredentialsSecret:
+    name: "profile-oauth-creds-staging"
+    googleClientIdKey: "google_client_id"
+    googleClientSecretKey: "google_client_secret"
+    discordClientIdKey: "discord_client_id"
+    discordClientSecretKey: "discord_client_secret"

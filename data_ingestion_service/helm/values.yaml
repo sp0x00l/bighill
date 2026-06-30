@@ -1,0 +1,81 @@
+replicaCount: 1
+image:
+  repository: "data-ingestion-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: false
+  name: "data-ingestion-service"
+  annotations: {}
+service:
+  type: ClusterIP
+  httpPort: 8086
+  healthPort: 5056
+ingress:
+  enabled: false
+  host: ""
+  certificateArn: ""
+env:
+  environment: "local-dev"
+  serviceName: "data-ingestion-service"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  redisAddress: "redis:6379"
+  redisUsername: ""
+  redisPassword: ""
+  kafkaBroker: "kafka:9092"
+  kafkaGroupId: "data-ingestion-group"
+  datasetFileUploadedPublisherTopic: "dataset_file_uploaded"
+  dlq: "http://localhost:4566/data-ingestion-dev-env-queue/"
+  outbox: "noop://local"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  filesBucketName: "local-dev-bucket"
+  filesBucketRegion: "local-dev"
+  fileMaxSizeMb: "2000"
+  filesUploadPartSizeMb: "10"
+  dbCredentialsSecret:
+    name: ""
+    userKey: "bighill_data_ingestion_db_user"
+    passwordKey: "bighill_data_ingestion_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_data_ingestion_db"
+  dbCredentialsExternalSecret:
+    enabled: false
+    targetSecretName: ""
+    refreshInterval: "1h"
+    secretStoreRef:
+      name: ""
+      kind: "SecretStore"
+    remoteKeys:
+      user: ""
+      password: ""
+      name: ""
+      host: ""
+      port: ""
+      sslmode: ""
+  dbName: "bighill_data_ingestion_db"
+  dbUser: "bighill_data_ingestion_db_user"
+  dbPassword: ""
+  dbMaxConnections: "20"
+  sharedLibDbStatementTimeoutMs: "15000"
+  sharedLibDbLockTimeoutMs: "5000"
+  sharedLibDbIdleInTxTimeoutMs: "10000"
+  pgHost: "localhost"
+  pgPort: "5432"
+  pgSslMode: "require"
+  healthcheckCpuThreshold: "80"
+  healthcheckFreeMemThreshold: "20"
+  healthcheckServiceLatencyThreshold: "5"
+  healthcheckDbLatencyThreshold: "5"
+  healthcheckMessageBrokerLatencyThreshold: "5"
+  authKmsKeyId: ""
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "768Mi"
+    cpu: "400m"

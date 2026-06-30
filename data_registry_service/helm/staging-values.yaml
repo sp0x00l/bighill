@@ -1,0 +1,31 @@
+image:
+  repository: 385800116362.dkr.ecr.us-east-1.amazonaws.com/bighill/mlops
+  tag: "data-registry-service-0.0.1-staging"
+  pullPolicy: Always
+
+serviceAccount:
+  create: true
+  name: "data-registry-service"
+  annotations: {}
+
+ingress:
+  enabled: true
+  host: "data-registry.internal.northern.exchange"
+
+env:
+  environment: "staging"
+  kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
+  dlq: "http://localhost:4566/data-registry-dev-env-queue/"
+  outbox: ""
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  dbCredentialsSecret:
+    name: "aurora-creds-staging"
+    userKey: "data_registry_db_user"
+    passwordKey: "data_registry_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "data_registry_db_name"

@@ -1,0 +1,462 @@
+package router
+
+import (
+	"api/pkg/adapter"
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/aws/aws-lambda-go/events"
+	log "github.com/sirupsen/logrus"
+)
+
+const (
+	publicEndpoint  = "public"
+	privateEndpoint = "private"
+	userHeader      = "X-User-ID"
+	sessionHeader   = "X-Session-ID"
+
+	corsAllowOrigin  = "*"
+	corsAllowMethods = "GET,POST,PUT,DELETE,PATCH,OPTIONS"
+	corsAllowHeaders = "Content-Type,Authorization,X-Request-ID,X-Amz-Date,X-Api-Key,X-Amz-Security-Token"
+)
+
+type AuthorizerContext struct {
+	UserID string `json:"userId"`
+}
+
+type HttpClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+type newRequestFunc func(method, url string, body io.Reader) (*http.Request, error)
+
+type Config struct {
+	DataRegistryServiceRoute  string
+	DataIngestionServiceRoute string
+	ProfileServiceRoute       string
+}
+
+type routeResolver struct {
+	dataRegistryServiceRoute  string
+	dataIngestionServiceRoute string
+	profileServiceRoute       string
+}
+
+type routeContext struct {
+	method        string
+	path          string
+	version       string
+	scope         string
+	resource      string
+	resourceIndex int
+	segments      []string
+}
+
+type routeStatusError struct {
+	status int
+	body   string
+}
+
+func (e *routeStatusError) Error() string {
+	return e.body
+}
+
+func DefaultConfig() Config {
+	return Config{
+		DataRegistryServiceRoute:  serviceBaseRoute("127.0.0.1", "8081"),
+		DataIngestionServiceRoute: serviceBaseRoute("127.0.0.1", "8086"),
+		ProfileServiceRoute:       serviceBaseRoute("127.0.0.1", "8082"),
+	}
+}
+
+func serviceBaseRoute(host, port string) string {
+	return fmt.Sprintf("http://%s:%s", host, port)
+}
+
+func (cfg Config) resolver() (routeResolver, error) {
+	if cfg.DataRegistryServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing data registry service route")
+	}
+	if cfg.DataIngestionServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing data ingestion service route")
+	}
+	if cfg.ProfileServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing profile service route")
+	}
+	return routeResolver{
+		dataRegistryServiceRoute:  cfg.DataRegistryServiceRoute,
+		dataIngestionServiceRoute: cfg.DataIngestionServiceRoute,
+		profileServiceRoute:       cfg.ProfileServiceRoute,
+	}, nil
+}
+
+func getHeaderValue(headers map[string]string, key string) string {
+	for k, v := range headers {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
+}
+
+func withCORSHeaders(resp events.APIGatewayProxyResponse, origin string) events.APIGatewayProxyResponse {
+	if origin == "" {
+		return resp
+	}
+	if resp.Headers == nil {
+		resp.Headers = map[string]string{}
+	}
+	if _, ok := resp.Headers["Access-Control-Allow-Origin"]; !ok {
+		resp.Headers["Access-Control-Allow-Origin"] = corsAllowOrigin
+	}
+	if _, ok := resp.Headers["Access-Control-Allow-Methods"]; !ok {
+		resp.Headers["Access-Control-Allow-Methods"] = corsAllowMethods
+	}
+	if _, ok := resp.Headers["Access-Control-Allow-Headers"]; !ok {
+		resp.Headers["Access-Control-Allow-Headers"] = corsAllowHeaders
+	}
+	return resp
+}
+
+func gatewayResponse(status int, body string) events.APIGatewayProxyResponse {
+	return events.APIGatewayProxyResponse{
+		StatusCode: status,
+		Body:       body,
+	}
+}
+
+// NewRouter returns a HandlerFunc that routes the request based on the path.
+func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter.HandlerFunc {
+	resolver, resolverErr := cfg.resolver()
+	return func(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+		log.Trace("API Gateway Router ", request.HTTPMethod, " ", request.Path)
+		origin := getHeaderValue(request.Headers, "Origin")
+
+		if request.HTTPMethod == http.MethodOptions {
+			return withCORSHeaders(gatewayResponse(http.StatusNoContent, ""), origin), nil
+		}
+
+		if userIDHeader := getHeaderValue(request.Headers, userHeader); len(userIDHeader) > 0 {
+			err := fmt.Errorf("X-User-ID header found on request")
+			log.WithContext(ctx).WithError(err).Errorf("API Gateway request with X-User-ID: `%s` and IP: `%s`", userIDHeader, request.RequestContext.Identity.SourceIP)
+			return withCORSHeaders(events.APIGatewayProxyResponse{
+				StatusCode: http.StatusBadRequest,
+				Body:       "Invalid request. Please check your headers",
+			}, origin), nil
+		}
+		if sessionIDHeader := getHeaderValue(request.Headers, sessionHeader); len(sessionIDHeader) > 0 {
+			err := fmt.Errorf("X-Session-ID header found on request")
+			log.WithContext(ctx).WithError(err).Errorf("API Gateway request with X-Session-ID and IP: `%s`", request.RequestContext.Identity.SourceIP)
+			return withCORSHeaders(events.APIGatewayProxyResponse{
+				StatusCode: http.StatusBadRequest,
+				Body:       "Invalid request. Please check your headers",
+			}, origin), nil
+		}
+
+		var userID string
+		var sessionID string
+		authorizerContext := request.RequestContext.Authorizer
+		if authorizerContext != nil {
+			if v, ok := authorizerContext["userId"]; ok {
+				if s, ok := v.(string); ok {
+					userID = s
+				}
+			}
+			if request.HTTPMethod == http.MethodPost && request.Path == "/private/v1/profiles/logout" {
+				if v, ok := authorizerContext["sid"]; ok {
+					if s, ok := v.(string); ok {
+						sessionID = s
+					}
+				}
+			}
+		}
+
+		if resolverErr != nil {
+			log.WithContext(ctx).WithError(resolverErr).Error("API Gateway Router invalid route config")
+			return withCORSHeaders(gatewayResponse(http.StatusInternalServerError, "bighill gateway route error"), origin), nil
+		}
+
+		serviceRoute, err := serviceRoute(request, resolver)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("API Gateway Router service route error")
+			var routeErr *routeStatusError
+			if errors.As(err, &routeErr) {
+				return withCORSHeaders(gatewayResponse(routeErr.status, routeErr.body), origin), nil
+			}
+			return withCORSHeaders(gatewayResponse(http.StatusInternalServerError, "bighill gateway route error"), origin), nil
+		}
+
+		req, errorResponse := newProxyRequest(ctx, request, serviceRoute, newReqFunc)
+		if errorResponse != nil {
+			return withCORSHeaders(*errorResponse, origin), nil
+		}
+
+		if userID != "" {
+			req.Header.Set(userHeader, userID)
+		}
+		if sessionID != "" {
+			req.Header.Set(sessionHeader, sessionID)
+		}
+
+		response, err := requestWithRetry(ctx, req, client)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Errorf("API Gateway request error for %s %s", request.HTTPMethod, request.Path)
+			return withCORSHeaders(newProxyResponse(ctx, response), origin), nil
+		}
+
+		defer response.Body.Close()
+		bodyBytes, err := io.ReadAll(response.Body)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("API Gateway response read error")
+			return withCORSHeaders(gatewayResponse(http.StatusInternalServerError, "bighill gateway read response error"), origin), nil
+		}
+
+		headers := make(map[string]string)
+		for k, v := range response.Header {
+			if len(v) > 0 {
+				headers[k] = v[0]
+			}
+		}
+
+		return withCORSHeaders(events.APIGatewayProxyResponse{
+			StatusCode: response.StatusCode,
+			Body:       string(bodyBytes),
+			Headers:    headers,
+		}, origin), nil
+	}
+}
+
+func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver) (string, error) {
+	log.Trace("API Gateway Router serviceRoute")
+
+	routeCtx, err := parseRouteContext(request)
+	if err != nil {
+		return "", err
+	}
+	switch routeCtx.resource {
+	case "profiles":
+		return fmt.Sprintf("%s%s", resolver.profileServiceRoute, routeCtx.path), nil
+	case "data":
+	default:
+		return "", fmt.Errorf("invalid resource: %s", routeCtx.resource)
+	}
+
+	if len(routeCtx.segments) > routeCtx.resourceIndex+1 && routeCtx.segments[routeCtx.resourceIndex+1] == "store" {
+		return fmt.Sprintf("%s%s", resolver.dataIngestionServiceRoute, routeCtx.path), nil
+	}
+	return fmt.Sprintf("%s%s", resolver.dataRegistryServiceRoute, routeCtx.path), nil
+}
+
+func parseRouteContext(request events.APIGatewayProxyRequest) (routeContext, error) {
+	trimmed := strings.TrimPrefix(request.Path, "/")
+	segments := strings.Split(trimmed, "/")
+	if len(segments) < 2 {
+		return routeContext{}, fmt.Errorf("invalid url path: %s", request.Path)
+	}
+
+	scope := ""
+	resourceIndex := 1
+	version := segments[0]
+	if segments[0] == publicEndpoint || segments[0] == privateEndpoint {
+		if len(segments) < 3 {
+			return routeContext{}, fmt.Errorf("invalid url path: %s", request.Path)
+		}
+		scope = segments[0]
+		version = segments[1]
+		resourceIndex = 2
+	} else if segments[1] == publicEndpoint {
+		scope = publicEndpoint
+		resourceIndex = 2
+	}
+	if len(segments) <= resourceIndex {
+		return routeContext{}, fmt.Errorf("invalid url path: %s", request.Path)
+	}
+
+	return routeContext{
+		method:        request.HTTPMethod,
+		path:          request.Path,
+		version:       version,
+		scope:         scope,
+		resource:      segments[resourceIndex],
+		resourceIndex: resourceIndex,
+		segments:      segments,
+	}, nil
+}
+
+func newRequestWithBody(ctx context.Context, request events.APIGatewayProxyRequest, serviceRoute, verb string, genProxyRequest newRequestFunc) (*http.Request, error) {
+	log.Trace("API Gateway Router newRequestWithBody")
+
+	var body io.Reader
+	if strings.Contains(getHeaderValue(request.Headers, "Content-Type"), "multipart/form-data") {
+		body = bytes.NewReader([]byte(request.Body))
+	} else {
+		body = bytes.NewBufferString(request.Body)
+	}
+
+	req, err := genProxyRequest(verb, serviceRoute, body)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("API Gateway Router - create request error")
+		return nil, err
+	}
+	return req, nil
+}
+
+func newProxyRequest(ctx context.Context, request events.APIGatewayProxyRequest, serviceRoute string, genProxyRequest newRequestFunc) (*http.Request, *events.APIGatewayProxyResponse) {
+	log.Trace("API Gateway Router newProxyRequest")
+
+	var (
+		req *http.Request
+		err error
+	)
+	switch request.HTTPMethod {
+	case http.MethodGet:
+		req, err = genProxyRequest(http.MethodGet, serviceRoute, nil)
+	case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
+		req, err = newRequestWithBody(ctx, request, serviceRoute, request.HTTPMethod, genProxyRequest)
+	default:
+		resp := gatewayResponse(http.StatusMethodNotAllowed, "bighill gateway method not allowed")
+		return nil, &resp
+	}
+
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Errorf("create %s request error", request.HTTPMethod)
+		resp := gatewayResponse(http.StatusInternalServerError, fmt.Sprintf("bighill gateway %s error", request.HTTPMethod))
+		return nil, &resp
+	}
+
+	if request.QueryStringParameters != nil {
+		query := req.URL.Query()
+		for key, value := range request.QueryStringParameters {
+			query.Add(key, value)
+		}
+		req.URL.RawQuery = query.Encode()
+	}
+
+	for key, value := range request.Headers {
+		if strings.EqualFold(key, "Content-Length") {
+			continue
+		}
+		req.Header.Set(key, value)
+	}
+
+	return req, nil
+}
+
+func newProxyResponse(ctx context.Context, response *http.Response) events.APIGatewayProxyResponse {
+	log.Trace("API Gateway Router newProxyResponse")
+
+	if response != nil && response.Body != nil {
+		defer response.Body.Close()
+		bodyBytes, err := io.ReadAll(response.Body)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("API Gateway response read error")
+			return gatewayResponse(http.StatusBadGateway, "bighill gateway routing read error")
+		}
+		return gatewayResponse(response.StatusCode, string(bodyBytes))
+	}
+	return gatewayResponse(http.StatusBadGateway, "no response. Bighill gateway routing error")
+}
+
+func requestWithRetry(ctx context.Context, req *http.Request, client HttpClient) (*http.Response, error) {
+	log.Trace("API Gateway Router requestWithRetry")
+
+	var bodyBytes []byte
+	if req.Body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("failed to buffer request body for retries")
+			return nil, err
+		}
+		resetBody := func() io.ReadCloser { return io.NopCloser(bytes.NewReader(bodyBytes)) }
+		req.Body = resetBody()
+		req.GetBody = func() (io.ReadCloser, error) { return resetBody(), nil }
+		req.ContentLength = int64(len(bodyBytes))
+	}
+
+	cloneReq := func() *http.Request {
+		cloned := req.Clone(ctx)
+		if bodyBytes != nil {
+			resetBody := func() io.ReadCloser { return io.NopCloser(bytes.NewReader(bodyBytes)) }
+			cloned.Body = resetBody()
+			cloned.GetBody = func() (io.ReadCloser, error) { return resetBody(), nil }
+			cloned.ContentLength = int64(len(bodyBytes))
+		}
+		return cloned
+	}
+
+	var lastErr error
+	var lastResp *http.Response
+	const maxAttempts = 6
+	backoff := 200 * time.Millisecond
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		attemptReq := cloneReq()
+		resp, err := client.Do(attemptReq)
+		if err == nil && resp.StatusCode < 500 {
+			return resp, nil
+		}
+
+		if err != nil {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+			log.Warnf("Request failed with error: %v (type: %T)", err, err)
+			var ne net.Error
+			if !(errors.Is(err, syscall.ECONNREFUSED) || errors.As(err, &ne) && (ne.Timeout() || ne.Temporary())) {
+				log.Error("Error is not retryable, returning immediately")
+				return resp, err
+			}
+			lastErr = err
+			lastResp = nil
+		} else {
+			if resp.StatusCode >= 500 && isRetryableStatus(resp.StatusCode) {
+				lastResp = resp
+				if attempt != maxAttempts && resp.Body != nil {
+					resp.Body.Close()
+				}
+				lastErr = fmt.Errorf("downstream %s", resp.Status)
+			} else {
+				log.Warnf("Got non-retryable 5xx status %d, returning downstream response", resp.StatusCode)
+				return resp, nil
+			}
+		}
+
+		if attempt == maxAttempts {
+			break
+		}
+
+		select {
+		case <-time.After(backoff):
+			log.Warnf("API Gateway Router retrying request after error: %v", lastErr)
+			if backoff < 2*time.Second {
+				backoff *= 2
+			}
+		case <-ctx.Done():
+			log.Errorf("API Gateway Router request context done: %v", ctx.Err())
+			return nil, ctx.Err()
+		}
+	}
+
+	log.Errorf("All retries exhausted, last error: %v", lastErr)
+	if lastResp != nil {
+		return lastResp, lastErr
+	}
+	return nil, lastErr
+}
+
+func isRetryableStatus(status int) bool {
+	switch status {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}

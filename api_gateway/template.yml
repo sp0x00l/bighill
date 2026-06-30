@@ -1,0 +1,643 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  StageNameParam:
+    Type: String
+    Default: local-dev
+    Description: The name of the deployment environment
+  BighillApiFunctionMemorySize:
+    Type: Number
+    Default: 2048
+    MinValue: 2048
+    MaxValue: 4096
+  BighillApiLogLevel:
+    Type: String
+    Default: debug
+  BighillApiFunctionTimeout:
+    Type: Number
+    Default: 30
+  BighillApiHttpClientTimeoutSeconds:
+    Type: Number
+    Default: 10
+    Description: Timeout in seconds for HTTP requests from API Gateway to backend services
+  DataRegistryServiceHttpDomain:
+    Type: String
+    Default: host.docker.internal
+    Description: The data registry service host name
+  DataRegistryServiceHttpPort:
+    Type: String
+    Default: 8081
+  DataIngestionServiceHttpDomain:
+    Type: String
+    Default: host.docker.internal
+    Description: The data ingestion service host name
+  DataIngestionServiceHttpPort:
+    Type: String
+    Default: 8086
+  ProfileServiceHttpDomain:
+    Type: String
+    Default: host.docker.internal
+    Description: The profile service host name
+  ProfileServiceHttpPort:
+    Type: String
+    Default: 8082
+  OtlpCollectorUrl:
+    Type: String
+    Default: ""
+    Description: In production, configure the OTLP exporter to send traces to Grafana Tempo. In local-dev, leave this value empty.
+  OtlpCollectorPort:
+    Type: Number
+    Default: 4317
+    Description: In production, configure the OTLP exporter to send traces to Grafana Tempo. In local-dev, leave this value empty.
+  RedisHost:
+    Type: String
+    Default: host.docker.internal
+    Description: Redis hostname or IP
+  RedisPort:
+    Type: String
+    Default: 6379
+    Description: Redis port
+  RedisTLS:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Enable TLS for Redis
+  RedisUsername:
+    Type: String
+    Default: ""
+  RedisPassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+  AuthKmsKeyId:
+    Type: String
+    Default: ""
+    Description: KMS key ID for JWT signing/verification. Leave empty for local dev.
+
+Globals:
+  Api:
+    BinaryMediaTypes:
+      - multipart/form-data
+      - image/jpeg
+      - image/png
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,PATCH,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization,X-Request-ID,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: "'*'"
+      AllowCredentials: false
+
+Resources:
+  BighillAuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./build/auth_binary
+      Handler: bootstrap
+      Runtime: provided.al2
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref BighillApiLogLevel
+          ENVIRONMENT: !Ref StageNameParam
+          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref OtlpCollectorUrl
+          OTEL_EXPORTER_OTLP_PORT: !Ref OtlpCollectorPort
+          REDIS_ADDRESS: !Sub "${RedisHost}:${RedisPort}"
+          REDIS_TLS: !Ref RedisTLS
+          REDIS_USERNAME: !Ref RedisUsername
+          REDIS_PASSWORD: !Ref RedisPassword
+          AUTH_KMS_KEY_ID: !Ref AuthKmsKeyId
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+  BighillApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      MemorySize: !Ref BighillApiFunctionMemorySize
+      Timeout: !Ref BighillApiFunctionTimeout
+      CodeUri: ./build/api_binary
+      Handler: bootstrap
+      Runtime: provided.al2
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref BighillApiLogLevel
+          ENVIRONMENT: !Ref StageNameParam
+          API_HTTP_CLIENT_TIMEOUT_SECONDS: !Ref BighillApiHttpClientTimeoutSeconds
+          DATA_REGISTRY_SERVICE_HTTP_HOST: !Ref DataRegistryServiceHttpDomain
+          DATA_REGISTRY_SERVICE_HTTP_PORT: !Ref DataRegistryServiceHttpPort
+          DATA_INGESTION_SERVICE_HTTP_HOST: !Ref DataIngestionServiceHttpDomain
+          DATA_INGESTION_SERVICE_HTTP_PORT: !Ref DataIngestionServiceHttpPort
+          PROFILE_SERVICE_HTTP_HOST: !Ref ProfileServiceHttpDomain
+          PROFILE_SERVICE_HTTP_PORT: !Ref ProfileServiceHttpPort
+          OTEL_EXPORTER_OTLP_ENDPOINT: !Ref OtlpCollectorUrl
+          OTEL_EXPORTER_OTLP_PORT: !Ref OtlpCollectorPort
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Events:
+        # Profile service
+        PostPublicProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            RequestParameters:
+              method.request.header.X-Request-ID: true
+            Path: /public/v1/profiles
+            Method: post
+        PutPrivateProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /private/v1/profiles
+            Method: put
+        DeletePrivateProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /private/v1/profiles
+            Method: delete
+        GetPrivateProfile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /private/v1/profiles
+            Method: get
+        PutPrivateProfilePassword:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /private/v1/profiles/password
+            Method: put
+        PostPrivateProfileLogout:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /private/v1/profiles/logout
+            Method: post
+        PostPublicProfilePasswordVerify:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /public/v1/profiles/password/verify
+            Method: post
+        PostPublicProfileEmailVerify:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /public/v1/profiles/email/verify
+            Method: post
+        PostPublicProfileOAuthAuthorization:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /public/v1/profiles/oauth/{provider}/authorizations
+            Method: post
+        PostPublicProfileOAuthSession:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /public/v1/profiles/oauth/{provider}/sessions
+            Method: post
+
+        # Data services
+        PostDataset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry
+            Method: post
+        GetPublishedDatasets:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/public/data/registry
+            Method: get
+        GetPublishedDatasetById:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/public/data/registry/{datasetId}
+            Method: get
+        GetPublishedDatasetsByUserId:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/public/data/registry/user/{userId}
+            Method: get
+        GetDatasets:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry
+            Method: get
+        GetDatasetByID:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry/{datasetId}
+            Method: get
+        DeleteDataset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry/{datasetId}
+            Method: delete
+        PutDataset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry/{datasetId}
+            Method: put
+        PatchPublishDataset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry/{datasetId}/publish
+            Method: patch
+        PostSourceConnector:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry/connector/{type}
+            Method: post
+        GetSourceConnector:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry/connector/{type}/{connectorId}
+            Method: get
+        PutSourceConnector:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry/connector/{type}/{connectorId}
+            Method: put
+        DeleteSourceConnector:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/registry/connector/{type}/{connectorId}
+            Method: delete
+        PostDataFile:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/store/{id}
+            Method: post
+
+  BighillApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref StageNameParam
+      BinaryMediaTypes:
+        - multipart/form-data
+        - image/jpeg
+        - image/png
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          title: "BighillDataApi"
+          version: "1.0"
+        paths:
+          # Profile service
+          /public/v1/profiles:
+            post:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              parameters:
+                - name: X-Request-ID
+                  in: header
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security: []
+          /private/v1/profiles:
+            put:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+            delete:
+              produces:
+                - application/json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+            get:
+              produces:
+                - application/json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /private/v1/profiles/password:
+            put:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /private/v1/profiles/logout:
+            post:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /public/v1/profiles/password/verify:
+            post:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security: []
+          /public/v1/profiles/email/verify:
+            post:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security: []
+          /public/v1/profiles/oauth/{provider}/authorizations:
+            post:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              parameters:
+                - name: provider
+                  in: path
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security: []
+          /public/v1/profiles/oauth/{provider}/sessions:
+            post:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              parameters:
+                - name: provider
+                  in: path
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security: []
+
+          # Data services
+          /v1/data/registry:
+            get:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              parameters:
+                - name: X-Request-ID
+                  in: header
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/data/registry/{datasetId}:
+            get:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+            put:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+            delete:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/data/registry/{datasetId}/publish:
+            patch:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/public/data/registry:
+            get:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security: []
+          /v1/public/data/registry/{datasetId}:
+            get:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security: []
+          /v1/public/data/registry/user/{userId}:
+            get:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security: []
+          /v1/data/registry/connector/{type}:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              parameters:
+                - name: X-Request-ID
+                  in: header
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/data/registry/connector/{type}/{connectorId}:
+            get:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+            put:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+            delete:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/data/store/{id}:
+            post:
+              consumes:
+                - multipart/form-data
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+        securityDefinitions:
+          BighillAuthorizer:
+            type: "apiKey"
+            name: "Authorization"
+            in: "header"
+            x-amazon-apigateway-authtype: "custom"
+            x-amazon-apigateway-authorizer:
+              type: "token"
+              authorizerUri:
+                Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillAuthFunction.Arn}/invocations
+              identitySource: "method.request.header.Authorization"
+              authorizerResultTtlInSeconds: 0

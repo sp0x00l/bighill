@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package profile.events.v1;
+ 
+option go_package = "lib/data_contracts_lib/profile_event";
+
+enum EmailVerificationStatus {
+  EMAIL_VERIFICATION_STATUS_UNSPECIFIED = 0;
+  EMAIL_VERIFICATION_STATUS_UNVERIFIED = 1;
+  EMAIL_VERIFICATION_STATUS_VERIFIED = 2;
+}
+
+message UserCreatedEvent {
+  string user_id = 1;
+  string email = 2;
+  string phone_number = 3;
+  string country_code = 4;
+  EmailVerificationStatus email_verification_status = 5;
+}
+
+message UserUpdatedEvent {
+  string user_id = 1;
+  string email = 2;
+  string first_name = 3;
+  string last_name = 4;
+  string phone_number = 5;
+  string country_code = 6;
+  EmailVerificationStatus email_verification_status = 7;
+}
+
+message UserDeletedEvent {
+    string user_id = 1;    
+}
+
+// EmailVerificationRequestedEvent carries the verification token as a separate
+// message type on the profile topic. The token is a credential and must not be
+// included in UserCreatedEvent.
+message EmailVerificationRequestedEvent {
+  string user_id = 1;
+  string email = 2;
+  string email_verify_token = 3;
+}

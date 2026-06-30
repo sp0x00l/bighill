@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NAMESPACE="${NAMESPACE:-observability}"
+
+print_section() {
+  local TITLE="$1"
+  echo ""
+  echo "== ${TITLE} =="
+}
+
+run_cmd() {
+  local LABEL="$1"
+  shift
+  print_section "$LABEL"
+  if "$@"; then
+    return 0
+  fi
+  local STATUS=$?
+  echo "Command failed with status ${STATUS}"
+  return 0
+}
+
+require_kubectl() {
+  local BIN
+  BIN="$(command -v kubectl || true)"
+  if [ -z "$BIN" ]; then
+    echo "kubectl not found in PATH"
+    exit 1
+  fi
+}
+
+list_otel_resources() {
+  local RESOURCE="$1"
+  kubectl get "$RESOURCE" -n "$NAMESPACE" -o name | rg -i 'otel|collector|opentelemetry' || true
+}
+
+describe_otel_resources() {
+  local RESOURCE="$1"
+  local NAME
+  while read -r NAME; do
+    if [ -n "$NAME" ]; then
+      run_cmd "Describe ${NAME}" kubectl describe -n "$NAMESPACE" "$NAME"
+    fi
+  done < <(list_otel_resources "$RESOURCE")
+}
+
+require_kubectl
+
+if kubectl version --short >/dev/null 2>&1; then
+  run_cmd "kubectl version" kubectl version --short
+else
+  run_cmd "kubectl version" kubectl version
+fi
+run_cmd "kubectl context" kubectl config current-context
+run_cmd "namespace list" kubectl get ns
+run_cmd "observability services" kubectl get svc -n "$NAMESPACE"
+run_cmd "observability servicemonitors" kubectl get servicemonitor -n "$NAMESPACE"
+run_cmd "observability endpoints" kubectl get endpoints -n "$NAMESPACE"
+run_cmd "observability pods" kubectl get pods -n "$NAMESPACE" -o wide
+
+run_cmd "otel services (filtered)" list_otel_resources svc
+run_cmd "otel servicemonitors (filtered)" list_otel_resources servicemonitor
+
+describe_otel_resources svc
+describe_otel_resources servicemonitor
+
+run_cmd "prometheus CR (selectors)" kubectl get prometheus -n "$NAMESPACE" -o yaml | rg -n "serviceMonitorSelector|podMonitorSelector|namespaceSelector|selector"
+
+print_section "Done"

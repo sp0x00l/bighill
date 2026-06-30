@@ -1,0 +1,130 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "data_registry_service",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "cwd": "${workspaceFolder}/data_registry_service",
+            "program": "${workspaceFolder}/data_registry_service/main.go",
+            "env": {
+                "DATA_REGISTRY_DB_USER": "bighill_data_registry_db_user",
+                "DATA_REGISTRY_DB_NAME": "bighill_data_registry_db",
+                "DATA_REGISTRY_DB_PASSWORD": "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw",
+                "DATA_REGISTRY_API_HTTP_PORT": "8081",
+                "DATA_REGISTRY_HEALTHCHECK_PORT": "5051",
+                "ENVIRONMENT": "local-dev",
+                "KMS_LOCAL_DEV_KEY": "bighill-local-dev-cipher-key-1234"
+            },
+            "args": [],
+            "buildFlags": "-ldflags='-X main.Version=0.0.1'"
+        },
+        {
+            "name": "data_ingestion_service",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "cwd": "${workspaceFolder}/data_ingestion_service",
+            "program": "${workspaceFolder}/data_ingestion_service/main.go",
+            "env": {
+                "DATA_INGESTION_DB_USER": "bighill_data_ingestion_db_user",
+                "DATA_INGESTION_DB_NAME": "bighill_data_ingestion_db",
+                "DATA_INGESTION_DB_PASSWORD": "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw",
+                "DATA_INGESTION_API_HTTP_PORT": "8086",
+                "DATA_INGESTION_HEALTHCHECK_PORT": "5056",
+                "DATA_INGESTION_FILE_MAX_SIZE_MB": "2000",
+                "DATA_INGESTION_FILES_BUCKET_REGION": "local-dev",
+                "DATA_INGESTION_FILES_BUCKET_NAME": "local-dev-bucket",
+                "DATA_INGESTION_FILES_UPLOAD_PART_SIZE_MS": "10",
+                "DATA_INGESTION_SERVICE_REDIS_ADDRESS": "localhost:6379",
+                "DATA_INGESTION_SERVICE_REDIS_USERNAME": "",
+                "DATA_INGESTION_SERVICE_REDIS_PASSWORD": "",
+                "KMS_LOCAL_DEV_KEY": "bighill-local-dev-cipher-key-1234",
+                "ENVIRONMENT": "local-dev"
+            },
+            "args": [],
+            "buildFlags": "-ldflags='-X main.Version=0.0.1'"
+        },
+        {
+            "name": "data_stream_service",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "cwd": "${workspaceFolder}/data_stream_service",
+            "program": "${workspaceFolder}/data_stream_service/main.go",
+            "env": {
+                "DATA_STREAM_API_GRPC_HOST": "localhost",
+                "DATA_STREAM_API_GRPC_PORT": "7070",
+                "DATA_STREAM_HEALTHCHECK_PORT": "5050",
+                "DATA_STREAM_QUERY_ENGINE_MODE": "local",
+                "DATA_STREAM_QUERY_ENGINE_DATA_ROOT": "tmp/local_s3_storage",
+                "ENVIRONMENT": "local-dev"
+            },
+            "args": [],
+            "buildFlags": "-ldflags='-X main.Version=0.0.1'"
+        },
+        {
+            "name": "profile_service",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "cwd": "${workspaceFolder}/profile_service",
+            "program": "${workspaceFolder}/profile_service/main.go",
+            "env": {
+                "PROFILE_SERVICE_NAME": "profile_service",
+                "PROFILE_SERVICE_HTTP_PORT": "8082",
+                "PROFILE_SERVICE_DB_NAME": "bighill_profile_db",
+                "PROFILE_SERVICE_DB_USER": "bighill_profile_db_user",
+                "PROFILE_SERVICE_DB_PASSWORD": "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw",
+                "PROFILE_SERVICE_DB_MAX_CONNECTIONS": "60",
+                "PROFILE_SERVICE_REDIS_ADDRESS": "localhost:6379",
+                "PROFILE_SERVICE_REDIS_USERNAME": "",
+                "PROFILE_SERVICE_REDIS_PASSWORD": "",
+                "PROFILE_AUTH_EXPIRATION_MINUTES": "1440",
+                "PROFILE_EMAIL_VALIDATION_TTL_MINUTES": "60",
+                "PROFILE_OAUTH_STATE_TTL_MINUTES": "10",
+                "PROFILE_OAUTH_GOOGLE_CLIENT_ID": "",
+                "PROFILE_OAUTH_GOOGLE_CLIENT_SECRET": "",
+                "PROFILE_OAUTH_DISCORD_CLIENT_ID": "",
+                "PROFILE_OAUTH_DISCORD_CLIENT_SECRET": "",
+                "PROFILE_DLQ": "http://localhost:4566/profile-dev-env-queue/",
+                "PROFILE_OUTBOX": "noop://local",
+                "PROFILE_KAFKA_GROUP_ID": "profile-group",
+                "PROFILE_SERVICE_KAFKA_PUBLISHER_TOPIC": "profile",
+                "PROFILE_SERVICE_OUTBOX_RELAY_POLL_MS": "250",
+                "PROFILE_SERVICE_OUTBOX_RELAY_BATCH_SIZE": "100",
+                "PROFILE_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS": "2000",
+                "PROFILE_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT": "100",
+                "PROFILE_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT": "10",
+                "PROFILE_SERVICE_HEALTHCHECK_PORT": "5052",
+                "PROFILE_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS": "5",
+                "PROFILE_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS": "5",
+                "PROFILE_SERVICE_HEALTHCHECK_KAFKA_LATENCY_THRESHOLD_SECONDS": "2",
+                "KAFKA_BROKER": "localhost:9092",
+                "ENVIRONMENT": "local-dev",
+                "KMS_LOCAL_DEV_KEY": "bighill-local-dev-cipher-key-1234"
+            },
+            "args": [],
+            "buildFlags": "-tags=kafka -ldflags='-X main.Version=0.0.1'"
+        },
+        {
+            "name": "profile_service_tests",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "cwd": "${workspaceFolder}/profile_service",
+            "program": "${workspaceFolder}/profile_service/pkg/app",
+            "showLog": true
+        },
+        {
+            "name": "profile_service_integration_tests",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "cwd": "${workspaceFolder}/profile_service",
+            "program": "${workspaceFolder}/profile_service/test/integration",
+            "showLog": true
+        }
+    ]
+}

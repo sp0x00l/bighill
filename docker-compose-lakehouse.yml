@@ -1,0 +1,78 @@
+services:
+  polaris-object-store:
+    image: rustfs/rustfs:1.0.0-alpha.81
+    container_name: polaris-object-store
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    environment:
+      RUSTFS_ACCESS_KEY: polaris_root
+      RUSTFS_SECRET_KEY: polaris_pass
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://127.0.0.1:9000/health && curl --fail http://127.0.0.1:9001/rustfs/console/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - polaris_object_store:/data
+    networks:
+      - lakehouse-network
+
+  polaris-bucket-setup:
+    image: amazon/aws-cli:2.35.11
+    depends_on:
+      polaris-object-store:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: polaris_root
+      AWS_SECRET_ACCESS_KEY: polaris_pass
+      AWS_ENDPOINT_URL: http://polaris-object-store:9000
+    entrypoint: "/bin/sh"
+    command:
+      - "-c"
+      - >-
+        aws s3 mb s3://bighill-mlops-lakehouse || true
+    networks:
+      - lakehouse-network
+
+  polaris-catalog:
+    image: apache/polaris:latest
+    container_name: polaris-catalog
+    ports:
+      - "8181:8181"
+      - "8182:8182"
+      - "5005:5005"
+    depends_on:
+      polaris-object-store:
+        condition: service_healthy
+      polaris-bucket-setup:
+        condition: service_completed_successfully
+    environment:
+      JAVA_DEBUG: "true"
+      JAVA_DEBUG_PORT: "*:5005"
+      AWS_REGION: us-west-2
+      AWS_ACCESS_KEY_ID: polaris_root
+      AWS_SECRET_ACCESS_KEY: polaris_pass
+      POLARIS_BOOTSTRAP_CREDENTIALS: POLARIS,${POLARIS_ROOT_CLIENT_ID:-root},${POLARIS_ROOT_CLIENT_SECRET:-s3cr3t}
+      polaris.realm-context.realms: ${POLARIS_REALM:-POLARIS}
+      quarkus.otel.sdk.disabled: "true"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    networks:
+      - lakehouse-network
+
+networks:
+  lakehouse-network:
+    name: bighill-lakehouse-network
+
+volumes:
+  polaris_object_store:

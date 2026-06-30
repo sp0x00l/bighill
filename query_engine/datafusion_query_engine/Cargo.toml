@@ -1,0 +1,12 @@
+[package]
+name = "datafusion_query_engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+datafusion = "54.0.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+parquet = "58.3.0"
+tempfile = "3.27.0"
