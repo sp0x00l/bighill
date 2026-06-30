@@ -31,8 +31,8 @@ func (s *featureSnapshotRepoStub) SavePendingFeatureSnapshot(_ context.Context, 
 	return validFeatureSnapshot(rawSnapshotID), nil
 }
 
-func (s *featureSnapshotRepoStub) MarkFeatureReady(_ context.Context, featureSnapshotID uuid.UUID, _ string) error {
-	s.readyID = featureSnapshotID
+func (s *featureSnapshotRepoStub) MarkFeatureReady(_ context.Context, featureSnapshot *model.FeatureSnapshot) error {
+	s.readyID = featureSnapshot.FeatureSnapshotID
 	return nil
 }
 

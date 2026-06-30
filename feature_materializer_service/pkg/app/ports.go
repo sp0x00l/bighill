@@ -9,7 +9,7 @@ import (
 
 type RawSnapshotRepository interface {
 	SavePendingRawSnapshot(ctx context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) (*model.RawSnapshot, error)
-	MarkRawReady(ctx context.Context, rawSnapshotID uuid.UUID, storageLocation string) error
+	MarkRawReady(ctx context.Context, rawSnapshot *model.RawSnapshot) error
 	MarkRawFailed(ctx context.Context, rawSnapshotID uuid.UUID, reason string) error
 	ReadRawByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (*model.RawSnapshot, error)
 }
@@ -20,7 +20,7 @@ type RawSnapshotWriter interface {
 
 type FeatureSnapshotRepository interface {
 	SavePendingFeatureSnapshot(ctx context.Context, rawSnapshotID, idempotencyKey uuid.UUID) (*model.FeatureSnapshot, error)
-	MarkFeatureReady(ctx context.Context, featureSnapshotID uuid.UUID, storageLocation string) error
+	MarkFeatureReady(ctx context.Context, featureSnapshot *model.FeatureSnapshot) error
 	MarkFeatureFailed(ctx context.Context, featureSnapshotID uuid.UUID, reason string) error
 	ReadFeatureByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (*model.FeatureSnapshot, error)
 }
@@ -35,7 +35,7 @@ type RawSnapshotReader interface {
 
 type EmbeddingSnapshotRepository interface {
 	SavePendingEmbeddingSnapshot(ctx context.Context, featureSnapshotID, idempotencyKey uuid.UUID) (*model.EmbeddingSnapshot, error)
-	MarkEmbeddingReady(ctx context.Context, embeddingSnapshotID uuid.UUID, vectorStore, collectionName string) error
+	MarkEmbeddingReady(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error
 	MarkEmbeddingFailed(ctx context.Context, embeddingSnapshotID uuid.UUID, reason string) error
 	ReadEmbeddingByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (*model.EmbeddingSnapshot, error)
 }

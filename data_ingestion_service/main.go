@@ -212,7 +212,7 @@ func readIngestionConfig() ingestionConfig {
 			FailureBackoff: time.Duration(env.WithDefaultInt("DATA_INGESTION_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
 			BatchSize:      int32(env.WithDefaultInt("DATA_INGESTION_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
 		},
-		DatasetUploadedTopic: env.WithDefaultString("DATA_INGESTION_SERVICE_DATASET_FILE_UPLOADED_PUBLISHER_TOPIC", "dataset_file_uploaded"),
+		DatasetUploadedTopic: env.WithDefaultString("DATA_INGESTION_SERVICE_TOPIC", "data_ingestion"),
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("DATA_INGESTION_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_INGESTION_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),

@@ -68,7 +68,7 @@ var _ = Describe("DataUploadUseCase", func() {
 	It("publishes a dataset file uploaded event after storage succeeds", func() {
 		repo := &stubBlobRepository{location: "s3://bucket/raw/file.csv"}
 		publisher := &stubEventPublisher{}
-		uc := usecase.NewDataUploadUseCase(repo, usecase.WithUploadEventPublisher(publisher, "dataset_file_uploaded"))
+		uc := usecase.NewDataUploadUseCase(repo, usecase.WithUploadEventPublisher(publisher, "data_ingestion"))
 		upload := &model.DataFile{
 			DatasetID:   uuid.New(),
 			UserID:      uuid.New(),
@@ -78,7 +78,7 @@ var _ = Describe("DataUploadUseCase", func() {
 
 		Expect(uc.UploadFile(context.Background(), upload)).To(Succeed())
 
-		Expect(publisher.topic).To(Equal("dataset_file_uploaded"))
+		Expect(publisher.topic).To(Equal("data_ingestion"))
 		Expect(publisher.message.ResourceKey).To(Equal(upload.DatasetID))
 		Expect(publisher.message.MsgType).To(Equal(shared.MsgTypeDatasetFileUploaded))
 	})

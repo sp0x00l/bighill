@@ -70,7 +70,7 @@ var _ = Describe("Data ingestion integration", Ordered, func() {
 		cfg := dbconn.DatabaseConfig{}
 		cfg.WithDbName("DATA_INGESTION_DB_NAME", "bighill_data_ingestion_db")
 		cfg.WithDbUser("DATA_INGESTION_DB_USER", "bighill_data_ingestion_db_user")
-		cfg.WithDbPassword("DATA_INGESTION_DB_PASSWORD", "")
+		cfg.WithDbPassword("DATA_INGESTION_DB_PASSWORD", env.WithDefaultString("BIGHILL_DB_PASSWORD", "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw"))
 		cfg.WithDbMaxConnections("DATA_INGESTION_DB_MAX_CONNECTIONS", "20")
 
 		var err error
@@ -78,7 +78,7 @@ var _ = Describe("Data ingestion integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		brokers = env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
-		topic = env.WithDefaultString("DATA_INGESTION_SERVICE_DATASET_FILE_UPLOADED_PUBLISHER_TOPIC", "dataset_file_uploaded")
+		topic = env.WithDefaultString("DATA_INGESTION_SERVICE_TOPIC", "data_ingestion")
 		Expect(purgeTopic(ctx, brokers, topic)).To(Succeed())
 
 		msgFactory = messaging.NewMessenger(messaging.MessengerConfig{

@@ -19,6 +19,8 @@ type DatasetRepositoryAdapter interface {
 	ReadByID(context.Context, uuid.UUID, uuid.UUID) (*model.Dataset, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	UpdatePublishedState(context.Context, uuid.UUID, uuid.UUID) error
+	UpdateProcessingState(context.Context, uuid.UUID, uuid.UUID, model.ProcessingState) (*model.Dataset, error)
+	UpdateMaterializationMetadata(context.Context, *model.Dataset) (*model.Dataset, error)
 	Replace(context.Context, *model.Dataset) (*model.Dataset, error)
 }
 

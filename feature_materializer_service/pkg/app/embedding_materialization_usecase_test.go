@@ -30,8 +30,8 @@ func (s *embeddingSnapshotRepoStub) SavePendingEmbeddingSnapshot(_ context.Conte
 	return validEmbeddingSnapshot(featureSnapshotID), nil
 }
 
-func (s *embeddingSnapshotRepoStub) MarkEmbeddingReady(_ context.Context, embeddingSnapshotID uuid.UUID, _, _ string) error {
-	s.readyID = embeddingSnapshotID
+func (s *embeddingSnapshotRepoStub) MarkEmbeddingReady(_ context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error {
+	s.readyID = embeddingSnapshot.EmbeddingSnapshotID
 	return nil
 }
 
@@ -128,6 +128,7 @@ func validEmbeddingSnapshot(featureSnapshotID uuid.UUID) *model.EmbeddingSnapsho
 		EmbeddingSnapshotID: uuid.New(),
 		FeatureSnapshotID:   featureSnapshotID,
 		DatasetID:           uuid.New(),
+		UserID:              uuid.New(),
 		Status:              model.SnapshotStatusPending,
 	}
 }

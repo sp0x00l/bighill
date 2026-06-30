@@ -37,8 +37,8 @@ func (s *rawSnapshotRepoStub) SavePendingRawSnapshot(_ context.Context, _ *model
 	return validRawSnapshot(), nil
 }
 
-func (s *rawSnapshotRepoStub) MarkRawReady(_ context.Context, rawSnapshotID uuid.UUID, _ string) error {
-	s.readyID = rawSnapshotID
+func (s *rawSnapshotRepoStub) MarkRawReady(_ context.Context, rawSnapshot *model.RawSnapshot) error {
+	s.readyID = rawSnapshot.RawSnapshotID
 	return nil
 }
 

@@ -36,18 +36,18 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 	datasetModel := Dataset{IdempotencyKey: pgtype.UUID{Bytes: idempotencyKey, Valid: true}}
 	datasetDAO := datasetModel.toDAO(dataset)
 
-	var id, userID, origin, status string
+	var id, userID, origin, status, processingState string
 	var sqlStatement = `INSERT INTO ` + db.Name +
 		`.datasets (id, user_id, title, description, location, idempotency_key, category,
-		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata)
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata, processing_state)
 		VALUES (@id, @user_id, @title, @description, @location, @idempotency_key, @category,
-		@table_namespace, @table_name, @table_format, @catalog_provider, @schema_version, @schema_metadata::jsonb) 
-		RETURNING id, user_id, origin, status;`
+		@table_namespace, @table_name, @table_format, @catalog_provider, @schema_version, @schema_metadata::jsonb, @processing_state)
+		RETURNING id, user_id, origin, status, processing_state;`
 
 	err := db.Pool.QueryRow(ctx,
 		sqlStatement,
 		datasetDAO,
-	).Scan(&id, &userID, &origin, &status)
+	).Scan(&id, &userID, &origin, &status, &processingState)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -68,6 +68,11 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 	if err != nil {
 		log.WithContext(ctx).Errorf("Error converting status type: %s", status)
 		return domainErrors.ErrValidationFailed.Extend("failed to convert status type")
+	}
+	dataset.ProcessingState, err = model.ToProcessingState(processingState)
+	if err != nil {
+		log.WithContext(ctx).Errorf("Error converting processing state: %s", processingState)
+		return domainErrors.ErrValidationFailed.Extend("failed to convert processing state")
 	}
 	return nil
 }
@@ -132,7 +137,7 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		catalog_provider = @catalog_provider, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
 		RETURNING title, description, origin, location, status, category,
-		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text;`
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text;`
 	row := db.Pool.QueryRow(ctx, sqlStatement, datasetDAO)
 
 	updatedDataset := DatasetDAO{
@@ -151,7 +156,8 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		&updatedDataset.TableFormat,
 		&updatedDataset.CatalogProvider,
 		&updatedDataset.SchemaVersion,
-		&updatedDataset.SchemaMetadata); err {
+		&updatedDataset.SchemaMetadata,
+		&updatedDataset.ProcessingState); err {
 	case pgx.ErrNoRows:
 		log.WithContext(ctx).Warnf("No dataset found in database for ID: %s", dataset.ID.String())
 		return nil, domainErrors.ErrResourceNotFound
@@ -177,6 +183,43 @@ func (db *datasetDB) Delete(ctx context.Context, datasetID uuid.UUID, userID uui
 		return domainErrors.ErrResourceNotFound
 	}
 	return nil
+}
+
+func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, error) {
+	log.Trace("DatasetDB UpdateProcessingState")
+
+	query := `UPDATE ` + db.Name + `.datasets
+		SET processing_state = @processing_state
+		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
+		RETURNING id, user_id, title, description, origin, location, status, category,
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text;`
+
+	return db.scanRow(ctx, db.Pool.QueryRow(ctx, query, pgx.NamedArgs{
+		"id":               datasetID,
+		"user_id":          userID,
+		"processing_state": state.String(),
+	}))
+}
+
+func (db *datasetDB) UpdateMaterializationMetadata(ctx context.Context, dataset *model.Dataset) (*model.Dataset, error) {
+	log.Trace("DatasetDB UpdateMaterializationMetadata")
+
+	datasetModel := Dataset{}
+	datasetDAO := datasetModel.toDAO(dataset)
+	query := `UPDATE ` + db.Name + `.datasets
+		SET location = @location,
+			table_namespace = @table_namespace,
+			table_name = @table_name,
+			table_format = @table_format,
+			catalog_provider = @catalog_provider,
+			schema_version = @schema_version,
+			schema_metadata = @schema_metadata::jsonb,
+			processing_state = @processing_state
+		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
+		RETURNING id, user_id, title, description, origin, location, status, category,
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text;`
+
+	return db.scanRow(ctx, db.Pool.QueryRow(ctx, query, datasetDAO))
 }
 
 func (db *datasetDB) UpdatePublishedState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) error {
@@ -282,7 +325,7 @@ func (db *datasetDB) getPaginatedSelectSQL(filter string, pagination core.Pagina
 
 func (db *datasetDB) getSelectSQL(filter string) string {
 	return fmt.Sprintf(`SELECT id, user_id, title, description, origin, location, status, category,
-	table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text
+	table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text
 	FROM %s.datasets WHERE %s;`, db.Name, filter)
 }
 
@@ -307,6 +350,7 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 			&dataset.CatalogProvider,
 			&dataset.SchemaVersion,
 			&dataset.SchemaMetadata,
+			&dataset.ProcessingState,
 		)
 		if err != nil {
 			log.WithContext(ctx).WithError(err).Error("Failed to read datasets")
@@ -329,7 +373,7 @@ func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, 
 	var dataset DatasetDAO
 	err := row.Scan(&dataset.ID, &dataset.UserID, &dataset.Title, &dataset.Description, &dataset.Origin,
 		&dataset.Location, &dataset.Status, &dataset.Category, &dataset.TableNamespace, &dataset.TableName,
-		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.SchemaVersion, &dataset.SchemaMetadata)
+		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.SchemaVersion, &dataset.SchemaMetadata, &dataset.ProcessingState)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domainErrors.ErrResourceNotFound

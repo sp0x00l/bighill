@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
@@ -32,10 +34,10 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, dataset
 
 	query := `INSERT INTO ` + r.Name + `.raw_snapshots (
 		dataset_id, user_id, idempotency_key, source_storage_location, storage_location, content_type, file_extension,
-		table_namespace, table_name, table_format, catalog_provider, status
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata, status
 	) VALUES (
 		@dataset_id, @user_id, @idempotency_key, @source_storage_location, @storage_location, @content_type, @file_extension,
-		@table_namespace, @table_name, @table_format, @catalog_provider, @status
+		@table_namespace, @table_name, @table_format, @catalog_provider, @schema_version, @schema_metadata::jsonb, @status
 	)
 	ON CONFLICT (idempotency_key) DO NOTHING
 	RETURNING ` + rawSnapshotColumns()
@@ -52,6 +54,8 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, dataset
 		"table_name":              datasetFile.TableName,
 		"table_format":            datasetFile.TableFormat,
 		"catalog_provider":        datasetFile.CatalogProvider,
+		"schema_version":          1,
+		"schema_metadata":         "{}",
 		"status":                  model.SnapshotStatusPending.String(),
 	})
 	rawSnapshot, err := scanRawSnapshot(row)
@@ -65,15 +69,23 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, dataset
 	return rawSnapshot, nil
 }
 
-func (r *SnapshotRepository) MarkRawReady(ctx context.Context, rawSnapshotID uuid.UUID, storageLocation string) error {
+func (r *SnapshotRepository) MarkRawReady(ctx context.Context, rawSnapshot *model.RawSnapshot) error {
 	log.Trace("SnapshotRepository MarkRawReady")
 
 	query := `UPDATE ` + r.Name + `.raw_snapshots
-		SET status = @status, storage_location = @storage_location, failure_reason = NULL
+		SET status = @status,
+			storage_location = @storage_location,
+			table_format = @table_format,
+			schema_version = @schema_version,
+			schema_metadata = @schema_metadata::jsonb,
+			failure_reason = NULL
 		WHERE raw_snapshot_id = @raw_snapshot_id`
 	tag, err := r.Pool.Exec(ctx, query, pgx.NamedArgs{
-		"raw_snapshot_id":  pgtype.UUID{Bytes: rawSnapshotID, Valid: true},
-		"storage_location": storageLocation,
+		"raw_snapshot_id":  pgtype.UUID{Bytes: rawSnapshot.RawSnapshotID, Valid: true},
+		"storage_location": rawSnapshot.StorageLocation,
+		"table_format":     rawSnapshot.TableFormat,
+		"schema_version":   schemaVersionOrDefault(rawSnapshot.SchemaVersion),
+		"schema_metadata":  schemaMetadataOrDefault(rawSnapshot.SchemaMetadata),
 		"status":           model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
@@ -81,7 +93,7 @@ func (r *SnapshotRepository) MarkRawReady(ctx context.Context, rawSnapshotID uui
 		return fmt.Errorf("mark raw snapshot ready: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: raw_snapshot_id=%s", domain.ErrRawSnapshotNotFound, rawSnapshotID)
+		return fmt.Errorf("%w: raw_snapshot_id=%s", domain.ErrRawSnapshotNotFound, rawSnapshot.RawSnapshotID)
 	}
 	return nil
 }
@@ -150,9 +162,9 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, raw
 	}
 
 	query := `INSERT INTO ` + r.Name + `.feature_snapshots (
-		raw_snapshot_id, dataset_id, idempotency_key, table_namespace, table_name, table_format, catalog_provider, status
+		raw_snapshot_id, dataset_id, user_id, idempotency_key, table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata, status
 	) VALUES (
-		@raw_snapshot_id, @dataset_id, @idempotency_key, @table_namespace, @table_name, @table_format, @catalog_provider, @status
+		@raw_snapshot_id, @dataset_id, @user_id, @idempotency_key, @table_namespace, @table_name, @table_format, @catalog_provider, @schema_version, @schema_metadata::jsonb, @status
 	)
 	ON CONFLICT (idempotency_key) DO NOTHING
 	RETURNING ` + featureSnapshotColumns()
@@ -160,11 +172,14 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, raw
 	featureSnapshot, err := scanFeatureSnapshot(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"raw_snapshot_id":  pgtype.UUID{Bytes: rawSnapshotID, Valid: true},
 		"dataset_id":       pgtype.UUID{Bytes: rawSnapshot.DatasetID, Valid: true},
+		"user_id":          pgtype.UUID{Bytes: rawSnapshot.UserID, Valid: true},
 		"idempotency_key":  pgtype.UUID{Bytes: idempotencyKey, Valid: true},
 		"table_namespace":  rawSnapshot.TableNamespace,
 		"table_name":       rawSnapshot.TableName,
 		"table_format":     rawSnapshot.TableFormat,
 		"catalog_provider": rawSnapshot.CatalogProvider,
+		"schema_version":   schemaVersionOrDefault(rawSnapshot.SchemaVersion),
+		"schema_metadata":  schemaMetadataOrDefault(rawSnapshot.SchemaMetadata),
 		"status":           model.SnapshotStatusPending.String(),
 	}))
 	if err != nil {
@@ -177,15 +192,23 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, raw
 	return featureSnapshot, nil
 }
 
-func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, featureSnapshotID uuid.UUID, storageLocation string) error {
+func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, featureSnapshot *model.FeatureSnapshot) error {
 	log.Trace("SnapshotRepository MarkFeatureReady")
 
 	query := `UPDATE ` + r.Name + `.feature_snapshots
-		SET status = @status, storage_location = @storage_location, failure_reason = NULL
+		SET status = @status,
+			storage_location = @storage_location,
+			table_format = @table_format,
+			schema_version = @schema_version,
+			schema_metadata = @schema_metadata::jsonb,
+			failure_reason = NULL
 		WHERE feature_snapshot_id = @feature_snapshot_id`
 	tag, err := r.Pool.Exec(ctx, query, pgx.NamedArgs{
-		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshotID, Valid: true},
-		"storage_location":    storageLocation,
+		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshot.FeatureSnapshotID, Valid: true},
+		"storage_location":    featureSnapshot.StorageLocation,
+		"table_format":        featureSnapshot.TableFormat,
+		"schema_version":      schemaVersionOrDefault(featureSnapshot.SchemaVersion),
+		"schema_metadata":     schemaMetadataOrDefault(featureSnapshot.SchemaMetadata),
 		"status":              model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
@@ -193,7 +216,7 @@ func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, featureSnapsh
 		return fmt.Errorf("mark feature snapshot ready: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: feature_snapshot_id=%s", domain.ErrFeatureSnapshotNotFound, featureSnapshotID)
+		return fmt.Errorf("%w: feature_snapshot_id=%s", domain.ErrFeatureSnapshotNotFound, featureSnapshot.FeatureSnapshotID)
 	}
 	return nil
 }
@@ -262,9 +285,9 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, f
 	}
 
 	query := `INSERT INTO ` + r.Name + `.embedding_snapshots (
-		feature_snapshot_id, dataset_id, idempotency_key, status
+		feature_snapshot_id, dataset_id, user_id, idempotency_key, status
 	) VALUES (
-		@feature_snapshot_id, @dataset_id, @idempotency_key, @status
+		@feature_snapshot_id, @dataset_id, @user_id, @idempotency_key, @status
 	)
 	ON CONFLICT (idempotency_key) DO NOTHING
 	RETURNING ` + embeddingSnapshotColumns()
@@ -272,6 +295,7 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, f
 	embeddingSnapshot, err := scanEmbeddingSnapshot(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshotID, Valid: true},
 		"dataset_id":          pgtype.UUID{Bytes: featureSnapshot.DatasetID, Valid: true},
+		"user_id":             pgtype.UUID{Bytes: featureSnapshot.UserID, Valid: true},
 		"idempotency_key":     pgtype.UUID{Bytes: idempotencyKey, Valid: true},
 		"status":              model.SnapshotStatusPending.String(),
 	}))
@@ -285,16 +309,60 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, f
 	return embeddingSnapshot, nil
 }
 
-func (r *SnapshotRepository) MarkEmbeddingReady(ctx context.Context, embeddingSnapshotID uuid.UUID, vectorStore, collectionName string) error {
+func (r *SnapshotRepository) SaveEmbeddingRecords(ctx context.Context, records []model.EmbeddingRecord) error {
+	log.Trace("SnapshotRepository SaveEmbeddingRecords")
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		r.LogPoolStatsOnError(ctx, "begin embedding records transaction failed", err)
+		return fmt.Errorf("begin embedding records transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	query := `INSERT INTO ` + r.Name + `.embedding_records (
+		embedding_snapshot_id, dataset_id, source_text, embedding
+	) VALUES (
+		@embedding_snapshot_id, @dataset_id, @source_text, @embedding
+	)`
+
+	for _, record := range records {
+		if _, err := tx.Exec(ctx, query, pgx.NamedArgs{
+			"embedding_snapshot_id": pgtype.UUID{Bytes: record.EmbeddingSnapshotID, Valid: true},
+			"dataset_id":            pgtype.UUID{Bytes: record.DatasetID, Valid: true},
+			"source_text":           record.SourceText,
+			"embedding":             vectorLiteral(record.Vector),
+		}); err != nil {
+			return fmt.Errorf("insert embedding record: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit embedding records transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *SnapshotRepository) MarkEmbeddingReady(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error {
 	log.Trace("SnapshotRepository MarkEmbeddingReady")
 
 	query := `UPDATE ` + r.Name + `.embedding_snapshots
-		SET status = @status, vector_store = @vector_store, collection_name = @collection_name, failure_reason = NULL
+		SET status = @status,
+			vector_store = @vector_store,
+			collection_name = @collection_name,
+			embedding_dimensions = @embedding_dimensions,
+			embedding_count = @embedding_count,
+			failure_reason = NULL
 		WHERE embedding_snapshot_id = @embedding_snapshot_id`
 	tag, err := r.Pool.Exec(ctx, query, pgx.NamedArgs{
-		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshotID, Valid: true},
-		"vector_store":          vectorStore,
-		"collection_name":       collectionName,
+		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
+		"vector_store":          embeddingSnapshot.VectorStore,
+		"collection_name":       embeddingSnapshot.CollectionName,
+		"embedding_dimensions":  embeddingSnapshot.EmbeddingDimensions,
+		"embedding_count":       embeddingSnapshot.EmbeddingCount,
 		"status":                model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
@@ -302,7 +370,7 @@ func (r *SnapshotRepository) MarkEmbeddingReady(ctx context.Context, embeddingSn
 		return fmt.Errorf("mark embedding snapshot ready: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: embedding_snapshot_id=%s", domain.ErrEmbeddingSnapshotNotFound, embeddingSnapshotID)
+		return fmt.Errorf("%w: embedding_snapshot_id=%s", domain.ErrEmbeddingSnapshotNotFound, embeddingSnapshot.EmbeddingSnapshotID)
 	}
 	return nil
 }
@@ -371,17 +439,17 @@ func (r *SnapshotRepository) embeddingsAlreadyMaterializedByIdempotencyKey(ctx c
 
 func rawSnapshotColumns() string {
 	return `raw_snapshot_id::text, dataset_id::text, user_id::text, storage_location, content_type, file_extension,
-		table_namespace, table_name, table_format, catalog_provider, status::text, COALESCE(failure_reason, '')`
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, status::text, COALESCE(failure_reason, '')`
 }
 
 func featureSnapshotColumns() string {
-	return `feature_snapshot_id::text, raw_snapshot_id::text, dataset_id::text, storage_location,
-		table_namespace, table_name, table_format, catalog_provider, status::text, COALESCE(failure_reason, '')`
+	return `feature_snapshot_id::text, raw_snapshot_id::text, dataset_id::text, user_id::text, storage_location,
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, status::text, COALESCE(failure_reason, '')`
 }
 
 func embeddingSnapshotColumns() string {
-	return `embedding_snapshot_id::text, feature_snapshot_id::text, dataset_id::text,
-		vector_store, collection_name, status::text, COALESCE(failure_reason, '')`
+	return `embedding_snapshot_id::text, feature_snapshot_id::text, dataset_id::text, user_id::text,
+		vector_store, collection_name, embedding_dimensions, embedding_count, status::text, COALESCE(failure_reason, '')`
 }
 
 func scanRawSnapshot(row pgx.Row) (*model.RawSnapshot, error) {
@@ -398,6 +466,8 @@ func scanRawSnapshot(row pgx.Row) (*model.RawSnapshot, error) {
 		&rawSnapshot.TableName,
 		&rawSnapshot.TableFormat,
 		&rawSnapshot.CatalogProvider,
+		&rawSnapshot.SchemaVersion,
+		&rawSnapshot.SchemaMetadata,
 		&statusRaw,
 		&rawSnapshot.FailureReason,
 	); err != nil {
@@ -415,17 +485,20 @@ func scanRawSnapshot(row pgx.Row) (*model.RawSnapshot, error) {
 }
 
 func scanFeatureSnapshot(row pgx.Row) (*model.FeatureSnapshot, error) {
-	var featureSnapshotID, rawSnapshotID, datasetID, statusRaw string
+	var featureSnapshotID, rawSnapshotID, datasetID, userID, statusRaw string
 	featureSnapshot := &model.FeatureSnapshot{}
 	if err := row.Scan(
 		&featureSnapshotID,
 		&rawSnapshotID,
 		&datasetID,
+		&userID,
 		&featureSnapshot.StorageLocation,
 		&featureSnapshot.TableNamespace,
 		&featureSnapshot.TableName,
 		&featureSnapshot.TableFormat,
 		&featureSnapshot.CatalogProvider,
+		&featureSnapshot.SchemaVersion,
+		&featureSnapshot.SchemaMetadata,
 		&statusRaw,
 		&featureSnapshot.FailureReason,
 	); err != nil {
@@ -438,19 +511,23 @@ func scanFeatureSnapshot(row pgx.Row) (*model.FeatureSnapshot, error) {
 	featureSnapshot.FeatureSnapshotID = uuid.MustParse(featureSnapshotID)
 	featureSnapshot.RawSnapshotID = uuid.MustParse(rawSnapshotID)
 	featureSnapshot.DatasetID = uuid.MustParse(datasetID)
+	featureSnapshot.UserID = uuid.MustParse(userID)
 	featureSnapshot.Status = status
 	return featureSnapshot, nil
 }
 
 func scanEmbeddingSnapshot(row pgx.Row) (*model.EmbeddingSnapshot, error) {
-	var embeddingSnapshotID, featureSnapshotID, datasetID, statusRaw string
+	var embeddingSnapshotID, featureSnapshotID, datasetID, userID, statusRaw string
 	embeddingSnapshot := &model.EmbeddingSnapshot{}
 	if err := row.Scan(
 		&embeddingSnapshotID,
 		&featureSnapshotID,
 		&datasetID,
+		&userID,
 		&embeddingSnapshot.VectorStore,
 		&embeddingSnapshot.CollectionName,
+		&embeddingSnapshot.EmbeddingDimensions,
+		&embeddingSnapshot.EmbeddingCount,
 		&statusRaw,
 		&embeddingSnapshot.FailureReason,
 	); err != nil {
@@ -463,6 +540,29 @@ func scanEmbeddingSnapshot(row pgx.Row) (*model.EmbeddingSnapshot, error) {
 	embeddingSnapshot.EmbeddingSnapshotID = uuid.MustParse(embeddingSnapshotID)
 	embeddingSnapshot.FeatureSnapshotID = uuid.MustParse(featureSnapshotID)
 	embeddingSnapshot.DatasetID = uuid.MustParse(datasetID)
+	embeddingSnapshot.UserID = uuid.MustParse(userID)
 	embeddingSnapshot.Status = status
 	return embeddingSnapshot, nil
+}
+
+func schemaVersionOrDefault(version int) int {
+	if version <= 0 {
+		return 1
+	}
+	return version
+}
+
+func schemaMetadataOrDefault(metadata string) string {
+	if metadata == "" {
+		return "{}"
+	}
+	return metadata
+}
+
+func vectorLiteral(vector []float32) string {
+	values := make([]string, len(vector))
+	for i, value := range vector {
+		values[i] = strconv.FormatFloat(float64(value), 'f', -1, 32)
+	}
+	return "[" + strings.Join(values, ",") + "]"
 }

@@ -68,9 +68,9 @@ func (u *embeddingMaterializationUsecase) MaterializeEmbeddings(ctx context.Cont
 	if materialized == nil {
 		return nil, fmt.Errorf("%w: embedding writer returned nil", domain.ErrEmbeddingMaterialize)
 	}
-	if err := u.repo.MarkEmbeddingReady(ctx, embeddingSnapshot.EmbeddingSnapshotID, materialized.VectorStore, materialized.CollectionName); err != nil {
+	materialized.EmbeddingSnapshotID = embeddingSnapshot.EmbeddingSnapshotID
+	if err := u.repo.MarkEmbeddingReady(ctx, materialized); err != nil {
 		return nil, err
 	}
-	materialized.EmbeddingSnapshotID = embeddingSnapshot.EmbeddingSnapshotID
 	return materialized, nil
 }

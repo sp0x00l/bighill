@@ -108,6 +108,8 @@ spec:
               value: {{ .Values.env.kafkaBroker | quote }}
             - name: DATA_REGISTRY_SERVICE_KAFKA_GROUP_ID
               value: {{ .Values.env.kafkaGroupId | quote }}
+            - name: DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.featureMaterializerSubscriberTopic | quote }}
             - name: DATA_REGISTRY_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: DATA_REGISTRY_SERVICE_OUTBOX

@@ -71,6 +71,7 @@ type Dataset struct {
 	CatalogProvider CatalogProvider
 	SchemaVersion   int
 	SchemaMetadata  string
+	ProcessingState ProcessingState
 }
 
 func NewDataset(ID uuid.UUID) *Dataset {

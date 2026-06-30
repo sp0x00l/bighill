@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 
+	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
 	corePagination "lib/shared_lib/transport"
 	usecasetrace "lib/shared_lib/usecasetrace"
@@ -22,6 +23,8 @@ type DatasetUsecase interface {
 	DeleteDataset(ctx context.Context, ID uuid.UUID, userID uuid.UUID) error
 	PublishDataset(ctx context.Context, ID uuid.UUID, userID uuid.UUID) error
 	ReplaceDataset(ctx context.Context, dataset *model.Dataset) (*model.Dataset, error)
+	AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, error)
+	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error)
 }
 
 type datasetUseCase struct {
@@ -151,4 +154,59 @@ func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Data
 	model.NormalizeDatasetMetadata(dataset)
 
 	return u.datasetsRepository.Replace(ctx, dataset)
+}
+
+func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (updated *model.Dataset, err error) {
+	log.Trace("DatasetUsecase AdvanceDatasetProcessingState")
+	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.advance_processing_state",
+		attribute.String("dataset_id", datasetID.String()),
+		attribute.String("user_id", userID.String()),
+		attribute.String("processing_state", state.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	dataset, err := u.datasetsRepository.ReadByID(ctx, datasetID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	next := model.AdvanceProcessingState(dataset.ProcessingState, state)
+	if next == dataset.ProcessingState {
+		return dataset, nil
+	}
+	return u.datasetsRepository.UpdateProcessingState(ctx, datasetID, userID, next)
+}
+
+func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, materialized *model.Dataset, state model.ProcessingState) (updated *model.Dataset, err error) {
+	log.Trace("DatasetUsecase RecordDatasetMaterialization")
+	var attrs []attribute.KeyValue
+	if materialized != nil {
+		attrs = append(attrs,
+			attribute.String("dataset_id", materialized.ID.String()),
+			attribute.String("user_id", materialized.UserID.String()),
+			attribute.String("processing_state", state.String()),
+		)
+	}
+	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.record_materialization", attrs...)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	if materialized == nil {
+		return nil, domainErrors.ErrValidationFailed.Extend("dataset materialization is required")
+	}
+	dataset, err := u.datasetsRepository.ReadByID(ctx, materialized.ID, materialized.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	dataset.Location = materialized.Location
+	dataset.TableNamespace = materialized.TableNamespace
+	dataset.TableName = materialized.TableName
+	dataset.TableFormat = materialized.TableFormat
+	dataset.CatalogProvider = materialized.CatalogProvider
+	dataset.SchemaVersion = materialized.SchemaVersion
+	dataset.SchemaMetadata = materialized.SchemaMetadata
+	dataset.ProcessingState = model.AdvanceProcessingState(dataset.ProcessingState, state)
+	model.NormalizeDatasetMetadata(dataset)
+
+	return u.datasetsRepository.UpdateMaterializationMetadata(ctx, dataset)
 }

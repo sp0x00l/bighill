@@ -16,7 +16,7 @@ env:
   environment: "staging"
   kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
   redisAddress: "redis.exchange-staging.svc.cluster.local:6379"
-  datasetFileUploadedPublisherTopic: "dataset_file_uploaded"
+  topic: "data_ingestion"
   dlq: "http://localhost:4566/data-ingestion-dev-env-queue/"
   outbox: ""
   authKmsKeyId: "alias/exchange-staging-jwt-signing"

@@ -25,6 +25,7 @@ type DatasetDAO struct {
 	CatalogProvider pgtype.Text
 	SchemaVersion   pgtype.Int4
 	SchemaMetadata  pgtype.Text
+	ProcessingState pgtype.Text
 }
 
 type Dataset struct {
@@ -50,6 +51,10 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 		},
 		"schema_version":  pgtype.Int4{Int32: int32(dataset.SchemaVersion), Valid: true},
 		"schema_metadata": pgtype.Text{String: dataset.SchemaMetadata, Valid: true},
+		"processing_state": pgtype.Text{
+			String: dataset.ProcessingState.String(),
+			Valid:  true,
+		},
 	}
 
 	if dataset.Description != "" {
@@ -89,6 +94,11 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 		log.WithContext(ctx).WithError(err).Error("Failed to convert catalog provider")
 		return nil, domainErrors.ErrValidationFailed.Extend("failed to convert catalog provider")
 	}
+	processingState, err := model.ToProcessingState(dao.ProcessingState.String)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("Failed to convert processing state")
+		return nil, domainErrors.ErrValidationFailed.Extend("failed to convert processing state")
+	}
 
 	return &model.Dataset{
 		ID:              dao.ID.Bytes,
@@ -105,5 +115,6 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 		CatalogProvider: catalogProvider,
 		SchemaVersion:   int(dao.SchemaVersion.Int32),
 		SchemaMetadata:  dao.SchemaMetadata.String,
+		ProcessingState: processingState,
 	}, nil
 }

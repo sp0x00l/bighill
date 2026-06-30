@@ -13,6 +13,7 @@ import (
 	"time"
 
 	usecase "feature_materializer_service/pkg/app"
+	"feature_materializer_service/pkg/infra/materialization"
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	featuredb "feature_materializer_service/pkg/infra/repo/db"
 	coreDB "lib/shared_lib/db"
@@ -28,12 +29,28 @@ import (
 var Version string
 
 type materializerConfig struct {
-	ServiceName          string
-	DBName               string
-	DBConnectionString   string
-	Messaging            messagingConn.MessengerConfig
-	DatasetUploadedTopic string
-	Health               healthConfig
+	ServiceName              string
+	DBName                   string
+	DBConnectionString       string
+	Messaging                messagingConn.MessengerConfig
+	OutboxRelay              messagingConn.OutboxRelayConfig
+	ArtifactBucket           artifactBucketConfig
+	Embedding                embeddingConfig
+	DatasetUploadedTopic     string
+	FeatureMaterializerTopic string
+	PublishTopics            featuremessaging.MaterializationTopics
+	Health                   healthConfig
+}
+
+type artifactBucketConfig struct {
+	Name           string
+	Region         string
+	UploadPartSize int64
+}
+
+type embeddingConfig struct {
+	Dimensions int
+	MaxRows    int
 }
 
 type healthConfig struct {
@@ -73,6 +90,20 @@ func main() {
 	defer func() {
 		_ = messagingFactory.Close(cancelCtx)
 	}()
+	publisher, err := messagingFactory.Publisher(cancelCtx)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
+	}
+	outboxRelay, err := messagingFactory.OutboxRelay(cancelCtx, cfg.OutboxRelay)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Warn("unable to create outbox relay")
+	} else {
+		go func() {
+			if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+				log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
+			}
+		}()
+	}
 
 	subscriber, err := messagingFactory.Subscriber(cancelCtx)
 	if err != nil {
@@ -80,8 +111,28 @@ func main() {
 	}
 
 	snapshotRepo := featuredb.NewSnapshotRepository(database)
-	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, nil)
-	datasetFileSubscriber := featuremessaging.NewDatasetFileUploadedSubscriber(subscriber, rawSnapshotUsecase, []string{cfg.DatasetUploadedTopic})
+	artifactStore, err := materialization.NewObjectArtifactStore(cancelCtx, cfg.ArtifactBucket.Name, cfg.ArtifactBucket.Region, cfg.ArtifactBucket.UploadPartSize)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create artifact store")
+	}
+
+	rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
+	featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
+	embeddingProvider := materialization.NewDeterministicEmbeddingProvider(cfg.Embedding.Dimensions)
+	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepo, embeddingProvider, "pgvector", cfg.Embedding.MaxRows)
+
+	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, rawWriter)
+	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotRepo, featureBuilder)
+	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotRepo, embeddingWriter)
+	eventPublisher := featuremessaging.NewMaterializationEventPublisher(publisher, cfg.PublishTopics)
+	materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
+		subscriber,
+		rawSnapshotUsecase,
+		featureSnapshotUsecase,
+		embeddingUsecase,
+		eventPublisher,
+		[]string{cfg.DatasetUploadedTopic, cfg.FeatureMaterializerTopic},
+	)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
@@ -90,8 +141,8 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		if err := datasetFileSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
-			log.WithContext(cancelCtx).WithError(err).Fatal("dataset file subscriber stopped unexpectedly")
+		if err := materializationSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(err).Fatal("materialization subscriber stopped unexpectedly")
 		}
 	}()
 
@@ -123,6 +174,7 @@ func readMaterializerConfig() materializerConfig {
 		env.WithDefaultString("FEATURE_MATERIALIZER_DB_SSLMODE", env.WithDefaultString("PGSSLMODE", "disable")),
 		env.WithDefaultInt("FEATURE_MATERIALIZER_DB_MAX_CONNECTIONS", "20"),
 	)
+	uploadPartSizeMB := env.WithDefaultInt64("FEATURE_MATERIALIZER_ARTIFACT_UPLOAD_PART_SIZE_MB", "10")
 	return materializerConfig{
 		ServiceName:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_NAME", "feature-materializer-service"),
 		DBName:             dbName,
@@ -133,7 +185,25 @@ func readMaterializerConfig() materializerConfig {
 			Brokers:   brokers,
 			OutboxURL: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_OUTBOX", ""),
 		},
-		DatasetUploadedTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATASET_FILE_UPLOADED_SUBSCRIBER_TOPIC", "dataset_file_uploaded"),
+		OutboxRelay: messagingConn.OutboxRelayConfig{
+			PollInterval:   time.Duration(env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_POLL_MS", "250")) * time.Millisecond,
+			FailureBackoff: time.Duration(env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
+			BatchSize:      int32(env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
+		},
+		ArtifactBucket: artifactBucketConfig{
+			Name:           env.WithDefaultString("FEATURE_MATERIALIZER_ARTIFACT_BUCKET_NAME", "local-dev-bucket"),
+			Region:         env.WithDefaultString("FEATURE_MATERIALIZER_ARTIFACT_BUCKET_REGION", "local-dev"),
+			UploadPartSize: uploadPartSizeMB * 1024 * 1024,
+		},
+		Embedding: embeddingConfig{
+			Dimensions: env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS", "384"),
+			MaxRows:    env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS", "1000"),
+		},
+		DatasetUploadedTopic:     env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC", "data_ingestion"),
+		FeatureMaterializerTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
+		PublishTopics: featuremessaging.MaterializationTopics{
+			FeatureMaterializer: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
+		},
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("FEATURE_MATERIALIZER_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercentage:    env.WithDefaultInt("FEATURE_MATERIALIZER_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),

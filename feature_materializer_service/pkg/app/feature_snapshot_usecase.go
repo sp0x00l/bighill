@@ -68,9 +68,9 @@ func (u *featureSnapshotUsecase) BuildFeatureSnapshot(ctx context.Context, rawSn
 	if built == nil {
 		return nil, fmt.Errorf("%w: feature snapshot builder returned nil", domain.ErrFeatureSnapshotBuild)
 	}
-	if err := u.repo.MarkFeatureReady(ctx, featureSnapshot.FeatureSnapshotID, built.StorageLocation); err != nil {
+	built.FeatureSnapshotID = featureSnapshot.FeatureSnapshotID
+	if err := u.repo.MarkFeatureReady(ctx, built); err != nil {
 		return nil, err
 	}
-	built.FeatureSnapshotID = featureSnapshot.FeatureSnapshotID
 	return built, nil
 }

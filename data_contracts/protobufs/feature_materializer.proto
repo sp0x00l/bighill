@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package feature_materializer;
+
+option go_package = "lib/data_contracts_lib/feature_materializer";
+
+message RawSnapshotReadyEvent {
+  string raw_snapshot_id = 1;
+  string dataset_id = 2;
+  string user_id = 3;
+  string storage_location = 4;
+  string table_namespace = 5;
+  string table_name = 6;
+  string table_format = 7;
+  string catalog_provider = 8;
+  int32 schema_version = 9;
+  string schema_metadata = 10;
+}
+
+message FeatureSnapshotBuildRequestedEvent {
+  string raw_snapshot_id = 1;
+  string idempotency_key = 2;
+}
+
+message FeatureSnapshotReadyEvent {
+  string feature_snapshot_id = 1;
+  string raw_snapshot_id = 2;
+  string dataset_id = 3;
+  string user_id = 4;
+  string storage_location = 5;
+  string table_namespace = 6;
+  string table_name = 7;
+  string table_format = 8;
+  string catalog_provider = 9;
+  int32 schema_version = 10;
+  string schema_metadata = 11;
+}
+
+message EmbeddingMaterializationRequestedEvent {
+  string feature_snapshot_id = 1;
+  string idempotency_key = 2;
+}
+
+message EmbeddingSnapshotReadyEvent {
+  string embedding_snapshot_id = 1;
+  string feature_snapshot_id = 2;
+  string dataset_id = 3;
+  string user_id = 4;
+  string vector_store = 5;
+  string collection_name = 6;
+  int32 embedding_dimensions = 7;
+  int64 embedding_count = 8;
+}

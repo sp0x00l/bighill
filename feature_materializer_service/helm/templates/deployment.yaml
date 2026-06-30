@@ -36,8 +36,10 @@ spec:
               value: {{ .Values.env.kafkaBroker | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID
               value: {{ .Values.env.kafkaGroupId | quote }}
-            - name: FEATURE_MATERIALIZER_SERVICE_DATASET_FILE_UPLOADED_SUBSCRIBER_TOPIC
-              value: {{ .Values.env.datasetFileUploadedSubscriberTopic | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_TOPIC
+              value: {{ .Values.env.topic | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.dataIngestionSubscriberTopic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX
@@ -48,28 +50,72 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: FEATURE_MATERIALIZER_ARTIFACT_BUCKET_NAME
+              value: {{ .Values.env.artifactBucketName | quote }}
+            - name: FEATURE_MATERIALIZER_ARTIFACT_BUCKET_REGION
+              value: {{ .Values.env.artifactBucketRegion | quote }}
+            - name: FEATURE_MATERIALIZER_ARTIFACT_UPLOAD_PART_SIZE_MB
+              value: {{ .Values.env.artifactUploadPartSizeMb | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS
+              value: {{ .Values.env.embeddingDimensions | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS
+              value: {{ .Values.env.embeddingMaxRows | quote }}
             - name: FEATURE_MATERIALIZER_DB_HOST
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.hostKey }}
+{{- else }}
               value: {{ .Values.env.dbHost | quote }}
+{{- end }}
             - name: FEATURE_MATERIALIZER_DB_PORT
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.portKey }}
+{{- else }}
               value: {{ .Values.env.dbPort | quote }}
+{{- end }}
             - name: FEATURE_MATERIALIZER_DB_NAME
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.nameKey }}
+{{- else }}
               value: {{ .Values.env.dbName | quote }}
+{{- end }}
             - name: FEATURE_MATERIALIZER_DB_USER
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.userKey }}
+{{- else }}
               value: {{ .Values.env.dbUser | quote }}
+{{- end }}
             - name: FEATURE_MATERIALIZER_DB_PASSWORD
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.passwordKey }}
+{{- else }}
               value: {{ .Values.env.dbPassword | quote }}
+{{- end }}
             - name: FEATURE_MATERIALIZER_DB_MAX_CONNECTIONS
               value: {{ .Values.env.dbMaxConnections | quote }}
             - name: FEATURE_MATERIALIZER_DB_SSLMODE
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.sslmodeKey }}
+{{- else }}
               value: {{ .Values.env.dbSslMode | quote }}
-            - name: FEATURE_MATERIALIZER_POLARIS_CATALOG_URL
-              value: {{ .Values.env.polarisCatalogUrl | quote }}
-            - name: FEATURE_MATERIALIZER_POLARIS_REALM
-              value: {{ .Values.env.polarisRealm | quote }}
-            - name: FEATURE_MATERIALIZER_POLARIS_CLIENT_ID
-              value: {{ .Values.env.polarisClientId | quote }}
-            - name: FEATURE_MATERIALIZER_POLARIS_CLIENT_SECRET
-              value: {{ .Values.env.polarisClientSecret | quote }}
+{{- end }}
             - name: FEATURE_MATERIALIZER_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: FEATURE_MATERIALIZER_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT

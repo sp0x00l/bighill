@@ -31,6 +31,7 @@ type DatasetDTO struct {
 	CatalogProvider string                 `json:"catalogProvider,omitempty"`
 	SchemaVersion   int                    `json:"schemaVersion,omitempty"`
 	SchemaMetadata  json.RawMessage        `json:"schemaMetadata,omitempty"`
+	ProcessingState string                 `json:"processingState,omitempty"`
 	Links           coreRest.ResourceLinks `json:"links"`
 }
 
@@ -205,6 +206,7 @@ func (a *dtoAdapter) toDTO(datasetModel *model.Dataset, baseURL string) *Dataset
 		CatalogProvider: datasetModel.CatalogProvider.String(),
 		SchemaVersion:   datasetModel.SchemaVersion,
 		SchemaMetadata:  json.RawMessage(schemaMetadata),
+		ProcessingState: datasetModel.ProcessingState.String(),
 		Links: coreRest.ResourceLinks{
 			Self: coreRest.Self{
 				Href: fmt.Sprintf("%s/%s", baseURL, datasetModel.ID.String()),

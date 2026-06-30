@@ -63,9 +63,9 @@ func (u *rawSnapshotUsecase) MaterializeRawSnapshot(ctx context.Context, dataset
 	if written == nil {
 		return nil, fmt.Errorf("%w: raw snapshot writer returned nil", domain.ErrRawSnapshotMaterialize)
 	}
-	if err := u.repo.MarkRawReady(ctx, rawSnapshot.RawSnapshotID, written.StorageLocation); err != nil {
+	written.RawSnapshotID = rawSnapshot.RawSnapshotID
+	if err := u.repo.MarkRawReady(ctx, written); err != nil {
 		return nil, err
 	}
-	written.RawSnapshotID = rawSnapshot.RawSnapshotID
 	return written, nil
 }

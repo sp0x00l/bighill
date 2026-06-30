@@ -13,6 +13,8 @@ type RawSnapshot struct {
 	TableName       string
 	TableFormat     string
 	CatalogProvider string
+	SchemaVersion   int
+	SchemaMetadata  string
 	Status          SnapshotStatus
 	FailureReason   string
 }

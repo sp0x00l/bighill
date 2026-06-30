@@ -3,18 +3,25 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	usecase "feature_materializer_service/pkg/app"
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	"feature_materializer_service/pkg/infra/materialization"
+	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	repo "feature_materializer_service/pkg/infra/repo/db"
+	datasetpb "lib/data_contracts_lib/dataset"
+	corebucket "lib/shared_lib/bucket"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
+	sharedmessaging "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -88,13 +95,20 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		featureSnapshot, err := snapshots.SavePendingFeatureSnapshot(ctx, rawSnapshot.RawSnapshotID, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(featureSnapshot.RawSnapshotID).To(Equal(rawSnapshot.RawSnapshotID))
-		Expect(snapshots.MarkFeatureReady(ctx, featureSnapshot.FeatureSnapshotID, "s3://lakehouse/features/snapshot.parquet")).To(Succeed())
+		featureSnapshot.StorageLocation = "s3://lakehouse/features/snapshot.parquet"
+		featureSnapshot.SchemaVersion = 1
+		featureSnapshot.SchemaMetadata = "{}"
+		Expect(snapshots.MarkFeatureReady(ctx, featureSnapshot)).To(Succeed())
 
 		embeddingIdempotencyKey := uuid.New()
 		embeddingSnapshot, err := snapshots.SavePendingEmbeddingSnapshot(ctx, featureSnapshot.FeatureSnapshotID, embeddingIdempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(embeddingSnapshot.FeatureSnapshotID).To(Equal(featureSnapshot.FeatureSnapshotID))
-		Expect(snapshots.MarkEmbeddingReady(ctx, embeddingSnapshot.EmbeddingSnapshotID, "pgvector", "movies")).To(Succeed())
+		embeddingSnapshot.VectorStore = "pgvector"
+		embeddingSnapshot.CollectionName = "movies"
+		embeddingSnapshot.EmbeddingDimensions = 384
+		embeddingSnapshot.EmbeddingCount = 3
+		Expect(snapshots.MarkEmbeddingReady(ctx, embeddingSnapshot)).To(Succeed())
 
 		readFeature, err := snapshots.ReadFeatureSnapshot(ctx, featureSnapshot.FeatureSnapshotID)
 		Expect(err).NotTo(HaveOccurred())
@@ -103,6 +117,85 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		readEmbedding, err := snapshots.ReadEmbeddingByIdempotencyKey(ctx, embeddingIdempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readEmbedding.VectorStore).To(Equal("pgvector"))
+	})
+
+	It("materializes an uploaded dataset file through Kafka", func() {
+		brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
+		suffix := fmt.Sprintf("%d", rand.Int64())
+		datasetTopic := "data_ingestion"
+		featureMaterializerTopic := "feature_materializer"
+		topics := featuremessaging.MaterializationTopics{
+			FeatureMaterializer: featureMaterializerTopic,
+		}
+
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		messenger := sharedmessaging.NewMessenger(sharedmessaging.MessengerConfig{
+			Brokers:         brokers,
+			GroupID:         "feature-materializer-integration-" + suffix,
+			DlqURL:          "http://localhost:4566/feature-materializer-dev-env-queue/",
+			OutboxURL:       "noop://local",
+			AutoOffsetReset: "earliest",
+		}, cancel)
+		defer func() {
+			_ = messenger.Close(runCtx)
+		}()
+
+		publisher, err := messenger.Publisher(runCtx)
+		Expect(err).NotTo(HaveOccurred())
+		subscriber, err := messenger.Subscriber(runCtx)
+		Expect(err).NotTo(HaveOccurred())
+
+		artifactStore, err := materialization.NewObjectArtifactStore(runCtx, "local-dev-bucket", "local-dev", 10*1024*1024)
+		Expect(err).NotTo(HaveOccurred())
+		rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
+		featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
+		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshots, materialization.NewDeterministicEmbeddingProvider(384), "pgvector", 10)
+		eventPublisher := featuremessaging.NewMaterializationEventPublisher(publisher, topics)
+		materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
+			subscriber,
+			usecase.NewRawSnapshotUsecase(snapshots, rawWriter),
+			usecase.NewFeatureSnapshotUsecase(snapshots, snapshots, featureBuilder),
+			usecase.NewEmbeddingMaterializationUsecase(snapshots, snapshots, embeddingWriter),
+			eventPublisher,
+			[]string{datasetTopic, featureMaterializerTopic},
+		)
+
+		go func() {
+			_ = materializationSubscriber.Start(runCtx)
+		}()
+		time.Sleep(750 * time.Millisecond)
+
+		datasetID := uuid.New()
+		userID := uuid.New()
+		storageKey := fmt.Sprintf("raw/%s/upload.csv", datasetID)
+		bucket := corebucket.NewBucket(runCtx, "local-dev", 10*1024*1024)
+		Expect(bucket.Upload(runCtx, "local-dev-bucket", storageKey, "text/csv", strings.NewReader("title,views\nIntro,10\nNext,20\n"))).To(Succeed())
+		storageLocation := "s3://local-dev-bucket/" + storageKey
+
+		err = publisher.Publish(runCtx, datasetTopic, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeDatasetFileUploaded,
+		}, &datasetpb.DatasetFileUploadedEvent{
+			DatasetId:       datasetID.String(),
+			UserId:          userID.String(),
+			StorageLocation: storageLocation,
+			ContentType:     "text/csv",
+			FileExtension:   "csv",
+			TableNamespace:  "features",
+			TableName:       "movies",
+			TableFormat:     "PARQUET",
+			CatalogProvider: "LOCAL",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			rawStatus, featureStatus, embeddingStatus, embeddingCount := materializationState(ctx, database, datasetID)
+			g.Expect(rawStatus).To(Equal(model.SnapshotStatusReady.String()))
+			g.Expect(featureStatus).To(Equal(model.SnapshotStatusReady.String()))
+			g.Expect(embeddingStatus).To(Equal(model.SnapshotStatusReady.String()))
+			g.Expect(embeddingCount).To(Equal(int64(2)))
+		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
 	})
 })
 
@@ -121,12 +214,26 @@ func validIntegrationDatasetFile() *model.DatasetFile {
 }
 
 func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"embedding_snapshots", "feature_snapshots", "raw_snapshots"} {
+	for _, table := range []string{"embedding_records", "embedding_snapshots", "feature_snapshots", "raw_snapshots"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func materializationState(ctx context.Context, database *dbconn.Database, datasetID uuid.UUID) (string, string, string, int64) {
+	var rawStatus, featureStatus, embeddingStatus string
+	var embeddingCount int64
+	err := database.Pool.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT status::text FROM `+database.Name+`.raw_snapshots WHERE dataset_id = $1 ORDER BY created_at DESC LIMIT 1), ''),
+			COALESCE((SELECT status::text FROM `+database.Name+`.feature_snapshots WHERE dataset_id = $1 ORDER BY created_at DESC LIMIT 1), ''),
+			COALESCE((SELECT status::text FROM `+database.Name+`.embedding_snapshots WHERE dataset_id = $1 ORDER BY created_at DESC LIMIT 1), ''),
+			COALESCE((SELECT embedding_count FROM `+database.Name+`.embedding_snapshots WHERE dataset_id = $1 ORDER BY created_at DESC LIMIT 1), 0)
+	`, datasetID).Scan(&rawStatus, &featureStatus, &embeddingStatus, &embeddingCount)
+	Expect(err).NotTo(HaveOccurred())
+	return rawStatus, featureStatus, embeddingStatus, embeddingCount
 }
 
 func testPostgresConnectionString(dbName string) string {

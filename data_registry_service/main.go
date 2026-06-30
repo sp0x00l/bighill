@@ -7,6 +7,7 @@ import (
 	"data_registry_service/pkg/infra/network/adapter"
 	catalogclient "data_registry_service/pkg/infra/network/client"
 	registrygrpc "data_registry_service/pkg/infra/network/grpc"
+	registrymessaging "data_registry_service/pkg/infra/network/messaging"
 	"data_registry_service/pkg/infra/network/rest"
 	coreRest "data_registry_service/pkg/infra/network/restsupport"
 	"data_registry_service/pkg/infra/repo/db"
@@ -33,14 +34,15 @@ import (
 var Version string
 
 type registryConfig struct {
-	ServiceName        string
-	HTTPPort           int
-	GRPCPort           int
-	DBName             string
-	DBConnectionString string
-	Messaging          messagingConn.MessengerConfig
-	OutboxRelay        messagingConn.OutboxRelayConfig
-	Health             healthConfig
+	ServiceName           string
+	HTTPPort              int
+	GRPCPort              int
+	DBName                string
+	DBConnectionString    string
+	Messaging             messagingConn.MessengerConfig
+	OutboxRelay           messagingConn.OutboxRelayConfig
+	MaterializationTopics registrymessaging.MaterializationTopics
+	Health                healthConfig
 }
 
 type healthConfig struct {
@@ -90,6 +92,10 @@ func main() {
 			}
 		}()
 	}
+	subscriber, err := messagingFactory.Subscriber(cancelCtx)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
+	}
 
 	sourceConnectorDB := db.NewSourceConnectorDB(database)
 	datasetDB := db.NewDatasetDB(database)
@@ -110,6 +116,7 @@ func main() {
 
 	restService := coreRest.NewService(routes, cfg.HTTPPort, serviceName)
 	grpcService := registrygrpc.NewDataRegistryGrpcServer(sourceConnectorUseCase)
+	materializationSubscriber := registrymessaging.NewMaterializationSubscriber(subscriber, datasetUseCase, cfg.MaterializationTopics)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
@@ -129,6 +136,13 @@ func main() {
 	go func() {
 		if err := grpcService.Connect(cfg.GRPCPort); err != nil {
 			log.Errorf("unable to start the %s grpc service: %v", serviceName, err)
+			quit <- syscall.SIGTERM
+		}
+	}()
+
+	go func() {
+		if err := materializationSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(err).Error("materialization subscriber stopped unexpectedly")
 			quit <- syscall.SIGTERM
 		}
 	}()
@@ -182,6 +196,9 @@ func readRegistryConfig() registryConfig {
 			PollInterval:   time.Duration(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_POLL_MS", "250")) * time.Millisecond,
 			FailureBackoff: time.Duration(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
 			BatchSize:      int32(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
+		},
+		MaterializationTopics: registrymessaging.MaterializationTopics{
+			FeatureMaterializer: env.WithDefaultString("DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC", "feature_materializer"),
 		},
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("DATA_REGISTRY_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
