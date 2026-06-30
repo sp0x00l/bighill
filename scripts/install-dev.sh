@@ -132,10 +132,20 @@ install_data_infra_dependencies()
     fi
 }
 
+build_datafusion_query_engine()
+{
+    local QUERY_ENGINE_DIR
+    QUERY_ENGINE_DIR="$ROOT_DIR/query_engine"
+
+    echo "building DataFusion query engine"
+    make -C "$QUERY_ENGINE_DIR" build
+}
+
 install_brew
 install_go_tools
 install_protobuf
 install_rust
+build_datafusion_query_engine
 install redis
 install_kafka
 install_data_infra_dependencies
@@ -147,7 +157,7 @@ echo "Final steps:"
 echo "  1. Run make install to generate module replacements and protobuf output."
 echo "  2. Run make start-infra for Postgres, Redis, Kafka, and local data sources."
 echo "  3. Run make start-test to start the local services and API gateway."
-echo "  4. Run make build-query-engine when you want DATA_STREAM_QUERY_ENGINE_MODE=datafusion."
+echo "  4. Run make build-query-engine to rebuild DATA_STREAM_QUERY_ENGINE_MODE=datafusion after Rust changes."
 echo "  5. Run make start-lakehouse when you need local Polaris/Iceberg catalog infra."
 
 cd "$ROOT_DIR"
