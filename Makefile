@@ -5,7 +5,7 @@ BUILD_MODE ?= prebuilt
 EXCLUDE_SERVICES ?=
 CI_TEST_EXCLUDE_SERVICES ?=
 
-.PHONY: install install-dev install-all build-all build-query-engine test-query-engine start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources start-lakehouse stop-lakehouse test-servers test-api kafka-clean kafka-create-topics kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka upgrade-go kafka-clean-test-topics k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
+.PHONY: install install-dev install-all build-all build-query-engine test-query-engine start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api kafka-clean kafka-create-topics kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka upgrade-go kafka-clean-test-topics k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
 
 install: install-all
 
@@ -63,12 +63,6 @@ start-data-sources:
 
 stop-data-sources:
 	@scripts/stop-data-sources.sh
-
-start-lakehouse:
-	@scripts/start-lakehouse.sh
-
-stop-lakehouse:
-	@scripts/stop-lakehouse.sh
 
 test-servers:
 	@scripts/stop-servers.sh

@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "feature-materializer-service.fullname" . }}
+  labels:
+    app: {{ include "feature-materializer-service.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "feature-materializer-service.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "feature-materializer-service.fullname" . }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default "feature-materializer-service" }}
+      {{- end }}
+      containers:
+        - name: {{ include "feature-materializer-service.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: {{ .Values.env.environment | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.env.otelExporterEndpoint | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_NAME
+              value: {{ .Values.env.serviceName | quote }}
+            - name: KAFKA_BROKER
+              value: {{ .Values.env.kafkaBroker | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID
+              value: {{ .Values.env.kafkaGroupId | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATASET_FILE_UPLOADED_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.datasetFileUploadedSubscriberTopic | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DLQ
+              value: {{ .Values.env.dlq | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX
+              value: {{ .Values.env.outbox | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_POLL_MS
+              value: {{ .Values.env.outboxRelayPollMs | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_BATCH_SIZE
+              value: {{ .Values.env.outboxRelayBatchSize | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
+              value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: FEATURE_MATERIALIZER_DB_HOST
+              value: {{ .Values.env.dbHost | quote }}
+            - name: FEATURE_MATERIALIZER_DB_PORT
+              value: {{ .Values.env.dbPort | quote }}
+            - name: FEATURE_MATERIALIZER_DB_NAME
+              value: {{ .Values.env.dbName | quote }}
+            - name: FEATURE_MATERIALIZER_DB_USER
+              value: {{ .Values.env.dbUser | quote }}
+            - name: FEATURE_MATERIALIZER_DB_PASSWORD
+              value: {{ .Values.env.dbPassword | quote }}
+            - name: FEATURE_MATERIALIZER_DB_MAX_CONNECTIONS
+              value: {{ .Values.env.dbMaxConnections | quote }}
+            - name: FEATURE_MATERIALIZER_DB_SSLMODE
+              value: {{ .Values.env.dbSslMode | quote }}
+            - name: FEATURE_MATERIALIZER_POLARIS_CATALOG_URL
+              value: {{ .Values.env.polarisCatalogUrl | quote }}
+            - name: FEATURE_MATERIALIZER_POLARIS_REALM
+              value: {{ .Values.env.polarisRealm | quote }}
+            - name: FEATURE_MATERIALIZER_POLARIS_CLIENT_ID
+              value: {{ .Values.env.polarisClientId | quote }}
+            - name: FEATURE_MATERIALIZER_POLARIS_CLIENT_SECRET
+              value: {{ .Values.env.polarisClientSecret | quote }}
+            - name: FEATURE_MATERIALIZER_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckCpuThreshold | quote }}
+            - name: FEATURE_MATERIALIZER_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
+            - name: FEATURE_MATERIALIZER_HEALTHCHECK_PORT
+              value: {{ .Values.service.healthPort | quote }}
+            - name: FEATURE_MATERIALIZER_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
+            - name: FEATURE_MATERIALIZER_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
+            - name: FEATURE_MATERIALIZER_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory | quote }}
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | quote }}
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3

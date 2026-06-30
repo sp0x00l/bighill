@@ -324,6 +324,10 @@ deploy_shared_infra() {
     --set postgres.password="$BIGHILL_DB_PASSWORD" \
     --set postgres.host="$PGHOST" \
     --set postgres.port="$PGPORT" \
+    --set postgres.image.repository="pgvector/pgvector" \
+    --set postgres.image.tag="pg17" \
+    --set postgres.extensions.vector=true \
+    --set polaris.enabled=true \
     --wait \
     --timeout 20m \
     --debug
@@ -732,6 +736,61 @@ ensure_redis_service() {
   return 0
 }
 
+ensure_polaris_service() {
+  echo "Ensuring Polaris catalog is ready..."
+
+  local RETRIES=30
+
+  echo "Waiting for Polaris catalog deployment..."
+  while [ $RETRIES -gt 0 ]; do
+    local READY=$(kubectl get deployment polaris-catalog -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+    if [ "$READY" = "1" ]; then
+      echo "Polaris catalog deployment is ready."
+      break
+    fi
+    RETRIES=$((RETRIES - 1))
+    echo "Waiting for Polaris catalog deployment... ($RETRIES retries left)"
+    sleep 5
+  done
+
+  if [ $RETRIES -eq 0 ]; then
+    echo "ERROR: Polaris catalog deployment not ready after timeout"
+    return 1
+  fi
+
+  RETRIES=30
+  while [ $RETRIES -gt 0 ]; do
+    if kubectl get svc polaris-catalog -n "$NAMESPACE" >/dev/null 2>&1; then
+      echo "Polaris catalog service exists."
+      break
+    fi
+    RETRIES=$((RETRIES - 1))
+    echo "Waiting for Polaris catalog service to be created... ($RETRIES retries left)"
+    sleep 3
+  done
+
+  if [ $RETRIES -eq 0 ]; then
+    echo "ERROR: Polaris catalog service was not created by Helm. Check helm chart configuration."
+    return 1
+  fi
+
+  RETRIES=15
+  while [ $RETRIES -gt 0 ]; do
+    local ENDPOINTS=$(kubectl get endpoints polaris-catalog -n "$NAMESPACE" -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || echo "")
+    if [ -n "$ENDPOINTS" ]; then
+      echo "Polaris catalog service has endpoints: $ENDPOINTS"
+      echo "K8s pods can use polaris-catalog.$NAMESPACE.svc.cluster.local:8181"
+      return 0
+    fi
+    RETRIES=$((RETRIES - 1))
+    echo "Waiting for Polaris catalog endpoints... ($RETRIES retries left)"
+    sleep 3
+  done
+
+  echo "ERROR: Polaris catalog endpoints not ready"
+  return 1
+}
+
 wait_for_kafka() {
   wait_for_kafka_ready "$NAMESPACE" "$ENVIRONMENT"
 }
@@ -837,6 +896,7 @@ if [ "$ONLY_SYNC_SECRETS" = "true" ]; then
 fi
 cleanup_stale_stateful_resources
 deploy_shared_infra
+ensure_polaris_service
 ensure_redis_service
 wait_for_kafka
 verify_migrations || exit 1

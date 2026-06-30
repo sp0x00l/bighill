@@ -35,6 +35,16 @@ install()
     fi
 }
 
+install_brew_formula()
+{
+    if brew list "$1" >/dev/null 2>&1; then
+        echo "$1 already installed"
+    else
+        echo "installing $1"
+        brew install "$1"
+    fi
+}
+
 install_docker()
 {
     if [ -d "/Applications/Docker.app" ]; then
@@ -42,6 +52,38 @@ install_docker()
     else
         echo "installing docker"
         brew install --cask docker
+    fi
+}
+
+install_postgres()
+{
+    install_brew_formula postgresql@17
+}
+
+link_postgres_launch_agent()
+{
+    local BREW_PREFIX
+    local LAUNCH_AGENTS_DIR
+
+    BREW_PREFIX="$(brew --prefix)"
+    LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+
+    mkdir -p "$LAUNCH_AGENTS_DIR"
+    ln -sfv "$BREW_PREFIX"/opt/postgresql@17/*.plist "$LAUNCH_AGENTS_DIR"
+}
+
+install_pgvector()
+{
+    install_brew_formula pgvector
+}
+
+install_pgadmin()
+{
+    if [ -d "/Applications/pgAdmin 4.app" ]; then
+        echo "pgAdmin 4 already installed"
+    else
+        echo "installing pgAdmin 4"
+        brew install --cask pgadmin4
     fi
 }
 
@@ -142,6 +184,10 @@ build_datafusion_query_engine()
 }
 
 install_brew
+install_postgres
+link_postgres_launch_agent
+install_pgvector
+install_pgadmin
 install_go_tools
 install_protobuf
 install_rust
@@ -155,9 +201,8 @@ install yq
 echo ""
 echo "Final steps:"
 echo "  1. Run make install to generate module replacements and protobuf output."
-echo "  2. Run make start-infra for Postgres, Redis, Kafka, and local data sources."
+echo "  2. Run make start-infra for Postgres with pgvector, Redis, Kafka, Polaris, and local data sources."
 echo "  3. Run make start-test to start the local services and API gateway."
 echo "  4. Run make build-query-engine to rebuild DATA_STREAM_QUERY_ENGINE_MODE=datafusion after Rust changes."
-echo "  5. Run make start-lakehouse when you need local Polaris/Iceberg catalog infra."
 
 cd "$ROOT_DIR"

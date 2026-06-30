@@ -112,6 +112,18 @@ install_docker_compose_standalone() {
     }
 }
 
+install_runtime_images() {
+    if ! command -v docker >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "Pulling runtime infra images..."
+    docker pull pgvector/pgvector:pg17 || true
+    docker pull apache/polaris:latest || true
+    docker pull rustfs/rustfs:1.0.0-alpha.81 || true
+    docker pull amazon/aws-cli:2.35.11 || true
+}
+
 install_go() {
     if command -v go >/dev/null 2>&1; then
         return 0
@@ -242,6 +254,35 @@ install_yq() {
     echo "Warning: Failed to download yq after $MAX_RETRIES attempts, continuing..."
 }
 
+install_rust() {
+    if command -v cargo >/dev/null 2>&1; then
+        echo "Rust toolchain already installed"
+    else
+        echo "Installing Rust toolchain..."
+        curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+    fi
+
+    # Make cargo available to this script and to later CI steps.
+    if [ -f "$HOME/.cargo/env" ]; then
+        # shellcheck disable=SC1091
+        . "$HOME/.cargo/env"
+    fi
+    export PATH="$HOME/.cargo/bin:$PATH"
+
+    if [ -n "${GITHUB_PATH:-}" ]; then
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+    fi
+}
+
+build_datafusion_query_engine() {
+    local REPO_ROOT
+    REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+    echo "Building DataFusion query engine..."
+    make -C "$REPO_ROOT/query_engine" build
+}
+
 configure_path() {
     local LOCAL_BIN="$HOME/.local/bin"
 
@@ -261,10 +302,13 @@ check_prerequisites
 install_system_packages
 install_docker
 install_docker_compose
+install_runtime_images
 install_go
 install_go_protobuf_plugins
+install_rust
 install_python_tooling
 install_aws_cli
 install_open_tofu
 install_yq
 configure_path
+build_datafusion_query_engine

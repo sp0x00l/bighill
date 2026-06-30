@@ -1,4 +1,4 @@
-.PHONY: all install migrate start stop delete install-dev
+.PHONY: all install migrate start stop delete
 .DEFAULT_GOAL := run
 SHELL         := /bin/bash
 
@@ -21,6 +21,3 @@ stop:
 delete:
 	@scripts/db-stop.sh
 	@scripts/db-delete.sh
-
-install-dev:
-	@scripts/install-dev.sh

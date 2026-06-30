@@ -132,6 +132,19 @@ compose_wait_for_postgres_ready() {
     return 1
 }
 
+compose_start_polaris() {
+    local COMPOSE_FILE="$1"
+
+    echo "Starting Polaris catalog infra..."
+    cd "$PROJECT_ROOT"
+    env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" up -d polaris-catalog
+
+    wait_for_port 9100 "Polaris object store API" 60 2
+    wait_for_port 9101 "Polaris object store console" 60 2
+    wait_for_port 8181 "Polaris catalog" 60 2
+    wait_for_port 8182 "Polaris health" 60 2
+}
+
 
 
 cicd_start_infra() {
@@ -147,13 +160,17 @@ cicd_start_infra() {
     fi
 
     cd "$PROJECT_ROOT"
-    echo "Starting infra using docker compose (Postgres, Redis, Kafka)..."
+    echo "Starting infra using docker compose (Postgres with pgvector, Redis, Kafka, Polaris)..."
     env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
-    env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" up -d bighilldb redis kafka migrations
+    env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" up -d bighilldb redis kafka migrations polaris-catalog
 
     wait_for_port 5432 "Postgres"
     wait_for_port 6379 "Redis"
     wait_for_port 9092 "Kafka"
+    wait_for_port 9100 "Polaris object store API"
+    wait_for_port 9101 "Polaris object store console"
+    wait_for_port 8181 "Polaris catalog"
+    wait_for_port 8182 "Polaris health"
 
     compose_wait_for_postgres_ready "$COMPOSE_FILE"
     wait_for_kafka_ready 60 2
@@ -168,6 +185,7 @@ local_start_infra() {
     local_restart_db
     local_restart_redis
     local_start_kafka
+    compose_start_polaris "$PROJECT_ROOT/docker-compose-services.yml"
     "$PROJECT_ROOT/scripts/start-data-sources.sh"
 }
 

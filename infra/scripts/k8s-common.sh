@@ -41,7 +41,7 @@ service_exists() {
   return 1
 }
 
-INFRA_SERVICES="kafka redis"
+INFRA_SERVICES="kafka redis polaris-catalog"
 
 export -f discover_services
 export -f get_services_list

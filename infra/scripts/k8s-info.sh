@@ -45,6 +45,11 @@ check_deployment() {
     exit 1
   fi
 
+  if ! kubectl get deployment polaris-catalog >/dev/null 2>&1; then
+    echo "Polaris catalog deployment failed."
+    exit 1
+  fi
+
   echo "All services deployed successfully."
   kubectl get svc
   kubectl get pods -o wide

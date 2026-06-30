@@ -1,7 +1,7 @@
 
 services:        
   bighilldb:
-    image: postgres:alpine
+    image: pgvector/pgvector:pg17
     restart: always
     ports:
       - "5432:5432"
@@ -223,6 +223,131 @@ services:
     networks:
       - bighillnetwork
 
+  feature-materializer-service:
+    image: feature-materializer-service:${FEATURE_MATERIALIZER_SERVICE_BUILD_VERSION:-0.0.0}
+    build:
+      context: .
+      dockerfile: feature-materializer-service.Dockerfile
+      args:
+        TARGETARCH: ${TARGETARCH:-arm64}
+        BUILD_VERSION_REQUIRED: ${FEATURE_MATERIALIZER_SERVICE_BUILD_VERSION:-0.0.0}
+    restart: always
+    ports:
+      - "5057:5057"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT}
+      - PGHOST=bighilldb
+      - PGPORT=${PGPORT}
+      - PGSSLMODE=disable
+      - KAFKA_BROKER=${KAFKA_BROKER}
+      - FEATURE_MATERIALIZER_SERVICE_NAME=${FEATURE_MATERIALIZER_SERVICE_NAME}
+      - FEATURE_MATERIALIZER_DB_HOST=bighilldb
+      - FEATURE_MATERIALIZER_DB_PORT=${PGPORT}
+      - FEATURE_MATERIALIZER_DB_NAME=${FEATURE_MATERIALIZER_DB_NAME}
+      - FEATURE_MATERIALIZER_DB_USER=${FEATURE_MATERIALIZER_DB_USER}
+      - FEATURE_MATERIALIZER_DB_PASSWORD=${FEATURE_MATERIALIZER_DB_PASSWORD}
+      - FEATURE_MATERIALIZER_DB_MAX_CONNECTIONS=${FEATURE_MATERIALIZER_DB_MAX_CONNECTIONS}
+      - FEATURE_MATERIALIZER_DB_SSLMODE=disable
+      - FEATURE_MATERIALIZER_POLARIS_CATALOG_URL=http://polaris-catalog:8181
+      - FEATURE_MATERIALIZER_POLARIS_REALM=${FEATURE_MATERIALIZER_POLARIS_REALM}
+      - FEATURE_MATERIALIZER_POLARIS_CLIENT_ID=${FEATURE_MATERIALIZER_POLARIS_CLIENT_ID}
+      - FEATURE_MATERIALIZER_POLARIS_CLIENT_SECRET=${FEATURE_MATERIALIZER_POLARIS_CLIENT_SECRET}
+      - FEATURE_MATERIALIZER_HEALTHCHECK_CPU_THRESHOLD_PERCENT=${FEATURE_MATERIALIZER_HEALTHCHECK_CPU_THRESHOLD_PERCENT}
+      - FEATURE_MATERIALIZER_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT=${FEATURE_MATERIALIZER_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT}
+      - FEATURE_MATERIALIZER_HEALTHCHECK_PORT=${FEATURE_MATERIALIZER_HEALTHCHECK_PORT}
+      - FEATURE_MATERIALIZER_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS=${FEATURE_MATERIALIZER_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS}
+      - FEATURE_MATERIALIZER_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS=${FEATURE_MATERIALIZER_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS}
+      - FEATURE_MATERIALIZER_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS=${FEATURE_MATERIALIZER_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS}
+      - FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID=${FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID}
+      - FEATURE_MATERIALIZER_SERVICE_DATASET_FILE_UPLOADED_SUBSCRIBER_TOPIC=${FEATURE_MATERIALIZER_SERVICE_DATASET_FILE_UPLOADED_SUBSCRIBER_TOPIC}
+      - FEATURE_MATERIALIZER_SERVICE_DLQ=${FEATURE_MATERIALIZER_SERVICE_DLQ}
+      - FEATURE_MATERIALIZER_SERVICE_OUTBOX=${FEATURE_MATERIALIZER_SERVICE_OUTBOX}
+      - FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_POLL_MS=${FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_POLL_MS}
+      - FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_BATCH_SIZE=${FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_BATCH_SIZE}
+      - FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS=${FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS}
+    depends_on:
+      - kafka
+      - bighilldb
+      - polaris-catalog
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${FEATURE_MATERIALIZER_HEALTHCHECK_PORT}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bighillnetwork
+
+  polaris-object-store:
+    image: rustfs/rustfs:1.0.0-alpha.81
+    container_name: polaris-object-store
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    environment:
+      RUSTFS_ACCESS_KEY: polaris_root
+      RUSTFS_SECRET_KEY: polaris_pass
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://127.0.0.1:9000/health && curl --fail http://127.0.0.1:9001/rustfs/console/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - polaris_object_store:/data
+    networks:
+      - bighillnetwork
+
+  polaris-bucket-setup:
+    image: amazon/aws-cli:2.35.11
+    depends_on:
+      polaris-object-store:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: polaris_root
+      AWS_SECRET_ACCESS_KEY: polaris_pass
+      AWS_ENDPOINT_URL: http://polaris-object-store:9000
+    entrypoint: "/bin/sh"
+    command:
+      - "-c"
+      - >-
+        aws s3 mb s3://bighill-mlops-lakehouse || true
+    networks:
+      - bighillnetwork
+
+  polaris-catalog:
+    image: apache/polaris:latest
+    container_name: polaris-catalog
+    ports:
+      - "8181:8181"
+      - "8182:8182"
+      - "5005:5005"
+    depends_on:
+      polaris-object-store:
+        condition: service_healthy
+      polaris-bucket-setup:
+        condition: service_completed_successfully
+    environment:
+      JAVA_DEBUG: "true"
+      JAVA_DEBUG_PORT: "*:5005"
+      AWS_REGION: us-west-2
+      AWS_ACCESS_KEY_ID: polaris_root
+      AWS_SECRET_ACCESS_KEY: polaris_pass
+      POLARIS_BOOTSTRAP_CREDENTIALS: POLARIS,${POLARIS_ROOT_CLIENT_ID:-root},${POLARIS_ROOT_CLIENT_SECRET:-s3cr3t}
+      polaris.realm-context.realms: ${POLARIS_REALM:-POLARIS}
+      quarkus.otel.sdk.disabled: "true"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    networks:
+      - bighillnetwork
+
   kafka:
     image: bitnami/kafka:latest
     container_name: kafka
@@ -263,6 +388,7 @@ volumes:
   postgres_data:
   kafka_data:
   redis_data:
+  polaris_object_store:
 
 networks:
   bighillnetwork:

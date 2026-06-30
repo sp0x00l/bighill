@@ -20,7 +20,19 @@ ENVIRONMENT="$1"
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/export-env.sh" "$ENVIRONMENT"
 
+local_stop_polaris() {
+    if check_docker; then
+        echo "Stopping Polaris catalog infra..."
+        cd "$PROJECT_ROOT"
+        docker compose -f docker-compose-services.yml stop polaris-catalog polaris-bucket-setup polaris-object-store >/dev/null 2>&1 || true
+        docker compose -f docker-compose-services.yml rm -f -v polaris-catalog polaris-bucket-setup polaris-object-store >/dev/null 2>&1 || true
+        cd "$CURRENT_DIR"
+    fi
+}
+
 local_stop_services() {
+    local_stop_polaris
+
     echo "stopping database"
     cd "$PROJECT_ROOT/database"
     . ./scripts/db-stop.sh

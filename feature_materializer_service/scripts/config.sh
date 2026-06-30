@@ -1,0 +1,64 @@
+#! /usr/bin/env sh
+
+BIGHILL_ROOT=$(git rev-parse --show-toplevel)
+. $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
+. $BIGHILL_ROOT/database/scripts/config.sh $1
+
+if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
+    export FEATURE_MATERIALIZER_SERVICE_DLQ=http://localhost:4566/feature-materializer-dev-env-queue/
+    export FEATURE_MATERIALIZER_SERVICE_OUTBOX=noop://local
+    export FEATURE_MATERIALIZER_DB_HOST=$PGHOST
+    export FEATURE_MATERIALIZER_DB_PORT=$PGPORT
+    export FEATURE_MATERIALIZER_DB_SSLMODE=$PGSSLMODE
+    export FEATURE_MATERIALIZER_POLARIS_CATALOG_URL=http://localhost:8181
+    export FEATURE_MATERIALIZER_POLARIS_REALM=POLARIS
+    export FEATURE_MATERIALIZER_POLARIS_CLIENT_ID=root
+    export FEATURE_MATERIALIZER_POLARIS_CLIENT_SECRET=s3cr3t
+elif [ "$1" = "staging" ]; then
+    export FEATURE_MATERIALIZER_SERVICE_DLQ=http://localhost:4566/feature-materializer-dev-env-queue/ # TODO
+    export FEATURE_MATERIALIZER_SERVICE_OUTBOX= # TODO
+    export FEATURE_MATERIALIZER_DB_HOST=$PGHOST
+    export FEATURE_MATERIALIZER_DB_PORT=$PGPORT
+    export FEATURE_MATERIALIZER_DB_SSLMODE=$PGSSLMODE
+    export FEATURE_MATERIALIZER_POLARIS_CATALOG_URL=http://polaris-catalog:8181
+    export FEATURE_MATERIALIZER_POLARIS_REALM=POLARIS
+    export FEATURE_MATERIALIZER_POLARIS_CLIENT_ID= # TODO
+    export FEATURE_MATERIALIZER_POLARIS_CLIENT_SECRET= # TODO
+elif [ "$1" = "prod" ]; then
+    export FEATURE_MATERIALIZER_SERVICE_DLQ="" # TODO
+    export FEATURE_MATERIALIZER_SERVICE_OUTBOX="" # TODO
+    export FEATURE_MATERIALIZER_DB_HOST=$PGHOST
+    export FEATURE_MATERIALIZER_DB_PORT=$PGPORT
+    export FEATURE_MATERIALIZER_DB_SSLMODE=$PGSSLMODE
+    export FEATURE_MATERIALIZER_POLARIS_CATALOG_URL=http://polaris-catalog:8181
+    export FEATURE_MATERIALIZER_POLARIS_REALM=POLARIS
+    export FEATURE_MATERIALIZER_POLARIS_CLIENT_ID= # TODO
+    export FEATURE_MATERIALIZER_POLARIS_CLIENT_SECRET= # TODO
+else
+    echo "Error: Invalid environment provided to feature_materializer_service config"
+    echo "Usage: './config.sh [local-dev|cicd|staging|prod]'"
+    exit 1
+fi
+
+export FEATURE_MATERIALIZER_SERVICE_NAME=feature-materializer-service
+export FEATURE_MATERIALIZER_DB_NAME=bighill_feature_materializer_db
+export FEATURE_MATERIALIZER_DB_USER=bighill_feature_materializer_db_user
+export FEATURE_MATERIALIZER_DB_PASSWORD=$BIGHILL_DB_PASSWORD
+export FEATURE_MATERIALIZER_DB_MAX_CONNECTIONS=20
+export FEATURE_MATERIALIZER_HEALTHCHECK_CPU_THRESHOLD_PERCENT=80
+export FEATURE_MATERIALIZER_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT=20
+export FEATURE_MATERIALIZER_HEALTHCHECK_PORT=5057
+export FEATURE_MATERIALIZER_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS=5
+export FEATURE_MATERIALIZER_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS=5
+export FEATURE_MATERIALIZER_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS=5
+export FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID=feature-materializer-group
+export FEATURE_MATERIALIZER_SERVICE_DATASET_FILE_UPLOADED_SUBSCRIBER_TOPIC=dataset_file_uploaded
+export FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_POLL_MS=250
+export FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_BATCH_SIZE=100
+export FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS=2000
+
+# The following are variables set at build time, intended to be used at runtime.
+# They are used to set the version in the build in the binary and is available to the binary main package.
+# It is then is used to identify the service instance in the logs.
+# IMPORTANT: This IDs the K8s deployment instance and is used in the templates.
+export FEATURE_MATERIALIZER_SERVICE_BUILD_VERSION=0.0.1
