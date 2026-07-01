@@ -76,6 +76,49 @@ local_start_kafka() {
     purge_kafka_topics "$KAFKA_BROKER" "$PROJECT_ROOT"
 }
 
+local_start_temporal() {
+    local TEMPORAL_GRPC_PORT="${TEMPORAL_PORT:-7233}"
+    local TEMPORAL_WEB_PORT="${TEMPORAL_UI_PORT:-8233}"
+    local TEMPORAL_DB_FILE="$PROJECT_ROOT/tmp/temporal/temporal.db"
+    local TEMPORAL_LOG_FILE="$PROJECT_ROOT/tmp/temporal/temporal.log"
+    local TEMPORAL_PID_FILE="$PROJECT_ROOT/tmp/temporal/temporal.pid"
+    local TEMPORAL_NAMESPACE_NAME="${TEMPORAL_NAMESPACE:-default}"
+
+    if nc -z localhost "$TEMPORAL_GRPC_PORT" >/dev/null 2>&1; then
+        echo "Temporal is already available on port ${TEMPORAL_GRPC_PORT}"
+        return
+    fi
+
+    if ! command -v temporal >/dev/null 2>&1; then
+        echo "Error: Temporal CLI is not installed. Run make install-dev before starting local-dev infra."
+        exit 1
+    fi
+
+    if command -v brew >/dev/null 2>&1 &&
+        [ "$TEMPORAL_GRPC_PORT" = "7233" ] &&
+        [ "$TEMPORAL_WEB_PORT" = "8233" ] &&
+        [ "$TEMPORAL_NAMESPACE_NAME" = "default" ]; then
+        echo "Starting Temporal dev server..."
+        brew services start temporal
+        wait_for_port "$TEMPORAL_GRPC_PORT" "Temporal"
+        wait_for_port "$TEMPORAL_WEB_PORT" "Temporal UI"
+        return
+    fi
+
+    mkdir -p "$PROJECT_ROOT/tmp/temporal"
+    echo "Starting Temporal dev server..."
+    nohup temporal server start-dev \
+        --port "$TEMPORAL_GRPC_PORT" \
+        --ui-port "$TEMPORAL_WEB_PORT" \
+        --namespace "$TEMPORAL_NAMESPACE_NAME" \
+        --db-filename "$TEMPORAL_DB_FILE" \
+        > "$TEMPORAL_LOG_FILE" 2>&1 &
+    echo $! > "$TEMPORAL_PID_FILE"
+
+    wait_for_port "$TEMPORAL_GRPC_PORT" "Temporal"
+    wait_for_port "$TEMPORAL_WEB_PORT" "Temporal UI"
+}
+
 compose_wait_for_migrations() {
     local COMPOSE_FILE="$1"
     local RETRIES=60
@@ -160,13 +203,15 @@ cicd_start_infra() {
     fi
 
     cd "$PROJECT_ROOT"
-    echo "Starting infra using docker compose (Postgres with pgvector, Redis, Kafka, Polaris)..."
+    echo "Starting infra using docker compose (Postgres with pgvector, Redis, Kafka, Temporal, Polaris)..."
     env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
-    env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" up -d bighilldb redis kafka migrations polaris-catalog
+    env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" up -d bighilldb redis kafka temporal migrations polaris-catalog
 
     wait_for_port 5432 "Postgres"
     wait_for_port 6379 "Redis"
     wait_for_port 9092 "Kafka"
+    wait_for_port 7233 "Temporal"
+    wait_for_port 8233 "Temporal UI"
     wait_for_port 9100 "Polaris object store API"
     wait_for_port 9101 "Polaris object store console"
     wait_for_port 8181 "Polaris catalog"
@@ -185,6 +230,7 @@ local_start_infra() {
     local_restart_db
     local_restart_redis
     local_start_kafka
+    local_start_temporal
     compose_start_polaris "$PROJECT_ROOT/docker-compose-services.yml"
     "$PROJECT_ROOT/scripts/start-data-sources.sh"
 }

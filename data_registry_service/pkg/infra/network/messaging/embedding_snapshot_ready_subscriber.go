@@ -30,10 +30,14 @@ func NewEmbeddingSnapshotReadyEventListener(listener EmbeddingSnapshotReadyListe
 }
 
 func (l *embeddingSnapshotReadyEventListener) MsgType() msgConn.MsgType {
+	log.Trace("embeddingSnapshotReadyEventListener MsgType")
+
 	return msgConn.MsgTypeEmbeddingSnapshotReady
 }
 
 func (l *embeddingSnapshotReadyEventListener) NewMessage() *featurepb.EmbeddingSnapshotReadyEvent {
+	log.Trace("embeddingSnapshotReadyEventListener NewMessage")
+
 	return &featurepb.EmbeddingSnapshotReadyEvent{}
 }
 
@@ -52,6 +56,8 @@ func (l *embeddingSnapshotReadyEventListener) Handle(ctx context.Context, resour
 }
 
 func embeddingSnapshotReadyToIDs(resourceKey uuid.UUID, payload *featurepb.EmbeddingSnapshotReadyEvent) (uuid.UUID, uuid.UUID, error) {
+	log.Trace("embeddingSnapshotReadyToIDs")
+
 	if resourceKey == uuid.Nil {
 		return uuid.Nil, uuid.Nil, fmt.Errorf("resource key is required")
 	}

@@ -54,6 +54,25 @@ type stubDatasetRepository struct {
 	replaceErr     error
 }
 
+type stubDatasetEventPublisher struct {
+	createdDataset   *model.Dataset
+	createdErr       error
+	deletedDatasetID uuid.UUID
+	deletedUserID    uuid.UUID
+	deletedErr       error
+}
+
+func (s *stubDatasetEventPublisher) PublishDatasetCreated(_ context.Context, dataset *model.Dataset) error {
+	s.createdDataset = dataset
+	return s.createdErr
+}
+
+func (s *stubDatasetEventPublisher) PublishDatasetDeleted(_ context.Context, datasetID uuid.UUID, userID uuid.UUID) error {
+	s.deletedDatasetID = datasetID
+	s.deletedUserID = userID
+	return s.deletedErr
+}
+
 func (s *stubDatasetRepository) Close() {}
 
 func (s *stubDatasetRepository) Create(_ context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) error {
@@ -140,6 +159,16 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.createIdempotencyKey).To(Equal(idempotencyKey))
 	})
 
+	It("publishes a dataset-created event after create succeeds", func() {
+		publisher := &stubDatasetEventPublisher{}
+		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
+		dataset := &model.Dataset{ID: datasetID, UserID: userID}
+
+		Expect(uc.CreateDataset(ctx, dataset, uuid.New())).To(Succeed())
+
+		Expect(publisher.createdDataset).To(Equal(dataset))
+	})
+
 	It("returns repository create errors", func() {
 		expectedErr := errors.New("create failed")
 		repo.createErr = expectedErr
@@ -174,6 +203,16 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(uc.DeleteDataset(ctx, datasetID, userID)).To(Succeed())
 		Expect(repo.deleteDatasetID).To(Equal(datasetID))
 		Expect(repo.deleteUserID).To(Equal(userID))
+	})
+
+	It("publishes a dataset-deleted event after delete succeeds", func() {
+		publisher := &stubDatasetEventPublisher{}
+		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
+
+		Expect(uc.DeleteDataset(ctx, datasetID, userID)).To(Succeed())
+
+		Expect(publisher.deletedDatasetID).To(Equal(datasetID))
+		Expect(publisher.deletedUserID).To(Equal(userID))
 	})
 
 	It("publishes a dataset through the repository", func() {

@@ -20,3 +20,13 @@ message DatasetFileUploadedEvent {
   string table_format = 8;
   string catalog_provider = 9;
 }
+
+message DatasetCreatedEvent {
+  string dataset_id = 1;
+  string user_id = 2;
+}
+
+message DatasetDeletedEvent {
+  string dataset_id = 1;
+  string user_id = 2;
+}

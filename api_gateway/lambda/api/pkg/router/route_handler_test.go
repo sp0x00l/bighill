@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -128,10 +129,11 @@ var _ = Describe("NewRouter", func() {
 		Expect(registryResp.StatusCode).To(Equal(http.StatusOK))
 
 		ingestionResp, err := handler(ctx, events.APIGatewayProxyRequest{
-			HTTPMethod: http.MethodPost,
-			Path:       "/v1/data/store/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
-			Body:       "file-bytes",
-			Headers:    map[string]string{"Content-Type": "multipart/form-data; boundary=test"},
+			HTTPMethod:      http.MethodPost,
+			Path:            "/v1/data/store/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			Body:            base64.StdEncoding.EncodeToString([]byte("file-bytes")),
+			IsBase64Encoded: true,
+			Headers:         map[string]string{"Content-Type": "multipart/form-data; boundary=test"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ingestionResp.StatusCode).To(Equal(http.StatusAccepted))

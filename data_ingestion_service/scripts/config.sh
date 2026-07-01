@@ -8,19 +8,19 @@ if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export DATA_INGESTION_FILES_BUCKET_REGION=local-dev
     export DATA_INGESTION_FILES_BUCKET_NAME=local-dev-bucket
     export DATA_INGESTION_SERVICE_DLQ=http://localhost:4566/data-ingestion-dev-env-queue/
-    export DATA_INGESTION_SERVICE_OUTBOX=noop://local
+    export DATA_INGESTION_SERVICE_OUTBOX=postgres
     export DATA_INGESTION_SERVICE_REDIS_ADDRESS=localhost:6379
 elif [ "$1" = "staging" ]; then
     export DATA_INGESTION_FILES_BUCKET_REGION=${AWS_DEFAULT_REGION}
     export DATA_INGESTION_FILES_BUCKET_NAME=adt-datalake-rawdata-prod-255525589248-eu-west-1 # TODO 
     export DATA_INGESTION_SERVICE_DLQ=http://localhost:4566/data-ingestion-dev-env-queue/ # TODO
-    export DATA_INGESTION_SERVICE_OUTBOX= # TODO
+    export DATA_INGESTION_SERVICE_OUTBOX=postgres
     export DATA_INGESTION_SERVICE_REDIS_ADDRESS=redis:6379
 elif [ "$1" = "prod" ]; then
     export DATA_INGESTION_FILES_BUCKET_REGION=${AWS_DEFAULT_REGION}
     export DATA_INGESTION_FILES_BUCKET_NAME=adt-datalake-rawdata-prod-255525589248-eu-west-1
     export DATA_INGESTION_SERVICE_DLQ="" # TODO
-    export DATA_INGESTION_SERVICE_OUTBOX="" # TODO
+    export DATA_INGESTION_SERVICE_OUTBOX=postgres
     export DATA_INGESTION_SERVICE_REDIS_ADDRESS=redis:6379
 else 
     echo "Error: Invalid environment provided to data_ingestion_service config"
@@ -46,6 +46,7 @@ export DATA_INGESTION_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS=5
 export DATA_INGESTION_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS=5
 export DATA_INGESTION_SERVICE_KAFKA_GROUP_ID=data-ingestion-group
 export DATA_INGESTION_SERVICE_TOPIC=data_ingestion
+export DATA_INGESTION_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC=data_registry
 export DATA_INGESTION_SERVICE_OUTBOX_RELAY_POLL_MS=250
 export DATA_INGESTION_SERVICE_OUTBOX_RELAY_BATCH_SIZE=100
 export DATA_INGESTION_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS=2000

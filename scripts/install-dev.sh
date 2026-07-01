@@ -152,6 +152,16 @@ install_kafka()
     fi
 }
 
+install_temporal()
+{
+    if is_installed temporal; then
+        echo "temporal already installed"
+    else
+        echo "installing temporal"
+        brew install temporal
+    fi
+}
+
 install_open_tofu()
 {
     if is_installed tofu; then
@@ -194,6 +204,7 @@ install_rust
 build_datafusion_query_engine
 install redis
 install_kafka
+install_temporal
 install_data_infra_dependencies
 install_open_tofu
 install yq
@@ -201,7 +212,7 @@ install yq
 echo ""
 echo "Final steps:"
 echo "  1. Run make install to generate module replacements and protobuf output."
-echo "  2. Run make start-infra for Postgres with pgvector, Redis, Kafka, Polaris, and local data sources."
+echo "  2. Run make start-infra for Postgres with pgvector, Redis, Kafka, Temporal, Polaris, and local data sources."
 echo "  3. Run make start-test to start the local services and API gateway."
 echo "  4. Run make build-query-engine to rebuild DATA_STREAM_QUERY_ENGINE_MODE=datafusion after Rust changes."
 

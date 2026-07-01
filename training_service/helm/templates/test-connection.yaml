@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "training-service.fullname" . }}-test-connection"
+  labels:
+    app: {{ include "training-service.fullname" . }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['{{ include "training-service.fullname" . }}:{{ .Values.service.healthPort }}/health']
+  restartPolicy: Never

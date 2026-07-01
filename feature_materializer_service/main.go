@@ -16,6 +16,7 @@ import (
 	"feature_materializer_service/pkg/infra/materialization"
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	featuredb "feature_materializer_service/pkg/infra/repo/db"
+	featuretemporal "feature_materializer_service/pkg/infra/temporalworker"
 	coreDB "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
@@ -24,22 +25,24 @@ import (
 	trace "lib/shared_lib/trace"
 
 	log "github.com/sirupsen/logrus"
+	"go.temporal.io/sdk/client"
 )
 
 var Version string
 
 type materializerConfig struct {
-	ServiceName              string
-	DBName                   string
-	DBConnectionString       string
-	Messaging                messagingConn.MessengerConfig
-	OutboxRelay              messagingConn.OutboxRelayConfig
-	ArtifactBucket           artifactBucketConfig
-	Embedding                embeddingConfig
-	DatasetUploadedTopic     string
-	FeatureMaterializerTopic string
-	PublishTopics            featuremessaging.MaterializationTopics
-	Health                   healthConfig
+	ServiceName          string
+	DBName               string
+	DBConnectionString   string
+	Messaging            messagingConn.MessengerConfig
+	OutboxBackend        string
+	OutboxRelay          messagingConn.OutboxRelayConfig
+	ArtifactBucket       artifactBucketConfig
+	Embedding            embeddingConfig
+	Temporal             temporalConfig
+	DatasetUploadedTopic string
+	PublishTopics        featuremessaging.MaterializationTopics
+	Health               healthConfig
 }
 
 type artifactBucketConfig struct {
@@ -51,6 +54,12 @@ type artifactBucketConfig struct {
 type embeddingConfig struct {
 	Dimensions int
 	MaxRows    int
+}
+
+type temporalConfig struct {
+	Address   string
+	Namespace string
+	TaskQueue string
 }
 
 type healthConfig struct {
@@ -90,27 +99,50 @@ func main() {
 	defer func() {
 		_ = messagingFactory.Close(cancelCtx)
 	}()
-	publisher, err := messagingFactory.Publisher(cancelCtx)
+
+	outboxWriter, err := newPostgresOutbox(database, cfg.OutboxBackend)
 	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
 	}
-	outboxRelay, err := messagingFactory.OutboxRelay(cancelCtx, cfg.OutboxRelay)
+	orderedOutbox, ok := outboxWriter.(messagingConn.OrderedOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support ordered transactional enqueue")
+	}
+	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support relay operations")
+	}
+	outboxPublisher, err := messagingConn.NewPublisher(cfg.Messaging.Brokers)
 	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Warn("unable to create outbox relay")
-	} else {
-		go func() {
-			if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
-				log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
-			}
-		}()
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create outbox relay publisher")
 	}
+	defer outboxPublisher.Close()
+	relayPublisher, ok := outboxPublisher.(messagingConn.RelayPublisher)
+	if !ok {
+		log.Fatal("publisher does not support outbox relay publishing")
+	}
+	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
+	go func() {
+		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
+		}
+	}()
 
 	subscriber, err := messagingFactory.Subscriber(cancelCtx)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
 	}
 
-	snapshotRepo := featuredb.NewSnapshotRepository(database)
+	temporalClient, err := client.Dial(client.Options{
+		HostPort:  cfg.Temporal.Address,
+		Namespace: cfg.Temporal.Namespace,
+	})
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to connect to Temporal")
+	}
+	defer temporalClient.Close()
+
+	snapshotRepo := featuredb.NewSnapshotRepository(database, featuredb.WithTransactionalOutbox(orderedOutbox, cfg.PublishTopics.FeatureMaterializer))
 	artifactStore, err := materialization.NewObjectArtifactStore(cancelCtx, cfg.ArtifactBucket.Name, cfg.ArtifactBucket.Region, cfg.ArtifactBucket.UploadPartSize)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create artifact store")
@@ -124,14 +156,18 @@ func main() {
 	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, rawWriter)
 	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotRepo, featureBuilder)
 	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotRepo, embeddingWriter)
-	eventPublisher := featuremessaging.NewMaterializationEventPublisher(publisher, cfg.PublishTopics)
+	activities := featuretemporal.NewMaterializationActivities(rawSnapshotUsecase, featureSnapshotUsecase, embeddingUsecase)
+	materializationWorker := featuretemporal.NewMaterializationWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
+	if err := materializationWorker.Start(); err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to start Temporal worker")
+	}
+	defer materializationWorker.Stop()
+
+	workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
 	materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
 		subscriber,
-		rawSnapshotUsecase,
-		featureSnapshotUsecase,
-		embeddingUsecase,
-		eventPublisher,
-		[]string{cfg.DatasetUploadedTopic, cfg.FeatureMaterializerTopic},
+		workflowStarter,
+		[]string{cfg.DatasetUploadedTopic},
 	)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
@@ -180,11 +216,11 @@ func readMaterializerConfig() materializerConfig {
 		DBName:             dbName,
 		DBConnectionString: dbConnectionString,
 		Messaging: messagingConn.MessengerConfig{
-			DlqURL:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DLQ", "http://localhost:4566/feature-materializer-dev-env-queue/"),
-			GroupID:   env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID", "feature-materializer-group"),
-			Brokers:   brokers,
-			OutboxURL: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_OUTBOX", ""),
+			DlqURL:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DLQ", "http://localhost:4566/feature-materializer-dev-env-queue/"),
+			GroupID: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID", "feature-materializer-group"),
+			Brokers: brokers,
 		},
+		OutboxBackend: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_OUTBOX", "postgres"),
 		OutboxRelay: messagingConn.OutboxRelayConfig{
 			PollInterval:   time.Duration(env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_POLL_MS", "250")) * time.Millisecond,
 			FailureBackoff: time.Duration(env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
@@ -199,8 +235,12 @@ func readMaterializerConfig() materializerConfig {
 			Dimensions: env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS", "384"),
 			MaxRows:    env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS", "1000"),
 		},
-		DatasetUploadedTopic:     env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC", "data_ingestion"),
-		FeatureMaterializerTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
+		Temporal: temporalConfig{
+			Address:   env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
+			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
+			TaskQueue: env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_TASK_QUEUE", usecase.DefaultMaterializeWorkflowTaskQueue),
+		},
+		DatasetUploadedTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC", "data_ingestion"),
 		PublishTopics: featuremessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
 		},
@@ -236,6 +276,15 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 
 func secondsFromEnv(key, defaultValue string) time.Duration {
 	return time.Duration(env.WithDefaultInt(key, defaultValue)) * time.Second
+}
+
+func newPostgresOutbox(database *coreDB.Database, backend string) (messagingConn.OutboxWriter, error) {
+	log.Trace("newPostgresOutbox")
+
+	if backend != "postgres" {
+		return nil, fmt.Errorf("unsupported outbox backend %q", backend)
+	}
+	return messagingConn.NewPostgresOutbox(database.Pool, database.Name, "")
 }
 
 func postgresConnectionString(user, password, host, port, dbName, sslMode string, maxConnections int) string {

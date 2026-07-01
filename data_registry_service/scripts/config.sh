@@ -6,14 +6,14 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export DATA_REGISTRY_SERVICE_DLQ=http://localhost:4566/data-registry-dev-env-queue/
-    export DATA_REGISTRY_SERVICE_OUTBOX=noop://local
+    export DATA_REGISTRY_SERVICE_OUTBOX=postgres
 elif [ "$1" = "staging" ]; then
     # TODO 
     export DATA_REGISTRY_SERVICE_DLQ=http://localhost:4566/data-registry-dev-env-queue/ # TODO
-    export DATA_REGISTRY_SERVICE_OUTBOX= # TODO
+    export DATA_REGISTRY_SERVICE_OUTBOX=postgres
 elif [ "$1" = "prod" ]; then
     export DATA_REGISTRY_SERVICE_DLQ="" # TODO
-    export DATA_REGISTRY_SERVICE_OUTBOX="" # TODO
+    export DATA_REGISTRY_SERVICE_OUTBOX=postgres
 else 
     echo "Error: Invalid environment provided to data_registry_service config"
     echo "Usage: './config.sh [local-dev|cicd|staging|prod]'"
@@ -35,6 +35,7 @@ export DATA_REGISTRY_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS=5
 export DATA_REGISTRY_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS=5
 export DATA_REGISTRY_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS=5
 export DATA_REGISTRY_SERVICE_KAFKA_GROUP_ID=data-registry-group
+export DATA_REGISTRY_SERVICE_TOPIC=data_registry
 export DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC=feature_materializer
 export DATA_REGISTRY_SERVICE_OUTBOX_RELAY_POLL_MS=250
 export DATA_REGISTRY_SERVICE_OUTBOX_RELAY_BATCH_SIZE=100

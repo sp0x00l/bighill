@@ -22,7 +22,7 @@ env:
   kafkaBroker: "kafka:9092"
   kafkaGroupId: "data-stream-group"
   dlq: "http://localhost:4566/data-stream-dev-env-queue/"
-  outbox: "noop://local"
+  outbox: "postgres"
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"

@@ -30,10 +30,14 @@ func NewFeatureSnapshotReadyEventListener(listener FeatureSnapshotReadyListener)
 }
 
 func (l *featureSnapshotReadyEventListener) MsgType() msgConn.MsgType {
+	log.Trace("featureSnapshotReadyEventListener MsgType")
+
 	return msgConn.MsgTypeFeatureSnapshotReady
 }
 
 func (l *featureSnapshotReadyEventListener) NewMessage() *featurepb.FeatureSnapshotReadyEvent {
+	log.Trace("featureSnapshotReadyEventListener NewMessage")
+
 	return &featurepb.FeatureSnapshotReadyEvent{}
 }
 
@@ -52,6 +56,8 @@ func (l *featureSnapshotReadyEventListener) Handle(ctx context.Context, resource
 }
 
 func featureSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.FeatureSnapshotReadyEvent) (*model.Dataset, error) {
+	log.Trace("featureSnapshotReadyToDataset")
+
 	if resourceKey == uuid.Nil {
 		return nil, fmt.Errorf("resource key is required")
 	}

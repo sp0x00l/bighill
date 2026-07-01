@@ -4,17 +4,17 @@ import "testing"
 
 func TestMsgTypeOrdinalsMatchMLContract(t *testing.T) {
 	expect := map[MsgType]int{
-		MsgTypeUnknown:                           0,
-		MsgTypeUserCreated:                       1,
-		MsgTypeUserUpdated:                       2,
-		MsgTypeUserDeleted:                       3,
-		MsgTypeEmailVerificationRequested:        4,
-		MsgTypeDatasetFileUploaded:               5,
-		MsgTypeRawSnapshotReady:                  6,
-		MsgTypeFeatureSnapshotBuildRequested:     7,
-		MsgTypeFeatureSnapshotReady:              8,
-		MsgTypeEmbeddingMaterializationRequested: 9,
-		MsgTypeEmbeddingSnapshotReady:            10,
+		MsgTypeUnknown:                    0,
+		MsgTypeUserCreated:                1,
+		MsgTypeUserUpdated:                2,
+		MsgTypeUserDeleted:                3,
+		MsgTypeEmailVerificationRequested: 4,
+		MsgTypeDatasetFileUploaded:        5,
+		MsgTypeRawSnapshotReady:           6,
+		MsgTypeFeatureSnapshotReady:       8,
+		MsgTypeEmbeddingSnapshotReady:     10,
+		MsgTypeDatasetCreated:             11,
+		MsgTypeDatasetDeleted:             12,
 	}
 
 	for msgType, ordinal := range expect {
@@ -32,10 +32,10 @@ func TestMsgTypeStringMappingsRoundTrip(t *testing.T) {
 		MsgTypeEmailVerificationRequested,
 		MsgTypeDatasetFileUploaded,
 		MsgTypeRawSnapshotReady,
-		MsgTypeFeatureSnapshotBuildRequested,
 		MsgTypeFeatureSnapshotReady,
-		MsgTypeEmbeddingMaterializationRequested,
 		MsgTypeEmbeddingSnapshotReady,
+		MsgTypeDatasetCreated,
+		MsgTypeDatasetDeleted,
 	} {
 		if msgType.String() == "" {
 			t.Fatalf("missing string mapping for msg type ordinal %d", msgType)

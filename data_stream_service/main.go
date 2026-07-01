@@ -4,12 +4,10 @@ import (
 	"context"
 	"data_stream_service/pkg/infra"
 	"data_stream_service/pkg/infra/network/data"
-	"errors"
 	"fmt"
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
-	messagingConn "lib/shared_lib/messaging"
 	trace "lib/shared_lib/trace"
 	"net/http"
 	"os"
@@ -26,8 +24,6 @@ type streamConfig struct {
 	ServiceName string
 	GRPCHost    string
 	GRPCPort    int
-	Messaging   messagingConn.MessengerConfig
-	OutboxRelay messagingConn.OutboxRelayConfig
 	Health      healthConfig
 }
 
@@ -54,24 +50,6 @@ func main() {
 
 	log.Trace(fmt.Sprintf("starting the %s service", serviceName))
 	traceShutdown := trace.Init(cancelCtx, serviceName, Version)
-
-	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
-	defer func() {
-		_ = messagingFactory.Close(cancelCtx)
-	}()
-	if _, err := messagingFactory.Publisher(cancelCtx); err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
-	}
-	outboxRelay, err := messagingFactory.OutboxRelay(cancelCtx, cfg.OutboxRelay)
-	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Warn("unable to create outbox relay")
-	} else {
-		go func() {
-			if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
-				log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
-			}
-		}()
-	}
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck().WithMessageBrokerCheck()
@@ -126,17 +104,6 @@ func readStreamConfig() streamConfig {
 		ServiceName: env.WithDefaultString("DATA_STREAM_SERVICE_NAME", "data-stream-service"),
 		GRPCHost:    env.WithDefaultString("DATA_STREAM_API_GRPC_HOST", "localhost"),
 		GRPCPort:    env.WithDefaultInt("DATA_STREAM_API_GRPC_PORT", "7070"),
-		Messaging: messagingConn.MessengerConfig{
-			DlqURL:    env.WithDefaultString("DATA_STREAM_SERVICE_DLQ", "http://localhost:4566/data-stream-dev-env-queue/"),
-			OutboxURL: env.WithDefaultString("DATA_STREAM_SERVICE_OUTBOX", ""),
-			GroupID:   env.WithDefaultString("DATA_STREAM_SERVICE_KAFKA_GROUP_ID", "data-stream-group"),
-			Brokers:   brokers,
-		},
-		OutboxRelay: messagingConn.OutboxRelayConfig{
-			PollInterval:   time.Duration(env.WithDefaultInt("DATA_STREAM_SERVICE_OUTBOX_RELAY_POLL_MS", "250")) * time.Millisecond,
-			FailureBackoff: time.Duration(env.WithDefaultInt("DATA_STREAM_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
-			BatchSize:      int32(env.WithDefaultInt("DATA_STREAM_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
-		},
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("DATA_STREAM_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_STREAM_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),

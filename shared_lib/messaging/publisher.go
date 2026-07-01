@@ -125,10 +125,8 @@ func (pc *publisher) Publish(ctx context.Context, topic string, message Message,
 			log.WithContext(ctx).Errorf("failed to enqueue outbox message: %v", err)
 			return fmt.Errorf("failed to enqueue outbox message: %w", err)
 		}
-		if !isNoopOutbox(pc.outbox) {
-			log.Infof("Successfully enqueued message to outbox for topic: %s", topic)
-			return nil
-		}
+		log.Infof("Successfully enqueued message to outbox for topic: %s", topic)
+		return nil
 	}
 
 	errProduce := pc.publishRaw(ctx, topic, msgBytes, headers)

@@ -213,7 +213,6 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			Brokers:         brokers,
 			GroupID:         fmt.Sprintf("data-registry-integration-%d", rand.Int64()),
 			DlqURL:          "http://localhost:4566/data-registry-dev-env-queue/",
-			OutboxURL:       "noop://local",
 			AutoOffsetReset: "earliest",
 		}, cancel)
 		defer func() {

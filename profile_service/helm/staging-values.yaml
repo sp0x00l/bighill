@@ -18,7 +18,7 @@ env:
   kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
   redisAddress: "redis.exchange-staging.svc.cluster.local:6379"
   dlq: "http://localhost:4566/profile-dev-env-queue/"
-  outbox: ""
+  outbox: "postgres"
   # KMS key for JWT signing - created by Terraform
   authKmsKeyId: "alias/exchange-staging-jwt-signing"
   emailValidationTtlMinutes: "60"

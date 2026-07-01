@@ -29,14 +29,29 @@ type DatasetUsecase interface {
 
 type datasetUseCase struct {
 	datasetsRepository DatasetRepositoryAdapter
+	eventPublisher     DatasetEventPublisher
 }
 
-func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter) *datasetUseCase {
+type DatasetUseCaseOption func(*datasetUseCase)
+
+func WithDatasetEventPublisher(publisher DatasetEventPublisher) DatasetUseCaseOption {
+	return func(u *datasetUseCase) {
+		u.eventPublisher = publisher
+	}
+}
+
+func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter, opts ...DatasetUseCaseOption) *datasetUseCase {
 	log.Trace("NewDatasetUseCase")
 
-	return &datasetUseCase{
+	u := &datasetUseCase{
 		datasetsRepository: datasetsRepository,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(u)
+		}
+	}
+	return u
 }
 
 func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) (err error) {
@@ -55,6 +70,11 @@ func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Datas
 
 	if err := u.datasetsRepository.Create(ctx, dataset, idempotencyKey); err != nil {
 		return err
+	}
+	if u.eventPublisher != nil {
+		if err := u.eventPublisher.PublishDatasetCreated(ctx, dataset); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -123,6 +143,11 @@ func (u *datasetUseCase) DeleteDataset(ctx context.Context, datasetID uuid.UUID,
 
 	if err := u.datasetsRepository.Delete(ctx, datasetID, userID); err != nil {
 		return err
+	}
+	if u.eventPublisher != nil {
+		if err := u.eventPublisher.PublishDatasetDeleted(ctx, datasetID, userID); err != nil {
+			return err
+		}
 	}
 
 	return nil

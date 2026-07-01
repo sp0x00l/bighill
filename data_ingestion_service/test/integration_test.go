@@ -82,9 +82,8 @@ var _ = Describe("Data ingestion integration", Ordered, func() {
 		Expect(purgeTopic(ctx, brokers, topic)).To(Succeed())
 
 		msgFactory = messaging.NewMessenger(messaging.MessengerConfig{
-			Brokers:   brokers,
-			GroupID:   "data-ingestion-integration-" + uuid.NewString(),
-			OutboxURL: "noop://local",
+			Brokers: brokers,
+			GroupID: "data-ingestion-integration-" + uuid.NewString(),
 		}, cancel)
 		publisher, err := msgFactory.Publisher(ctx)
 		Expect(err).NotTo(HaveOccurred())

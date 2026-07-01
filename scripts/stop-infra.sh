@@ -30,8 +30,27 @@ local_stop_polaris() {
     fi
 }
 
+local_stop_temporal() {
+    local TEMPORAL_PID_FILE="$PROJECT_ROOT/tmp/temporal/temporal.pid"
+
+    if command -v brew >/dev/null 2>&1; then
+        brew services stop temporal >/dev/null 2>&1 || true
+    fi
+
+    if [ -f "$TEMPORAL_PID_FILE" ]; then
+        echo "Stopping Temporal dev server..."
+        kill "$(cat "$TEMPORAL_PID_FILE")" >/dev/null 2>&1 || true
+        rm -f "$TEMPORAL_PID_FILE"
+        return
+    fi
+
+    lsof -ti:7233 | xargs kill 2>/dev/null || true
+    lsof -ti:8233 | xargs kill 2>/dev/null || true
+}
+
 local_stop_services() {
     local_stop_polaris
+    local_stop_temporal
 
     echo "stopping database"
     cd "$PROJECT_ROOT/database"

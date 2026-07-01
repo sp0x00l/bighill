@@ -19,23 +19,25 @@ const (
 	MsgTypeEmailVerificationRequested
 	MsgTypeDatasetFileUploaded
 	MsgTypeRawSnapshotReady
-	MsgTypeFeatureSnapshotBuildRequested
+	msgTypeFeatureSnapshotBuildRequestedDeprecated
 	MsgTypeFeatureSnapshotReady
-	MsgTypeEmbeddingMaterializationRequested
+	msgTypeEmbeddingMaterializationRequestedDeprecated
 	MsgTypeEmbeddingSnapshotReady
+	MsgTypeDatasetCreated
+	MsgTypeDatasetDeleted
 )
 
 var msgType = map[MsgType]string{
-	MsgTypeUserCreated:                       "user_created",
-	MsgTypeUserUpdated:                       "user_updated",
-	MsgTypeUserDeleted:                       "user_deleted",
-	MsgTypeEmailVerificationRequested:        "email_verification_requested",
-	MsgTypeDatasetFileUploaded:               "dataset_file_uploaded",
-	MsgTypeRawSnapshotReady:                  "raw_snapshot_ready",
-	MsgTypeFeatureSnapshotBuildRequested:     "feature_snapshot_build_requested",
-	MsgTypeFeatureSnapshotReady:              "feature_snapshot_ready",
-	MsgTypeEmbeddingMaterializationRequested: "embedding_materialization_requested",
-	MsgTypeEmbeddingSnapshotReady:            "embedding_snapshot_ready",
+	MsgTypeUserCreated:                "user_created",
+	MsgTypeUserUpdated:                "user_updated",
+	MsgTypeUserDeleted:                "user_deleted",
+	MsgTypeEmailVerificationRequested: "email_verification_requested",
+	MsgTypeDatasetFileUploaded:        "dataset_file_uploaded",
+	MsgTypeRawSnapshotReady:           "raw_snapshot_ready",
+	MsgTypeFeatureSnapshotReady:       "feature_snapshot_ready",
+	MsgTypeEmbeddingSnapshotReady:     "embedding_snapshot_ready",
+	MsgTypeDatasetCreated:             "dataset_created",
+	MsgTypeDatasetDeleted:             "dataset_deleted",
 }
 
 func (m MsgType) String() string {

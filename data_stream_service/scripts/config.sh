@@ -5,13 +5,13 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export DATA_STREAM_SERVICE_DLQ=http://localhost:4566/data-stream-dev-env-queue/
-    export DATA_STREAM_SERVICE_OUTBOX=noop://local
+    export DATA_STREAM_SERVICE_OUTBOX=postgres
 elif [ "$1" = "staging" ]; then
     export DATA_STREAM_SERVICE_DLQ=http://localhost:4566/data-stream-dev-env-queue/ # TODO
-    export DATA_STREAM_SERVICE_OUTBOX= # TODO
+    export DATA_STREAM_SERVICE_OUTBOX=postgres
 elif [ "$1" = "prod" ]; then
     export DATA_STREAM_SERVICE_DLQ="" # TODO
-    export DATA_STREAM_SERVICE_OUTBOX="" # TODO
+    export DATA_STREAM_SERVICE_OUTBOX=postgres
 else
     echo "Error: Invalid environment provided to data_stream_service config"
     echo "Usage: './config.sh [local-dev|cicd|staging|prod]'"

@@ -1,0 +1,33 @@
+replicaCount: 1
+image:
+  repository: "training-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: false
+  name: "training-service"
+  annotations: {}
+service:
+  type: ClusterIP
+  healthPort: 5058
+ingress:
+  enabled: false
+  host: ""
+  certificateArn: ""
+env:
+  environment: "local-dev"
+  serviceName: "training-service"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  temporalAddress: "temporal:7233"
+  temporalNamespace: "default"
+  temporalTaskQueue: "training-service"
+  healthcheckCpuThreshold: "80"
+  healthcheckFreeMemThreshold: "20"
+  healthcheckServiceLatencyThreshold: "5"
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "768Mi"
+    cpu: "500m"

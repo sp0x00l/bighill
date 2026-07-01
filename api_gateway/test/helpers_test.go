@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strings"
@@ -58,6 +59,39 @@ func doJSON(method, path string, payload any, bearerToken string, requestID uuid
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if requestID != uuid.Nil {
+		req.Header.Set("X-Request-ID", requestID.String())
+	}
+	if bearerToken != "" {
+		if strings.HasPrefix(strings.ToLower(bearerToken), "bearer ") {
+			req.Header.Set("Authorization", bearerToken)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+bearerToken)
+		}
+	}
+
+	resp, err := apiClient.Do(req)
+	Expect(err).NotTo(HaveOccurred())
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	Expect(err).NotTo(HaveOccurred())
+	return resp.StatusCode, respBody
+}
+
+func doMultipartFile(method, path string, fieldName string, filename string, content []byte, bearerToken string, requestID uuid.UUID) (int, []byte) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile(fieldName, filename)
+	Expect(err).NotTo(HaveOccurred())
+	_, err = part.Write(content)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(writer.Close()).To(Succeed())
+
+	req, err := http.NewRequest(method, gatewayBaseURL()+path, bytes.NewReader(body.Bytes()))
+	Expect(err).NotTo(HaveOccurred())
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	if requestID != uuid.Nil {
 		req.Header.Set("X-Request-ID", requestID.String())
 	}

@@ -4,6 +4,7 @@ import (
 	"api/pkg/adapter"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -294,11 +295,10 @@ func parseRouteContext(request events.APIGatewayProxyRequest) (routeContext, err
 func newRequestWithBody(ctx context.Context, request events.APIGatewayProxyRequest, serviceRoute, verb string, genProxyRequest newRequestFunc) (*http.Request, error) {
 	log.Trace("API Gateway Router newRequestWithBody")
 
-	var body io.Reader
-	if strings.Contains(getHeaderValue(request.Headers, "Content-Type"), "multipart/form-data") {
-		body = bytes.NewReader([]byte(request.Body))
-	} else {
-		body = bytes.NewBufferString(request.Body)
+	body, err := requestBodyReader(request)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("API Gateway Router - decode request body error")
+		return nil, err
 	}
 
 	req, err := genProxyRequest(verb, serviceRoute, body)
@@ -307,6 +307,17 @@ func newRequestWithBody(ctx context.Context, request events.APIGatewayProxyReque
 		return nil, err
 	}
 	return req, nil
+}
+
+func requestBodyReader(request events.APIGatewayProxyRequest) (io.Reader, error) {
+	if request.IsBase64Encoded {
+		bodyBytes, err := base64.StdEncoding.DecodeString(request.Body)
+		if err != nil {
+			return nil, fmt.Errorf("decode base64 request body: %w", err)
+		}
+		return bytes.NewReader(bodyBytes), nil
+	}
+	return bytes.NewBufferString(request.Body), nil
 }
 
 func newProxyRequest(ctx context.Context, request events.APIGatewayProxyRequest, serviceRoute string, genProxyRequest newRequestFunc) (*http.Request, *events.APIGatewayProxyResponse) {

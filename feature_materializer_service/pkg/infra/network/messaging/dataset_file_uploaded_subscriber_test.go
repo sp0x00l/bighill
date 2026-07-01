@@ -25,10 +25,10 @@ type recordingRawSnapshotUsecase struct {
 	err            error
 }
 
-func (r *recordingRawSnapshotUsecase) MaterializeRawSnapshot(_ context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) (*model.RawSnapshot, error) {
+func (r *recordingRawSnapshotUsecase) StartMaterializationWorkflow(_ context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) error {
 	r.datasetFile = datasetFile
 	r.idempotencyKey = idempotencyKey
-	return &model.RawSnapshot{RawSnapshotID: uuid.New()}, r.err
+	return r.err
 }
 
 var _ = Describe("DatasetFileUploadedEventListener", func() {
@@ -39,7 +39,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		Expect(listener.NewMessage()).To(Equal(&datasetpb.DatasetFileUploadedEvent{}))
 	})
 
-	It("maps the protobuf event into the raw snapshot use case", func() {
+	It("maps the protobuf event into the materialization workflow starter", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
 		uc := &recordingRawSnapshotUsecase{}

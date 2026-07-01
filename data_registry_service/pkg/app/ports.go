@@ -24,6 +24,11 @@ type DatasetRepositoryAdapter interface {
 	Replace(context.Context, *model.Dataset) (*model.Dataset, error)
 }
 
+type DatasetEventPublisher interface {
+	PublishDatasetCreated(ctx context.Context, dataset *model.Dataset) error
+	PublishDatasetDeleted(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) error
+}
+
 type SourceRepositoryAdapter interface {
 	Close()
 	Create(context.Context, *model.SourceConnector, uuid.UUID) error

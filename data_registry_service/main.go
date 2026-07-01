@@ -40,7 +40,9 @@ type registryConfig struct {
 	DBName                string
 	DBConnectionString    string
 	Messaging             messagingConn.MessengerConfig
+	OutboxBackend         string
 	OutboxRelay           messagingConn.OutboxRelayConfig
+	Topic                 string
 	MaterializationTopics registrymessaging.MaterializationTopics
 	Health                healthConfig
 }
@@ -75,23 +77,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	outboxWriter, err := newPostgresOutbox(database, cfg.OutboxBackend)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
+	}
+	publisher, err := messagingConn.NewPublisher(cfg.Messaging.Brokers, messagingConn.WithOutbox(outboxWriter))
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
+	}
+	defer publisher.Close()
+	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support relay operations")
+	}
+	relayPublisher, ok := publisher.(messagingConn.RelayPublisher)
+	if !ok {
+		log.Fatal("publisher does not support outbox relay publishing")
+	}
+	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
+	go func() {
+		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
+		}
+	}()
+
 	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
 	defer func() {
 		_ = messagingFactory.Close(cancelCtx)
 	}()
-	if _, err := messagingFactory.Publisher(cancelCtx); err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
-	}
-	outboxRelay, err := messagingFactory.OutboxRelay(cancelCtx, cfg.OutboxRelay)
-	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Warn("unable to create outbox relay")
-	} else {
-		go func() {
-			if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
-				log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
-			}
-		}()
-	}
 	subscriber, err := messagingFactory.Subscriber(cancelCtx)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
@@ -100,7 +113,8 @@ func main() {
 	sourceConnectorDB := db.NewSourceConnectorDB(database)
 	datasetDB := db.NewDatasetDB(database)
 
-	datasetUseCase := usecase.NewDatasetUseCase(datasetDB)
+	datasetEventPublisher := registrymessaging.NewDatasetEventPublisher(publisher, cfg.Topic)
+	datasetUseCase := usecase.NewDatasetUseCase(datasetDB, usecase.WithDatasetEventPublisher(datasetEventPublisher))
 	encoder := serializers.NewJSONSerializer()
 
 	catalogClient := catalogclient.NewLocalCatalogClient()
@@ -187,16 +201,17 @@ func readRegistryConfig() registryConfig {
 		DBName:             dbName,
 		DBConnectionString: dbConnectionString,
 		Messaging: messagingConn.MessengerConfig{
-			DlqURL:    env.WithDefaultString("DATA_REGISTRY_SERVICE_DLQ", "http://localhost:4566/data-registry-dev-env-queue/"),
-			OutboxURL: env.WithDefaultString("DATA_REGISTRY_SERVICE_OUTBOX", ""),
-			GroupID:   env.WithDefaultString("DATA_REGISTRY_SERVICE_KAFKA_GROUP_ID", "data-registry-group"),
-			Brokers:   brokers,
+			DlqURL:  env.WithDefaultString("DATA_REGISTRY_SERVICE_DLQ", "http://localhost:4566/data-registry-dev-env-queue/"),
+			GroupID: env.WithDefaultString("DATA_REGISTRY_SERVICE_KAFKA_GROUP_ID", "data-registry-group"),
+			Brokers: brokers,
 		},
+		OutboxBackend: env.WithDefaultString("DATA_REGISTRY_SERVICE_OUTBOX", "postgres"),
 		OutboxRelay: messagingConn.OutboxRelayConfig{
 			PollInterval:   time.Duration(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_POLL_MS", "250")) * time.Millisecond,
 			FailureBackoff: time.Duration(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
 			BatchSize:      int32(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
 		},
+		Topic: env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry"),
 		MaterializationTopics: registrymessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC", "feature_materializer"),
 		},
@@ -246,4 +261,13 @@ func postgresConnectionString(user, password, host, port, dbName, sslMode string
 
 func secondsFromEnv(key, defaultValue string) time.Duration {
 	return time.Duration(env.WithDefaultInt(key, defaultValue)) * time.Second
+}
+
+func newPostgresOutbox(database *coreDB.Database, backend string) (messagingConn.OutboxWriter, error) {
+	log.Trace("newPostgresOutbox")
+
+	if backend != "postgres" {
+		return nil, fmt.Errorf("unsupported outbox backend %q", backend)
+	}
+	return messagingConn.NewPostgresOutbox(database.Pool, database.Name, "")
 }

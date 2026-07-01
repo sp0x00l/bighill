@@ -17,11 +17,6 @@ message RawSnapshotReadyEvent {
   string schema_metadata = 10;
 }
 
-message FeatureSnapshotBuildRequestedEvent {
-  string raw_snapshot_id = 1;
-  string idempotency_key = 2;
-}
-
 message FeatureSnapshotReadyEvent {
   string feature_snapshot_id = 1;
   string raw_snapshot_id = 2;
@@ -34,11 +29,6 @@ message FeatureSnapshotReadyEvent {
   string catalog_provider = 9;
   int32 schema_version = 10;
   string schema_metadata = 11;
-}
-
-message EmbeddingMaterializationRequestedEvent {
-  string feature_snapshot_id = 1;
-  string idempotency_key = 2;
 }
 
 message EmbeddingSnapshotReadyEvent {

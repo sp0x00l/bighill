@@ -50,6 +50,12 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: FEATURE_MATERIALIZER_TEMPORAL_ADDRESS
+              value: {{ .Values.env.temporalAddress | quote }}
+            - name: FEATURE_MATERIALIZER_TEMPORAL_NAMESPACE
+              value: {{ .Values.env.temporalNamespace | quote }}
+            - name: FEATURE_MATERIALIZER_TEMPORAL_TASK_QUEUE
+              value: {{ .Values.env.temporalTaskQueue | quote }}
             - name: FEATURE_MATERIALIZER_ARTIFACT_BUCKET_NAME
               value: {{ .Values.env.artifactBucketName | quote }}
             - name: FEATURE_MATERIALIZER_ARTIFACT_BUCKET_REGION

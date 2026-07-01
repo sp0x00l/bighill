@@ -14,6 +14,8 @@ type MaterializationTopics struct {
 }
 
 func (t MaterializationTopics) List() []string {
+	log.Trace("MaterializationTopics List")
+
 	return []string{t.FeatureMaterializer}
 }
 

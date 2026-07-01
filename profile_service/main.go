@@ -15,6 +15,7 @@ import (
 
 	"context"
 	"errors"
+	"fmt"
 	sharedclock "lib/shared_lib/clock"
 	"net/http"
 
@@ -44,6 +45,7 @@ type runtimeConfig struct {
 	discordOAuth            rest.OAuthProviderConfig
 	redisOption             rueidis.ClientOption
 	messagingConfig         messagingConn.MessengerConfig
+	outboxBackend           string
 	outboxRelayConfig       messagingConn.OutboxRelayConfig
 	kafkaPublisherTopic     string
 	healthCheckConfig       healthcheck.HealthCheckConfig
@@ -85,22 +87,29 @@ func main() {
 	authStore := authProvider.NewRevocationStore(redisClient, authProvider.WithKeyPrefix("auth:"))
 	oauthStateStore := db.NewOAuthStateStore(redisClient, "auth:oauth:")
 
-	messagingFactory := messagingConn.NewMessenger(cfg.messagingConfig, cancelFtn)
-
-	msgPublisher, err := messagingFactory.Publisher(cancelCtx)
+	outboxWriter, err := newPostgresOutbox(database, cfg.outboxBackend)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
+	}
+	msgPublisher, err := messagingConn.NewPublisher(cfg.messagingConfig.Brokers, messagingConn.WithOutbox(outboxWriter))
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
 	}
-	outboxRelay, err := messagingFactory.OutboxRelay(cancelCtx, cfg.outboxRelayConfig)
-	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Warn("unable to create outbox relay")
-	} else {
-		go func() {
-			if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
-				log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
-			}
-		}()
+	defer msgPublisher.Close()
+	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support relay operations")
 	}
+	relayPublisher, ok := msgPublisher.(messagingConn.RelayPublisher)
+	if !ok {
+		log.Fatal("publisher does not support outbox relay publishing")
+	}
+	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.outboxRelayConfig)
+	go func() {
+		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
+		}
+	}()
 
 	profilePublisher := messaging.NewUserEventPublisher(msgPublisher, cfg.kafkaPublisherTopic)
 
@@ -198,11 +207,11 @@ func loadConfig() runtimeConfig {
 			Password:    env.MustString("PROFILE_SERVICE_REDIS_PASSWORD"),
 		},
 		messagingConfig: messagingConn.MessengerConfig{
-			DlqURL:    env.MustString("PROFILE_DLQ"),
-			OutboxURL: env.MustString("PROFILE_OUTBOX"),
-			GroupID:   env.MustString("PROFILE_KAFKA_GROUP_ID"),
-			Brokers:   brokers,
+			DlqURL:  env.MustString("PROFILE_DLQ"),
+			GroupID: env.MustString("PROFILE_KAFKA_GROUP_ID"),
+			Brokers: brokers,
 		},
+		outboxBackend: env.MustString("PROFILE_OUTBOX"),
 		outboxRelayConfig: messagingConn.OutboxRelayConfig{
 			PollInterval:   time.Duration(env.MustInt("PROFILE_SERVICE_OUTBOX_RELAY_POLL_MS")) * time.Millisecond,
 			FailureBackoff: time.Duration(env.MustInt("PROFILE_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS")) * time.Millisecond,
@@ -220,4 +229,13 @@ func loadConfig() runtimeConfig {
 			MessageBrokerConnectionString:    brokers,
 		},
 	}
+}
+
+func newPostgresOutbox(database *dbConn.Database, backend string) (messagingConn.OutboxWriter, error) {
+	log.Trace("newPostgresOutbox")
+
+	if backend != "postgres" {
+		return nil, fmt.Errorf("unsupported outbox backend %q", backend)
+	}
+	return messagingConn.NewPostgresOutbox(database.Pool, database.Name, "")
 }

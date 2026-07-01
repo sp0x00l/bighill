@@ -17,6 +17,7 @@ import (
 	"feature_materializer_service/pkg/infra/materialization"
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	repo "feature_materializer_service/pkg/infra/repo/db"
+	featuretemporal "feature_materializer_service/pkg/infra/temporalworker"
 	datasetpb "lib/data_contracts_lib/dataset"
 	corebucket "lib/shared_lib/bucket"
 	dbconn "lib/shared_lib/db"
@@ -27,6 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	log "github.com/sirupsen/logrus"
+	"go.temporal.io/sdk/client"
 )
 
 func TestFeatureMaterializerIntegration(t *testing.T) {
@@ -124,9 +126,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		suffix := fmt.Sprintf("%d", rand.Int64())
 		datasetTopic := "data_ingestion"
 		featureMaterializerTopic := "feature_materializer"
-		topics := featuremessaging.MaterializationTopics{
-			FeatureMaterializer: featureMaterializerTopic,
-		}
+		taskQueue := "feature-materializer-integration-" + suffix
 
 		runCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -134,7 +134,6 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 			Brokers:         brokers,
 			GroupID:         "feature-materializer-integration-" + suffix,
 			DlqURL:          "http://localhost:4566/feature-materializer-dev-env-queue/",
-			OutboxURL:       "noop://local",
 			AutoOffsetReset: "earliest",
 		}, cancel)
 		defer func() {
@@ -143,22 +142,55 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 
 		publisher, err := messenger.Publisher(runCtx)
 		Expect(err).NotTo(HaveOccurred())
+		relayPublisher, ok := publisher.(sharedmessaging.RelayPublisher)
+		Expect(ok).To(BeTrue())
 		subscriber, err := messenger.Subscriber(runCtx)
 		Expect(err).NotTo(HaveOccurred())
+
+		outboxWriter, err := sharedmessaging.NewPostgresOutbox(database.Pool, database.Name, "")
+		Expect(err).NotTo(HaveOccurred())
+		orderedOutbox, ok := outboxWriter.(sharedmessaging.OrderedOutbox)
+		Expect(ok).To(BeTrue())
+		relayOutbox, ok := outboxWriter.(sharedmessaging.RelayOutbox)
+		Expect(ok).To(BeTrue())
+		snapshotRepoWithOutbox := repo.NewSnapshotRepository(database, repo.WithTransactionalOutbox(orderedOutbox, featureMaterializerTopic))
+		outboxRelay := sharedmessaging.NewOutboxRelay(relayOutbox, relayPublisher, sharedmessaging.OutboxRelayConfig{
+			PollInterval:   100 * time.Millisecond,
+			FailureBackoff: 250 * time.Millisecond,
+			BatchSize:      10,
+			InstanceID:     "feature-materializer-integration-" + suffix,
+			LeaseDuration:  time.Second,
+		})
+		go func() {
+			_ = outboxRelay.Run(runCtx)
+		}()
 
 		artifactStore, err := materialization.NewObjectArtifactStore(runCtx, "local-dev-bucket", "local-dev", 10*1024*1024)
 		Expect(err).NotTo(HaveOccurred())
 		rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
 		featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
-		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshots, materialization.NewDeterministicEmbeddingProvider(384), "pgvector", 10)
-		eventPublisher := featuremessaging.NewMaterializationEventPublisher(publisher, topics)
+		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepoWithOutbox, materialization.NewDeterministicEmbeddingProvider(384), "pgvector", 10)
+		temporalClient, err := client.Dial(client.Options{
+			HostPort:  env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
+			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		defer temporalClient.Close()
+
+		activities := featuretemporal.NewMaterializationActivities(
+			usecase.NewRawSnapshotUsecase(snapshotRepoWithOutbox, rawWriter),
+			usecase.NewFeatureSnapshotUsecase(snapshotRepoWithOutbox, snapshotRepoWithOutbox, featureBuilder),
+			usecase.NewEmbeddingMaterializationUsecase(snapshotRepoWithOutbox, snapshotRepoWithOutbox, embeddingWriter),
+		)
+		worker := featuretemporal.NewMaterializationWorker(temporalClient, taskQueue, activities)
+		Expect(worker.Start()).To(Succeed())
+		defer worker.Stop()
+
+		workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, taskQueue)
 		materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
 			subscriber,
-			usecase.NewRawSnapshotUsecase(snapshots, rawWriter),
-			usecase.NewFeatureSnapshotUsecase(snapshots, snapshots, featureBuilder),
-			usecase.NewEmbeddingMaterializationUsecase(snapshots, snapshots, embeddingWriter),
-			eventPublisher,
-			[]string{datasetTopic, featureMaterializerTopic},
+			workflowStarter,
+			[]string{datasetTopic},
 		)
 
 		go func() {
@@ -195,6 +227,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 			g.Expect(featureStatus).To(Equal(model.SnapshotStatusReady.String()))
 			g.Expect(embeddingStatus).To(Equal(model.SnapshotStatusReady.String()))
 			g.Expect(embeddingCount).To(Equal(int64(2)))
+			g.Expect(outboxSentCount(ctx, database, datasetID)).To(Equal(3))
 		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
 	})
 })
@@ -214,7 +247,7 @@ func validIntegrationDatasetFile() *model.DatasetFile {
 }
 
 func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"embedding_records", "embedding_snapshots", "feature_snapshots", "raw_snapshots"} {
+	for _, table := range []string{"outbox_messages", "embedding_records", "embedding_snapshots", "feature_snapshots", "raw_snapshots"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}
@@ -234,6 +267,17 @@ func materializationState(ctx context.Context, database *dbconn.Database, datase
 	`, datasetID).Scan(&rawStatus, &featureStatus, &embeddingStatus, &embeddingCount)
 	Expect(err).NotTo(HaveOccurred())
 	return rawStatus, featureStatus, embeddingStatus, embeddingCount
+}
+
+func outboxSentCount(ctx context.Context, database *dbconn.Database, datasetID uuid.UUID) int {
+	var count int
+	err := database.Pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM `+database.Name+`.outbox_messages
+		WHERE resource_key = $1 AND status = 'SENT'
+	`, datasetID).Scan(&count)
+	Expect(err).NotTo(HaveOccurred())
+	return count
 }
 
 func testPostgresConnectionString(dbName string) string {

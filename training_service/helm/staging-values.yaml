@@ -1,0 +1,13 @@
+replicaCount: 1
+image:
+  repository: "385800116362.dkr.ecr.us-east-1.amazonaws.com/bighill/mlops/training-service"
+  tag: "0.0.1"
+  pullPolicy: Always
+service:
+  type: ClusterIP
+  healthPort: 5058
+env:
+  environment: "staging"
+  temporalAddress: "temporal:7233"
+  temporalNamespace: "default"
+  temporalTaskQueue: "training-service"

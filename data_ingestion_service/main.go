@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	usecase "data_ingestion_service/pkg/app"
+	ingestionmessaging "data_ingestion_service/pkg/infra/network/messaging"
 	"data_ingestion_service/pkg/infra/network/rest"
 	coreRest "data_ingestion_service/pkg/infra/network/restsupport"
 	"data_ingestion_service/pkg/infra/repo/bucket"
@@ -44,8 +45,10 @@ type ingestionConfig struct {
 	DBConnectionString   string
 	Redis                rueidis.ClientOption
 	Messaging            messagingConn.MessengerConfig
+	OutboxBackend        string
 	OutboxRelay          messagingConn.OutboxRelayConfig
 	DatasetUploadedTopic string
+	DataRegistryTopic    string
 	Health               healthConfig
 }
 
@@ -79,13 +82,37 @@ func main() {
 		os.Exit(1)
 	}
 
+	outboxWriter, err := newPostgresOutbox(coreDb, cfg.OutboxBackend)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
+	}
+	publisher, err := messagingConn.NewPublisher(cfg.Messaging.Brokers, messagingConn.WithOutbox(outboxWriter))
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
+	}
+	defer publisher.Close()
+	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support relay operations")
+	}
+	relayPublisher, ok := publisher.(messagingConn.RelayPublisher)
+	if !ok {
+		log.Fatal("publisher does not support outbox relay publishing")
+	}
+	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
+	go func() {
+		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
+		}
+	}()
+
 	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
 	defer func() {
 		_ = messagingFactory.Close(cancelCtx)
 	}()
-	publisher, err := messagingFactory.Publisher(cancelCtx)
+	subscriber, err := messagingFactory.Subscriber(cancelCtx)
 	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
 	}
 
 	redisClient, err := rueidis.NewClient(cfg.Redis)
@@ -104,21 +131,11 @@ func main() {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create auth provider")
 	}
 
-	outboxRelay, err := messagingFactory.OutboxRelay(cancelCtx, cfg.OutboxRelay)
-	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Warn("unable to create outbox relay")
-	} else {
-		go func() {
-			if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
-				log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
-			}
-		}()
-	}
-
 	uploader := coreBucket.NewBucket(ctx, cfg.BucketRegion, cfg.BucketUploadPartSize)
 	uploadBucket := bucket.NewDataBucket(cfg.BucketName, uploader)
 	datasetDB := db.NewDatasetDB(coreDb)
 	datasetUseCase := usecase.NewDatasetUseCase(datasetDB)
+	datasetLifecycleSubscriber := ingestionmessaging.NewDatasetLifecycleSubscriber(subscriber, datasetUseCase, []string{cfg.DataRegistryTopic})
 	uploadUseCase := usecase.NewDataUploadUseCase(
 		uploadBucket,
 		usecase.WithUploadEventPublisher(publisher, cfg.DatasetUploadedTopic),
@@ -149,6 +166,13 @@ func main() {
 			if err != http.ErrServerClosed {
 				log.Fatalf("unable to start the %s rest service: %v", serviceName, err)
 			}
+			quit <- syscall.SIGTERM
+		}
+	}()
+
+	go func() {
+		if err := datasetLifecycleSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(err).Error("dataset lifecycle subscriber stopped unexpectedly")
 			quit <- syscall.SIGTERM
 		}
 	}()
@@ -202,17 +226,18 @@ func readIngestionConfig() ingestionConfig {
 			Password:    env.WithDefaultString("DATA_INGESTION_SERVICE_REDIS_PASSWORD", ""),
 		},
 		Messaging: messagingConn.MessengerConfig{
-			DlqURL:    env.WithDefaultString("DATA_INGESTION_SERVICE_DLQ", "http://localhost:4566/data-ingestion-dev-env-queue/"),
-			OutboxURL: env.WithDefaultString("DATA_INGESTION_SERVICE_OUTBOX", ""),
-			GroupID:   env.WithDefaultString("DATA_INGESTION_SERVICE_KAFKA_GROUP_ID", "data-ingestion-group"),
-			Brokers:   brokers,
+			DlqURL:  env.WithDefaultString("DATA_INGESTION_SERVICE_DLQ", "http://localhost:4566/data-ingestion-dev-env-queue/"),
+			GroupID: env.WithDefaultString("DATA_INGESTION_SERVICE_KAFKA_GROUP_ID", "data-ingestion-group"),
+			Brokers: brokers,
 		},
+		OutboxBackend: env.WithDefaultString("DATA_INGESTION_SERVICE_OUTBOX", "postgres"),
 		OutboxRelay: messagingConn.OutboxRelayConfig{
 			PollInterval:   time.Duration(env.WithDefaultInt("DATA_INGESTION_SERVICE_OUTBOX_RELAY_POLL_MS", "250")) * time.Millisecond,
 			FailureBackoff: time.Duration(env.WithDefaultInt("DATA_INGESTION_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
 			BatchSize:      int32(env.WithDefaultInt("DATA_INGESTION_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
 		},
 		DatasetUploadedTopic: env.WithDefaultString("DATA_INGESTION_SERVICE_TOPIC", "data_ingestion"),
+		DataRegistryTopic:    env.WithDefaultString("DATA_INGESTION_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("DATA_INGESTION_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_INGESTION_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
@@ -259,4 +284,13 @@ func postgresConnectionString(user, password, host, port, dbName, sslMode string
 
 func secondsFromEnv(key, defaultValue string) time.Duration {
 	return time.Duration(env.WithDefaultInt(key, defaultValue)) * time.Second
+}
+
+func newPostgresOutbox(database *coreDB.Database, backend string) (messagingConn.OutboxWriter, error) {
+	log.Trace("newPostgresOutbox")
+
+	if backend != "postgres" {
+		return nil, fmt.Errorf("unsupported outbox backend %q", backend)
+	}
+	return messagingConn.NewPostgresOutbox(database.Pool, database.Name, "")
 }

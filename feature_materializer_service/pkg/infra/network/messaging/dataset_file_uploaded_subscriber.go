@@ -2,11 +2,9 @@ package messaging
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
-	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
 	datasetpb "lib/data_contracts_lib/dataset"
 	msgConn "lib/shared_lib/messaging"
@@ -16,7 +14,7 @@ import (
 )
 
 type DatasetFileUploadedListener interface {
-	MaterializeRawSnapshot(ctx context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) (*model.RawSnapshot, error)
+	StartMaterializationWorkflow(ctx context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) error
 }
 
 type DatasetFileUploadedSubscriber interface {
@@ -48,8 +46,7 @@ func (s *datasetFileUploadedSubscriber) Start(ctx context.Context) error {
 }
 
 type datasetFileUploadedEventListener struct {
-	listener  DatasetFileUploadedListener
-	publisher MaterializationEventPublisher
+	listener DatasetFileUploadedListener
 }
 
 func NewDatasetFileUploadedEventListener(listener DatasetFileUploadedListener) *datasetFileUploadedEventListener {
@@ -60,20 +57,15 @@ func NewDatasetFileUploadedEventListener(listener DatasetFileUploadedListener) *
 	}
 }
 
-func NewDatasetFileUploadedEventListenerWithPublisher(listener DatasetFileUploadedListener, publisher MaterializationEventPublisher) *datasetFileUploadedEventListener {
-	log.Trace("NewDatasetFileUploadedEventListenerWithPublisher")
-
-	return &datasetFileUploadedEventListener{
-		listener:  listener,
-		publisher: publisher,
-	}
-}
-
 func (l *datasetFileUploadedEventListener) MsgType() msgConn.MsgType {
+	log.Trace("datasetFileUploadedEventListener MsgType")
+
 	return msgConn.MsgTypeDatasetFileUploaded
 }
 
 func (l *datasetFileUploadedEventListener) NewMessage() *datasetpb.DatasetFileUploadedEvent {
+	log.Trace("datasetFileUploadedEventListener NewMessage")
+
 	return &datasetpb.DatasetFileUploadedEvent{}
 }
 
@@ -87,39 +79,12 @@ func (l *datasetFileUploadedEventListener) Handle(ctx context.Context, resourceK
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
-	rawSnapshot, err := l.listener.MaterializeRawSnapshot(ctx, datasetFile, idempotencyKey)
-	if err != nil {
-		existing, ok := domain.IsRawSnapshotAlreadyMaterialized(err)
-		if !ok {
-			return err
-		}
-		rawSnapshot = existing
-	}
-	if rawSnapshot == nil {
-		return msgConn.NonRetryable(fmt.Errorf("raw snapshot materializer returned nil"))
-	}
-	if err := l.publishNext(ctx, rawSnapshot); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return err
-		}
-		return fmt.Errorf("publish raw snapshot materialization events: %w", err)
-	}
-	return nil
-}
-
-func (l *datasetFileUploadedEventListener) publishNext(ctx context.Context, rawSnapshot *model.RawSnapshot) error {
-	log.Trace("datasetFileUploadedEventListener publishNext")
-
-	if l.publisher == nil {
-		return nil
-	}
-	if err := l.publisher.PublishRawSnapshotReady(ctx, rawSnapshot); err != nil {
-		return err
-	}
-	return l.publisher.PublishFeatureSnapshotBuildRequested(ctx, rawSnapshot, featureSnapshotIdempotencyKey(rawSnapshot.RawSnapshotID))
+	return l.listener.StartMaterializationWorkflow(ctx, datasetFile, idempotencyKey)
 }
 
 func eventToDatasetFile(resourceKey uuid.UUID, payload *datasetpb.DatasetFileUploadedEvent) (*model.DatasetFile, uuid.UUID, error) {
+	log.Trace("eventToDatasetFile")
+
 	if resourceKey == uuid.Nil {
 		return nil, uuid.Nil, fmt.Errorf("resource key is required")
 	}
@@ -169,6 +134,8 @@ func eventToDatasetFile(resourceKey uuid.UUID, payload *datasetpb.DatasetFileUpl
 }
 
 func withDefault(value, defaultValue string) string {
+	log.Trace("withDefault")
+
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return defaultValue

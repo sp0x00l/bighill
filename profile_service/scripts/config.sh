@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export PROFILE_DLQ=http://localhost:4566/profile-dev-env-queue/
-    export PROFILE_OUTBOX=noop://local
+    export PROFILE_OUTBOX=postgres
     export PROFILE_SERVICE_REDIS_ADDRESS=localhost:6379
     export PROFILE_USE_STAGING_TEST_EMAIL_TOKEN=true
     export PROFILE_OAUTH_GOOGLE_CLIENT_ID=""
@@ -17,7 +17,7 @@ if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export PROFILE_OAUTH_DISCORD_CLIENT_SECRET=""
 elif [ "$1" = "staging" ]; then
     export PROFILE_DLQ=http://localhost:4566/profile-dev-env-queue/ # TODO
-    export PROFILE_OUTBOX= # TODO
+    export PROFILE_OUTBOX=postgres
     export PROFILE_SERVICE_REDIS_ADDRESS=redis:6379
     export PROFILE_USE_STAGING_TEST_EMAIL_TOKEN=true
     export PROFILE_OAUTH_GOOGLE_CLIENT_ID="308109649261-hvbtodmtpegm0gp53ovjchu8j0v6k3i1.apps.googleusercontent.com"
@@ -27,7 +27,7 @@ elif [ "$1" = "staging" ]; then
 
 elif [ "$1" = "prod" ]; then
     export PROFILE_DLQ="" # TODO
-    export PROFILE_OUTBOX="" # TODO
+    export PROFILE_OUTBOX=postgres
     export PROFILE_SERVICE_REDIS_ADDRESS=redis:6379
     export PROFILE_USE_STAGING_TEST_EMAIL_TOKEN=false
     export PROFILE_OAUTH_GOOGLE_CLIENT_ID="" # TODO

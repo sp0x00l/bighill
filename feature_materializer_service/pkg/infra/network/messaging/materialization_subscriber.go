@@ -9,40 +9,29 @@ import (
 )
 
 type MaterializationSubscriber struct {
-	subscriber                  msgConn.Subscriber
-	rawSnapshotUsecase          DatasetFileUploadedListener
-	featureSnapshotUsecase      FeatureSnapshotBuildRequestedListener
-	embeddingMaterializeUsecase EmbeddingMaterializationRequestedListener
-	publisher                   MaterializationEventPublisher
-	topics                      []string
+	subscriber msgConn.Subscriber
+	listener   DatasetFileUploadedListener
+	topics     []string
 }
 
 func NewMaterializationSubscriber(
 	subscriber msgConn.Subscriber,
-	rawSnapshotUsecase DatasetFileUploadedListener,
-	featureSnapshotUsecase FeatureSnapshotBuildRequestedListener,
-	embeddingMaterializeUsecase EmbeddingMaterializationRequestedListener,
-	publisher MaterializationEventPublisher,
+	listener DatasetFileUploadedListener,
 	topics []string,
 ) *MaterializationSubscriber {
 	log.Trace("NewMaterializationSubscriber")
 
 	configureErrorPolicy(subscriber)
 	return &MaterializationSubscriber{
-		subscriber:                  subscriber,
-		rawSnapshotUsecase:          rawSnapshotUsecase,
-		featureSnapshotUsecase:      featureSnapshotUsecase,
-		embeddingMaterializeUsecase: embeddingMaterializeUsecase,
-		publisher:                   publisher,
-		topics:                      topics,
+		subscriber: subscriber,
+		listener:   listener,
+		topics:     topics,
 	}
 }
 
 func (s *MaterializationSubscriber) Start(ctx context.Context) error {
 	log.Trace("MaterializationSubscriber Start")
 
-	msgConn.AddListener(s.subscriber, NewDatasetFileUploadedEventListenerWithPublisher(s.rawSnapshotUsecase, s.publisher))
-	msgConn.AddListener(s.subscriber, NewFeatureSnapshotBuildRequestedEventListener(s.featureSnapshotUsecase, s.publisher))
-	msgConn.AddListener(s.subscriber, NewEmbeddingMaterializationRequestedEventListener(s.embeddingMaterializeUsecase, s.publisher))
+	msgConn.AddListener(s.subscriber, NewDatasetFileUploadedEventListener(s.listener))
 	return s.subscriber.Subscribe(ctx, s.topics)
 }

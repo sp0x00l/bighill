@@ -9,24 +9,46 @@ import (
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	featurepb "lib/data_contracts_lib/feature_materializer"
 	coreDB "lib/shared_lib/db"
+	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
 )
 
 type SnapshotRepository struct {
 	coreDB.Database
+	outbox msgConn.OrderedOutbox
+	topic  string
 }
 
-func NewSnapshotRepository(db *coreDB.Database) *SnapshotRepository {
+type SnapshotRepositoryOption func(*SnapshotRepository)
+
+func WithTransactionalOutbox(outbox msgConn.OrderedOutbox, topic string) SnapshotRepositoryOption {
+	log.Trace("WithTransactionalOutbox")
+
+	return func(r *SnapshotRepository) {
+		r.outbox = outbox
+		r.topic = topic
+	}
+}
+
+func NewSnapshotRepository(db *coreDB.Database, opts ...SnapshotRepositoryOption) *SnapshotRepository {
 	log.Trace("NewSnapshotRepository")
 
-	return &SnapshotRepository{
+	repository := &SnapshotRepository{
 		Database: *db,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(repository)
+		}
+	}
+	return repository
 }
 
 func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) (*model.RawSnapshot, error) {
@@ -72,6 +94,10 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, dataset
 func (r *SnapshotRepository) MarkRawReady(ctx context.Context, rawSnapshot *model.RawSnapshot) error {
 	log.Trace("SnapshotRepository MarkRawReady")
 
+	if r.outbox != nil {
+		return r.markRawReadyTx(ctx, rawSnapshot)
+	}
+
 	query := `UPDATE ` + r.Name + `.raw_snapshots
 		SET status = @status,
 			storage_location = @storage_location,
@@ -94,6 +120,46 @@ func (r *SnapshotRepository) MarkRawReady(ctx context.Context, rawSnapshot *mode
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: raw_snapshot_id=%s", domain.ErrRawSnapshotNotFound, rawSnapshot.RawSnapshotID)
+	}
+	return nil
+}
+
+func (r *SnapshotRepository) markRawReadyTx(ctx context.Context, rawSnapshot *model.RawSnapshot) error {
+	log.Trace("SnapshotRepository markRawReadyTx")
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin raw snapshot ready transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	query := `UPDATE ` + r.Name + `.raw_snapshots
+		SET status = @status,
+			storage_location = @storage_location,
+			table_format = @table_format,
+			schema_version = @schema_version,
+			schema_metadata = @schema_metadata::jsonb,
+			failure_reason = NULL
+		WHERE raw_snapshot_id = @raw_snapshot_id`
+	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
+		"raw_snapshot_id":  pgtype.UUID{Bytes: rawSnapshot.RawSnapshotID, Valid: true},
+		"storage_location": rawSnapshot.StorageLocation,
+		"table_format":     rawSnapshot.TableFormat,
+		"schema_version":   schemaVersionOrDefault(rawSnapshot.SchemaVersion),
+		"schema_metadata":  schemaMetadataOrDefault(rawSnapshot.SchemaMetadata),
+		"status":           model.SnapshotStatusReady.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("mark raw snapshot ready: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: raw_snapshot_id=%s", domain.ErrRawSnapshotNotFound, rawSnapshot.RawSnapshotID)
+	}
+	if err := r.outbox.EnqueueTx(ctx, tx, rawSnapshotReadyMessage(r.topic, rawSnapshot)); err != nil {
+		return fmt.Errorf("enqueue raw snapshot ready: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit raw snapshot ready transaction: %w", err)
 	}
 	return nil
 }
@@ -195,6 +261,10 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, raw
 func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, featureSnapshot *model.FeatureSnapshot) error {
 	log.Trace("SnapshotRepository MarkFeatureReady")
 
+	if r.outbox != nil {
+		return r.markFeatureReadyTx(ctx, featureSnapshot)
+	}
+
 	query := `UPDATE ` + r.Name + `.feature_snapshots
 		SET status = @status,
 			storage_location = @storage_location,
@@ -217,6 +287,46 @@ func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, featureSnapsh
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: feature_snapshot_id=%s", domain.ErrFeatureSnapshotNotFound, featureSnapshot.FeatureSnapshotID)
+	}
+	return nil
+}
+
+func (r *SnapshotRepository) markFeatureReadyTx(ctx context.Context, featureSnapshot *model.FeatureSnapshot) error {
+	log.Trace("SnapshotRepository markFeatureReadyTx")
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin feature snapshot ready transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	query := `UPDATE ` + r.Name + `.feature_snapshots
+		SET status = @status,
+			storage_location = @storage_location,
+			table_format = @table_format,
+			schema_version = @schema_version,
+			schema_metadata = @schema_metadata::jsonb,
+			failure_reason = NULL
+		WHERE feature_snapshot_id = @feature_snapshot_id`
+	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
+		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshot.FeatureSnapshotID, Valid: true},
+		"storage_location":    featureSnapshot.StorageLocation,
+		"table_format":        featureSnapshot.TableFormat,
+		"schema_version":      schemaVersionOrDefault(featureSnapshot.SchemaVersion),
+		"schema_metadata":     schemaMetadataOrDefault(featureSnapshot.SchemaMetadata),
+		"status":              model.SnapshotStatusReady.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("mark feature snapshot ready: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: feature_snapshot_id=%s", domain.ErrFeatureSnapshotNotFound, featureSnapshot.FeatureSnapshotID)
+	}
+	if err := r.outbox.EnqueueTx(ctx, tx, featureSnapshotReadyMessage(r.topic, featureSnapshot)); err != nil {
+		return fmt.Errorf("enqueue feature snapshot ready: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit feature snapshot ready transaction: %w", err)
 	}
 	return nil
 }
@@ -349,6 +459,10 @@ func (r *SnapshotRepository) SaveEmbeddingRecords(ctx context.Context, records [
 func (r *SnapshotRepository) MarkEmbeddingReady(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error {
 	log.Trace("SnapshotRepository MarkEmbeddingReady")
 
+	if r.outbox != nil {
+		return r.markEmbeddingReadyTx(ctx, embeddingSnapshot)
+	}
+
 	query := `UPDATE ` + r.Name + `.embedding_snapshots
 		SET status = @status,
 			vector_store = @vector_store,
@@ -371,6 +485,46 @@ func (r *SnapshotRepository) MarkEmbeddingReady(ctx context.Context, embeddingSn
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: embedding_snapshot_id=%s", domain.ErrEmbeddingSnapshotNotFound, embeddingSnapshot.EmbeddingSnapshotID)
+	}
+	return nil
+}
+
+func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error {
+	log.Trace("SnapshotRepository markEmbeddingReadyTx")
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin embedding snapshot ready transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	query := `UPDATE ` + r.Name + `.embedding_snapshots
+		SET status = @status,
+			vector_store = @vector_store,
+			collection_name = @collection_name,
+			embedding_dimensions = @embedding_dimensions,
+			embedding_count = @embedding_count,
+			failure_reason = NULL
+		WHERE embedding_snapshot_id = @embedding_snapshot_id`
+	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
+		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
+		"vector_store":          embeddingSnapshot.VectorStore,
+		"collection_name":       embeddingSnapshot.CollectionName,
+		"embedding_dimensions":  embeddingSnapshot.EmbeddingDimensions,
+		"embedding_count":       embeddingSnapshot.EmbeddingCount,
+		"status":                model.SnapshotStatusReady.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("mark embedding snapshot ready: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: embedding_snapshot_id=%s", domain.ErrEmbeddingSnapshotNotFound, embeddingSnapshot.EmbeddingSnapshotID)
+	}
+	if err := r.outbox.EnqueueTx(ctx, tx, embeddingSnapshotReadyMessage(r.topic, embeddingSnapshot)); err != nil {
+		return fmt.Errorf("enqueue embedding snapshot ready: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit embedding snapshot ready transaction: %w", err)
 	}
 	return nil
 }
@@ -565,4 +719,91 @@ func vectorLiteral(vector []float32) string {
 		values[i] = strconv.FormatFloat(float64(value), 'f', -1, 32)
 	}
 	return "[" + strings.Join(values, ",") + "]"
+}
+
+func rawSnapshotReadyMessage(topic string, rawSnapshot *model.RawSnapshot) msgConn.OutboundMessage {
+	log.Trace("rawSnapshotReadyMessage")
+
+	payload := mustMarshal(&featurepb.RawSnapshotReadyEvent{
+		RawSnapshotId:   rawSnapshot.RawSnapshotID.String(),
+		DatasetId:       rawSnapshot.DatasetID.String(),
+		UserId:          rawSnapshot.UserID.String(),
+		StorageLocation: rawSnapshot.StorageLocation,
+		TableNamespace:  rawSnapshot.TableNamespace,
+		TableName:       rawSnapshot.TableName,
+		TableFormat:     rawSnapshot.TableFormat,
+		CatalogProvider: rawSnapshot.CatalogProvider,
+		SchemaVersion:   int32(rawSnapshot.SchemaVersion),
+		SchemaMetadata:  rawSnapshot.SchemaMetadata,
+	})
+	return msgConn.OutboundMessage{
+		Topic: topic,
+		Message: msgConn.Message{
+			ResourceKey: rawSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeRawSnapshotReady,
+			Payload:     payload,
+		},
+		DispatchKey: "raw_snapshot_ready:" + rawSnapshot.RawSnapshotID.String(),
+	}
+}
+
+func featureSnapshotReadyMessage(topic string, featureSnapshot *model.FeatureSnapshot) msgConn.OutboundMessage {
+	log.Trace("featureSnapshotReadyMessage")
+
+	payload := mustMarshal(&featurepb.FeatureSnapshotReadyEvent{
+		FeatureSnapshotId: featureSnapshot.FeatureSnapshotID.String(),
+		RawSnapshotId:     featureSnapshot.RawSnapshotID.String(),
+		DatasetId:         featureSnapshot.DatasetID.String(),
+		UserId:            featureSnapshot.UserID.String(),
+		StorageLocation:   featureSnapshot.StorageLocation,
+		TableNamespace:    featureSnapshot.TableNamespace,
+		TableName:         featureSnapshot.TableName,
+		TableFormat:       featureSnapshot.TableFormat,
+		CatalogProvider:   featureSnapshot.CatalogProvider,
+		SchemaVersion:     int32(featureSnapshot.SchemaVersion),
+		SchemaMetadata:    featureSnapshot.SchemaMetadata,
+	})
+	return msgConn.OutboundMessage{
+		Topic: topic,
+		Message: msgConn.Message{
+			ResourceKey: featureSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeFeatureSnapshotReady,
+			Payload:     payload,
+		},
+		DispatchKey: "feature_snapshot_ready:" + featureSnapshot.FeatureSnapshotID.String(),
+	}
+}
+
+func embeddingSnapshotReadyMessage(topic string, embeddingSnapshot *model.EmbeddingSnapshot) msgConn.OutboundMessage {
+	log.Trace("embeddingSnapshotReadyMessage")
+
+	payload := mustMarshal(&featurepb.EmbeddingSnapshotReadyEvent{
+		EmbeddingSnapshotId: embeddingSnapshot.EmbeddingSnapshotID.String(),
+		FeatureSnapshotId:   embeddingSnapshot.FeatureSnapshotID.String(),
+		DatasetId:           embeddingSnapshot.DatasetID.String(),
+		UserId:              embeddingSnapshot.UserID.String(),
+		VectorStore:         embeddingSnapshot.VectorStore,
+		CollectionName:      embeddingSnapshot.CollectionName,
+		EmbeddingDimensions: int32(embeddingSnapshot.EmbeddingDimensions),
+		EmbeddingCount:      embeddingSnapshot.EmbeddingCount,
+	})
+	return msgConn.OutboundMessage{
+		Topic: topic,
+		Message: msgConn.Message{
+			ResourceKey: embeddingSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeEmbeddingSnapshotReady,
+			Payload:     payload,
+		},
+		DispatchKey: "embedding_snapshot_ready:" + embeddingSnapshot.EmbeddingSnapshotID.String(),
+	}
+}
+
+func mustMarshal(payload proto.Message) []byte {
+	log.Trace("mustMarshal")
+
+	out, err := proto.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }

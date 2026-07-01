@@ -12,12 +12,16 @@ import (
 type errorPolicy struct{}
 
 func configureErrorPolicy(subscriber msgConn.Subscriber) {
+	log.Trace("configureErrorPolicy")
+
 	if err := msgConn.ConfigureErrorPolicy(subscriber, errorPolicy{}); err != nil {
 		log.WithError(err).Trace("subscriber does not support error policy")
 	}
 }
 
 func (errorPolicy) IsNonRetryableError(err error) bool {
+	log.Trace("errorPolicy IsNonRetryableError")
+
 	if err == nil {
 		return false
 	}

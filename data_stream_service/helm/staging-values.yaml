@@ -16,7 +16,7 @@ env:
   environment: "staging"
   kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
   dlq: "http://localhost:4566/data-stream-dev-env-queue/"
-  outbox: ""
+  outbox: "postgres"
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"

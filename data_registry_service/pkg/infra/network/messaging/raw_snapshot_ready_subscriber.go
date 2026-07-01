@@ -30,10 +30,14 @@ func NewRawSnapshotReadyEventListener(listener RawSnapshotReadyListener) *rawSna
 }
 
 func (l *rawSnapshotReadyEventListener) MsgType() msgConn.MsgType {
+	log.Trace("rawSnapshotReadyEventListener MsgType")
+
 	return msgConn.MsgTypeRawSnapshotReady
 }
 
 func (l *rawSnapshotReadyEventListener) NewMessage() *featurepb.RawSnapshotReadyEvent {
+	log.Trace("rawSnapshotReadyEventListener NewMessage")
+
 	return &featurepb.RawSnapshotReadyEvent{}
 }
 
@@ -52,6 +56,8 @@ func (l *rawSnapshotReadyEventListener) Handle(ctx context.Context, resourceKey 
 }
 
 func rawSnapshotReadyToIDs(resourceKey uuid.UUID, payload *featurepb.RawSnapshotReadyEvent) (uuid.UUID, uuid.UUID, error) {
+	log.Trace("rawSnapshotReadyToIDs")
+
 	if resourceKey == uuid.Nil {
 		return uuid.Nil, uuid.Nil, fmt.Errorf("resource key is required")
 	}

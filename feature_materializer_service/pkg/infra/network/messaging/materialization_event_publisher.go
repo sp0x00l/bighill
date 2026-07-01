@@ -15,9 +15,7 @@ import (
 
 type MaterializationEventPublisher interface {
 	PublishRawSnapshotReady(ctx context.Context, rawSnapshot *model.RawSnapshot) error
-	PublishFeatureSnapshotBuildRequested(ctx context.Context, rawSnapshot *model.RawSnapshot, idempotencyKey uuid.UUID) error
 	PublishFeatureSnapshotReady(ctx context.Context, featureSnapshot *model.FeatureSnapshot) error
-	PublishEmbeddingMaterializationRequested(ctx context.Context, featureSnapshot *model.FeatureSnapshot, idempotencyKey uuid.UUID) error
 	PublishEmbeddingSnapshotReady(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error
 }
 
@@ -59,18 +57,6 @@ func (p *materializationEventPublisher) PublishRawSnapshotReady(ctx context.Cont
 	})
 }
 
-func (p *materializationEventPublisher) PublishFeatureSnapshotBuildRequested(ctx context.Context, rawSnapshot *model.RawSnapshot, idempotencyKey uuid.UUID) error {
-	log.Trace("materializationEventPublisher PublishFeatureSnapshotBuildRequested")
-
-	if rawSnapshot == nil {
-		return msgConn.NonRetryable(fmt.Errorf("raw snapshot is required"))
-	}
-	return p.publish(ctx, rawSnapshot.DatasetID, msgConn.MsgTypeFeatureSnapshotBuildRequested, &featurepb.FeatureSnapshotBuildRequestedEvent{
-		RawSnapshotId:  rawSnapshot.RawSnapshotID.String(),
-		IdempotencyKey: idempotencyKey.String(),
-	})
-}
-
 func (p *materializationEventPublisher) PublishFeatureSnapshotReady(ctx context.Context, featureSnapshot *model.FeatureSnapshot) error {
 	log.Trace("materializationEventPublisher PublishFeatureSnapshotReady")
 
@@ -89,18 +75,6 @@ func (p *materializationEventPublisher) PublishFeatureSnapshotReady(ctx context.
 		CatalogProvider:   featureSnapshot.CatalogProvider,
 		SchemaVersion:     int32(featureSnapshot.SchemaVersion),
 		SchemaMetadata:    featureSnapshot.SchemaMetadata,
-	})
-}
-
-func (p *materializationEventPublisher) PublishEmbeddingMaterializationRequested(ctx context.Context, featureSnapshot *model.FeatureSnapshot, idempotencyKey uuid.UUID) error {
-	log.Trace("materializationEventPublisher PublishEmbeddingMaterializationRequested")
-
-	if featureSnapshot == nil {
-		return msgConn.NonRetryable(fmt.Errorf("feature snapshot is required"))
-	}
-	return p.publish(ctx, featureSnapshot.DatasetID, msgConn.MsgTypeEmbeddingMaterializationRequested, &featurepb.EmbeddingMaterializationRequestedEvent{
-		FeatureSnapshotId: featureSnapshot.FeatureSnapshotID.String(),
-		IdempotencyKey:    idempotencyKey.String(),
 	})
 }
 

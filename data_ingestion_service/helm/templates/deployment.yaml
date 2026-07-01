@@ -119,6 +119,8 @@ spec:
               value: {{ .Values.env.kafkaGroupId | quote }}
             - name: DATA_INGESTION_SERVICE_TOPIC
               value: {{ .Values.env.topic | quote }}
+            - name: DATA_INGESTION_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
             - name: DATA_INGESTION_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: DATA_INGESTION_SERVICE_OUTBOX
