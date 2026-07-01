@@ -11,5 +11,9 @@ spec:
       port: {{ .Values.service.healthPort }}
       targetPort: health
       protocol: TCP
+    - name: grpc
+      port: {{ .Values.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
   selector:
     app: {{ include "inference-service.fullname" . }}

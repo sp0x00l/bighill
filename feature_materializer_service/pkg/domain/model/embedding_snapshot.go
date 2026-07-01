@@ -18,6 +18,7 @@ type EmbeddingSnapshot struct {
 	ChunkOverlap        int
 	EmbeddingProvider   string
 	EmbeddingModel      string
+	ActiveForRetrieval  bool
 	Status              SnapshotStatus
 	FailureReason       string
 }

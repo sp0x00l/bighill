@@ -162,7 +162,8 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		RETURNING title, description, origin, location, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
-		embedding_dimensions, embedding_count;`
+		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
+		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model;`
 	row := db.Pool.QueryRow(ctx, sqlStatement, datasetDAO)
 
 	updatedDataset := DatasetDAO{
@@ -191,7 +192,14 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		&updatedDataset.VectorStore,
 		&updatedDataset.CollectionName,
 		&updatedDataset.EmbeddingDimensions,
-		&updatedDataset.EmbeddingCount); err {
+		&updatedDataset.EmbeddingCount,
+		&updatedDataset.EmbeddingStrategyVersion,
+		&updatedDataset.EmbeddingChunkerName,
+		&updatedDataset.EmbeddingChunkerVersion,
+		&updatedDataset.EmbeddingChunkSize,
+		&updatedDataset.EmbeddingChunkOverlap,
+		&updatedDataset.EmbeddingProvider,
+		&updatedDataset.EmbeddingModel); err {
 	case pgx.ErrNoRows:
 		log.WithContext(ctx).Warnf("No dataset found in database for ID: %s", dataset.ID.String())
 		return nil, domainErrors.ErrResourceNotFound
@@ -229,7 +237,8 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.U
 		RETURNING id, user_id, title, description, origin, location, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
-		embedding_dimensions, embedding_count;`
+		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
+		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model;`
 
 	return db.scanRow(ctx, db.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"id":               datasetID,
@@ -292,7 +301,14 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 			vector_store = COALESCE(NULLIF(@vector_store, ''), d.vector_store),
 			collection_name = COALESCE(NULLIF(@collection_name, ''), d.collection_name),
 			embedding_dimensions = CASE WHEN @embedding_dimensions > 0 THEN @embedding_dimensions ELSE d.embedding_dimensions END,
-			embedding_count = CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END
+			embedding_count = CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END,
+			embedding_strategy_version = COALESCE(NULLIF(@embedding_strategy_version, ''), d.embedding_strategy_version),
+			embedding_chunker_name = COALESCE(NULLIF(@embedding_chunker_name, ''), d.embedding_chunker_name),
+			embedding_chunker_version = COALESCE(NULLIF(@embedding_chunker_version, ''), d.embedding_chunker_version),
+			embedding_chunk_size = CASE WHEN @embedding_chunk_size > 0 THEN @embedding_chunk_size ELSE d.embedding_chunk_size END,
+			embedding_chunk_overlap = CASE WHEN @embedding_chunk_overlap > 0 THEN @embedding_chunk_overlap ELSE d.embedding_chunk_overlap END,
+			embedding_provider = COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider),
+			embedding_model = COALESCE(NULLIF(@embedding_model, ''), d.embedding_model)
 		WHERE d.id = @id
 			AND d.user_id = @user_id
 			AND d.status != '` + model.Blacklisted.String() + `'
@@ -314,11 +330,19 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 				OR d.collection_name IS DISTINCT FROM COALESCE(NULLIF(@collection_name, ''), d.collection_name)
 				OR d.embedding_dimensions IS DISTINCT FROM CASE WHEN @embedding_dimensions > 0 THEN @embedding_dimensions ELSE d.embedding_dimensions END
 				OR d.embedding_count IS DISTINCT FROM CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END
+				OR d.embedding_strategy_version IS DISTINCT FROM COALESCE(NULLIF(@embedding_strategy_version, ''), d.embedding_strategy_version)
+				OR d.embedding_chunker_name IS DISTINCT FROM COALESCE(NULLIF(@embedding_chunker_name, ''), d.embedding_chunker_name)
+				OR d.embedding_chunker_version IS DISTINCT FROM COALESCE(NULLIF(@embedding_chunker_version, ''), d.embedding_chunker_version)
+				OR d.embedding_chunk_size IS DISTINCT FROM CASE WHEN @embedding_chunk_size > 0 THEN @embedding_chunk_size ELSE d.embedding_chunk_size END
+				OR d.embedding_chunk_overlap IS DISTINCT FROM CASE WHEN @embedding_chunk_overlap > 0 THEN @embedding_chunk_overlap ELSE d.embedding_chunk_overlap END
+				OR d.embedding_provider IS DISTINCT FROM COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider)
+				OR d.embedding_model IS DISTINCT FROM COALESCE(NULLIF(@embedding_model, ''), d.embedding_model)
 			)
 		RETURNING d.id, d.user_id, d.title, d.description, d.origin, d.location, d.status, d.category,
 			d.table_namespace, d.table_name, d.table_format, d.catalog_provider, d.processing_profile, d.schema_version, d.schema_metadata::text, d.processing_state::text,
 			d.dataset_version, d.raw_snapshot_id, d.feature_snapshot_id, d.embedding_snapshot_id, d.vector_store, d.collection_name,
-			d.embedding_dimensions, d.embedding_count`
+			d.embedding_dimensions, d.embedding_count, d.embedding_strategy_version, d.embedding_chunker_name, d.embedding_chunker_version,
+			d.embedding_chunk_size, d.embedding_chunk_overlap, d.embedding_provider, d.embedding_model`
 
 	updated, err := db.scanRow(ctx, tx.QueryRow(ctx, query, datasetDAO))
 	if err == nil {
@@ -470,7 +494,8 @@ func (db *datasetDB) getSelectSQL(filter string) string {
 	return fmt.Sprintf(`SELECT id, user_id, title, description, origin, location, status, category,
 	table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 	dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
-	embedding_dimensions, embedding_count
+	embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
+	embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model
 	FROM %s.datasets WHERE %s;`, db.Name, filter)
 }
 
@@ -505,6 +530,13 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 			&dataset.CollectionName,
 			&dataset.EmbeddingDimensions,
 			&dataset.EmbeddingCount,
+			&dataset.EmbeddingStrategyVersion,
+			&dataset.EmbeddingChunkerName,
+			&dataset.EmbeddingChunkerVersion,
+			&dataset.EmbeddingChunkSize,
+			&dataset.EmbeddingChunkOverlap,
+			&dataset.EmbeddingProvider,
+			&dataset.EmbeddingModel,
 		)
 		if err != nil {
 			log.WithContext(ctx).WithError(err).Error("Failed to read datasets")
@@ -529,7 +561,9 @@ func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, 
 		&dataset.Location, &dataset.Status, &dataset.Category, &dataset.TableNamespace, &dataset.TableName,
 		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.ProcessingProfile, &dataset.SchemaVersion, &dataset.SchemaMetadata, &dataset.ProcessingState,
 		&dataset.DatasetVersion, &dataset.RawSnapshotID, &dataset.FeatureSnapshotID, &dataset.EmbeddingSnapshotID,
-		&dataset.VectorStore, &dataset.CollectionName, &dataset.EmbeddingDimensions, &dataset.EmbeddingCount)
+		&dataset.VectorStore, &dataset.CollectionName, &dataset.EmbeddingDimensions, &dataset.EmbeddingCount,
+		&dataset.EmbeddingStrategyVersion, &dataset.EmbeddingChunkerName, &dataset.EmbeddingChunkerVersion,
+		&dataset.EmbeddingChunkSize, &dataset.EmbeddingChunkOverlap, &dataset.EmbeddingProvider, &dataset.EmbeddingModel)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domainErrors.ErrResourceNotFound
@@ -563,25 +597,32 @@ func datasetUpdatedMessage(topic string, dataset *model.Dataset) msgConn.Outboun
 	log.Trace("datasetUpdatedMessage")
 
 	payload := mustMarshalDataset(&datasetpb.DatasetUpdatedEvent{
-		DatasetId:           dataset.ID.String(),
-		UserId:              dataset.UserID.String(),
-		DatasetVersion:      int32(dataset.DatasetVersion),
-		ProcessingState:     dataset.ProcessingState.String(),
-		StorageLocation:     dataset.Location,
-		TableNamespace:      dataset.TableNamespace,
-		TableName:           dataset.TableName,
-		TableFormat:         dataset.TableFormat.String(),
-		CatalogProvider:     dataset.CatalogProvider.String(),
-		ProcessingProfile:   dataset.ProcessingProfile.String(),
-		SchemaVersion:       int32(dataset.SchemaVersion),
-		SchemaMetadata:      dataset.SchemaMetadata,
-		RawSnapshotId:       uuidToString(dataset.RawSnapshotID),
-		FeatureSnapshotId:   uuidToString(dataset.FeatureSnapshotID),
-		EmbeddingSnapshotId: uuidToString(dataset.EmbeddingSnapshotID),
-		VectorStore:         dataset.VectorStore,
-		CollectionName:      dataset.CollectionName,
-		EmbeddingDimensions: int32(dataset.EmbeddingDimensions),
-		EmbeddingCount:      dataset.EmbeddingCount,
+		DatasetId:                dataset.ID.String(),
+		UserId:                   dataset.UserID.String(),
+		DatasetVersion:           int32(dataset.DatasetVersion),
+		ProcessingState:          dataset.ProcessingState.String(),
+		StorageLocation:          dataset.Location,
+		TableNamespace:           dataset.TableNamespace,
+		TableName:                dataset.TableName,
+		TableFormat:              dataset.TableFormat.String(),
+		CatalogProvider:          dataset.CatalogProvider.String(),
+		ProcessingProfile:        dataset.ProcessingProfile.String(),
+		SchemaVersion:            int32(dataset.SchemaVersion),
+		SchemaMetadata:           dataset.SchemaMetadata,
+		RawSnapshotId:            uuidToString(dataset.RawSnapshotID),
+		FeatureSnapshotId:        uuidToString(dataset.FeatureSnapshotID),
+		EmbeddingSnapshotId:      uuidToString(dataset.EmbeddingSnapshotID),
+		VectorStore:              dataset.VectorStore,
+		CollectionName:           dataset.CollectionName,
+		EmbeddingDimensions:      int32(dataset.EmbeddingDimensions),
+		EmbeddingCount:           dataset.EmbeddingCount,
+		EmbeddingStrategyVersion: dataset.EmbeddingStrategyVersion,
+		EmbeddingChunkerName:     dataset.EmbeddingChunkerName,
+		EmbeddingChunkerVersion:  dataset.EmbeddingChunkerVersion,
+		EmbeddingChunkSize:       int32(dataset.EmbeddingChunkSize),
+		EmbeddingChunkOverlap:    int32(dataset.EmbeddingChunkOverlap),
+		EmbeddingProvider:        dataset.EmbeddingProvider,
+		EmbeddingModel:           dataset.EmbeddingModel,
 	})
 	return msgConn.OutboundMessage{
 		Topic: topic,

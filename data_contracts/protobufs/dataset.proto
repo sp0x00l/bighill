@@ -52,4 +52,11 @@ message DatasetUpdatedEvent {
   int32 embedding_dimensions = 17;
   int64 embedding_count = 18;
   string processing_profile = 19;
+  string embedding_strategy_version = 20;
+  string embedding_chunker_name = 21;
+  string embedding_chunker_version = 22;
+  int32 embedding_chunk_size = 23;
+  int32 embedding_chunk_overlap = 24;
+  string embedding_provider = 25;
+  string embedding_model = 26;
 }

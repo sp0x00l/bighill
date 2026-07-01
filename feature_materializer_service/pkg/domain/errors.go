@@ -35,6 +35,7 @@ var (
 	ErrRawSnapshotMaterialize      = &ServiceError{Code: "raw_snapshot_materialize_failed", Message: "raw snapshot materialize failed"}
 	ErrFeatureSnapshotBuild        = &ServiceError{Code: "feature_snapshot_build_failed", Message: "feature snapshot build failed"}
 	ErrEmbeddingMaterialize        = &ServiceError{Code: "embedding_materialize_failed", Message: "embedding materialize failed"}
+	ErrEmbeddingSearch             = &ServiceError{Code: "embedding_search_failed", Message: "embedding search failed"}
 	ErrArtifactRead                = &ServiceError{Code: "artifact_read_failed", Message: "artifact read failed"}
 	ErrArtifactWrite               = &ServiceError{Code: "artifact_write_failed", Message: "artifact write failed"}
 	ErrCatalogRegister             = &ServiceError{Code: "catalog_register_failed", Message: "catalog register failed"}

@@ -25,6 +25,9 @@ spec:
             - name: health
               containerPort: {{ .Values.service.healthPort }}
               protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+              protocol: TCP
           env:
             - name: ENVIRONMENT
               value: {{ .Values.env.environment | quote }}
@@ -94,8 +97,20 @@ spec:
               value: {{ .Values.env.kafkaGroupId | quote }}
             - name: INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.modelRegistrySubscriberTopic | quote }}
+            - name: INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
+            - name: INFERENCE_API_GRPC_PORT
+              value: {{ .Values.service.grpcPort | quote }}
+            - name: INFERENCE_FEATURE_MATERIALIZER_GRPC_ADDRESS
+              value: {{ .Values.env.featureMaterializerGrpcAddress | quote }}
+            - name: INFERENCE_FEATURE_MATERIALIZER_GRPC_DIAL_TIMEOUT_MS
+              value: {{ .Values.env.featureMaterializerGrpcDialTimeoutMs | quote }}
+            - name: INFERENCE_FEATURE_MATERIALIZER_GRPC_CALL_TIMEOUT_MS
+              value: {{ .Values.env.featureMaterializerGrpcCallTimeoutMs | quote }}
+            - name: INFERENCE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT
+              value: {{ .Values.env.featureMaterializerGrpcRetryCount | quote }}
             - name: INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: INFERENCE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT

@@ -475,52 +475,9 @@ func (r *SnapshotRepository) SaveEmbeddingRecords(ctx context.Context, records [
 func (r *SnapshotRepository) MarkEmbeddingReady(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error {
 	log.Trace("SnapshotRepository MarkEmbeddingReady")
 
-	if r.outbox != nil {
-		return r.markEmbeddingReadyTx(ctx, embeddingSnapshot)
+	if embeddingSnapshot == nil {
+		return domain.ErrValidationFailed.Extend("embedding snapshot is required")
 	}
-
-	query := `UPDATE ` + r.Name + `.embedding_snapshots
-		SET status = @status,
-			vector_store = @vector_store,
-			collection_name = @collection_name,
-			embedding_dimensions = @embedding_dimensions,
-			embedding_count = @embedding_count,
-			strategy_version = @strategy_version,
-			chunker_name = @chunker_name,
-			chunker_version = @chunker_version,
-			chunk_size = @chunk_size,
-			chunk_overlap = @chunk_overlap,
-			embedding_provider = @embedding_provider,
-			embedding_model = @embedding_model,
-			failure_reason = NULL
-		WHERE embedding_snapshot_id = @embedding_snapshot_id`
-	tag, err := r.Pool.Exec(ctx, query, pgx.NamedArgs{
-		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
-		"vector_store":          embeddingSnapshot.VectorStore,
-		"collection_name":       embeddingSnapshot.CollectionName,
-		"embedding_dimensions":  embeddingSnapshot.EmbeddingDimensions,
-		"embedding_count":       embeddingSnapshot.EmbeddingCount,
-		"strategy_version":      embeddingSnapshot.StrategyVersion,
-		"chunker_name":          embeddingSnapshot.ChunkerName,
-		"chunker_version":       embeddingSnapshot.ChunkerVersion,
-		"chunk_size":            embeddingSnapshot.ChunkSize,
-		"chunk_overlap":         embeddingSnapshot.ChunkOverlap,
-		"embedding_provider":    embeddingSnapshot.EmbeddingProvider,
-		"embedding_model":       embeddingSnapshot.EmbeddingModel,
-		"status":                model.SnapshotStatusReady.String(),
-	})
-	if err != nil {
-		r.LogPoolStatsOnError(ctx, "mark embedding snapshot ready failed", err)
-		return fmt.Errorf("mark embedding snapshot ready: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: embedding_snapshot_id=%s", domain.ErrEmbeddingSnapshotNotFound, embeddingSnapshot.EmbeddingSnapshotID)
-	}
-	return nil
-}
-
-func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error {
-	log.Trace("SnapshotRepository markEmbeddingReadyTx")
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -528,8 +485,39 @@ func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, embedding
 	}
 	defer tx.Rollback(ctx)
 
+	if err := r.markEmbeddingReadyTx(ctx, tx, embeddingSnapshot); err != nil {
+		return err
+	}
+
+	if r.outbox != nil {
+		if err := r.outbox.EnqueueTx(ctx, tx, embeddingSnapshotReadyMessage(r.topic, embeddingSnapshot)); err != nil {
+			return fmt.Errorf("enqueue embedding snapshot ready: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit embedding snapshot ready transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx, embeddingSnapshot *model.EmbeddingSnapshot) error {
+	log.Trace("SnapshotRepository markEmbeddingReadyTx")
+
+	if _, err := tx.Exec(ctx, `UPDATE `+r.Name+`.embedding_snapshots
+		SET active_for_retrieval = false
+		WHERE dataset_id = @dataset_id
+			AND active_for_retrieval = true
+			AND embedding_snapshot_id != @embedding_snapshot_id`, pgx.NamedArgs{
+		"dataset_id":            pgtype.UUID{Bytes: embeddingSnapshot.DatasetID, Valid: true},
+		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("deactivate previous active embedding snapshots: %w", err)
+	}
+
 	query := `UPDATE ` + r.Name + `.embedding_snapshots
 		SET status = @status,
+			active_for_retrieval = true,
 			vector_store = @vector_store,
 			collection_name = @collection_name,
 			embedding_dimensions = @embedding_dimensions,
@@ -564,12 +552,7 @@ func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, embedding
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: embedding_snapshot_id=%s", domain.ErrEmbeddingSnapshotNotFound, embeddingSnapshot.EmbeddingSnapshotID)
 	}
-	if err := r.outbox.EnqueueTx(ctx, tx, embeddingSnapshotReadyMessage(r.topic, embeddingSnapshot)); err != nil {
-		return fmt.Errorf("enqueue embedding snapshot ready: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit embedding snapshot ready transaction: %w", err)
-	}
+	embeddingSnapshot.ActiveForRetrieval = true
 	return nil
 }
 
@@ -577,7 +560,7 @@ func (r *SnapshotRepository) MarkEmbeddingFailed(ctx context.Context, embeddingS
 	log.Trace("SnapshotRepository MarkEmbeddingFailed")
 
 	query := `UPDATE ` + r.Name + `.embedding_snapshots
-		SET status = @status, failure_reason = @failure_reason
+		SET status = @status, active_for_retrieval = false, failure_reason = @failure_reason
 		WHERE embedding_snapshot_id = @embedding_snapshot_id`
 	tag, err := r.Pool.Exec(ctx, query, pgx.NamedArgs{
 		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshotID, Valid: true},
@@ -609,6 +592,81 @@ func (r *SnapshotRepository) ReadEmbeddingByIdempotencyKey(ctx context.Context, 
 		return nil, fmt.Errorf("read embedding snapshot by idempotency key: %w", err)
 	}
 	return embeddingSnapshot, nil
+}
+
+func (r *SnapshotRepository) ReadActiveEmbeddingSnapshot(ctx context.Context, datasetID uuid.UUID) (*model.EmbeddingSnapshot, error) {
+	log.Trace("SnapshotRepository ReadActiveEmbeddingSnapshot")
+
+	query := `SELECT ` + embeddingSnapshotColumns() + ` FROM ` + r.Name + `.embedding_snapshots
+		WHERE dataset_id = @dataset_id
+			AND active_for_retrieval = true
+			AND status = @status
+		ORDER BY updated_at DESC
+		LIMIT 1`
+	embeddingSnapshot, err := scanEmbeddingSnapshot(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
+		"dataset_id": pgtype.UUID{Bytes: datasetID, Valid: true},
+		"status":     model.SnapshotStatusReady.String(),
+	}))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: dataset_id=%s", domain.ErrEmbeddingSnapshotNotFound, datasetID)
+		}
+		r.LogPoolStatsOnError(ctx, "read active embedding snapshot failed", err)
+		return nil, fmt.Errorf("read active embedding snapshot: %w", err)
+	}
+	return embeddingSnapshot, nil
+}
+
+func (r *SnapshotRepository) SearchEmbeddingRecords(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, queryVector []float32, topK int) ([]model.EmbeddingRecord, error) {
+	log.Trace("SnapshotRepository SearchEmbeddingRecords")
+
+	if embeddingSnapshot == nil {
+		return nil, domain.ErrEmbeddingSnapshotNotFound.Extend("active embedding snapshot is required")
+	}
+	if topK <= 0 {
+		topK = 5
+	}
+	if embeddingSnapshot.EmbeddingDimensions <= 0 {
+		return nil, domain.ErrValidationFailed.Extend("embedding dimensions are required")
+	}
+	if len(queryVector) != embeddingSnapshot.EmbeddingDimensions {
+		return nil, domain.ErrValidationFailed.Extend("query vector dimensions do not match active embedding snapshot")
+	}
+
+	dimensions := embeddingSnapshot.EmbeddingDimensions
+	query := fmt.Sprintf(`SELECT embedding_record_id::text, embedding_snapshot_id::text, dataset_id::text, chunk_index, source_text,
+			(embedding::vector(%d) <=> @query_embedding::vector(%d))::double precision AS distance
+		FROM `+r.Name+`.embedding_records
+		WHERE embedding_snapshot_id = @embedding_snapshot_id
+			AND dataset_id = @dataset_id
+			AND vector_dims(embedding) = %d
+		ORDER BY embedding::vector(%d) <=> @query_embedding::vector(%d)
+		LIMIT @limit`, dimensions, dimensions, dimensions, dimensions, dimensions)
+
+	rows, err := r.Pool.Query(ctx, query, pgx.NamedArgs{
+		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
+		"dataset_id":            pgtype.UUID{Bytes: embeddingSnapshot.DatasetID, Valid: true},
+		"query_embedding":       vectorLiteral(queryVector),
+		"limit":                 topK,
+	})
+	if err != nil {
+		r.LogPoolStatsOnError(ctx, "search embedding records failed", err)
+		return nil, fmt.Errorf("search embedding records: %w", err)
+	}
+	defer rows.Close()
+
+	records := []model.EmbeddingRecord{}
+	for rows.Next() {
+		record, err := scanEmbeddingRecordSearchRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read embedding search rows: %w", err)
+	}
+	return records, nil
 }
 
 func (r *SnapshotRepository) resolveRawSnapshotIdempotencyConflict(ctx context.Context, idempotencyKey uuid.UUID) (*model.RawSnapshot, error) {
@@ -736,7 +794,7 @@ func embeddingSnapshotColumns() string {
 	return `embedding_snapshot_id::text, feature_snapshot_id::text, dataset_id::text, user_id::text,
 		vector_store, collection_name, embedding_dimensions, embedding_count, strategy_version,
 		chunker_name, chunker_version, chunk_size, chunk_overlap, embedding_provider, embedding_model,
-		status::text, COALESCE(failure_reason, '')`
+		active_for_retrieval, status::text, COALESCE(failure_reason, '')`
 }
 
 func scanRawSnapshot(row pgx.Row) (*model.RawSnapshot, error) {
@@ -834,6 +892,7 @@ func scanEmbeddingSnapshot(row pgx.Row) (*model.EmbeddingSnapshot, error) {
 		&embeddingSnapshot.ChunkOverlap,
 		&embeddingSnapshot.EmbeddingProvider,
 		&embeddingSnapshot.EmbeddingModel,
+		&embeddingSnapshot.ActiveForRetrieval,
 		&statusRaw,
 		&embeddingSnapshot.FailureReason,
 	); err != nil {
@@ -849,6 +908,28 @@ func scanEmbeddingSnapshot(row pgx.Row) (*model.EmbeddingSnapshot, error) {
 	embeddingSnapshot.UserID = uuid.MustParse(userID)
 	embeddingSnapshot.Status = status
 	return embeddingSnapshot, nil
+}
+
+func scanEmbeddingRecordSearchRow(row pgx.Row) (model.EmbeddingRecord, error) {
+	var embeddingRecordID, embeddingSnapshotID, datasetID string
+	var distance float64
+	record := model.EmbeddingRecord{}
+	if err := row.Scan(
+		&embeddingRecordID,
+		&embeddingSnapshotID,
+		&datasetID,
+		&record.ChunkIndex,
+		&record.SourceText,
+		&distance,
+	); err != nil {
+		return model.EmbeddingRecord{}, err
+	}
+	record.EmbeddingRecordID = uuid.MustParse(embeddingRecordID)
+	record.EmbeddingSnapshotID = uuid.MustParse(embeddingSnapshotID)
+	record.DatasetID = uuid.MustParse(datasetID)
+	record.Distance = distance
+	record.Similarity = 1 - distance
+	return record, nil
 }
 
 func schemaVersionOrDefault(version int) int {
@@ -940,6 +1021,13 @@ func embeddingSnapshotReadyMessage(topic string, embeddingSnapshot *model.Embedd
 		CollectionName:      embeddingSnapshot.CollectionName,
 		EmbeddingDimensions: int32(embeddingSnapshot.EmbeddingDimensions),
 		EmbeddingCount:      embeddingSnapshot.EmbeddingCount,
+		StrategyVersion:     embeddingSnapshot.StrategyVersion,
+		ChunkerName:         embeddingSnapshot.ChunkerName,
+		ChunkerVersion:      embeddingSnapshot.ChunkerVersion,
+		ChunkSize:           int32(embeddingSnapshot.ChunkSize),
+		ChunkOverlap:        int32(embeddingSnapshot.ChunkOverlap),
+		EmbeddingProvider:   embeddingSnapshot.EmbeddingProvider,
+		EmbeddingModel:      embeddingSnapshot.EmbeddingModel,
 	})
 	return msgConn.OutboundMessage{
 		Topic: topic,

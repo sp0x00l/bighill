@@ -1,0 +1,119 @@
+package grpc
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	usecase "inference_service/pkg/app"
+	"inference_service/pkg/domain/model"
+	featurepb "lib/data_contracts_lib/feature_materializer"
+	rpcLib "lib/shared_lib/rpc"
+
+	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
+)
+
+type FeatureMaterializerClientConfig struct {
+	Address       string
+	DialTimeoutMs int
+	CallTimeoutMs int
+	RetryCount    int
+}
+
+type featureMaterializerClient struct {
+	conn   *grpc.ClientConn
+	client featurepb.FeatureMaterializerServiceClient
+}
+
+func NewFeatureMaterializerClient(ctx context.Context, config FeatureMaterializerClientConfig, opts ...grpc.DialOption) (usecase.RetrievalClient, error) {
+	log.Trace("NewFeatureMaterializerClient")
+
+	address := config.Address
+	if address == "" {
+		address = "localhost:7072"
+	}
+
+	conn, err := rpcLib.NewClient(ctx, rpcLib.Config{
+		Address:          address,
+		Insecure:         true,
+		DialTimeout:      time.Duration(defaultPositiveInt(config.DialTimeoutMs, 500)) * time.Millisecond,
+		PerCallTimeout:   time.Duration(defaultPositiveInt(config.CallTimeoutMs, 15000)) * time.Millisecond,
+		MaxRetryAttempts: defaultPositiveInt(config.RetryCount, 3),
+	}, opts...)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("feature materializer grpc connection instantiation failed")
+		return nil, err
+	}
+
+	return &featureMaterializerClient{
+		conn:   conn,
+		client: featurepb.NewFeatureMaterializerServiceClient(conn),
+	}, nil
+}
+
+func (c *featureMaterializerClient) Close() error {
+	log.Trace("featureMaterializerClient Close")
+
+	if c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
+}
+
+func (c *featureMaterializerClient) SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int) ([]model.RetrievedContext, error) {
+	log.Trace("featureMaterializerClient SearchEmbeddings")
+
+	resp, err := c.client.SearchEmbeddings(ctx, &featurepb.SearchEmbeddingsRequest{
+		DatasetId: datasetID.String(),
+		QueryText: queryText,
+		TopK:      int32(topK),
+	})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("feature materializer search embeddings failed")
+		return nil, fmt.Errorf("search embeddings: %w", rpcLib.ExtractGRPCErrMsg(err))
+	}
+	contexts, err := embeddingSearchMatchesToContexts(resp.GetMatches())
+	if err != nil {
+		return nil, err
+	}
+	return contexts, nil
+}
+
+func embeddingSearchMatchesToContexts(matches []*featurepb.EmbeddingSearchMatch) ([]model.RetrievedContext, error) {
+	log.Trace("embeddingSearchMatchesToContexts")
+
+	contexts := make([]model.RetrievedContext, 0, len(matches))
+	for _, match := range matches {
+		if match == nil {
+			continue
+		}
+		recordID, err := uuid.Parse(match.GetEmbeddingRecordId())
+		if err != nil || recordID == uuid.Nil {
+			return nil, fmt.Errorf("feature materializer returned invalid embedding_record_id")
+		}
+		snapshotID, err := uuid.Parse(match.GetEmbeddingSnapshotId())
+		if err != nil || snapshotID == uuid.Nil {
+			return nil, fmt.Errorf("feature materializer returned invalid embedding_snapshot_id")
+		}
+		contexts = append(contexts, model.RetrievedContext{
+			EmbeddingRecordID:   recordID,
+			EmbeddingSnapshotID: snapshotID,
+			ChunkIndex:          int(match.GetChunkIndex()),
+			SourceText:          match.GetSourceText(),
+			Distance:            match.GetDistance(),
+			Similarity:          match.GetSimilarity(),
+		})
+	}
+	return contexts, nil
+}
+
+func defaultPositiveInt(value, defaultValue int) int {
+	log.Trace("defaultPositiveInt")
+
+	if value <= 0 {
+		return defaultValue
+	}
+	return value
+}

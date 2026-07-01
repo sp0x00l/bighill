@@ -132,6 +132,13 @@ func validMessagingEmbeddingSnapshot(featureSnapshotID uuid.UUID) *model.Embeddi
 		CollectionName:      "movies",
 		EmbeddingDimensions: 384,
 		EmbeddingCount:      2,
+		StrategyVersion:     "rag-v1",
+		ChunkerName:         "go-token-window",
+		ChunkerVersion:      "v1",
+		ChunkSize:           384,
+		ChunkOverlap:        64,
+		EmbeddingProvider:   "ollama",
+		EmbeddingModel:      model.DefaultEmbeddingModel,
 		Status:              model.SnapshotStatusReady,
 	}
 }

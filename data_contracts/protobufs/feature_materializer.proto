@@ -4,6 +4,10 @@ package feature_materializer;
 
 option go_package = "lib/data_contracts_lib/feature_materializer";
 
+service FeatureMaterializerService {
+  rpc SearchEmbeddings(SearchEmbeddingsRequest) returns (SearchEmbeddingsResponse);
+}
+
 message RawSnapshotReadyEvent {
   string raw_snapshot_id = 1;
   string dataset_id = 2;
@@ -42,4 +46,44 @@ message EmbeddingSnapshotReadyEvent {
   string collection_name = 6;
   int32 embedding_dimensions = 7;
   int64 embedding_count = 8;
+  string strategy_version = 9;
+  string chunker_name = 10;
+  string chunker_version = 11;
+  int32 chunk_size = 12;
+  int32 chunk_overlap = 13;
+  string embedding_provider = 14;
+  string embedding_model = 15;
+}
+
+message SearchEmbeddingsRequest {
+  string dataset_id = 1;
+  string query_text = 2;
+  int32 top_k = 3;
+}
+
+message SearchEmbeddingsResponse {
+  string dataset_id = 1;
+  string embedding_snapshot_id = 2;
+  string feature_snapshot_id = 3;
+  string vector_store = 4;
+  string collection_name = 5;
+  int32 embedding_dimensions = 6;
+  string strategy_version = 7;
+  string chunker_name = 8;
+  string chunker_version = 9;
+  int32 chunk_size = 10;
+  int32 chunk_overlap = 11;
+  string embedding_provider = 12;
+  string embedding_model = 13;
+  repeated EmbeddingSearchMatch matches = 14;
+}
+
+message EmbeddingSearchMatch {
+  string embedding_record_id = 1;
+  string embedding_snapshot_id = 2;
+  string dataset_id = 3;
+  int32 chunk_index = 4;
+  string source_text = 5;
+  double distance = 6;
+  double similarity = 7;
 }

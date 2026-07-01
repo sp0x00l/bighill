@@ -5,7 +5,7 @@ BUILD_MODE ?= prebuilt
 EXCLUDE_SERVICES ?=
 CI_TEST_EXCLUDE_SERVICES ?=
 
-.PHONY: install install-dev install-all build-all build-query-engine test-query-engine start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api kafka-clean kafka-create-topics kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka upgrade-go kafka-clean-test-topics k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
+.PHONY: install install-dev install-all build-all build-query-engine test test-query-engine start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api kafka-clean kafka-create-topics kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka upgrade-go kafka-clean-test-topics k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
 
 install: install-all
 
@@ -17,6 +17,31 @@ install-all:
 
 build-all:
 	@scripts/build-servers.sh $(ENV)
+
+test:
+	@cd data_contracts && make install && make build
+	@shared_lib/scripts/install.sh
+	@shared_lib/scripts/test.sh $(ENV)
+
+	@scripts/stop-servers.sh
+	@scripts/stop-infra.sh $(ENV)
+	@scripts/start-infra.sh $(ENV)
+
+	@CI_TEST_EXCLUDE_SERVICES=$(CI_TEST_EXCLUDE_SERVICES) scripts/install-services.sh
+
+	@scripts/kafka/kafka-clean-topics.sh $(ENV)
+	@scripts/kafka/kafka-create-topics.sh $(ENV)
+	@api_gateway/scripts/check-docker.sh
+	@CI_TEST_EXCLUDE_SERVICES=$(CI_TEST_EXCLUDE_SERVICES) scripts/start-servers.sh build $(ENV)
+	@api_gateway/scripts/install.sh
+	@api_gateway/scripts/build.sh auth
+	@api_gateway/scripts/build.sh api
+	@cd api_gateway && ./scripts/run.sh
+	@cd api_gateway && ./scripts/test.sh $(ENV)
+
+	@cd api_gateway && ./scripts/stop.sh
+	@scripts/stop-servers.sh
+	@scripts/stop-infra.sh $(ENV)
 
 build-query-engine:
 	@$(MAKE) -C query_engine build

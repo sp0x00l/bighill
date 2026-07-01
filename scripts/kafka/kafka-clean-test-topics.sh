@@ -1,24 +1,26 @@
-#! /usr/bin/env sh
+#!/usr/bin/env bash
+set -euo pipefail
 
-if ! brew services list | grep -q kafka.plist; then
-    echo "kafka is not running, starting kafka"
-    brew services start kafka
-    sleep 5
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/kafka-common.sh"
+
+ENVIRONMENT="${1:-local-dev}"
+kafka_load_config "$ENVIRONMENT"
+kafka_start_homebrew_if_needed
 
 echo "Cleaning kafka test topics, this will purge logs and data"
-topicsCmd=$(brew --prefix)/bin/kafka-topics
-broker=$(cat $(brew --prefix)/etc/kafka/kraft/broker.properties | grep "advertised.listeners" | cut -d':' -f2- | cut -d'/' -f3)
-topics=$($topicsCmd --bootstrap-server $broker --list)
+BROKER="$(kafka_bootstrap_server)"
+topics="$(kafka_topics --bootstrap-server "$BROKER" --list)"
 if [ -z "$topics" ]; then
-    echo "no topics to delete"
+  echo "no topics to delete"
 else
-   for topic in $topics; do
-        if [[ "$topic" == test-topic* ]]; then
-            echo "deleting topic $topic"
-            $topicsCmd --bootstrap-server $broker --delete --topic $topic
-        fi
-    done
+  for topic in $topics; do
+    if [[ "$topic" == test-topic* ]]; then
+      echo "deleting topic $topic"
+      kafka_topics --bootstrap-server "$BROKER" --delete --if-exists --topic "$topic" >/dev/null 2>&1 || true
+    fi
+  done
 fi
 
 echo "Cleaning complete"

@@ -47,3 +47,13 @@ var _ = Describe("InferenceModelRepository", func() {
 		Expect(repository.Name).To(Equal("bighill_inference_db"))
 	})
 })
+
+var _ = Describe("InferenceDatasetRepository", func() {
+	It("wraps the shared database with the configured schema name", func() {
+		database := coreDB.NewDatabase(connectionPoolStub{}, "bighill_inference_db")
+
+		repository := inferencedb.NewInferenceDatasetRepository(database)
+
+		Expect(repository.Name).To(Equal("bighill_inference_db"))
+	})
+})

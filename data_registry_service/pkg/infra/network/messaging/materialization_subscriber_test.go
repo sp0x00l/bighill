@@ -124,6 +124,13 @@ var _ = Describe("Materialization event listeners", func() {
 			CollectionName:      "movies",
 			EmbeddingDimensions: 384,
 			EmbeddingCount:      2,
+			StrategyVersion:     "rag-v1",
+			ChunkerName:         "go-token-window",
+			ChunkerVersion:      "v1",
+			ChunkSize:           384,
+			ChunkOverlap:        64,
+			EmbeddingProvider:   "ollama",
+			EmbeddingModel:      "bge-small-en-v1.5",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -132,6 +139,9 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedDataset.FeatureSnapshotID).To(Equal(featureSnapshotID))
 		Expect(uc.recordedDataset.EmbeddingSnapshotID).To(Equal(embeddingSnapshotID))
 		Expect(uc.recordedDataset.VectorStore).To(Equal("pgvector"))
+		Expect(uc.recordedDataset.EmbeddingStrategyVersion).To(Equal("rag-v1"))
+		Expect(uc.recordedDataset.EmbeddingProvider).To(Equal("ollama"))
+		Expect(uc.recordedDataset.EmbeddingModel).To(Equal("bge-small-en-v1.5"))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 	})
 

@@ -28,6 +28,7 @@ type testConnectionPool struct {
 	CloseCalled         bool
 	QueryRowCalled      bool
 	QueryRowCalledCount int
+	QueryCalled         bool
 	ExecCalled          bool
 	ExecCalledCount     int
 	QueryCalls          []string
@@ -35,9 +36,12 @@ type testConnectionPool struct {
 	ExecCalls           []string
 	ExecArgs            [][]any
 	NextRows            []pgx.Row
+	NextQueryRows       pgx.Rows
 	NextRowsAffected    int64
 	NextError           error
 	NextExecErrors      []error
+	CommitCalled        bool
+	RollbackCalled      bool
 }
 
 func (p *testConnectionPool) Close() {
@@ -57,8 +61,14 @@ func (p *testConnectionPool) QueryRow(_ context.Context, sql string, args ...any
 	return errorRow{err: pgx.ErrNoRows}
 }
 
-func (p *testConnectionPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
-	return nil, p.NextError
+func (p *testConnectionPool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	p.QueryCalled = true
+	p.QueryCalls = append(p.QueryCalls, sql)
+	p.QueryArgs = append(p.QueryArgs, args)
+	if p.NextQueryRows != nil {
+		return p.NextQueryRows, p.NextError
+	}
+	return &testRows{}, p.NextError
 }
 
 func (p *testConnectionPool) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -75,7 +85,111 @@ func (p *testConnectionPool) Exec(_ context.Context, sql string, args ...any) (p
 }
 
 func (p *testConnectionPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
-	return nil, p.NextError
+	if p.NextError != nil {
+		return nil, p.NextError
+	}
+	return &testTx{pool: p}, nil
+}
+
+type testTx struct {
+	pool *testConnectionPool
+}
+
+func (tx *testTx) Begin(context.Context) (pgx.Tx, error) {
+	return tx, nil
+}
+
+func (tx *testTx) Commit(context.Context) error {
+	tx.pool.CommitCalled = true
+	return nil
+}
+
+func (tx *testTx) Rollback(context.Context) error {
+	tx.pool.RollbackCalled = true
+	return nil
+}
+
+func (tx *testTx) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	return 0, nil
+}
+
+func (tx *testTx) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults {
+	return nil
+}
+
+func (tx *testTx) LargeObjects() pgx.LargeObjects {
+	return pgx.LargeObjects{}
+}
+
+func (tx *testTx) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
+	return nil, nil
+}
+
+func (tx *testTx) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+	return tx.pool.Exec(ctx, sql, arguments...)
+}
+
+func (tx *testTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return tx.pool.Query(ctx, sql, args...)
+}
+
+func (tx *testTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return tx.pool.QueryRow(ctx, sql, args...)
+}
+
+func (tx *testTx) Conn() *pgx.Conn {
+	return nil
+}
+
+type testRows struct {
+	rows   []pgx.Row
+	index  int
+	err    error
+	closed bool
+}
+
+func (r *testRows) Close() {
+	r.closed = true
+}
+
+func (r *testRows) Err() error {
+	return r.err
+}
+
+func (r *testRows) CommandTag() pgconn.CommandTag {
+	return pgconn.NewCommandTag("SELECT 0")
+}
+
+func (r *testRows) FieldDescriptions() []pgconn.FieldDescription {
+	return nil
+}
+
+func (r *testRows) Next() bool {
+	if r.index >= len(r.rows) {
+		r.Close()
+		return false
+	}
+	r.index++
+	return true
+}
+
+func (r *testRows) Scan(dest ...any) error {
+	if r.index == 0 || r.index > len(r.rows) {
+		return pgx.ErrNoRows
+	}
+	return r.rows[r.index-1].Scan(dest...)
+}
+
+func (r *testRows) Values() ([]any, error) {
+	return nil, nil
+}
+
+func (r *testRows) RawValues() [][]byte {
+	return nil
+}
+
+func (r *testRows) Conn() *pgx.Conn {
+	return nil
 }
 
 type errorRow struct {
@@ -174,6 +288,7 @@ type embeddingSnapshotRow struct {
 	ChunkOverlap        int
 	EmbeddingProvider   string
 	EmbeddingModel      string
+	ActiveForRetrieval  bool
 	Status              string
 	FailureReason       string
 }
@@ -194,8 +309,28 @@ func (r embeddingSnapshotRow) Scan(dest ...any) error {
 	*(dest[12].(*int)) = r.ChunkOverlap
 	*(dest[13].(*string)) = r.EmbeddingProvider
 	*(dest[14].(*string)) = r.EmbeddingModel
-	*(dest[15].(*string)) = r.Status
-	*(dest[16].(*string)) = r.FailureReason
+	*(dest[15].(*bool)) = r.ActiveForRetrieval
+	*(dest[16].(*string)) = r.Status
+	*(dest[17].(*string)) = r.FailureReason
+	return nil
+}
+
+type embeddingRecordSearchRow struct {
+	EmbeddingRecordID   uuid.UUID
+	EmbeddingSnapshotID uuid.UUID
+	DatasetID           uuid.UUID
+	ChunkIndex          int
+	SourceText          string
+	Distance            float64
+}
+
+func (r embeddingRecordSearchRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.EmbeddingRecordID.String()
+	*(dest[1].(*string)) = r.EmbeddingSnapshotID.String()
+	*(dest[2].(*string)) = r.DatasetID.String()
+	*(dest[3].(*int)) = r.ChunkIndex
+	*(dest[4].(*string)) = r.SourceText
+	*(dest[5].(*float64)) = r.Distance
 	return nil
 }
 
@@ -542,6 +677,7 @@ var _ = Describe("SnapshotRepository", func() {
 		It("marks the embedding snapshot ready", func() {
 			err := repository.MarkEmbeddingReady(ctx, &model.EmbeddingSnapshot{
 				EmbeddingSnapshotID: embeddingID,
+				DatasetID:           datasetID,
 				VectorStore:         "pgvector",
 				CollectionName:      "movies",
 				EmbeddingDimensions: 384,
@@ -556,8 +692,12 @@ var _ = Describe("SnapshotRepository", func() {
 			})
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("UPDATE test_db.embedding_snapshots"))
-			args := namedArgs(poolMock.ExecArgs[0])
+			Expect(poolMock.CommitCalled).To(BeTrue())
+			Expect(poolMock.ExecCalls).To(HaveLen(2))
+			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("active_for_retrieval = false"))
+			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("UPDATE test_db.embedding_snapshots"))
+			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("active_for_retrieval = true"))
+			args := namedArgs(poolMock.ExecArgs[1])
 			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("vector_store", "pgvector"))
 			Expect(args).To(HaveKeyWithValue("collection_name", "movies"))
@@ -571,6 +711,60 @@ var _ = Describe("SnapshotRepository", func() {
 			err := repository.MarkEmbeddingReady(ctx, &model.EmbeddingSnapshot{EmbeddingSnapshotID: embeddingID})
 
 			Expect(errors.Is(err, domain.ErrEmbeddingSnapshotNotFound)).To(BeTrue())
+		})
+	})
+
+	Describe("ReadActiveEmbeddingSnapshot", func() {
+		It("reads the ready active snapshot for a dataset", func() {
+			activeRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID)
+			activeRow.Status = model.SnapshotStatusReady.String()
+			activeRow.ActiveForRetrieval = true
+			poolMock.NextRows = []pgx.Row{activeRow}
+
+			embeddingSnapshot, err := repository.ReadActiveEmbeddingSnapshot(ctx, datasetID)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
+			Expect(embeddingSnapshot.ActiveForRetrieval).To(BeTrue())
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("active_for_retrieval = true"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
+		})
+	})
+
+	Describe("SearchEmbeddingRecords", func() {
+		It("scopes search to the active embedding snapshot and uses the dimension-cast HNSW query shape", func() {
+			poolMock.NextQueryRows = &testRows{rows: []pgx.Row{
+				embeddingRecordSearchRow{
+					EmbeddingRecordID:   uuid.New(),
+					EmbeddingSnapshotID: embeddingID,
+					DatasetID:           datasetID,
+					ChunkIndex:          2,
+					SourceText:          "nearest chunk",
+					Distance:            0.25,
+				},
+			}}
+			activeSnapshot := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID)
+
+			records, err := repository.SearchEmbeddingRecords(ctx, &model.EmbeddingSnapshot{
+				EmbeddingSnapshotID: activeSnapshot.EmbeddingSnapshotID,
+				DatasetID:           activeSnapshot.DatasetID,
+				EmbeddingDimensions: activeSnapshot.EmbeddingDimensions,
+			}, make([]float32, activeSnapshot.EmbeddingDimensions), 3)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(records).To(HaveLen(1))
+			Expect(records[0].Distance).To(Equal(0.25))
+			Expect(records[0].Similarity).To(Equal(0.75))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("embedding_snapshot_id = @embedding_snapshot_id"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("embedding::vector(384)"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("vector_dims(embedding) = 384"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("double precision AS distance"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("limit", 3))
 		})
 	})
 })

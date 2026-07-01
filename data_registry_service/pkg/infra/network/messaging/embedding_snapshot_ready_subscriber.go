@@ -92,13 +92,20 @@ func embeddingSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.E
 		return nil, fmt.Errorf("collection name is required")
 	}
 	return &model.Dataset{
-		ID:                  datasetID,
-		UserID:              userID,
-		FeatureSnapshotID:   featureSnapshotID,
-		EmbeddingSnapshotID: embeddingSnapshotID,
-		VectorStore:         vectorStore,
-		CollectionName:      collectionName,
-		EmbeddingDimensions: int(payload.GetEmbeddingDimensions()),
-		EmbeddingCount:      payload.GetEmbeddingCount(),
+		ID:                       datasetID,
+		UserID:                   userID,
+		FeatureSnapshotID:        featureSnapshotID,
+		EmbeddingSnapshotID:      embeddingSnapshotID,
+		VectorStore:              vectorStore,
+		CollectionName:           collectionName,
+		EmbeddingDimensions:      int(payload.GetEmbeddingDimensions()),
+		EmbeddingCount:           payload.GetEmbeddingCount(),
+		EmbeddingStrategyVersion: strings.TrimSpace(payload.GetStrategyVersion()),
+		EmbeddingChunkerName:     strings.TrimSpace(payload.GetChunkerName()),
+		EmbeddingChunkerVersion:  strings.TrimSpace(payload.GetChunkerVersion()),
+		EmbeddingChunkSize:       int(payload.GetChunkSize()),
+		EmbeddingChunkOverlap:    int(payload.GetChunkOverlap()),
+		EmbeddingProvider:        strings.TrimSpace(payload.GetEmbeddingProvider()),
+		EmbeddingModel:           strings.TrimSpace(payload.GetEmbeddingModel()),
 	}, nil
 }

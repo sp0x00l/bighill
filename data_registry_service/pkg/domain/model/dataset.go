@@ -57,30 +57,37 @@ func ToStatusType(s string) (StatusType, error) {
 }
 
 type Dataset struct {
-	ID                  uuid.UUID
-	UserID              uuid.UUID
-	Title               string
-	Description         string
-	Origin              OriginType
-	Location            string
-	Status              StatusType
-	Category            string
-	TableNamespace      string
-	TableName           string
-	TableFormat         TableFormat
-	CatalogProvider     CatalogProvider
-	ProcessingProfile   ProcessingProfile
-	SchemaVersion       int
-	SchemaMetadata      string
-	ProcessingState     ProcessingState
-	DatasetVersion      int
-	RawSnapshotID       uuid.UUID
-	FeatureSnapshotID   uuid.UUID
-	EmbeddingSnapshotID uuid.UUID
-	VectorStore         string
-	CollectionName      string
-	EmbeddingDimensions int
-	EmbeddingCount      int64
+	ID                       uuid.UUID
+	UserID                   uuid.UUID
+	Title                    string
+	Description              string
+	Origin                   OriginType
+	Location                 string
+	Status                   StatusType
+	Category                 string
+	TableNamespace           string
+	TableName                string
+	TableFormat              TableFormat
+	CatalogProvider          CatalogProvider
+	ProcessingProfile        ProcessingProfile
+	SchemaVersion            int
+	SchemaMetadata           string
+	ProcessingState          ProcessingState
+	DatasetVersion           int
+	RawSnapshotID            uuid.UUID
+	FeatureSnapshotID        uuid.UUID
+	EmbeddingSnapshotID      uuid.UUID
+	VectorStore              string
+	CollectionName           string
+	EmbeddingDimensions      int
+	EmbeddingCount           int64
+	EmbeddingStrategyVersion string
+	EmbeddingChunkerName     string
+	EmbeddingChunkerVersion  string
+	EmbeddingChunkSize       int
+	EmbeddingChunkOverlap    int
+	EmbeddingProvider        string
+	EmbeddingModel           string
 }
 
 func NewDataset(ID uuid.UUID) *Dataset {

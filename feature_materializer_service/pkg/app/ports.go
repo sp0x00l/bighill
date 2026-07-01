@@ -40,6 +40,11 @@ type EmbeddingSnapshotRepository interface {
 	ReadEmbeddingByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (*model.EmbeddingSnapshot, error)
 }
 
+type EmbeddingSearchRepository interface {
+	ReadActiveEmbeddingSnapshot(ctx context.Context, datasetID uuid.UUID) (*model.EmbeddingSnapshot, error)
+	SearchEmbeddingRecords(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, queryVector []float32, topK int) ([]model.EmbeddingRecord, error)
+}
+
 type EmbeddingWriter interface {
 	MaterializeEmbeddings(context.Context, *model.FeatureSnapshot, *model.EmbeddingSnapshot) (*model.EmbeddingSnapshot, error)
 }

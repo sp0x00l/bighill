@@ -5,6 +5,7 @@ import (
 
 	"inference_service/pkg/domain/model"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -28,5 +29,38 @@ var _ = Describe("ModelStatus", func() {
 		_, err := model.ToModelStatus("UNKNOWN")
 
 		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("DatasetProcessingState", func() {
+	It("converts known dataset processing states", func() {
+		status, err := model.ToDatasetProcessingState("EMBEDDINGS_MATERIALIZED")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+		Expect(model.DatasetProcessingPending.String()).To(Equal("PENDING"))
+		Expect(model.DatasetProcessingFailed.String()).To(Equal("FAILED"))
+	})
+
+	It("rejects unknown dataset processing states", func() {
+		_, err := model.ToDatasetProcessingState("UNKNOWN")
+
+		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("InferenceDataset", func() {
+	It("reports RAG readiness only for active embedding metadata", func() {
+		dataset := &model.InferenceDataset{
+			ProcessingState:     model.DatasetProcessingEmbeddingsMaterialized,
+			EmbeddingSnapshotID: uuid.New(),
+			EmbeddingDimensions: 384,
+			EmbeddingCount:      1,
+		}
+
+		Expect(dataset.IsRAGReady()).To(BeTrue())
+
+		dataset.EmbeddingCount = 0
+		Expect(dataset.IsRAGReady()).To(BeFalse())
 	})
 })

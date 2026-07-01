@@ -20,6 +20,9 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_DB_USER")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_DB_PASSWORD")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_API_GRPC_PORT")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_FEATURE_MATERIALIZER_GRPC_ADDRESS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_GROUP_ID")).To(Succeed())
 	})
 
@@ -30,6 +33,9 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.DBName).To(Equal("bighill_inference_db"))
 		Expect(cfg.Messaging.GroupID).To(Equal("inference-group"))
 		Expect(cfg.Topics.ModelRegistry).To(Equal("model_registry"))
+		Expect(cfg.Topics.DataRegistry).To(Equal("data_registry"))
+		Expect(cfg.FeatureMaterializer.Address).To(Equal("localhost:7072"))
+		Expect(cfg.GRPCPort).To(Equal(7073))
 		Expect(cfg.Health.HealthCheckPort).To(Equal(5059))
 	})
 

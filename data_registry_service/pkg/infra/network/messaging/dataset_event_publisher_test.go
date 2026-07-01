@@ -67,25 +67,32 @@ var _ = Describe("DatasetEventPublisher", func() {
 		client := &registryPublishClientStub{}
 		publisher := registrymessaging.NewDatasetEventPublisher(client, "data_registry")
 		dataset := &model.Dataset{
-			ID:                  uuid.New(),
-			UserID:              uuid.New(),
-			DatasetVersion:      4,
-			ProcessingState:     model.DatasetProcessingEmbeddingsMaterialized,
-			Location:            "s3://local-dev-bucket/lakehouse/features/data.parquet",
-			TableNamespace:      "features",
-			TableName:           "movies",
-			TableFormat:         model.Parquet,
-			CatalogProvider:     model.LocalCatalog,
-			ProcessingProfile:   model.TextRAGProfile,
-			SchemaVersion:       3,
-			SchemaMetadata:      `{"columns":["title"]}`,
-			RawSnapshotID:       uuid.New(),
-			FeatureSnapshotID:   uuid.New(),
-			EmbeddingSnapshotID: uuid.New(),
-			VectorStore:         "pgvector",
-			CollectionName:      "movies",
-			EmbeddingDimensions: 384,
-			EmbeddingCount:      2,
+			ID:                       uuid.New(),
+			UserID:                   uuid.New(),
+			DatasetVersion:           4,
+			ProcessingState:          model.DatasetProcessingEmbeddingsMaterialized,
+			Location:                 "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:           "features",
+			TableName:                "movies",
+			TableFormat:              model.Parquet,
+			CatalogProvider:          model.LocalCatalog,
+			ProcessingProfile:        model.TextRAGProfile,
+			SchemaVersion:            3,
+			SchemaMetadata:           `{"columns":["title"]}`,
+			RawSnapshotID:            uuid.New(),
+			FeatureSnapshotID:        uuid.New(),
+			EmbeddingSnapshotID:      uuid.New(),
+			VectorStore:              "pgvector",
+			CollectionName:           "movies",
+			EmbeddingDimensions:      384,
+			EmbeddingCount:           2,
+			EmbeddingStrategyVersion: "rag-v1",
+			EmbeddingChunkerName:     "go-token-window",
+			EmbeddingChunkerVersion:  "v1",
+			EmbeddingChunkSize:       384,
+			EmbeddingChunkOverlap:    64,
+			EmbeddingProvider:        "ollama",
+			EmbeddingModel:           "bge-small-en-v1.5",
 		}
 
 		Expect(publisher.PublishDatasetUpdated(context.Background(), dataset)).To(Succeed())
@@ -104,5 +111,8 @@ var _ = Describe("DatasetEventPublisher", func() {
 		Expect(event.FeatureSnapshotId).To(Equal(dataset.FeatureSnapshotID.String()))
 		Expect(event.EmbeddingSnapshotId).To(Equal(dataset.EmbeddingSnapshotID.String()))
 		Expect(event.VectorStore).To(Equal("pgvector"))
+		Expect(event.EmbeddingStrategyVersion).To(Equal("rag-v1"))
+		Expect(event.EmbeddingProvider).To(Equal("ollama"))
+		Expect(event.EmbeddingModel).To(Equal("bge-small-en-v1.5"))
 	})
 })

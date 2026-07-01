@@ -16,6 +16,7 @@ import (
 	usecase "feature_materializer_service/pkg/app"
 	"feature_materializer_service/pkg/domain/model"
 	"feature_materializer_service/pkg/infra/materialization"
+	featuregrpc "feature_materializer_service/pkg/infra/network/grpc"
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	featuredb "feature_materializer_service/pkg/infra/repo/db"
 	featuretemporal "feature_materializer_service/pkg/infra/temporalworker"
@@ -42,6 +43,7 @@ type materializerConfig struct {
 	ArtifactBucket       artifactBucketConfig
 	Embedding            embeddingConfig
 	Temporal             temporalConfig
+	GRPCPort             int
 	DatasetUploadedTopic string
 	PublishTopics        featuremessaging.MaterializationTopics
 	Health               healthConfig
@@ -175,6 +177,7 @@ func main() {
 	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, rawDispatcher)
 	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotRepo, featureDispatcher)
 	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotRepo, embeddingDispatcher)
+	embeddingSearchUsecase := usecase.NewEmbeddingSearchUsecase(snapshotRepo, newQueryEmbeddingProviderFactory(cfg.Embedding))
 	activities := featuretemporal.NewMaterializationActivities(rawSnapshotUsecase, featureSnapshotUsecase, embeddingUsecase)
 	materializationWorker := featuretemporal.NewMaterializationWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
 	if err := materializationWorker.Start(); err != nil {
@@ -189,6 +192,9 @@ func main() {
 		[]string{cfg.DatasetUploadedTopic},
 	)
 
+	grpcService := featuregrpc.NewFeatureMaterializerGrpcServer(embeddingSearchUsecase)
+	defer grpcService.Close()
+
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
 
@@ -198,6 +204,13 @@ func main() {
 	go func() {
 		if err := materializationSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.WithContext(cancelCtx).WithError(err).Fatal("materialization subscriber stopped unexpectedly")
+		}
+	}()
+
+	go func() {
+		if err := grpcService.Connect(cfg.GRPCPort); err != nil {
+			log.Errorf("unable to start the %s grpc service: %v", serviceName, err)
+			quit <- syscall.SIGTERM
 		}
 	}()
 
@@ -268,6 +281,7 @@ func readMaterializerConfig() materializerConfig {
 			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
 			TaskQueue: env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_TASK_QUEUE", usecase.DefaultMaterializeWorkflowTaskQueue),
 		},
+		GRPCPort:             env.WithDefaultInt("FEATURE_MATERIALIZER_API_GRPC_PORT", "7072"),
 		DatasetUploadedTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC", "data_ingestion"),
 		PublishTopics: featuremessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
@@ -319,6 +333,21 @@ func embeddingStrategyFromConfig(cfg embeddingConfig) model.EmbeddingStrategy {
 		EmbeddingModel:      cfg.Model,
 		EmbeddingDimensions: cfg.Dimensions,
 	})
+}
+
+func newQueryEmbeddingProviderFactory(cfg embeddingConfig) usecase.QueryEmbeddingProviderFactory {
+	log.Trace("newQueryEmbeddingProviderFactory")
+
+	return func(strategy model.EmbeddingStrategy) (usecase.QueryEmbeddingProvider, error) {
+		log.Trace("queryEmbeddingProviderFactory")
+
+		strategy = model.NormalizeEmbeddingStrategy(strategy)
+		queryCfg := cfg
+		queryCfg.Provider = strategy.EmbeddingProvider
+		queryCfg.Model = strategy.EmbeddingModel
+		queryCfg.Dimensions = strategy.EmbeddingDimensions
+		return newEmbeddingProvider(queryCfg)
+	}
 }
 
 func newEmbeddingProvider(cfg embeddingConfig) (materialization.EmbeddingProvider, error) {

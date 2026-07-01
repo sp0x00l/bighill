@@ -10,6 +10,7 @@ serviceAccount:
 service:
   type: ClusterIP
   healthPort: 5057
+  grpcPort: 7072
 env:
   environment: "local-dev"
   serviceName: "feature-materializer-service"

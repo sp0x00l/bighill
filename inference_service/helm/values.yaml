@@ -10,6 +10,7 @@ serviceAccount:
 service:
   type: ClusterIP
   healthPort: 5059
+  grpcPort: 7073
 ingress:
   enabled: false
   host: ""
@@ -36,7 +37,12 @@ env:
   kafkaBroker: "kafka:9092"
   kafkaGroupId: "inference-group"
   modelRegistrySubscriberTopic: "model_registry"
+  dataRegistrySubscriberTopic: "data_registry"
   dlq: "http://localhost:4566/inference-dev-env-queue/"
+  featureMaterializerGrpcAddress: "feature-materializer-service:7072"
+  featureMaterializerGrpcDialTimeoutMs: "500"
+  featureMaterializerGrpcCallTimeoutMs: "15000"
+  featureMaterializerGrpcRetryCount: "3"
   healthcheckCpuThreshold: "80"
   healthcheckFreeMemThreshold: "20"
   healthcheckDbLatencyThreshold: "5"

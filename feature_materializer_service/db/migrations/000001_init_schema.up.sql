@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_snapshots (
     chunk_overlap integer NOT NULL DEFAULT 64,
     embedding_provider text NOT NULL DEFAULT 'deterministic',
     embedding_model text NOT NULL DEFAULT 'bge-small-en-v1.5',
+    active_for_retrieval boolean NOT NULL DEFAULT false,
     status snapshot_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -86,6 +87,9 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_snapshots (
 CREATE INDEX IF NOT EXISTS index_embedding_snapshots_feature_snapshot_id ON bighill_feature_materializer_db.embedding_snapshots(feature_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_embedding_snapshots_dataset_id ON bighill_feature_materializer_db.embedding_snapshots(dataset_id);
 CREATE INDEX IF NOT EXISTS index_embedding_snapshots_user_id ON bighill_feature_materializer_db.embedding_snapshots(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS index_embedding_snapshots_active_dataset
+ON bighill_feature_materializer_db.embedding_snapshots(dataset_id)
+WHERE active_for_retrieval = true;
 
 CREATE TRIGGER embedding_snapshots_updated_at
 BEFORE UPDATE ON bighill_feature_materializer_db.embedding_snapshots

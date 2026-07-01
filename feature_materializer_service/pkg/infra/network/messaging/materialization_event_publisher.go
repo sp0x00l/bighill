@@ -95,6 +95,13 @@ func (p *materializationEventPublisher) PublishEmbeddingSnapshotReady(ctx contex
 		CollectionName:      embeddingSnapshot.CollectionName,
 		EmbeddingDimensions: int32(embeddingSnapshot.EmbeddingDimensions),
 		EmbeddingCount:      embeddingSnapshot.EmbeddingCount,
+		StrategyVersion:     embeddingSnapshot.StrategyVersion,
+		ChunkerName:         embeddingSnapshot.ChunkerName,
+		ChunkerVersion:      embeddingSnapshot.ChunkerVersion,
+		ChunkSize:           int32(embeddingSnapshot.ChunkSize),
+		ChunkOverlap:        int32(embeddingSnapshot.ChunkOverlap),
+		EmbeddingProvider:   embeddingSnapshot.EmbeddingProvider,
+		EmbeddingModel:      embeddingSnapshot.EmbeddingModel,
 	})
 }
 

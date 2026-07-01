@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"inference_service/pkg/app"
+	"inference_service/pkg/infra/generation"
+	inferencegrpc "inference_service/pkg/infra/network/grpc"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
 	inferencedb "inference_service/pkg/infra/repo/db"
 
@@ -30,12 +32,14 @@ import (
 var Version string
 
 type inferenceConfig struct {
-	ServiceName        string
-	DBName             string
-	DBConnectionString string
-	Messaging          messagingConn.MessengerConfig
-	Topics             inferencemessaging.InferenceTopics
-	Health             healthConfig
+	ServiceName         string
+	DBName              string
+	DBConnectionString  string
+	Messaging           messagingConn.MessengerConfig
+	Topics              inferencemessaging.InferenceTopics
+	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
+	GRPCPort            int
+	Health              healthConfig
 }
 
 type healthConfig struct {
@@ -81,8 +85,24 @@ func main() {
 	}
 
 	modelRepository := inferencedb.NewInferenceModelRepository(database)
-	inferenceUsecase := app.NewInferenceUsecase(modelRepository)
+	datasetRepository := inferencedb.NewInferenceDatasetRepository(database)
+	retrievalClient, err := inferencegrpc.NewFeatureMaterializerClient(cancelCtx, cfg.FeatureMaterializer)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create feature materializer client")
+	}
+	defer func() {
+		_ = retrievalClient.Close()
+	}()
+	generator := generation.NewDeterministicGenerator()
+	inferenceUsecase := app.NewInferenceUsecase(
+		modelRepository,
+		app.WithInferenceDatasetRepository(datasetRepository),
+		app.WithRetrievalClient(retrievalClient),
+		app.WithGenerationAdapter(generator),
+	)
 	modelUpdatedSubscriber := inferencemessaging.NewModelUpdatedSubscriber(subscriber, inferenceUsecase, cfg.Topics)
+	grpcService := inferencegrpc.NewInferenceGrpcServer(inferenceUsecase)
+	defer grpcService.Close()
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
@@ -102,6 +122,13 @@ func main() {
 	go func() {
 		if err := modelUpdatedSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.WithContext(cancelCtx).WithError(err).Error("model updated subscriber stopped unexpectedly")
+			quit <- syscall.SIGTERM
+		}
+	}()
+
+	go func() {
+		if err := grpcService.Connect(cfg.GRPCPort); err != nil {
+			log.Errorf("unable to start the %s grpc service: %v", serviceName, err)
 			quit <- syscall.SIGTERM
 		}
 	}()
@@ -136,7 +163,15 @@ func readInferenceConfig() inferenceConfig {
 		},
 		Topics: inferencemessaging.InferenceTopics{
 			ModelRegistry: env.WithDefaultString("INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry"),
+			DataRegistry:  env.WithDefaultString("INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 		},
+		FeatureMaterializer: inferencegrpc.FeatureMaterializerClientConfig{
+			Address:       env.WithDefaultString("INFERENCE_FEATURE_MATERIALIZER_GRPC_ADDRESS", "localhost:7072"),
+			DialTimeoutMs: env.WithDefaultInt("INFERENCE_FEATURE_MATERIALIZER_GRPC_DIAL_TIMEOUT_MS", "500"),
+			CallTimeoutMs: env.WithDefaultInt("INFERENCE_FEATURE_MATERIALIZER_GRPC_CALL_TIMEOUT_MS", "15000"),
+			RetryCount:    env.WithDefaultInt("INFERENCE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT", "3"),
+		},
+		GRPCPort: env.WithDefaultInt("INFERENCE_API_GRPC_PORT", "7073"),
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercent:       env.WithDefaultInt("INFERENCE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),

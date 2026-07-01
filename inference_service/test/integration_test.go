@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -12,9 +13,13 @@ import (
 
 	"inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
+	"inference_service/pkg/infra/generation"
+	inferencegrpc "inference_service/pkg/infra/network/grpc"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
 	repo "inference_service/pkg/infra/repo/db"
 
+	datasetpb "lib/data_contracts_lib/dataset"
+	inferencepb "lib/data_contracts_lib/inference"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
@@ -24,6 +29,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	log "github.com/sirupsen/logrus"
+	stdgrpc "google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func TestInferenceIntegration(t *testing.T) {
@@ -37,6 +44,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		cancel    context.CancelFunc
 		database  *dbconn.Database
 		models    *repo.InferenceModelRepository
+		datasets  *repo.InferenceDatasetRepository
 		modelsUse app.InferenceUsecase
 	)
 
@@ -51,11 +59,17 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		models = repo.NewInferenceModelRepository(database)
-		modelsUse = app.NewInferenceUsecase(models)
+		datasets = repo.NewInferenceDatasetRepository(database)
+		modelsUse = app.NewInferenceUsecase(
+			models,
+			app.WithInferenceDatasetRepository(datasets),
+			app.WithRetrievalClient(&integrationRetrievalClient{}),
+			app.WithGenerationAdapter(generation.NewDeterministicGenerator()),
+		)
 	})
 
 	BeforeEach(func() {
-		Expect(truncateInferenceModels(ctx, database)).To(Succeed())
+		Expect(cleanInferenceTables(ctx, database)).To(Succeed())
 	})
 
 	AfterAll(func() {
@@ -72,6 +86,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		suffix := fmt.Sprintf("%d", rand.Int64())
 		topics := inferencemessaging.InferenceTopics{
 			ModelRegistry: "model_registry",
+			DataRegistry:  "data_registry",
 		}
 		runCtx, runCancel := context.WithCancel(ctx)
 		defer runCancel()
@@ -127,11 +142,129 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			g.Expect(record.ArtifactFormat).To(Equal("HF_PEFT_ADAPTER"))
 		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
 	})
+
+	It("persists registry dataset updates and generates with materialized contexts", func() {
+		brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
+		suffix := fmt.Sprintf("%d", rand.Int64())
+		topics := inferencemessaging.InferenceTopics{
+			ModelRegistry: "model_registry",
+			DataRegistry:  "data_registry",
+		}
+		runCtx, runCancel := context.WithCancel(ctx)
+		defer runCancel()
+
+		serviceMessenger := sharedmessaging.NewMessenger(sharedmessaging.MessengerConfig{
+			Brokers:         brokers,
+			GroupID:         "inference-integration-dataset-service-" + suffix,
+			DlqURL:          "http://localhost:4566/inference-dev-env-queue/",
+			AutoOffsetReset: "earliest",
+		}, runCancel)
+		defer func() {
+			_ = serviceMessenger.Close(runCtx)
+		}()
+		serviceSubscriber, err := serviceMessenger.Subscriber(runCtx)
+		Expect(err).NotTo(HaveOccurred())
+		publisher, err := serviceMessenger.Publisher(runCtx)
+		Expect(err).NotTo(HaveOccurred())
+
+		inferenceSubscriber := inferencemessaging.NewModelUpdatedSubscriber(serviceSubscriber, modelsUse, topics)
+		go func() {
+			_ = inferenceSubscriber.Start(runCtx)
+		}()
+		time.Sleep(750 * time.Millisecond)
+
+		datasetID := uuid.New()
+		userID := uuid.New()
+		embeddingSnapshotID := uuid.New()
+		Expect(publisher.Publish(runCtx, topics.DataRegistry, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeDatasetUpdated,
+		}, &datasetpb.DatasetUpdatedEvent{
+			DatasetId:                datasetID.String(),
+			UserId:                   userID.String(),
+			DatasetVersion:           6,
+			ProcessingState:          "EMBEDDINGS_MATERIALIZED",
+			StorageLocation:          "s3://local-dev-bucket/features/movies.parquet",
+			TableNamespace:           "features",
+			TableName:                "movies",
+			TableFormat:              "PARQUET",
+			CatalogProvider:          "LOCAL",
+			SchemaVersion:            2,
+			SchemaMetadata:           `{"columns":[{"name":"text"}]}`,
+			RawSnapshotId:            uuid.NewString(),
+			FeatureSnapshotId:        uuid.NewString(),
+			EmbeddingSnapshotId:      embeddingSnapshotID.String(),
+			VectorStore:              "pgvector",
+			CollectionName:           "movies",
+			EmbeddingDimensions:      384,
+			EmbeddingCount:           12,
+			ProcessingProfile:        "RAG",
+			EmbeddingStrategyVersion: "rag-v1",
+			EmbeddingChunkerName:     "go-token-window",
+			EmbeddingChunkerVersion:  "v1",
+			EmbeddingChunkSize:       384,
+			EmbeddingChunkOverlap:    64,
+			EmbeddingProvider:        "ollama",
+			EmbeddingModel:           "bge-small-en-v1.5",
+		})).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			record, err := datasets.ReadDataset(ctx, datasetID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(record.UserID).To(Equal(userID))
+			g.Expect(record.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+			g.Expect(record.EmbeddingSnapshotID).To(Equal(embeddingSnapshotID))
+			g.Expect(record.EmbeddingDimensions).To(Equal(384))
+		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
+
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		Expect(err).NotTo(HaveOccurred())
+		inferenceServer := inferencegrpc.NewInferenceGrpcServer(modelsUse)
+		defer inferenceServer.Close()
+		go func() {
+			_ = inferenceServer.Serve(lis)
+		}()
+		conn, err := stdgrpc.NewClient(lis.Addr().String(), stdgrpc.WithTransportCredentials(insecure.NewCredentials()))
+		Expect(err).NotTo(HaveOccurred())
+		defer func() {
+			_ = conn.Close()
+		}()
+		client := inferencepb.NewInferenceServiceClient(conn)
+
+		response, err := client.Generate(ctx, &inferencepb.GenerateRequest{
+			DatasetId: datasetID.String(),
+			QueryText: "what movie context is available?",
+			TopK:      3,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetAnswer()).To(ContainSubstring("integration retrieved context"))
+		Expect(response.GetContexts()).To(HaveLen(1))
+	})
 })
 
-func truncateInferenceModels(ctx context.Context, database *dbconn.Database) error {
-	_, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+".inference_models")
-	return err
+type integrationRetrievalClient struct{}
+
+func (c *integrationRetrievalClient) SearchEmbeddings(context.Context, uuid.UUID, string, int) ([]model.RetrievedContext, error) {
+	return []model.RetrievedContext{{
+		EmbeddingRecordID:   uuid.New(),
+		EmbeddingSnapshotID: uuid.New(),
+		ChunkIndex:          1,
+		SourceText:          "integration retrieved context",
+		Similarity:          0.91,
+	}}, nil
+}
+
+func (c *integrationRetrievalClient) Close() error {
+	return nil
+}
+
+func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error {
+	for _, table := range []string{"inference_models", "inference_datasets"} {
+		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func testPostgresConnectionString(dbName string) string {

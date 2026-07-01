@@ -1,26 +1,28 @@
-#! /usr/bin/env sh
+#!/usr/bin/env bash
+set -euo pipefail
 
-export ENV=$1
-echo "ENV: $ENV"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/kafka-common.sh"
+# shellcheck disable=SC1091
+. "${PROJECT_ROOT}/scripts/common.sh"
 
-KAFKA_SCRIPT_DIR=$(pwd)
+ENVIRONMENT="${1:-local-dev}"
+echo "ENV: $ENVIRONMENT"
 
-if ! brew services list | grep -q kafka.plist; then
-    echo "kafka is not running, starting kafka"
-    brew services start kafka
-    sleep 5
-fi
+kafka_load_config "$ENVIRONMENT"
+kafka_start_homebrew_if_needed
 
-topicsCmd=$(brew --prefix)/bin/kafka-topics
-broker=$(cat $(brew --prefix)/etc/kafka/kraft/broker.properties | grep "advertised.listeners" | cut -d':' -f2- | cut -d'/' -f3)
+BROKER="$(kafka_bootstrap_server)"
 
-if [[ "$ENV" == "local-dev" ]]; then
-    export BIGHILL_KAFKA_TRANSACTION_REPLICATION_FACTOR=1
-    $topicsCmd --bootstrap-server $broker --create --topic __transaction_state --replication-factor $BIGHILL_KAFKA_TRANSACTION_REPLICATION_FACTOR --config cleanup.policy=compact
+if [ "$ENVIRONMENT" = "local-dev" ] || [ "$ENVIRONMENT" = "cicd" ]; then
+  BIGHILL_KAFKA_TRANSACTION_REPLICATION_FACTOR=1
+  kafka_topics --bootstrap-server "$BROKER" --create --if-not-exists --topic __transaction_state --replication-factor "$BIGHILL_KAFKA_TRANSACTION_REPLICATION_FACTOR" --config cleanup.policy=compact >/dev/null 2>&1 || true
 else
-    # production partions count of 50
-    # The higher the partitions the more the throughput
-    echo "PROD: creating __transaction_state --partitions count of 50 (1 is the defualt value for partitions in the server.properties)."
-    export BIGHILL_KAFKA_TRANSACTION_REPLICATION_FACTOR=3
-    $topicsCmd --bootstrap-server $broker --create --topic __transaction_state --partitions 50 --replication-factor $BIGHILL_KAFKA_TRANSACTION_REPLICATION_FACTOR --config cleanup.policy=compact
+  echo "PROD: creating __transaction_state --partitions count of 50."
+  BIGHILL_KAFKA_TRANSACTION_REPLICATION_FACTOR=3
+  kafka_topics --bootstrap-server "$BROKER" --create --if-not-exists --topic __transaction_state --partitions 50 --replication-factor "$BIGHILL_KAFKA_TRANSACTION_REPLICATION_FACTOR" --config cleanup.policy=compact >/dev/null 2>&1 || true
 fi
+
+create_kafka_topics "$BROKER" "$PROJECT_ROOT" "true"
