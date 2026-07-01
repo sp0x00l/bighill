@@ -23,6 +23,7 @@ const (
 type MaterializeWorkflowInput struct {
 	DatasetFile       model.DatasetFile
 	RawIdempotencyKey uuid.UUID
+	EmbeddingStrategy model.EmbeddingStrategy
 }
 
 type MaterializeWorkflowResult struct {
@@ -44,6 +45,7 @@ type BuildFeatureSnapshotActivityInput struct {
 type MaterializeEmbeddingsActivityInput struct {
 	FeatureSnapshotID uuid.UUID
 	IdempotencyKey    uuid.UUID
+	Strategy          model.EmbeddingStrategy
 }
 
 func MaterializeWorkflowID(datasetID uuid.UUID, rawIdempotencyKey uuid.UUID) string {
@@ -54,13 +56,15 @@ func FeatureSnapshotIdempotencyKey(rawSnapshotID uuid.UUID) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("feature_snapshot:"+rawSnapshotID.String()))
 }
 
-func EmbeddingSnapshotIdempotencyKey(featureSnapshotID uuid.UUID) uuid.UUID {
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("embedding_snapshot:"+featureSnapshotID.String()))
+func EmbeddingSnapshotIdempotencyKey(featureSnapshotID uuid.UUID, strategy model.EmbeddingStrategy) uuid.UUID {
+	strategy = model.NormalizeEmbeddingStrategy(strategy)
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("embedding_snapshot:"+featureSnapshotID.String()+":"+strategy.CanonicalKey()))
 }
 
 func MaterializeWorkflow(ctx workflow.Context, input MaterializeWorkflowInput) (*MaterializeWorkflowResult, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("MaterializeWorkflow started", "dataset_id", input.DatasetFile.DatasetID.String())
+	embeddingStrategy := model.NormalizeEmbeddingStrategy(input.EmbeddingStrategy)
 
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
@@ -88,18 +92,23 @@ func MaterializeWorkflow(ctx workflow.Context, input MaterializeWorkflowInput) (
 		return nil, err
 	}
 
-	var embeddingSnapshot model.EmbeddingSnapshot
-	if err := workflow.ExecuteActivity(ctx, MaterializeEmbeddingsActivityName, MaterializeEmbeddingsActivityInput{
-		FeatureSnapshotID: featureSnapshot.FeatureSnapshotID,
-		IdempotencyKey:    EmbeddingSnapshotIdempotencyKey(featureSnapshot.FeatureSnapshotID),
-	}).Get(ctx, &embeddingSnapshot); err != nil {
-		return nil, err
+	var embeddingSnapshotID uuid.UUID
+	if featureSnapshot.ProcessingProfile.RequiresEmbeddings() {
+		var embeddingSnapshot model.EmbeddingSnapshot
+		if err := workflow.ExecuteActivity(ctx, MaterializeEmbeddingsActivityName, MaterializeEmbeddingsActivityInput{
+			FeatureSnapshotID: featureSnapshot.FeatureSnapshotID,
+			IdempotencyKey:    EmbeddingSnapshotIdempotencyKey(featureSnapshot.FeatureSnapshotID, embeddingStrategy),
+			Strategy:          embeddingStrategy,
+		}).Get(ctx, &embeddingSnapshot); err != nil {
+			return nil, err
+		}
+		embeddingSnapshotID = embeddingSnapshot.EmbeddingSnapshotID
 	}
 
 	result := &MaterializeWorkflowResult{
 		RawSnapshotID:       rawSnapshot.RawSnapshotID,
 		FeatureSnapshotID:   featureSnapshot.FeatureSnapshotID,
-		EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+		EmbeddingSnapshotID: embeddingSnapshotID,
 	}
 	logger.Info("MaterializeWorkflow completed", "dataset_id", input.DatasetFile.DatasetID.String())
 	return result, nil

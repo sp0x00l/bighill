@@ -50,16 +50,17 @@ var _ = Describe("Materialization event listeners", func() {
 		listener := registrymessaging.NewRawSnapshotReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.RawSnapshotReadyEvent{
-			DatasetId:       datasetID.String(),
-			UserId:          userID.String(),
-			RawSnapshotId:   rawSnapshotID.String(),
-			StorageLocation: "s3://local-dev-bucket/lakehouse/raw/data.parquet",
-			TableNamespace:  "raw",
-			TableName:       "movies_raw",
-			TableFormat:     "PARQUET",
-			CatalogProvider: "LOCAL",
-			SchemaVersion:   1,
-			SchemaMetadata:  "{}",
+			DatasetId:         datasetID.String(),
+			UserId:            userID.String(),
+			RawSnapshotId:     rawSnapshotID.String(),
+			StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:    "raw",
+			TableName:         "movies_raw",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			SchemaVersion:     1,
+			SchemaMetadata:    "{}",
+			ProcessingProfile: "TEXT_RAG",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -67,6 +68,7 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedDataset.UserID).To(Equal(userID))
 		Expect(uc.recordedDataset.RawSnapshotID).To(Equal(rawSnapshotID))
 		Expect(uc.recordedDataset.TableName).To(Equal("movies_raw"))
+		Expect(uc.recordedDataset.ProcessingProfile).To(Equal(model.TextRAGProfile))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingRawMaterialized))
 	})
 
@@ -90,6 +92,7 @@ var _ = Describe("Materialization event listeners", func() {
 			CatalogProvider:   "LOCAL",
 			SchemaVersion:     2,
 			SchemaMetadata:    `{"columns":["title"]}`,
+			ProcessingProfile: "TEXT_RAG",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -98,6 +101,7 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedDataset.TableNamespace).To(Equal("features"))
 		Expect(uc.recordedDataset.TableName).To(Equal("movies"))
 		Expect(uc.recordedDataset.TableFormat).To(Equal(model.Parquet))
+		Expect(uc.recordedDataset.ProcessingProfile).To(Equal(model.TextRAGProfile))
 		Expect(uc.recordedDataset.RawSnapshotID).To(Equal(rawSnapshotID))
 		Expect(uc.recordedDataset.FeatureSnapshotID).To(Equal(featureSnapshotID))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingFeatureMaterialized))

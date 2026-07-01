@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	usecase "feature_materializer_service/pkg/app"
+	"feature_materializer_service/pkg/domain/model"
 	"feature_materializer_service/pkg/infra/materialization"
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	featuredb "feature_materializer_service/pkg/infra/repo/db"
@@ -52,8 +54,17 @@ type artifactBucketConfig struct {
 }
 
 type embeddingConfig struct {
-	Dimensions int
-	MaxRows    int
+	Provider        string
+	Endpoint        string
+	Model           string
+	Dimensions      int
+	MaxRows         int
+	StrategyVersion string
+	ChunkerName     string
+	ChunkerVersion  string
+	ChunkSize       int
+	ChunkOverlap    int
+	RequestTimeout  time.Duration
 }
 
 type temporalConfig struct {
@@ -150,12 +161,20 @@ func main() {
 
 	rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
 	featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
-	embeddingProvider := materialization.NewDeterministicEmbeddingProvider(cfg.Embedding.Dimensions)
-	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepo, embeddingProvider, "pgvector", cfg.Embedding.MaxRows)
+	embeddingStrategy := embeddingStrategyFromConfig(cfg.Embedding)
+	embeddingProvider, err := newEmbeddingProvider(cfg.Embedding)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create embedding provider")
+	}
+	embeddingChunker := materialization.NewTokenWindowChunker(embeddingStrategy)
+	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepo, embeddingProvider, embeddingChunker, embeddingStrategy, "pgvector", cfg.Embedding.MaxRows)
+	rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(rawWriter)
+	featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
+	embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
 
-	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, rawWriter)
-	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotRepo, featureBuilder)
-	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotRepo, embeddingWriter)
+	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, rawDispatcher)
+	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotRepo, featureDispatcher)
+	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotRepo, embeddingDispatcher)
 	activities := featuretemporal.NewMaterializationActivities(rawSnapshotUsecase, featureSnapshotUsecase, embeddingUsecase)
 	materializationWorker := featuretemporal.NewMaterializationWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
 	if err := materializationWorker.Start(); err != nil {
@@ -163,7 +182,7 @@ func main() {
 	}
 	defer materializationWorker.Stop()
 
-	workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
+	workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue, embeddingStrategy)
 	materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
 		subscriber,
 		workflowStarter,
@@ -232,8 +251,17 @@ func readMaterializerConfig() materializerConfig {
 			UploadPartSize: uploadPartSizeMB * 1024 * 1024,
 		},
 		Embedding: embeddingConfig{
-			Dimensions: env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS", "384"),
-			MaxRows:    env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS", "1000"),
+			Provider:        env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_PROVIDER", "ollama"),
+			Endpoint:        env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_ENDPOINT", "http://localhost:11434"),
+			Model:           env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_MODEL", model.DefaultEmbeddingModel),
+			Dimensions:      env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS", strconv.Itoa(model.DefaultEmbeddingDimensions)),
+			MaxRows:         env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS", "1000"),
+			StrategyVersion: env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_STRATEGY_VERSION", model.DefaultEmbeddingStrategyVersion),
+			ChunkerName:     env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_NAME", model.DefaultChunkerName),
+			ChunkerVersion:  env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_VERSION", model.DefaultChunkerVersion),
+			ChunkSize:       env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_CHUNK_SIZE", strconv.Itoa(model.DefaultChunkSize)),
+			ChunkOverlap:    env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_CHUNK_OVERLAP", strconv.Itoa(model.DefaultChunkOverlap)),
+			RequestTimeout:  secondsFromEnv("FEATURE_MATERIALIZER_EMBEDDING_REQUEST_TIMEOUT_SECONDS", "30"),
 		},
 		Temporal: temporalConfig{
 			Address:   env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
@@ -276,6 +304,35 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 
 func secondsFromEnv(key, defaultValue string) time.Duration {
 	return time.Duration(env.WithDefaultInt(key, defaultValue)) * time.Second
+}
+
+func embeddingStrategyFromConfig(cfg embeddingConfig) model.EmbeddingStrategy {
+	log.Trace("embeddingStrategyFromConfig")
+
+	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+		StrategyVersion:     cfg.StrategyVersion,
+		ChunkerName:         cfg.ChunkerName,
+		ChunkerVersion:      cfg.ChunkerVersion,
+		ChunkSize:           cfg.ChunkSize,
+		ChunkOverlap:        cfg.ChunkOverlap,
+		EmbeddingProvider:   cfg.Provider,
+		EmbeddingModel:      cfg.Model,
+		EmbeddingDimensions: cfg.Dimensions,
+	})
+}
+
+func newEmbeddingProvider(cfg embeddingConfig) (materialization.EmbeddingProvider, error) {
+	log.Trace("newEmbeddingProvider")
+
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	switch provider {
+	case "tei", "ollama":
+		return materialization.NewHTTPEmbeddingProvider(provider, cfg.Endpoint, cfg.Model, cfg.Dimensions, cfg.RequestTimeout), nil
+	case "deterministic":
+		return materialization.NewDeterministicEmbeddingProvider(cfg.Dimensions), nil
+	default:
+		return nil, fmt.Errorf("unsupported embedding provider %q", cfg.Provider)
+	}
 }
 
 func newPostgresOutbox(database *coreDB.Database, backend string) (messagingConn.OutboxWriter, error) {

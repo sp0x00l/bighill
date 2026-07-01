@@ -13,7 +13,7 @@ import (
 )
 
 type EmbeddingMaterializationUsecase interface {
-	MaterializeEmbeddings(ctx context.Context, featureSnapshotID uuid.UUID, idempotencyKey uuid.UUID) (*model.EmbeddingSnapshot, error)
+	MaterializeEmbeddings(ctx context.Context, featureSnapshotID uuid.UUID, idempotencyKey uuid.UUID, strategy model.EmbeddingStrategy) (*model.EmbeddingSnapshot, error)
 }
 
 type embeddingMaterializationUsecase struct {
@@ -32,15 +32,19 @@ func NewEmbeddingMaterializationUsecase(repo EmbeddingSnapshotRepository, featur
 	}
 }
 
-func (u *embeddingMaterializationUsecase) MaterializeEmbeddings(ctx context.Context, featureSnapshotID uuid.UUID, idempotencyKey uuid.UUID) (out *model.EmbeddingSnapshot, err error) {
+func (u *embeddingMaterializationUsecase) MaterializeEmbeddings(ctx context.Context, featureSnapshotID uuid.UUID, idempotencyKey uuid.UUID, strategy model.EmbeddingStrategy) (out *model.EmbeddingSnapshot, err error) {
 	log.Trace("EmbeddingMaterializationUsecase MaterializeEmbeddings")
+	strategy = model.NormalizeEmbeddingStrategy(strategy)
 	ctx, span := startFeatureMaterializerSpan(ctx, "feature_materializer_service/app", "embedding.materialize",
 		attribute.String("feature_snapshot_id", featureSnapshotID.String()),
 		attribute.String("idempotency_key", idempotencyKey.String()),
+		attribute.String("strategy_version", strategy.StrategyVersion),
+		attribute.String("embedding_provider", strategy.EmbeddingProvider),
+		attribute.String("embedding_model", strategy.EmbeddingModel),
 	)
 	defer endFeatureMaterializerSpanOnReturn(ctx, span, &err)
 
-	embeddingSnapshot, err := u.repo.SavePendingEmbeddingSnapshot(ctx, featureSnapshotID, idempotencyKey)
+	embeddingSnapshot, err := u.repo.SavePendingEmbeddingSnapshot(ctx, featureSnapshotID, idempotencyKey, strategy)
 	if err != nil {
 		if existing, ok := domain.IsEmbeddingsAlreadyMaterialized(err); ok {
 			return existing, err

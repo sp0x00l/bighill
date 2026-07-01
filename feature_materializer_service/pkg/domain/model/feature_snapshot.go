@@ -12,6 +12,7 @@ type FeatureSnapshot struct {
 	TableName         string
 	TableFormat       string
 	CatalogProvider   string
+	ProcessingProfile ProcessingProfile
 	SchemaVersion     int
 	SchemaMetadata    string
 	Status            SnapshotStatus

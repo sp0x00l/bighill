@@ -117,17 +117,22 @@ func eventToDatasetFile(resourceKey uuid.UUID, payload *datasetpb.DatasetFileUpl
 	if fileExtension == "" {
 		return nil, uuid.Nil, fmt.Errorf("file extension is required")
 	}
+	processingProfile, err := model.ToProcessingProfile(payload.GetProcessingProfile())
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("processing profile is invalid: %w", err)
+	}
 
 	datasetFile := &model.DatasetFile{
-		DatasetID:       datasetID,
-		UserID:          userID,
-		StorageLocation: storageLocation,
-		ContentType:     contentType,
-		FileExtension:   fileExtension,
-		TableNamespace:  withDefault(payload.GetTableNamespace(), "default"),
-		TableName:       withDefault(payload.GetTableName(), "dataset_"+strings.ReplaceAll(datasetID.String(), "-", "")),
-		TableFormat:     withDefault(payload.GetTableFormat(), "PARQUET"),
-		CatalogProvider: withDefault(payload.GetCatalogProvider(), "LOCAL"),
+		DatasetID:         datasetID,
+		UserID:            userID,
+		StorageLocation:   storageLocation,
+		ContentType:       contentType,
+		FileExtension:     fileExtension,
+		TableNamespace:    withDefault(payload.GetTableNamespace(), "default"),
+		TableName:         withDefault(payload.GetTableName(), "dataset_"+strings.ReplaceAll(datasetID.String(), "-", "")),
+		TableFormat:       withDefault(payload.GetTableFormat(), "PARQUET"),
+		CatalogProvider:   withDefault(payload.GetCatalogProvider(), "LOCAL"),
+		ProcessingProfile: processingProfile,
 	}
 	idempotencyKey := uuid.NewSHA1(uuid.NameSpaceURL, []byte(datasetID.String()+":"+storageLocation))
 	return datasetFile, idempotencyKey, nil

@@ -76,6 +76,7 @@ var _ = Describe("DatasetEventPublisher", func() {
 			TableName:           "movies",
 			TableFormat:         model.Parquet,
 			CatalogProvider:     model.LocalCatalog,
+			ProcessingProfile:   model.TextRAGProfile,
 			SchemaVersion:       3,
 			SchemaMetadata:      `{"columns":["title"]}`,
 			RawSnapshotID:       uuid.New(),
@@ -98,6 +99,7 @@ var _ = Describe("DatasetEventPublisher", func() {
 		Expect(event.DatasetVersion).To(Equal(int32(4)))
 		Expect(event.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized.String()))
 		Expect(event.TableFormat).To(Equal("PARQUET"))
+		Expect(event.ProcessingProfile).To(Equal(model.TextRAGProfile.String()))
 		Expect(event.RawSnapshotId).To(Equal(dataset.RawSnapshotID.String()))
 		Expect(event.FeatureSnapshotId).To(Equal(dataset.FeatureSnapshotID.String()))
 		Expect(event.EmbeddingSnapshotId).To(Equal(dataset.EmbeddingSnapshotID.String()))

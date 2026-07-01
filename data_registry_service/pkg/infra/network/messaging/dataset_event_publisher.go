@@ -67,6 +67,7 @@ func (p *DatasetEventPublisher) PublishDatasetUpdated(ctx context.Context, datas
 		TableName:           dataset.TableName,
 		TableFormat:         dataset.TableFormat.String(),
 		CatalogProvider:     dataset.CatalogProvider.String(),
+		ProcessingProfile:   dataset.ProcessingProfile.String(),
 		SchemaVersion:       int32(dataset.SchemaVersion),
 		SchemaMetadata:      dataset.SchemaMetadata,
 		RawSnapshotId:       uuidToString(dataset.RawSnapshotID),

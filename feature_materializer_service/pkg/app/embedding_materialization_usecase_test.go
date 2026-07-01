@@ -20,7 +20,7 @@ type embeddingSnapshotRepoStub struct {
 	failedID          uuid.UUID
 }
 
-func (s *embeddingSnapshotRepoStub) SavePendingEmbeddingSnapshot(_ context.Context, featureSnapshotID, _ uuid.UUID) (*model.EmbeddingSnapshot, error) {
+func (s *embeddingSnapshotRepoStub) SavePendingEmbeddingSnapshot(_ context.Context, featureSnapshotID, _ uuid.UUID, _ model.EmbeddingStrategy) (*model.EmbeddingSnapshot, error) {
 	if s.saveErr != nil {
 		return nil, s.saveErr
 	}
@@ -78,7 +78,7 @@ var _ = Describe("EmbeddingMaterializationUsecase", func() {
 		repo := &embeddingSnapshotRepoStub{}
 		uc := usecase.NewEmbeddingMaterializationUsecase(repo, nil, nil)
 
-		embeddingSnapshot, err := uc.MaterializeEmbeddings(context.Background(), uuid.New(), uuid.New())
+		embeddingSnapshot, err := uc.MaterializeEmbeddings(context.Background(), uuid.New(), uuid.New(), model.EmbeddingStrategy{})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(embeddingSnapshot.Status).To(Equal(model.SnapshotStatusPending))
@@ -90,7 +90,7 @@ var _ = Describe("EmbeddingMaterializationUsecase", func() {
 		repo := &embeddingSnapshotRepoStub{embeddingSnapshot: embeddingSnapshot}
 		uc := usecase.NewEmbeddingMaterializationUsecase(repo, featureSnapshotReaderStub{featureSnapshot: featureSnapshot}, embeddingWriterStub{})
 
-		result, err := uc.MaterializeEmbeddings(context.Background(), featureSnapshot.FeatureSnapshotID, uuid.New())
+		result, err := uc.MaterializeEmbeddings(context.Background(), featureSnapshot.FeatureSnapshotID, uuid.New(), model.EmbeddingStrategy{})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(repo.readyID).To(Equal(embeddingSnapshot.EmbeddingSnapshotID))
@@ -102,7 +102,7 @@ var _ = Describe("EmbeddingMaterializationUsecase", func() {
 		repo := &embeddingSnapshotRepoStub{saveErr: &domain.EmbeddingsAlreadyMaterializedError{Record: existing}}
 		uc := usecase.NewEmbeddingMaterializationUsecase(repo, nil, nil)
 
-		embeddingSnapshot, err := uc.MaterializeEmbeddings(context.Background(), uuid.New(), uuid.New())
+		embeddingSnapshot, err := uc.MaterializeEmbeddings(context.Background(), uuid.New(), uuid.New(), model.EmbeddingStrategy{})
 
 		Expect(err).To(HaveOccurred())
 		Expect(embeddingSnapshot).To(Equal(existing))
@@ -114,7 +114,7 @@ var _ = Describe("EmbeddingMaterializationUsecase", func() {
 		repo := &embeddingSnapshotRepoStub{embeddingSnapshot: validEmbeddingSnapshot(featureSnapshot.FeatureSnapshotID)}
 		uc := usecase.NewEmbeddingMaterializationUsecase(repo, featureSnapshotReaderStub{featureSnapshot: featureSnapshot}, embeddingWriterStub{err: expectedErr})
 
-		result, err := uc.MaterializeEmbeddings(context.Background(), featureSnapshot.FeatureSnapshotID, uuid.New())
+		result, err := uc.MaterializeEmbeddings(context.Background(), featureSnapshot.FeatureSnapshotID, uuid.New(), model.EmbeddingStrategy{})
 
 		Expect(result).To(BeNil())
 		Expect(errors.Is(err, expectedErr)).To(BeTrue())

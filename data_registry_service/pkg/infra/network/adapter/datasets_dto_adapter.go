@@ -16,23 +16,24 @@ import (
 )
 
 type DatasetDTO struct {
-	ID              string                 `json:"id,omitempty"`
-	UserID          string                 `json:"userId,omitempty"`
-	Title           string                 `json:"title"                       validate:"required,max=250"`
-	Description     string                 `json:"description,omitempty"`
-	Origin          string                 `json:"origin,omitempty"`
-	Location        string                 `json:"location,omitempty"          validate:"max=250"`
-	StorageLocation string                 `json:"storageLocation,omitempty"   validate:"max=1024"`
-	Status          string                 `json:"status"`
-	Category        string                 `json:"category,omitempty"          validate:"max=250"`
-	TableNamespace  string                 `json:"tableNamespace,omitempty"    validate:"max=250"`
-	TableName       string                 `json:"tableName,omitempty"         validate:"max=250"`
-	TableFormat     string                 `json:"tableFormat,omitempty"`
-	CatalogProvider string                 `json:"catalogProvider,omitempty"`
-	SchemaVersion   int                    `json:"schemaVersion,omitempty"`
-	SchemaMetadata  json.RawMessage        `json:"schemaMetadata,omitempty"`
-	ProcessingState string                 `json:"processingState,omitempty"`
-	Links           coreRest.ResourceLinks `json:"links"`
+	ID                string                 `json:"id,omitempty"`
+	UserID            string                 `json:"userId,omitempty"`
+	Title             string                 `json:"title"                       validate:"required,max=250"`
+	Description       string                 `json:"description,omitempty"`
+	Origin            string                 `json:"origin,omitempty"`
+	Location          string                 `json:"location,omitempty"          validate:"max=250"`
+	StorageLocation   string                 `json:"storageLocation,omitempty"   validate:"max=1024"`
+	Status            string                 `json:"status"`
+	Category          string                 `json:"category,omitempty"          validate:"max=250"`
+	TableNamespace    string                 `json:"tableNamespace,omitempty"    validate:"max=250"`
+	TableName         string                 `json:"tableName,omitempty"         validate:"max=250"`
+	TableFormat       string                 `json:"tableFormat,omitempty"`
+	CatalogProvider   string                 `json:"catalogProvider,omitempty"`
+	ProcessingProfile string                 `json:"processingProfile,omitempty"`
+	SchemaVersion     int                    `json:"schemaVersion,omitempty"`
+	SchemaMetadata    json.RawMessage        `json:"schemaMetadata,omitempty"`
+	ProcessingState   string                 `json:"processingState,omitempty"`
+	Links             coreRest.ResourceLinks `json:"links"`
 }
 
 type dtoAdapter struct {
@@ -156,6 +157,12 @@ func (a *dtoAdapter) fromDTO(ctx context.Context, datasetDTO *DatasetDTO) (*mode
 		}
 	}
 
+	processingProfile, err := model.ToProcessingProfile(datasetDTO.ProcessingProfile)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("dataset processing profile is invalid")
+		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
+	}
+
 	location := datasetDTO.StorageLocation
 	if location == "" {
 		location = datasetDTO.Location
@@ -163,20 +170,21 @@ func (a *dtoAdapter) fromDTO(ctx context.Context, datasetDTO *DatasetDTO) (*mode
 	schemaMetadata := string(datasetDTO.SchemaMetadata)
 
 	modelDataset := &model.Dataset{
-		ID:              datasetID,
-		UserID:          userID,
-		Title:           datasetDTO.Title,
-		Description:     datasetDTO.Description,
-		Origin:          origin,
-		Location:        location,
-		Status:          status,
-		Category:        datasetDTO.Category,
-		TableNamespace:  datasetDTO.TableNamespace,
-		TableName:       datasetDTO.TableName,
-		TableFormat:     tableFormat,
-		CatalogProvider: catalogProvider,
-		SchemaVersion:   datasetDTO.SchemaVersion,
-		SchemaMetadata:  schemaMetadata,
+		ID:                datasetID,
+		UserID:            userID,
+		Title:             datasetDTO.Title,
+		Description:       datasetDTO.Description,
+		Origin:            origin,
+		Location:          location,
+		Status:            status,
+		Category:          datasetDTO.Category,
+		TableNamespace:    datasetDTO.TableNamespace,
+		TableName:         datasetDTO.TableName,
+		TableFormat:       tableFormat,
+		CatalogProvider:   catalogProvider,
+		ProcessingProfile: processingProfile,
+		SchemaVersion:     datasetDTO.SchemaVersion,
+		SchemaMetadata:    schemaMetadata,
 	}
 	model.NormalizeDatasetMetadata(modelDataset)
 
@@ -191,22 +199,23 @@ func (a *dtoAdapter) toDTO(datasetModel *model.Dataset, baseURL string) *Dataset
 		schemaMetadata = "{}"
 	}
 	dtoDataset := DatasetDTO{
-		ID:              datasetModel.ID.String(),
-		UserID:          datasetModel.UserID.String(),
-		Title:           datasetModel.Title,
-		Description:     datasetModel.Description,
-		Origin:          datasetModel.Origin.String(),
-		Location:        datasetModel.Location,
-		StorageLocation: datasetModel.Location,
-		Status:          datasetModel.Status.String(),
-		Category:        datasetModel.Category,
-		TableNamespace:  datasetModel.TableNamespace,
-		TableName:       datasetModel.TableName,
-		TableFormat:     datasetModel.TableFormat.String(),
-		CatalogProvider: datasetModel.CatalogProvider.String(),
-		SchemaVersion:   datasetModel.SchemaVersion,
-		SchemaMetadata:  json.RawMessage(schemaMetadata),
-		ProcessingState: datasetModel.ProcessingState.String(),
+		ID:                datasetModel.ID.String(),
+		UserID:            datasetModel.UserID.String(),
+		Title:             datasetModel.Title,
+		Description:       datasetModel.Description,
+		Origin:            datasetModel.Origin.String(),
+		Location:          datasetModel.Location,
+		StorageLocation:   datasetModel.Location,
+		Status:            datasetModel.Status.String(),
+		Category:          datasetModel.Category,
+		TableNamespace:    datasetModel.TableNamespace,
+		TableName:         datasetModel.TableName,
+		TableFormat:       datasetModel.TableFormat.String(),
+		CatalogProvider:   datasetModel.CatalogProvider.String(),
+		ProcessingProfile: datasetModel.ProcessingProfile.String(),
+		SchemaVersion:     datasetModel.SchemaVersion,
+		SchemaMetadata:    json.RawMessage(schemaMetadata),
+		ProcessingState:   datasetModel.ProcessingState.String(),
 		Links: coreRest.ResourceLinks{
 			Self: coreRest.Self{
 				Href: fmt.Sprintf("%s/%s", baseURL, datasetModel.ID.String()),

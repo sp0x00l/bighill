@@ -112,14 +112,23 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		featureSnapshot.SchemaMetadata = "{}"
 		Expect(snapshots.MarkFeatureReady(ctx, featureSnapshot)).To(Succeed())
 
+		embeddingStrategy := integrationEmbeddingStrategy()
 		embeddingIdempotencyKey := uuid.New()
-		embeddingSnapshot, err := snapshots.SavePendingEmbeddingSnapshot(ctx, featureSnapshot.FeatureSnapshotID, embeddingIdempotencyKey)
+		embeddingSnapshot, err := snapshots.SavePendingEmbeddingSnapshot(ctx, featureSnapshot.FeatureSnapshotID, embeddingIdempotencyKey, embeddingStrategy)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(embeddingSnapshot.FeatureSnapshotID).To(Equal(featureSnapshot.FeatureSnapshotID))
+		Expect(embeddingSnapshot.StrategyVersion).To(Equal(embeddingStrategy.StrategyVersion))
 		embeddingSnapshot.VectorStore = "pgvector"
 		embeddingSnapshot.CollectionName = "movies"
-		embeddingSnapshot.EmbeddingDimensions = 384
+		embeddingSnapshot.EmbeddingDimensions = embeddingStrategy.EmbeddingDimensions
 		embeddingSnapshot.EmbeddingCount = 3
+		embeddingSnapshot.StrategyVersion = embeddingStrategy.StrategyVersion
+		embeddingSnapshot.ChunkerName = embeddingStrategy.ChunkerName
+		embeddingSnapshot.ChunkerVersion = embeddingStrategy.ChunkerVersion
+		embeddingSnapshot.ChunkSize = embeddingStrategy.ChunkSize
+		embeddingSnapshot.ChunkOverlap = embeddingStrategy.ChunkOverlap
+		embeddingSnapshot.EmbeddingProvider = embeddingStrategy.EmbeddingProvider
+		embeddingSnapshot.EmbeddingModel = embeddingStrategy.EmbeddingModel
 		Expect(snapshots.MarkEmbeddingReady(ctx, embeddingSnapshot)).To(Succeed())
 
 		readFeature, err := snapshots.ReadFeatureSnapshot(ctx, featureSnapshot.FeatureSnapshotID)
@@ -179,7 +188,11 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
 		featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
-		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepoWithOutbox, materialization.NewDeterministicEmbeddingProvider(384), "pgvector", 10)
+		embeddingStrategy := integrationEmbeddingStrategy()
+		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepoWithOutbox, materialization.NewDeterministicEmbeddingProvider(embeddingStrategy.EmbeddingDimensions), nil, embeddingStrategy, "pgvector", 10)
+		rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(rawWriter)
+		featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
+		embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
 		temporalClient, err := client.Dial(client.Options{
 			HostPort:  env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
 			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
@@ -188,15 +201,15 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		defer temporalClient.Close()
 
 		activities := featuretemporal.NewMaterializationActivities(
-			usecase.NewRawSnapshotUsecase(snapshotRepoWithOutbox, rawWriter),
-			usecase.NewFeatureSnapshotUsecase(snapshotRepoWithOutbox, snapshotRepoWithOutbox, featureBuilder),
-			usecase.NewEmbeddingMaterializationUsecase(snapshotRepoWithOutbox, snapshotRepoWithOutbox, embeddingWriter),
+			usecase.NewRawSnapshotUsecase(snapshotRepoWithOutbox, rawDispatcher),
+			usecase.NewFeatureSnapshotUsecase(snapshotRepoWithOutbox, snapshotRepoWithOutbox, featureDispatcher),
+			usecase.NewEmbeddingMaterializationUsecase(snapshotRepoWithOutbox, snapshotRepoWithOutbox, embeddingDispatcher),
 		)
 		worker := featuretemporal.NewMaterializationWorker(temporalClient, taskQueue, activities)
 		Expect(worker.Start()).To(Succeed())
 		defer worker.Stop()
 
-		workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, taskQueue)
+		workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, taskQueue, embeddingStrategy)
 		materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
 			subscriber,
 			workflowStarter,
@@ -219,15 +232,16 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeDatasetFileUploaded,
 		}, &datasetpb.DatasetFileUploadedEvent{
-			DatasetId:       datasetID.String(),
-			UserId:          userID.String(),
-			StorageLocation: storageLocation,
-			ContentType:     "text/csv",
-			FileExtension:   "csv",
-			TableNamespace:  "features",
-			TableName:       "movies",
-			TableFormat:     "PARQUET",
-			CatalogProvider: "LOCAL",
+			DatasetId:         datasetID.String(),
+			UserId:            userID.String(),
+			StorageLocation:   storageLocation,
+			ContentType:       "text/csv",
+			FileExtension:     "csv",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
 		})
 		Expect(err).NotTo(HaveOccurred())
 
@@ -254,6 +268,19 @@ func validIntegrationDatasetFile() *model.DatasetFile {
 		TableFormat:     "PARQUET",
 		CatalogProvider: "LOCAL",
 	}
+}
+
+func integrationEmbeddingStrategy() model.EmbeddingStrategy {
+	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+		StrategyVersion:     "rag-v1",
+		ChunkerName:         "go-token-window",
+		ChunkerVersion:      "v1",
+		ChunkSize:           512,
+		ChunkOverlap:        64,
+		EmbeddingProvider:   "deterministic",
+		EmbeddingModel:      "deterministic-test",
+		EmbeddingDimensions: 384,
+	})
 }
 
 func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {

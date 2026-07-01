@@ -43,7 +43,9 @@ var _ = Describe("MaterializationEventPublisher", func() {
 		Expect(sharedPublisher.topic).To(Equal("feature_materializer"))
 		Expect(sharedPublisher.message.ResourceKey).To(Equal(datasetID))
 		Expect(sharedPublisher.message.MsgType).To(Equal(sharedMessaging.MsgTypeRawSnapshotReady))
-		Expect(sharedPublisher.payload).To(BeAssignableToTypeOf(&featurepb.RawSnapshotReadyEvent{}))
+		event, ok := sharedPublisher.payload.(*featurepb.RawSnapshotReadyEvent)
+		Expect(ok).To(BeTrue())
+		Expect(event.ProcessingProfile).To(Equal(model.ProcessingProfileTextRAG.String()))
 	})
 
 	It("publishes feature snapshot ready facts through the shared publisher", func() {
@@ -60,7 +62,9 @@ var _ = Describe("MaterializationEventPublisher", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sharedPublisher.message.ResourceKey).To(Equal(datasetID))
 		Expect(sharedPublisher.message.MsgType).To(Equal(sharedMessaging.MsgTypeFeatureSnapshotReady))
-		Expect(sharedPublisher.payload).To(BeAssignableToTypeOf(&featurepb.FeatureSnapshotReadyEvent{}))
+		event, ok := sharedPublisher.payload.(*featurepb.FeatureSnapshotReadyEvent)
+		Expect(ok).To(BeTrue())
+		Expect(event.ProcessingProfile).To(Equal(model.ProcessingProfileTextRAG.String()))
 	})
 
 	It("publishes embedding snapshot ready facts through the shared publisher", func() {
@@ -83,19 +87,20 @@ var _ = Describe("MaterializationEventPublisher", func() {
 
 func validMessagingRawSnapshot(datasetID uuid.UUID) *model.RawSnapshot {
 	return &model.RawSnapshot{
-		RawSnapshotID:   uuid.New(),
-		DatasetID:       datasetID,
-		UserID:          uuid.New(),
-		StorageLocation: "s3://local-dev-bucket/lakehouse/raw/data.parquet",
-		ContentType:     "text/csv",
-		FileExtension:   "csv",
-		TableNamespace:  "features",
-		TableName:       "movies",
-		TableFormat:     "PARQUET",
-		CatalogProvider: "LOCAL",
-		SchemaVersion:   1,
-		SchemaMetadata:  "{}",
-		Status:          model.SnapshotStatusReady,
+		RawSnapshotID:     uuid.New(),
+		DatasetID:         datasetID,
+		UserID:            uuid.New(),
+		StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+		ContentType:       "text/csv",
+		FileExtension:     "csv",
+		TableNamespace:    "features",
+		TableName:         "movies",
+		TableFormat:       "PARQUET",
+		CatalogProvider:   "LOCAL",
+		ProcessingProfile: model.ProcessingProfileTextRAG,
+		SchemaVersion:     1,
+		SchemaMetadata:    "{}",
+		Status:            model.SnapshotStatusReady,
 	}
 }
 
@@ -110,6 +115,7 @@ func validMessagingFeatureSnapshot(rawSnapshotID uuid.UUID) *model.FeatureSnapsh
 		TableName:         "movies",
 		TableFormat:       "PARQUET",
 		CatalogProvider:   "LOCAL",
+		ProcessingProfile: model.ProcessingProfileTextRAG,
 		SchemaVersion:     1,
 		SchemaMetadata:    "{}",
 		Status:            model.SnapshotStatusReady,

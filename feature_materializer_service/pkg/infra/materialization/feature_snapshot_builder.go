@@ -21,6 +21,12 @@ func NewFeatureSnapshotBuilder(store ArtifactStore) *FeatureSnapshotBuilder {
 	}
 }
 
+func (b *FeatureSnapshotBuilder) SupportsFeatureSnapshot(rawSnapshot *model.RawSnapshot) bool {
+	log.Trace("FeatureSnapshotBuilder SupportsFeatureSnapshot")
+
+	return rawSnapshot != nil
+}
+
 func (b *FeatureSnapshotBuilder) BuildFeatureSnapshot(ctx context.Context, rawSnapshot *model.RawSnapshot, featureSnapshot *model.FeatureSnapshot) (*model.FeatureSnapshot, error) {
 	log.Trace("FeatureSnapshotBuilder BuildFeatureSnapshot")
 
@@ -44,6 +50,7 @@ func (b *FeatureSnapshotBuilder) BuildFeatureSnapshot(ctx context.Context, rawSn
 	out.UserID = rawSnapshot.UserID
 	out.StorageLocation = location
 	out.TableFormat = "PARQUET"
+	out.ProcessingProfile = rawSnapshot.ProcessingProfile
 	out.SchemaVersion = artifact.SchemaVersion
 	out.SchemaMetadata = artifact.SchemaMetadata
 	out.Status = model.SnapshotStatusReady

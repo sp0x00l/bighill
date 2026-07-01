@@ -44,16 +44,17 @@ func (p *materializationEventPublisher) PublishRawSnapshotReady(ctx context.Cont
 		return msgConn.NonRetryable(fmt.Errorf("raw snapshot is required"))
 	}
 	return p.publish(ctx, rawSnapshot.DatasetID, msgConn.MsgTypeRawSnapshotReady, &featurepb.RawSnapshotReadyEvent{
-		RawSnapshotId:   rawSnapshot.RawSnapshotID.String(),
-		DatasetId:       rawSnapshot.DatasetID.String(),
-		UserId:          rawSnapshot.UserID.String(),
-		StorageLocation: rawSnapshot.StorageLocation,
-		TableNamespace:  rawSnapshot.TableNamespace,
-		TableName:       rawSnapshot.TableName,
-		TableFormat:     rawSnapshot.TableFormat,
-		CatalogProvider: rawSnapshot.CatalogProvider,
-		SchemaVersion:   int32(rawSnapshot.SchemaVersion),
-		SchemaMetadata:  rawSnapshot.SchemaMetadata,
+		RawSnapshotId:     rawSnapshot.RawSnapshotID.String(),
+		DatasetId:         rawSnapshot.DatasetID.String(),
+		UserId:            rawSnapshot.UserID.String(),
+		StorageLocation:   rawSnapshot.StorageLocation,
+		TableNamespace:    rawSnapshot.TableNamespace,
+		TableName:         rawSnapshot.TableName,
+		TableFormat:       rawSnapshot.TableFormat,
+		CatalogProvider:   rawSnapshot.CatalogProvider,
+		SchemaVersion:     int32(rawSnapshot.SchemaVersion),
+		SchemaMetadata:    rawSnapshot.SchemaMetadata,
+		ProcessingProfile: rawSnapshot.ProcessingProfile.String(),
 	})
 }
 
@@ -75,6 +76,7 @@ func (p *materializationEventPublisher) PublishFeatureSnapshotReady(ctx context.
 		CatalogProvider:   featureSnapshot.CatalogProvider,
 		SchemaVersion:     int32(featureSnapshot.SchemaVersion),
 		SchemaMetadata:    featureSnapshot.SchemaMetadata,
+		ProcessingProfile: featureSnapshot.ProcessingProfile.String(),
 	})
 }
 

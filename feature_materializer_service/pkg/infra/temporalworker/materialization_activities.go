@@ -59,7 +59,7 @@ func (a *MaterializationActivities) BuildFeatureSnapshot(ctx context.Context, in
 func (a *MaterializationActivities) MaterializeEmbeddings(ctx context.Context, input usecase.MaterializeEmbeddingsActivityInput) (*model.EmbeddingSnapshot, error) {
 	log.Trace("MaterializationActivities MaterializeEmbeddings")
 
-	embeddingSnapshot, err := a.embeddingUsecase.MaterializeEmbeddings(ctx, input.FeatureSnapshotID, input.IdempotencyKey)
+	embeddingSnapshot, err := a.embeddingUsecase.MaterializeEmbeddings(ctx, input.FeatureSnapshotID, input.IdempotencyKey, input.Strategy)
 	if err != nil {
 		if existing, ok := domain.IsEmbeddingsAlreadyMaterialized(err); ok {
 			return existing, nil

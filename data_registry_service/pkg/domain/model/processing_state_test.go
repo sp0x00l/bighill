@@ -33,3 +33,20 @@ var _ = Describe("ProcessingState", func() {
 		Expect(model.AdvanceProcessingState(model.DatasetProcessingEmbeddingsMaterialized, model.DatasetProcessingRawMaterialized)).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 	})
 })
+
+var _ = Describe("ProcessingProfile", func() {
+	It("converts known profiles and defaults empty values to generic parquet", func() {
+		profile, err := model.ToProcessingProfile("")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(profile).To(Equal(model.GenericParquetProfile))
+
+		profile, err = model.ToProcessingProfile("TEXT_RAG")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(profile).To(Equal(model.TextRAGProfile))
+	})
+
+	It("rejects unknown profiles", func() {
+		_, err := model.ToProcessingProfile("CUSTOM")
+		Expect(err).To(HaveOccurred())
+	})
+})

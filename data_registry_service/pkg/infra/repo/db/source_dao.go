@@ -24,6 +24,7 @@ type DatasetDAO struct {
 	TableName           pgtype.Text
 	TableFormat         pgtype.Text
 	CatalogProvider     pgtype.Text
+	ProcessingProfile   pgtype.Text
 	SchemaVersion       pgtype.Int4
 	SchemaMetadata      pgtype.Text
 	ProcessingState     pgtype.Text
@@ -61,8 +62,9 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 			String: dataset.CatalogProvider.String(),
 			Valid:  true,
 		},
-		"schema_version":  pgtype.Int4{Int32: int32(dataset.SchemaVersion), Valid: true},
-		"schema_metadata": pgtype.Text{String: dataset.SchemaMetadata, Valid: true},
+		"processing_profile": pgtype.Text{String: dataset.ProcessingProfile.String(), Valid: true},
+		"schema_version":     pgtype.Int4{Int32: int32(dataset.SchemaVersion), Valid: true},
+		"schema_metadata":    pgtype.Text{String: dataset.SchemaMetadata, Valid: true},
 		"processing_state": pgtype.Text{
 			String: dataset.ProcessingState.String(),
 			Valid:  true,
@@ -104,6 +106,11 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 		log.WithContext(ctx).WithError(err).Error("Failed to convert catalog provider")
 		return nil, domainErrors.ErrValidationFailed.Extend("failed to convert catalog provider")
 	}
+	processingProfile, err := model.ToProcessingProfile(dao.ProcessingProfile.String)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("Failed to convert processing profile")
+		return nil, domainErrors.ErrValidationFailed.Extend("failed to convert processing profile")
+	}
 	processingState, err := model.ToProcessingState(dao.ProcessingState.String)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("Failed to convert processing state")
@@ -123,6 +130,7 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 		TableName:           dao.TableName.String,
 		TableFormat:         tableFormat,
 		CatalogProvider:     catalogProvider,
+		ProcessingProfile:   processingProfile,
 		SchemaVersion:       int(dao.SchemaVersion.Int32),
 		SchemaMetadata:      dao.SchemaMetadata.String,
 		ProcessingState:     processingState,

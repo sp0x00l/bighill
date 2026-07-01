@@ -3,6 +3,7 @@ CREATE TYPE storage_type_enum AS ENUM ('S3', 'AZURE_STORAGE', 'GCS', 'POSTGRES',
 CREATE TYPE status_enum AS ENUM ('draft', 'published', 'blacklisted');
 CREATE TYPE table_format_enum AS ENUM ('PARQUET', 'ICEBERG');
 CREATE TYPE catalog_provider_enum AS ENUM ('LOCAL', 'POLARIS');
+CREATE TYPE processing_profile_enum AS ENUM ('GENERIC_PARQUET', 'TEXT_RAG', 'INSTRUCTION_TUNING');
 
 CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
     id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
     table_name VARCHAR(255) NOT NULL,
     table_format table_format_enum NOT NULL DEFAULT 'PARQUET',
     catalog_provider catalog_provider_enum NOT NULL DEFAULT 'LOCAL',
+    processing_profile processing_profile_enum NOT NULL DEFAULT 'GENERIC_PARQUET',
     schema_version INTEGER NOT NULL DEFAULT 1,
     schema_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     dataset_version INTEGER NOT NULL DEFAULT 1,

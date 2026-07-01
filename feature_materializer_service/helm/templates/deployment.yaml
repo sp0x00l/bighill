@@ -62,10 +62,28 @@ spec:
               value: {{ .Values.env.artifactBucketRegion | quote }}
             - name: FEATURE_MATERIALIZER_ARTIFACT_UPLOAD_PART_SIZE_MB
               value: {{ .Values.env.artifactUploadPartSizeMb | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_PROVIDER
+              value: {{ .Values.env.embeddingProvider | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_ENDPOINT
+              value: {{ .Values.env.embeddingEndpoint | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_MODEL
+              value: {{ .Values.env.embeddingModel | quote }}
             - name: FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS
               value: {{ .Values.env.embeddingDimensions | quote }}
             - name: FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS
               value: {{ .Values.env.embeddingMaxRows | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_STRATEGY_VERSION
+              value: {{ .Values.env.embeddingStrategyVersion | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_NAME
+              value: {{ .Values.env.embeddingChunkerName | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_VERSION
+              value: {{ .Values.env.embeddingChunkerVersion | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNK_SIZE
+              value: {{ .Values.env.embeddingChunkSize | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNK_OVERLAP
+              value: {{ .Values.env.embeddingChunkOverlap | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.env.embeddingRequestTimeoutSeconds | quote }}
             - name: FEATURE_MATERIALIZER_DB_HOST
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:

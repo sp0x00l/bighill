@@ -19,6 +19,7 @@ message DatasetFileUploadedEvent {
   string table_name = 7;
   string table_format = 8;
   string catalog_provider = 9;
+  string processing_profile = 10;
 }
 
 message DatasetCreatedEvent {
@@ -50,4 +51,5 @@ message DatasetUpdatedEvent {
   string collection_name = 16;
   int32 embedding_dimensions = 17;
   int64 embedding_count = 18;
+  string processing_profile = 19;
 }

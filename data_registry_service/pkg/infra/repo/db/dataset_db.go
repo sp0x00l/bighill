@@ -61,9 +61,9 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 	var id, userID, origin, status, processingState string
 	var sqlStatement = `INSERT INTO ` + db.Name +
 		`.datasets (id, user_id, title, description, location, idempotency_key, category,
-		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata, processing_state)
+		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata, processing_state)
 		VALUES (@id, @user_id, @title, @description, @location, @idempotency_key, @category,
-		@table_namespace, @table_name, @table_format, @catalog_provider, @schema_version, @schema_metadata::jsonb, @processing_state)
+		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, @processing_state)
 		RETURNING id, user_id, origin, status, processing_state;`
 
 	err := db.Pool.QueryRow(ctx,
@@ -156,11 +156,11 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 	var sqlStatement = `UPDATE ` + db.Name + `.datasets SET title = @title, 
 		description = @description, origin = @origin, location = @location, category = @category,
 		table_namespace = @table_namespace, table_name = @table_name, table_format = @table_format,
-		catalog_provider = @catalog_provider, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb,
+		catalog_provider = @catalog_provider, processing_profile = @processing_profile, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb,
 		dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
 		RETURNING title, description, origin, location, status, category,
-		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text,
+		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count;`
 	row := db.Pool.QueryRow(ctx, sqlStatement, datasetDAO)
@@ -180,6 +180,7 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		&updatedDataset.TableName,
 		&updatedDataset.TableFormat,
 		&updatedDataset.CatalogProvider,
+		&updatedDataset.ProcessingProfile,
 		&updatedDataset.SchemaVersion,
 		&updatedDataset.SchemaMetadata,
 		&updatedDataset.ProcessingState,
@@ -226,7 +227,7 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.U
 			dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
 		RETURNING id, user_id, title, description, origin, location, status, category,
-		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text,
+		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count;`
 
@@ -266,6 +267,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 	log.Trace("DatasetDB recordMaterializationTx")
 
 	datasetDAO := (&Dataset{}).toDAO(materialized)
+	applyMaterializationOptionalFields(datasetDAO, materialized)
 	datasetDAO["processing_state"] = pgtype.Text{String: state.String(), Valid: true}
 
 	requestedRank := processingStateRankSQL("@processing_state")
@@ -276,6 +278,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 			table_name = COALESCE(NULLIF(@table_name, ''), d.table_name),
 			table_format = COALESCE(NULLIF(@table_format, '')::table_format_enum, d.table_format),
 			catalog_provider = COALESCE(NULLIF(@catalog_provider, '')::catalog_provider_enum, d.catalog_provider),
+			processing_profile = COALESCE(NULLIF(@processing_profile, '')::processing_profile_enum, d.processing_profile),
 			schema_version = CASE WHEN @schema_version > 0 THEN @schema_version ELSE d.schema_version END,
 			schema_metadata = COALESCE(NULLIF(@schema_metadata, '')::jsonb, d.schema_metadata),
 			processing_state = CASE
@@ -301,6 +304,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 				OR d.table_name IS DISTINCT FROM COALESCE(NULLIF(@table_name, ''), d.table_name)
 				OR d.table_format IS DISTINCT FROM COALESCE(NULLIF(@table_format, '')::table_format_enum, d.table_format)
 				OR d.catalog_provider IS DISTINCT FROM COALESCE(NULLIF(@catalog_provider, '')::catalog_provider_enum, d.catalog_provider)
+				OR d.processing_profile IS DISTINCT FROM COALESCE(NULLIF(@processing_profile, '')::processing_profile_enum, d.processing_profile)
 				OR d.schema_version IS DISTINCT FROM CASE WHEN @schema_version > 0 THEN @schema_version ELSE d.schema_version END
 				OR d.schema_metadata IS DISTINCT FROM COALESCE(NULLIF(@schema_metadata, '')::jsonb, d.schema_metadata)
 				OR d.raw_snapshot_id IS DISTINCT FROM COALESCE(@raw_snapshot_id, d.raw_snapshot_id)
@@ -312,7 +316,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 				OR d.embedding_count IS DISTINCT FROM CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END
 			)
 		RETURNING d.id, d.user_id, d.title, d.description, d.origin, d.location, d.status, d.category,
-			d.table_namespace, d.table_name, d.table_format, d.catalog_provider, d.schema_version, d.schema_metadata::text, d.processing_state::text,
+			d.table_namespace, d.table_name, d.table_format, d.catalog_provider, d.processing_profile, d.schema_version, d.schema_metadata::text, d.processing_state::text,
 			d.dataset_version, d.raw_snapshot_id, d.feature_snapshot_id, d.embedding_snapshot_id, d.vector_store, d.collection_name,
 			d.embedding_dimensions, d.embedding_count`
 
@@ -328,6 +332,29 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 		return nil, false, err
 	}
 	return current, false, nil
+}
+
+func applyMaterializationOptionalFields(datasetDAO pgx.NamedArgs, materialized *model.Dataset) {
+	log.Trace("applyMaterializationOptionalFields")
+
+	if hasTableMaterializationMetadata(materialized) {
+		return
+	}
+	datasetDAO["table_format"] = pgtype.Text{String: "", Valid: true}
+	datasetDAO["catalog_provider"] = pgtype.Text{String: "", Valid: true}
+	datasetDAO["processing_profile"] = pgtype.Text{String: "", Valid: true}
+}
+
+func hasTableMaterializationMetadata(dataset *model.Dataset) bool {
+	log.Trace("hasTableMaterializationMetadata")
+
+	if dataset == nil {
+		return false
+	}
+	return strings.TrimSpace(dataset.Location) != "" ||
+		strings.TrimSpace(dataset.TableNamespace) != "" ||
+		strings.TrimSpace(dataset.TableName) != "" ||
+		dataset.RawSnapshotID != uuid.Nil
 }
 
 func (db *datasetDB) readMaterializationDatasetTx(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, userID uuid.UUID) (*model.Dataset, error) {
@@ -441,7 +468,7 @@ func (db *datasetDB) getPaginatedSelectSQL(filter string, pagination core.Pagina
 
 func (db *datasetDB) getSelectSQL(filter string) string {
 	return fmt.Sprintf(`SELECT id, user_id, title, description, origin, location, status, category,
-	table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text,
+	table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 	dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 	embedding_dimensions, embedding_count
 	FROM %s.datasets WHERE %s;`, db.Name, filter)
@@ -466,6 +493,7 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 			&dataset.TableName,
 			&dataset.TableFormat,
 			&dataset.CatalogProvider,
+			&dataset.ProcessingProfile,
 			&dataset.SchemaVersion,
 			&dataset.SchemaMetadata,
 			&dataset.ProcessingState,
@@ -499,7 +527,7 @@ func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, 
 	var dataset DatasetDAO
 	err := row.Scan(&dataset.ID, &dataset.UserID, &dataset.Title, &dataset.Description, &dataset.Origin,
 		&dataset.Location, &dataset.Status, &dataset.Category, &dataset.TableNamespace, &dataset.TableName,
-		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.SchemaVersion, &dataset.SchemaMetadata, &dataset.ProcessingState,
+		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.ProcessingProfile, &dataset.SchemaVersion, &dataset.SchemaMetadata, &dataset.ProcessingState,
 		&dataset.DatasetVersion, &dataset.RawSnapshotID, &dataset.FeatureSnapshotID, &dataset.EmbeddingSnapshotID,
 		&dataset.VectorStore, &dataset.CollectionName, &dataset.EmbeddingDimensions, &dataset.EmbeddingCount)
 	if err != nil {
@@ -544,6 +572,7 @@ func datasetUpdatedMessage(topic string, dataset *model.Dataset) msgConn.Outboun
 		TableName:           dataset.TableName,
 		TableFormat:         dataset.TableFormat.String(),
 		CatalogProvider:     dataset.CatalogProvider.String(),
+		ProcessingProfile:   dataset.ProcessingProfile.String(),
 		SchemaVersion:       int32(dataset.SchemaVersion),
 		SchemaMetadata:      dataset.SchemaMetadata,
 		RawSnapshotId:       uuidToString(dataset.RawSnapshotID),

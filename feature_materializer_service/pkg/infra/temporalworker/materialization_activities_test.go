@@ -49,7 +49,7 @@ type embeddingUsecaseStub struct {
 	err               error
 }
 
-func (s embeddingUsecaseStub) MaterializeEmbeddings(context.Context, uuid.UUID, uuid.UUID) (*model.EmbeddingSnapshot, error) {
+func (s embeddingUsecaseStub) MaterializeEmbeddings(context.Context, uuid.UUID, uuid.UUID, model.EmbeddingStrategy) (*model.EmbeddingSnapshot, error) {
 	if s.err != nil {
 		return nil, s.err
 	}

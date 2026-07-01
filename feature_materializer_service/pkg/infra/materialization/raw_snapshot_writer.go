@@ -20,6 +20,12 @@ func NewRawSnapshotWriter(store ArtifactStore) *RawSnapshotWriter {
 	return &RawSnapshotWriter{store: store}
 }
 
+func (w *RawSnapshotWriter) SupportsRawSnapshot(datasetFile *model.DatasetFile) bool {
+	log.Trace("RawSnapshotWriter SupportsRawSnapshot")
+
+	return datasetFile != nil
+}
+
 func (w *RawSnapshotWriter) WriteRawSnapshot(ctx context.Context, datasetFile *model.DatasetFile, rawSnapshot *model.RawSnapshot) (*model.RawSnapshot, error) {
 	log.Trace("RawSnapshotWriter WriteRawSnapshot")
 
@@ -42,6 +48,7 @@ func (w *RawSnapshotWriter) WriteRawSnapshot(ctx context.Context, datasetFile *m
 	out := *rawSnapshot
 	out.StorageLocation = location
 	out.TableFormat = "PARQUET"
+	out.ProcessingProfile = datasetFile.ProcessingProfile
 	out.SchemaVersion = artifact.SchemaVersion
 	out.SchemaMetadata = artifact.SchemaMetadata
 	out.Status = model.SnapshotStatusReady

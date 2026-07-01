@@ -20,6 +20,7 @@ import (
 	sharedmessaging "lib/shared_lib/messaging"
 	"lib/shared_lib/transport"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -238,44 +239,53 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		runCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
+		suffix := fmt.Sprintf("%d", rand.Int64())
 		topics := registrymessaging.MaterializationTopics{
 			FeatureMaterializer: "feature_materializer",
 		}
-		messenger := sharedmessaging.NewMessenger(sharedmessaging.MessengerConfig{
+		Expect(purgeTopic(ctx, brokers, topics.FeatureMaterializer)).To(Succeed())
+
+		subscriberMessenger := sharedmessaging.NewMessenger(sharedmessaging.MessengerConfig{
 			Brokers:         brokers,
-			GroupID:         fmt.Sprintf("data-registry-integration-%d", rand.Int64()),
+			GroupID:         "data-registry-integration-" + suffix,
 			DlqURL:          "http://localhost:4566/data-registry-dev-env-queue/",
 			AutoOffsetReset: "earliest",
 		}, cancel)
 		defer func() {
-			_ = messenger.Close(runCtx)
+			_ = subscriberMessenger.Close(runCtx)
 		}()
 
-		publisher, err := messenger.Publisher(runCtx)
+		publisherMessenger := sharedmessaging.NewMessenger(sharedmessaging.MessengerConfig{
+			Brokers: brokers,
+			GroupID: "data-registry-integration-publisher-" + suffix,
+			DlqURL:  "http://localhost:4566/data-registry-dev-env-queue/",
+		}, cancel)
+		publisher, err := publisherMessenger.Publisher(runCtx)
 		Expect(err).NotTo(HaveOccurred())
-		subscriber, err := messenger.Subscriber(runCtx)
+		subscriber, err := subscriberMessenger.Subscriber(runCtx)
 		Expect(err).NotTo(HaveOccurred())
 
 		materializationSubscriber := registrymessaging.NewMaterializationSubscriber(subscriber, datasets, topics)
 		go func() {
 			_ = materializationSubscriber.Start(runCtx)
 		}()
-		time.Sleep(750 * time.Millisecond)
+		time.Sleep(4 * time.Second)
 
 		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeRawSnapshotReady,
 		}, &featurepb.RawSnapshotReadyEvent{
-			RawSnapshotId:   uuid.NewString(),
-			DatasetId:       datasetID.String(),
-			UserId:          userID.String(),
-			StorageLocation: "s3://local-dev-bucket/lakehouse/raw/data.parquet",
-			TableNamespace:  "raw",
-			TableName:       "kafka_materialization_raw",
-			TableFormat:     "PARQUET",
-			CatalogProvider: "LOCAL",
-			SchemaVersion:   1,
-			SchemaMetadata:  "{}",
+			RawSnapshotId:     uuid.NewString(),
+			DatasetId:         datasetID.String(),
+			UserId:            userID.String(),
+			StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:    "raw",
+			TableName:         "kafka_materialization_raw",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			SchemaVersion:     1,
+			SchemaMetadata:    "{}",
+			ProcessingProfile: "TEXT_RAG",
 		})).To(Succeed())
 
 		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
@@ -293,6 +303,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			CatalogProvider:   "LOCAL",
 			SchemaVersion:     3,
 			SchemaMetadata:    `{"columns":["title"]}`,
+			ProcessingProfile: "TEXT_RAG",
 		})).To(Succeed())
 
 		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
@@ -308,13 +319,101 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			EmbeddingDimensions: 384,
 			EmbeddingCount:      1,
 		})).To(Succeed())
+		Expect(publisherMessenger.Close(runCtx)).To(Succeed())
 
 		Eventually(func(g Gomega) {
 			dataset, err := datasets.ReadDatasetForUser(ctx, datasetID, userID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/data.parquet"))
 			g.Expect(dataset.TableName).To(Equal("kafka_materialization"))
+			g.Expect(dataset.ProcessingProfile).To(Equal(model.TextRAGProfile))
 			g.Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
 	})
 })
+
+func purgeTopic(ctx context.Context, brokers, topic string) error {
+	log.Trace("purgeTopic")
+
+	Expect(sharedmessaging.CreateTopic(ctx, brokers, topic)).Should(Succeed())
+
+	admin, err := kafka.NewAdminClient(&kafka.ConfigMap{
+		"bootstrap.servers": brokers,
+	})
+	if err != nil {
+		return err
+	}
+	defer admin.Close()
+
+	md, err := admin.GetMetadata(&topic, false, 10000)
+	if err != nil {
+		return err
+	}
+	tmd, ok := md.Topics[topic]
+	if !ok || tmd.Error.Code() != kafka.ErrNoError {
+		return nil
+	}
+
+	partitions := make([]kafka.TopicPartition, 0, len(tmd.Partitions))
+	for _, partition := range tmd.Partitions {
+		partitions = append(partitions, kafka.TopicPartition{
+			Topic:     &topic,
+			Partition: partition.ID,
+			Offset:    kafka.OffsetEnd,
+		})
+	}
+	if len(partitions) == 0 {
+		return nil
+	}
+
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := deleteTopicRecords(ctx, admin, partitions); err != nil {
+			if isRetriableTopicPurgeError(err) && attempt < 4 {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	return nil
+}
+
+func deleteTopicRecords(ctx context.Context, admin *kafka.AdminClient, partitions []kafka.TopicPartition) error {
+	log.Trace("deleteTopicRecords")
+
+	res, err := admin.DeleteRecords(
+		ctx,
+		partitions,
+		kafka.SetAdminOperationTimeout(30*time.Second),
+	)
+	if err != nil {
+		if !isKafkaErrorCode(err, -186) {
+			return err
+		}
+		return nil
+	}
+
+	for _, result := range res.DeleteRecordsResults {
+		if result.TopicPartition.Error != nil {
+			if !isKafkaErrorCode(result.TopicPartition.Error, -186) {
+				return result.TopicPartition.Error
+			}
+		}
+	}
+	return nil
+}
+
+func isRetriableTopicPurgeError(err error) bool {
+	log.Trace("isRetriableTopicPurgeError")
+
+	return isKafkaErrorCode(err, kafka.ErrNotLeaderForPartition) ||
+		isKafkaErrorCode(err, kafka.ErrLeaderNotAvailable)
+}
+
+func isKafkaErrorCode(err error, code kafka.ErrorCode) bool {
+	log.Trace("isKafkaErrorCode")
+
+	var kafkaErr kafka.Error
+	return errors.As(err, &kafkaErr) && kafkaErr.Code() == code
+}

@@ -69,6 +69,7 @@ type Dataset struct {
 	TableName           string
 	TableFormat         TableFormat
 	CatalogProvider     CatalogProvider
+	ProcessingProfile   ProcessingProfile
 	SchemaVersion       int
 	SchemaMetadata      string
 	ProcessingState     ProcessingState

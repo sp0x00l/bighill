@@ -11,6 +11,13 @@ type EmbeddingSnapshot struct {
 	CollectionName      string
 	EmbeddingDimensions int
 	EmbeddingCount      int64
+	StrategyVersion     string
+	ChunkerName         string
+	ChunkerVersion      string
+	ChunkSize           int
+	ChunkOverlap        int
+	EmbeddingProvider   string
+	EmbeddingModel      string
 	Status              SnapshotStatus
 	FailureReason       string
 }

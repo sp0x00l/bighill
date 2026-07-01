@@ -87,20 +87,21 @@ func (r errorRow) Scan(...any) error {
 }
 
 type rawSnapshotRow struct {
-	RawSnapshotID   uuid.UUID
-	DatasetID       uuid.UUID
-	UserID          uuid.UUID
-	StorageLocation string
-	ContentType     string
-	FileExtension   string
-	TableNamespace  string
-	TableName       string
-	TableFormat     string
-	CatalogProvider string
-	SchemaVersion   int
-	SchemaMetadata  string
-	Status          string
-	FailureReason   string
+	RawSnapshotID     uuid.UUID
+	DatasetID         uuid.UUID
+	UserID            uuid.UUID
+	StorageLocation   string
+	ContentType       string
+	FileExtension     string
+	TableNamespace    string
+	TableName         string
+	TableFormat       string
+	CatalogProvider   string
+	ProcessingProfile string
+	SchemaVersion     int
+	SchemaMetadata    string
+	Status            string
+	FailureReason     string
 }
 
 func (r rawSnapshotRow) Scan(dest ...any) error {
@@ -114,10 +115,11 @@ func (r rawSnapshotRow) Scan(dest ...any) error {
 	*(dest[7].(*string)) = r.TableName
 	*(dest[8].(*string)) = r.TableFormat
 	*(dest[9].(*string)) = r.CatalogProvider
-	*(dest[10].(*int)) = r.SchemaVersion
-	*(dest[11].(*string)) = r.SchemaMetadata
-	*(dest[12].(*string)) = r.Status
-	*(dest[13].(*string)) = r.FailureReason
+	*(dest[10].(*string)) = r.ProcessingProfile
+	*(dest[11].(*int)) = r.SchemaVersion
+	*(dest[12].(*string)) = r.SchemaMetadata
+	*(dest[13].(*string)) = r.Status
+	*(dest[14].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -131,6 +133,7 @@ type featureSnapshotRow struct {
 	TableName         string
 	TableFormat       string
 	CatalogProvider   string
+	ProcessingProfile string
 	SchemaVersion     int
 	SchemaMetadata    string
 	Status            string
@@ -147,10 +150,11 @@ func (r featureSnapshotRow) Scan(dest ...any) error {
 	*(dest[6].(*string)) = r.TableName
 	*(dest[7].(*string)) = r.TableFormat
 	*(dest[8].(*string)) = r.CatalogProvider
-	*(dest[9].(*int)) = r.SchemaVersion
-	*(dest[10].(*string)) = r.SchemaMetadata
-	*(dest[11].(*string)) = r.Status
-	*(dest[12].(*string)) = r.FailureReason
+	*(dest[9].(*string)) = r.ProcessingProfile
+	*(dest[10].(*int)) = r.SchemaVersion
+	*(dest[11].(*string)) = r.SchemaMetadata
+	*(dest[12].(*string)) = r.Status
+	*(dest[13].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -163,6 +167,13 @@ type embeddingSnapshotRow struct {
 	CollectionName      string
 	EmbeddingDimensions int
 	EmbeddingCount      int64
+	StrategyVersion     string
+	ChunkerName         string
+	ChunkerVersion      string
+	ChunkSize           int
+	ChunkOverlap        int
+	EmbeddingProvider   string
+	EmbeddingModel      string
 	Status              string
 	FailureReason       string
 }
@@ -176,8 +187,15 @@ func (r embeddingSnapshotRow) Scan(dest ...any) error {
 	*(dest[5].(*string)) = r.CollectionName
 	*(dest[6].(*int)) = r.EmbeddingDimensions
 	*(dest[7].(*int64)) = r.EmbeddingCount
-	*(dest[8].(*string)) = r.Status
-	*(dest[9].(*string)) = r.FailureReason
+	*(dest[8].(*string)) = r.StrategyVersion
+	*(dest[9].(*string)) = r.ChunkerName
+	*(dest[10].(*string)) = r.ChunkerVersion
+	*(dest[11].(*int)) = r.ChunkSize
+	*(dest[12].(*int)) = r.ChunkOverlap
+	*(dest[13].(*string)) = r.EmbeddingProvider
+	*(dest[14].(*string)) = r.EmbeddingModel
+	*(dest[15].(*string)) = r.Status
+	*(dest[16].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -208,15 +226,16 @@ var _ = Describe("SnapshotRepository", func() {
 		embeddingID = uuid.New()
 		idempotencyKey = uuid.New()
 		datasetFile = &model.DatasetFile{
-			DatasetID:       datasetID,
-			UserID:          userID,
-			StorageLocation: "s3://local/raw/file.csv",
-			ContentType:     "text/csv",
-			FileExtension:   "csv",
-			TableNamespace:  "features",
-			TableName:       "movies",
-			TableFormat:     "PARQUET",
-			CatalogProvider: "LOCAL",
+			DatasetID:         datasetID,
+			UserID:            userID,
+			StorageLocation:   "s3://local/raw/file.csv",
+			ContentType:       "text/csv",
+			FileExtension:     "csv",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: model.ProcessingProfileTextRAG,
 		}
 	})
 
@@ -239,6 +258,7 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("storage_location", datasetFile.StorageLocation))
 			Expect(args).To(HaveKeyWithValue("table_name", datasetFile.TableName))
+			Expect(args).To(HaveKeyWithValue("processing_profile", model.ProcessingProfileTextRAG.String()))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusPending.String()))
 		})
 
@@ -369,6 +389,7 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("raw_snapshot_id", pgtype.UUID{Bytes: rawSnapshotID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("table_name", "movies"))
+			Expect(args).To(HaveKeyWithValue("processing_profile", model.ProcessingProfileTextRAG.String()))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusPending.String()))
 		})
 
@@ -441,16 +462,19 @@ var _ = Describe("SnapshotRepository", func() {
 
 	Describe("SavePendingEmbeddingSnapshot", func() {
 		It("reads the feature snapshot and inserts a pending embedding snapshot", func() {
+			strategy := validEmbeddingStrategy()
 			poolMock.NextRows = []pgx.Row{
 				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
 				newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID),
 			}
 
-			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey)
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey, strategy)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
 			Expect(embeddingSnapshot.Status).To(Equal(model.SnapshotStatusPending))
+			Expect(embeddingSnapshot.StrategyVersion).To(Equal(strategy.StrategyVersion))
+			Expect(embeddingSnapshot.EmbeddingProvider).To(Equal(strategy.EmbeddingProvider))
 			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.feature_snapshots WHERE feature_snapshot_id = @feature_snapshot_id"))
 			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("INSERT INTO test_db.embedding_snapshots"))
@@ -459,6 +483,14 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("feature_snapshot_id", pgtype.UUID{Bytes: featureID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("strategy_version", strategy.StrategyVersion))
+			Expect(args).To(HaveKeyWithValue("chunker_name", strategy.ChunkerName))
+			Expect(args).To(HaveKeyWithValue("chunker_version", strategy.ChunkerVersion))
+			Expect(args).To(HaveKeyWithValue("chunk_size", strategy.ChunkSize))
+			Expect(args).To(HaveKeyWithValue("chunk_overlap", strategy.ChunkOverlap))
+			Expect(args).To(HaveKeyWithValue("embedding_provider", strategy.EmbeddingProvider))
+			Expect(args).To(HaveKeyWithValue("embedding_model", strategy.EmbeddingModel))
+			Expect(args).To(HaveKeyWithValue("embedding_dimensions", strategy.EmbeddingDimensions))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusPending.String()))
 		})
 
@@ -471,7 +503,7 @@ var _ = Describe("SnapshotRepository", func() {
 				readyRow,
 			}
 
-			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey)
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey, model.EmbeddingStrategy{})
 
 			Expect(embeddingSnapshot).To(BeNil())
 			existing, ok := domain.IsEmbeddingsAlreadyMaterialized(err)
@@ -495,7 +527,7 @@ var _ = Describe("SnapshotRepository", func() {
 				reopenedRow,
 			}
 
-			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey)
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey, model.EmbeddingStrategy{})
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
@@ -514,6 +546,13 @@ var _ = Describe("SnapshotRepository", func() {
 				CollectionName:      "movies",
 				EmbeddingDimensions: 384,
 				EmbeddingCount:      3,
+				StrategyVersion:     model.DefaultEmbeddingStrategyVersion,
+				ChunkerName:         model.DefaultChunkerName,
+				ChunkerVersion:      model.DefaultChunkerVersion,
+				ChunkSize:           model.DefaultChunkSize,
+				ChunkOverlap:        model.DefaultChunkOverlap,
+				EmbeddingProvider:   "ollama",
+				EmbeddingModel:      model.DefaultEmbeddingModel,
 			})
 
 			Expect(err).NotTo(HaveOccurred())
@@ -523,6 +562,7 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("vector_store", "pgvector"))
 			Expect(args).To(HaveKeyWithValue("collection_name", "movies"))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
+			Expect(args).To(HaveKeyWithValue("embedding_provider", "ollama"))
 		})
 
 		It("returns embedding snapshot not found when no row is updated", func() {
@@ -544,19 +584,20 @@ func namedArgs(args []any) pgx.NamedArgs {
 
 func newRawSnapshotRow(rawSnapshotID, datasetID, userID uuid.UUID) rawSnapshotRow {
 	return rawSnapshotRow{
-		RawSnapshotID:   rawSnapshotID,
-		DatasetID:       datasetID,
-		UserID:          userID,
-		StorageLocation: "s3://local/raw/file.csv",
-		ContentType:     "text/csv",
-		FileExtension:   "csv",
-		TableNamespace:  "features",
-		TableName:       "movies",
-		TableFormat:     "PARQUET",
-		CatalogProvider: "LOCAL",
-		SchemaVersion:   1,
-		SchemaMetadata:  "{}",
-		Status:          model.SnapshotStatusPending.String(),
+		RawSnapshotID:     rawSnapshotID,
+		DatasetID:         datasetID,
+		UserID:            userID,
+		StorageLocation:   "s3://local/raw/file.csv",
+		ContentType:       "text/csv",
+		FileExtension:     "csv",
+		TableNamespace:    "features",
+		TableName:         "movies",
+		TableFormat:       "PARQUET",
+		CatalogProvider:   "LOCAL",
+		ProcessingProfile: model.ProcessingProfileTextRAG.String(),
+		SchemaVersion:     1,
+		SchemaMetadata:    "{}",
+		Status:            model.SnapshotStatusPending.String(),
 	}
 }
 
@@ -571,6 +612,7 @@ func newFeatureSnapshotRow(featureSnapshotID, rawSnapshotID, datasetID, userID u
 		TableName:         "movies",
 		TableFormat:       "PARQUET",
 		CatalogProvider:   "LOCAL",
+		ProcessingProfile: model.ProcessingProfileTextRAG.String(),
 		SchemaVersion:     1,
 		SchemaMetadata:    "{}",
 		Status:            model.SnapshotStatusPending.String(),
@@ -578,6 +620,7 @@ func newFeatureSnapshotRow(featureSnapshotID, rawSnapshotID, datasetID, userID u
 }
 
 func newEmbeddingSnapshotRow(embeddingSnapshotID, featureSnapshotID, datasetID, userID uuid.UUID) embeddingSnapshotRow {
+	strategy := validEmbeddingStrategy()
 	return embeddingSnapshotRow{
 		EmbeddingSnapshotID: embeddingSnapshotID,
 		FeatureSnapshotID:   featureSnapshotID,
@@ -585,8 +628,28 @@ func newEmbeddingSnapshotRow(embeddingSnapshotID, featureSnapshotID, datasetID, 
 		UserID:              userID,
 		VectorStore:         "pgvector",
 		CollectionName:      "movies",
-		EmbeddingDimensions: 384,
+		EmbeddingDimensions: strategy.EmbeddingDimensions,
 		EmbeddingCount:      3,
+		StrategyVersion:     strategy.StrategyVersion,
+		ChunkerName:         strategy.ChunkerName,
+		ChunkerVersion:      strategy.ChunkerVersion,
+		ChunkSize:           strategy.ChunkSize,
+		ChunkOverlap:        strategy.ChunkOverlap,
+		EmbeddingProvider:   strategy.EmbeddingProvider,
+		EmbeddingModel:      strategy.EmbeddingModel,
 		Status:              model.SnapshotStatusPending.String(),
 	}
+}
+
+func validEmbeddingStrategy() model.EmbeddingStrategy {
+	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+		StrategyVersion:     "rag-v1",
+		ChunkerName:         "go-token-window",
+		ChunkerVersion:      "v1",
+		ChunkSize:           128,
+		ChunkOverlap:        16,
+		EmbeddingProvider:   "ollama",
+		EmbeddingModel:      model.DefaultEmbeddingModel,
+		EmbeddingDimensions: 384,
+	})
 }

@@ -15,6 +15,7 @@ DROP TYPE IF EXISTS storage_type_enum;
 DROP TYPE IF EXISTS status_enum;
 DROP TYPE IF EXISTS table_format_enum;
 DROP TYPE IF EXISTS catalog_provider_enum;
+DROP TYPE IF EXISTS processing_profile_enum;
 
 DROP TRIGGER IF EXISTS updated_at_trigger ON bighill_data_registry_db.datasets;
 DROP TRIGGER IF EXISTS updated_at_trigger ON bighill_data_registry_db.connectors;

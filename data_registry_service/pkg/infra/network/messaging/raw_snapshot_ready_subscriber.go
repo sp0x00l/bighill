@@ -99,6 +99,10 @@ func rawSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.RawSnap
 	if err != nil {
 		return nil, fmt.Errorf("catalog provider is invalid: %w", err)
 	}
+	processingProfile, err := model.ToProcessingProfile(strings.TrimSpace(payload.GetProcessingProfile()))
+	if err != nil {
+		return nil, fmt.Errorf("processing profile is invalid: %w", err)
+	}
 	schemaVersion := int(payload.GetSchemaVersion())
 	if schemaVersion <= 0 {
 		schemaVersion = 1
@@ -108,15 +112,16 @@ func rawSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.RawSnap
 		schemaMetadata = "{}"
 	}
 	return &model.Dataset{
-		ID:              datasetID,
-		UserID:          userID,
-		Location:        location,
-		TableNamespace:  tableNamespace,
-		TableName:       tableName,
-		TableFormat:     tableFormat,
-		CatalogProvider: catalogProvider,
-		SchemaVersion:   schemaVersion,
-		SchemaMetadata:  schemaMetadata,
-		RawSnapshotID:   rawSnapshotID,
+		ID:                datasetID,
+		UserID:            userID,
+		Location:          location,
+		TableNamespace:    tableNamespace,
+		TableName:         tableName,
+		TableFormat:       tableFormat,
+		CatalogProvider:   catalogProvider,
+		ProcessingProfile: processingProfile,
+		SchemaVersion:     schemaVersion,
+		SchemaMetadata:    schemaMetadata,
+		RawSnapshotID:     rawSnapshotID,
 	}, nil
 }

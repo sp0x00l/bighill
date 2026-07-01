@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.raw_snapshots (
     table_name text NOT NULL,
     table_format text NOT NULL,
     catalog_provider text NOT NULL,
+    processing_profile text NOT NULL DEFAULT 'GENERIC_PARQUET',
+    schema_version integer NOT NULL DEFAULT 1,
+    schema_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     status snapshot_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -33,12 +36,16 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.feature_snapshots (
     feature_snapshot_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     raw_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.raw_snapshots(raw_snapshot_id),
     dataset_id uuid NOT NULL,
+    user_id uuid NOT NULL,
     idempotency_key uuid NOT NULL UNIQUE,
     storage_location text NOT NULL DEFAULT '',
     table_namespace text NOT NULL,
     table_name text NOT NULL,
     table_format text NOT NULL,
     catalog_provider text NOT NULL,
+    processing_profile text NOT NULL DEFAULT 'GENERIC_PARQUET',
+    schema_version integer NOT NULL DEFAULT 1,
+    schema_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     status snapshot_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -57,9 +64,19 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_snapshots (
     embedding_snapshot_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     feature_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.feature_snapshots(feature_snapshot_id),
     dataset_id uuid NOT NULL,
+    user_id uuid NOT NULL,
     idempotency_key uuid NOT NULL UNIQUE,
     vector_store text NOT NULL DEFAULT '',
     collection_name text NOT NULL DEFAULT '',
+    embedding_dimensions integer NOT NULL DEFAULT 0,
+    embedding_count bigint NOT NULL DEFAULT 0,
+    strategy_version text NOT NULL DEFAULT 'rag-v1',
+    chunker_name text NOT NULL DEFAULT 'go-token-window',
+    chunker_version text NOT NULL DEFAULT 'v1',
+    chunk_size integer NOT NULL DEFAULT 384,
+    chunk_overlap integer NOT NULL DEFAULT 64,
+    embedding_provider text NOT NULL DEFAULT 'deterministic',
+    embedding_model text NOT NULL DEFAULT 'bge-small-en-v1.5',
     status snapshot_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -68,8 +85,62 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_snapshots (
 
 CREATE INDEX IF NOT EXISTS index_embedding_snapshots_feature_snapshot_id ON bighill_feature_materializer_db.embedding_snapshots(feature_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_embedding_snapshots_dataset_id ON bighill_feature_materializer_db.embedding_snapshots(dataset_id);
+CREATE INDEX IF NOT EXISTS index_embedding_snapshots_user_id ON bighill_feature_materializer_db.embedding_snapshots(user_id);
 
 CREATE TRIGGER embedding_snapshots_updated_at
 BEFORE UPDATE ON bighill_feature_materializer_db.embedding_snapshots
+FOR EACH ROW
+EXECUTE FUNCTION updated_at_column();
+
+CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_records (
+    embedding_record_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    embedding_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.embedding_snapshots(embedding_snapshot_id) ON DELETE CASCADE,
+    dataset_id uuid NOT NULL,
+    chunk_index integer NOT NULL DEFAULT 0,
+    source_text text NOT NULL,
+    embedding vector NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS index_embedding_records_snapshot_id ON bighill_feature_materializer_db.embedding_records(embedding_snapshot_id);
+CREATE INDEX IF NOT EXISTS index_embedding_records_dataset_id ON bighill_feature_materializer_db.embedding_records(dataset_id);
+-- Retrieval queries must use embedding::vector(384), cosine distance, and vector_dims(embedding) = 384 to use this partial ANN index.
+CREATE INDEX IF NOT EXISTS index_embedding_records_embedding_384_hnsw
+ON bighill_feature_materializer_db.embedding_records
+USING hnsw ((embedding::vector(384)) vector_cosine_ops)
+WHERE vector_dims(embedding) = 384;
+
+CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.outbox_messages (
+    outbox_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    dispatch_key text NOT NULL UNIQUE,
+    topic text NOT NULL,
+    event_type text NOT NULL,
+    resource_key uuid NOT NULL,
+    payload bytea NOT NULL,
+    headers jsonb NOT NULL DEFAULT '[]'::jsonb,
+    status text NOT NULL DEFAULT 'PENDING',
+    attempts integer NOT NULL DEFAULT 0,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    processing_owner text NOT NULL DEFAULT '',
+    claim_token text NOT NULL DEFAULT '',
+    lease_expires_at timestamptz,
+    last_error text NOT NULL DEFAULT '',
+    sent_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT outbox_messages_status_check CHECK (status IN ('PENDING', 'PROCESSING', 'SENT'))
+);
+
+CREATE INDEX IF NOT EXISTS index_outbox_messages_pending
+ON bighill_feature_materializer_db.outbox_messages(status, next_attempt_at, created_at);
+
+CREATE INDEX IF NOT EXISTS index_outbox_messages_processing
+ON bighill_feature_materializer_db.outbox_messages(status, lease_expires_at, created_at);
+
+CREATE INDEX IF NOT EXISTS index_outbox_messages_resource_key
+ON bighill_feature_materializer_db.outbox_messages(resource_key, created_at);
+
+CREATE TRIGGER outbox_messages_updated_at
+BEFORE UPDATE ON bighill_feature_materializer_db.outbox_messages
 FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();

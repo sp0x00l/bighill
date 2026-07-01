@@ -34,7 +34,7 @@ type RawSnapshotReader interface {
 }
 
 type EmbeddingSnapshotRepository interface {
-	SavePendingEmbeddingSnapshot(ctx context.Context, featureSnapshotID, idempotencyKey uuid.UUID) (*model.EmbeddingSnapshot, error)
+	SavePendingEmbeddingSnapshot(ctx context.Context, featureSnapshotID, idempotencyKey uuid.UUID, strategy model.EmbeddingStrategy) (*model.EmbeddingSnapshot, error)
 	MarkEmbeddingReady(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error
 	MarkEmbeddingFailed(ctx context.Context, embeddingSnapshotID uuid.UUID, reason string) error
 	ReadEmbeddingByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (*model.EmbeddingSnapshot, error)

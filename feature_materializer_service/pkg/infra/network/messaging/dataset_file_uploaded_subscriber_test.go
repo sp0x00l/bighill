@@ -46,15 +46,16 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetFileUploadedEvent{
-			DatasetId:       datasetID.String(),
-			UserId:          userID.String(),
-			StorageLocation: "s3://local-dev-bucket/raw/user/dataset/file.csv",
-			ContentType:     "text/csv",
-			FileExtension:   "csv",
-			TableNamespace:  "features",
-			TableName:       "movies",
-			TableFormat:     "PARQUET",
-			CatalogProvider: "LOCAL",
+			DatasetId:         datasetID.String(),
+			UserId:            userID.String(),
+			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
+			ContentType:       "text/csv",
+			FileExtension:     "csv",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -62,6 +63,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		Expect(uc.datasetFile.UserID).To(Equal(userID))
 		Expect(uc.datasetFile.TableNamespace).To(Equal("features"))
 		Expect(uc.datasetFile.TableName).To(Equal("movies"))
+		Expect(uc.datasetFile.ProcessingProfile).To(Equal(model.ProcessingProfileTextRAG))
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 
@@ -83,6 +85,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		Expect(uc.datasetFile.TableName).To(HavePrefix("dataset_"))
 		Expect(uc.datasetFile.TableFormat).To(Equal("PARQUET"))
 		Expect(uc.datasetFile.CatalogProvider).To(Equal("LOCAL"))
+		Expect(uc.datasetFile.ProcessingProfile).To(Equal(model.ProcessingProfileGenericParquet))
 	})
 
 	It("uses a deterministic idempotency key for the same dataset file", func() {

@@ -17,14 +17,16 @@ import (
 type MaterializationWorkflowStarter struct {
 	temporalClient client.Client
 	taskQueue      string
+	strategy       model.EmbeddingStrategy
 }
 
-func NewMaterializationWorkflowStarter(temporalClient client.Client, taskQueue string) *MaterializationWorkflowStarter {
+func NewMaterializationWorkflowStarter(temporalClient client.Client, taskQueue string, strategy model.EmbeddingStrategy) *MaterializationWorkflowStarter {
 	log.Trace("NewMaterializationWorkflowStarter")
 
 	return &MaterializationWorkflowStarter{
 		temporalClient: temporalClient,
 		taskQueue:      taskQueue,
+		strategy:       model.NormalizeEmbeddingStrategy(strategy),
 	}
 }
 
@@ -43,6 +45,7 @@ func (s *MaterializationWorkflowStarter) StartMaterializationWorkflow(ctx contex
 	}, usecase.MaterializeWorkflowName, usecase.MaterializeWorkflowInput{
 		DatasetFile:       *datasetFile,
 		RawIdempotencyKey: rawIdempotencyKey,
+		EmbeddingStrategy: s.strategy,
 	})
 	if err == nil {
 		return nil

@@ -1,2 +1,0 @@
-DROP TRIGGER IF EXISTS outbox_messages_updated_at ON bighill_feature_materializer_db.outbox_messages;
-DROP TABLE IF EXISTS bighill_feature_materializer_db.outbox_messages;
