@@ -46,6 +46,7 @@ type stubDatasetRepository struct {
 	updateProcessingErr       error
 
 	updateMaterializationDataset *model.Dataset
+	updateMaterializationState   model.ProcessingState
 	updateMaterializationResult  *model.Dataset
 	updateMaterializationErr     error
 
@@ -60,6 +61,8 @@ type stubDatasetEventPublisher struct {
 	deletedDatasetID uuid.UUID
 	deletedUserID    uuid.UUID
 	deletedErr       error
+	updatedDataset   *model.Dataset
+	updatedErr       error
 }
 
 func (s *stubDatasetEventPublisher) PublishDatasetCreated(_ context.Context, dataset *model.Dataset) error {
@@ -71,6 +74,11 @@ func (s *stubDatasetEventPublisher) PublishDatasetDeleted(_ context.Context, dat
 	s.deletedDatasetID = datasetID
 	s.deletedUserID = userID
 	return s.deletedErr
+}
+
+func (s *stubDatasetEventPublisher) PublishDatasetUpdated(_ context.Context, dataset *model.Dataset) error {
+	s.updatedDataset = dataset
+	return s.updatedErr
 }
 
 func (s *stubDatasetRepository) Close() {}
@@ -123,8 +131,9 @@ func (s *stubDatasetRepository) UpdateProcessingState(_ context.Context, dataset
 	return s.updateProcessingResult, s.updateProcessingErr
 }
 
-func (s *stubDatasetRepository) UpdateMaterializationMetadata(_ context.Context, dataset *model.Dataset) (*model.Dataset, error) {
+func (s *stubDatasetRepository) RecordMaterialization(_ context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error) {
 	s.updateMaterializationDataset = dataset
+	s.updateMaterializationState = state
 	return s.updateMaterializationResult, s.updateMaterializationErr
 }
 
@@ -232,6 +241,19 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.replaceDataset).To(Equal(replacement))
 	})
 
+	It("publishes a dataset-updated event after replace succeeds", func() {
+		publisher := &stubDatasetEventPublisher{}
+		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
+		replacement := &model.Dataset{ID: datasetID, UserID: userID, Title: "updated"}
+		repo.replaceResult = replacement
+
+		got, err := uc.ReplaceDataset(ctx, replacement)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(replacement))
+		Expect(publisher.updatedDataset).To(Equal(replacement))
+	})
+
 	It("advances dataset processing state through the repository", func() {
 		existing := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingPending}
 		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingRawMaterialized}
@@ -247,6 +269,20 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.updateProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
 	})
 
+	It("publishes a dataset-updated event after processing state advances", func() {
+		publisher := &stubDatasetEventPublisher{}
+		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
+		existing := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingPending}
+		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingRawMaterialized}
+		repo.readDataset = existing
+		repo.updateProcessingResult = updated
+
+		_, err := uc.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(publisher.updatedDataset).To(Equal(updated))
+	})
+
 	It("does not downgrade dataset processing state for late events", func() {
 		existing := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingEmbeddingsMaterialized}
 		repo.readDataset = existing
@@ -259,27 +295,51 @@ var _ = Describe("DatasetUsecase", func() {
 	})
 
 	It("records feature materialization metadata and advances processing state", func() {
-		existing := &model.Dataset{ID: datasetID, UserID: userID, Title: "movies", ProcessingState: model.DatasetProcessingRawMaterialized}
-		repo.readDataset = existing
-		repo.updateMaterializationResult = existing
+		updated := &model.Dataset{ID: datasetID, UserID: userID, Title: "movies", ProcessingState: model.DatasetProcessingFeatureMaterialized}
+		repo.updateMaterializationResult = updated
 		materialized := &model.Dataset{
-			ID:              datasetID,
-			UserID:          userID,
-			Location:        "s3://local-dev-bucket/lakehouse/features/data.parquet",
-			TableNamespace:  "features",
-			TableName:       "movies",
-			TableFormat:     model.Parquet,
-			CatalogProvider: model.LocalCatalog,
-			SchemaVersion:   2,
-			SchemaMetadata:  `{"columns":["title"]}`,
+			ID:                datasetID,
+			UserID:            userID,
+			Location:          "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       model.Parquet,
+			CatalogProvider:   model.LocalCatalog,
+			SchemaVersion:     2,
+			SchemaMetadata:    `{"columns":["title"]}`,
+			RawSnapshotID:     uuid.New(),
+			FeatureSnapshotID: uuid.New(),
 		}
 
-		_, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingFeatureMaterialized)
+		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingFeatureMaterialized)
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(updated))
+		Expect(repo.updateMaterializationState).To(Equal(model.DatasetProcessingFeatureMaterialized))
 		Expect(repo.updateMaterializationDataset.Location).To(Equal(materialized.Location))
 		Expect(repo.updateMaterializationDataset.TableNamespace).To(Equal("features"))
-		Expect(repo.updateMaterializationDataset.ProcessingState).To(Equal(model.DatasetProcessingFeatureMaterialized))
-		Expect(repo.updateMaterializationDataset.Title).To(Equal("movies"))
+		Expect(repo.updateMaterializationDataset.RawSnapshotID).To(Equal(materialized.RawSnapshotID))
+		Expect(repo.updateMaterializationDataset.FeatureSnapshotID).To(Equal(materialized.FeatureSnapshotID))
+	})
+
+	It("does not publish materialization updates outside the repository transaction", func() {
+		publisher := &stubDatasetEventPublisher{}
+		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
+		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingEmbeddingsMaterialized}
+		repo.updateMaterializationResult = updated
+
+		_, err := uc.RecordDatasetMaterialization(ctx, &model.Dataset{
+			ID:                  datasetID,
+			UserID:              userID,
+			EmbeddingSnapshotID: uuid.New(),
+			VectorStore:         "pgvector",
+			CollectionName:      "movies",
+			EmbeddingDimensions: 384,
+			EmbeddingCount:      2,
+		}, model.DatasetProcessingEmbeddingsMaterialized)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(publisher.updatedDataset).To(BeNil())
+		Expect(repo.updateMaterializationState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 	})
 })

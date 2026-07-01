@@ -76,6 +76,14 @@ func featureSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.Fea
 	if err != nil {
 		return nil, err
 	}
+	featureSnapshotID, err := msgConn.ParseUUID("feature_snapshot_id", payload.GetFeatureSnapshotId())
+	if err != nil {
+		return nil, err
+	}
+	rawSnapshotID, err := msgConn.ParseUUID("raw_snapshot_id", payload.GetRawSnapshotId())
+	if err != nil {
+		return nil, err
+	}
 	location := strings.TrimSpace(payload.GetStorageLocation())
 	if location == "" {
 		return nil, fmt.Errorf("storage location is required")
@@ -106,14 +114,16 @@ func featureSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.Fea
 	}
 
 	return &model.Dataset{
-		ID:              datasetID,
-		UserID:          userID,
-		Location:        location,
-		TableNamespace:  tableNamespace,
-		TableName:       tableName,
-		TableFormat:     tableFormat,
-		CatalogProvider: catalogProvider,
-		SchemaVersion:   schemaVersion,
-		SchemaMetadata:  schemaMetadata,
+		ID:                datasetID,
+		UserID:            userID,
+		Location:          location,
+		TableNamespace:    tableNamespace,
+		TableName:         tableName,
+		TableFormat:       tableFormat,
+		CatalogProvider:   catalogProvider,
+		SchemaVersion:     schemaVersion,
+		SchemaMetadata:    schemaMetadata,
+		RawSnapshotID:     rawSnapshotID,
+		FeatureSnapshotID: featureSnapshotID,
 	}, nil
 }

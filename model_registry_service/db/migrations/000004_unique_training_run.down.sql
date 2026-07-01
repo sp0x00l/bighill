@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS bighill_model_registry_db.index_models_training_run_id_unique;

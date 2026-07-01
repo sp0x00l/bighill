@@ -1,5 +1,8 @@
 DROP INDEX IF EXISTS index_user_id;
 DROP INDEX IF EXISTS index_dataset_table_ref;
+DROP INDEX IF EXISTS index_dataset_raw_snapshot_id;
+DROP INDEX IF EXISTS index_dataset_feature_snapshot_id;
+DROP INDEX IF EXISTS index_dataset_embedding_snapshot_id;
 DROP INDEX IF EXISTS index_dataset_id_connectors;
 DROP INDEX IF EXISTS index_dataset_id_metadata;
 

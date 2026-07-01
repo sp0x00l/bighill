@@ -1,0 +1,6 @@
+apiVersion: v2
+name: model-registry-service
+description: Bighill ML Ops model registry service
+type: application
+version: 0.1.0
+appVersion: "0.0.1"

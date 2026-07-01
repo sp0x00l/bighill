@@ -1,0 +1,20 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "model-registry-service.fullname" . }}-ingress
+  labels:
+    app: {{ include "model-registry-service.fullname" . }}
+spec:
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "model-registry-service.fullname" . }}
+                port:
+                  number: {{ .Values.service.healthPort }}
+{{- end }}

@@ -9,11 +9,15 @@ RUN addgroup -S training_service_server_group && \
 WORKDIR $GOPATH/src/shared_lib
 COPY ./shared_lib .
 
+WORKDIR $GOPATH/src/data_contracts/build/protobufs
+COPY ./data_contracts/build/protobufs .
+
 WORKDIR $GOPATH/src/training_service
 COPY ./training_service .
 
 RUN rm -f go.mod && go mod init training_service
 RUN go mod edit -replace lib/shared_lib=../shared_lib
+RUN go mod edit -replace lib/data_contracts_lib=../data_contracts/build/protobufs
 RUN go get -d -v
 
 RUN apk add --no-cache gcc musl-dev

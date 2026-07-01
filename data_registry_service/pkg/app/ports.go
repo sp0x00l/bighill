@@ -20,13 +20,14 @@ type DatasetRepositoryAdapter interface {
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	UpdatePublishedState(context.Context, uuid.UUID, uuid.UUID) error
 	UpdateProcessingState(context.Context, uuid.UUID, uuid.UUID, model.ProcessingState) (*model.Dataset, error)
-	UpdateMaterializationMetadata(context.Context, *model.Dataset) (*model.Dataset, error)
+	RecordMaterialization(context.Context, *model.Dataset, model.ProcessingState) (*model.Dataset, error)
 	Replace(context.Context, *model.Dataset) (*model.Dataset, error)
 }
 
 type DatasetEventPublisher interface {
 	PublishDatasetCreated(ctx context.Context, dataset *model.Dataset) error
 	PublishDatasetDeleted(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) error
+	PublishDatasetUpdated(ctx context.Context, dataset *model.Dataset) error
 }
 
 type SourceRepositoryAdapter interface {

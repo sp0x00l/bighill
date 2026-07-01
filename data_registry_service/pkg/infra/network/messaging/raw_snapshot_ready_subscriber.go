@@ -14,7 +14,7 @@ import (
 )
 
 type RawSnapshotReadyListener interface {
-	AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, error)
+	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error)
 }
 
 type rawSnapshotReadyEventListener struct {
@@ -47,36 +47,76 @@ func (l *rawSnapshotReadyEventListener) Handle(ctx context.Context, resourceKey 
 	if l.listener == nil {
 		return msgConn.NonRetryable(fmt.Errorf("raw snapshot ready listener is nil"))
 	}
-	datasetID, userID, err := rawSnapshotReadyToIDs(resourceKey, payload)
+	dataset, err := rawSnapshotReadyToDataset(resourceKey, payload)
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
-	_, err = l.listener.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
+	_, err = l.listener.RecordDatasetMaterialization(ctx, dataset, model.DatasetProcessingRawMaterialized)
 	return err
 }
 
-func rawSnapshotReadyToIDs(resourceKey uuid.UUID, payload *featurepb.RawSnapshotReadyEvent) (uuid.UUID, uuid.UUID, error) {
-	log.Trace("rawSnapshotReadyToIDs")
+func rawSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.RawSnapshotReadyEvent) (*model.Dataset, error) {
+	log.Trace("rawSnapshotReadyToDataset")
 
 	if resourceKey == uuid.Nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("resource key is required")
+		return nil, fmt.Errorf("resource key is required")
 	}
 	if payload == nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("raw snapshot ready payload is required")
+		return nil, fmt.Errorf("raw snapshot ready payload is required")
 	}
 	datasetID, err := msgConn.ParseUUID("dataset_id", payload.GetDatasetId())
 	if err != nil {
-		return uuid.Nil, uuid.Nil, err
+		return nil, err
 	}
 	if datasetID != resourceKey {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("dataset id %s does not match resource key %s", datasetID, resourceKey)
+		return nil, fmt.Errorf("dataset id %s does not match resource key %s", datasetID, resourceKey)
 	}
 	userID, err := msgConn.ParseUUID("user_id", payload.GetUserId())
 	if err != nil {
-		return uuid.Nil, uuid.Nil, err
+		return nil, err
 	}
-	if strings.TrimSpace(payload.GetStorageLocation()) == "" {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("storage location is required")
+	rawSnapshotID, err := msgConn.ParseUUID("raw_snapshot_id", payload.GetRawSnapshotId())
+	if err != nil {
+		return nil, err
 	}
-	return datasetID, userID, nil
+	location := strings.TrimSpace(payload.GetStorageLocation())
+	if location == "" {
+		return nil, fmt.Errorf("storage location is required")
+	}
+	tableNamespace := strings.TrimSpace(payload.GetTableNamespace())
+	if tableNamespace == "" {
+		return nil, fmt.Errorf("table namespace is required")
+	}
+	tableName := strings.TrimSpace(payload.GetTableName())
+	if tableName == "" {
+		return nil, fmt.Errorf("table name is required")
+	}
+	tableFormat, err := model.ToTableFormat(strings.TrimSpace(payload.GetTableFormat()))
+	if err != nil {
+		return nil, fmt.Errorf("table format is invalid: %w", err)
+	}
+	catalogProvider, err := model.ToCatalogProvider(strings.TrimSpace(payload.GetCatalogProvider()))
+	if err != nil {
+		return nil, fmt.Errorf("catalog provider is invalid: %w", err)
+	}
+	schemaVersion := int(payload.GetSchemaVersion())
+	if schemaVersion <= 0 {
+		schemaVersion = 1
+	}
+	schemaMetadata := strings.TrimSpace(payload.GetSchemaMetadata())
+	if schemaMetadata == "" {
+		schemaMetadata = "{}"
+	}
+	return &model.Dataset{
+		ID:              datasetID,
+		UserID:          userID,
+		Location:        location,
+		TableNamespace:  tableNamespace,
+		TableName:       tableName,
+		TableFormat:     tableFormat,
+		CatalogProvider: catalogProvider,
+		SchemaVersion:   schemaVersion,
+		SchemaMetadata:  schemaMetadata,
+		RawSnapshotID:   rawSnapshotID,
+	}, nil
 }

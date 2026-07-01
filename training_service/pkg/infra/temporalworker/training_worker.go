@@ -18,6 +18,8 @@ func NewTrainingWorker(temporalClient client.Client, taskQueue string, activitie
 	trainingWorker.RegisterActivityWithOptions(activities.PrepareTrainingDataset, activityRegisterOptions(app.PrepareTrainingDatasetActivity))
 	trainingWorker.RegisterActivityWithOptions(activities.RunTrainingJob, activityRegisterOptions(app.RunTrainingJobActivity))
 	trainingWorker.RegisterActivityWithOptions(activities.EvaluateTrainedModel, activityRegisterOptions(app.EvaluateTrainedModelActivity))
+	trainingWorker.RegisterActivityWithOptions(activities.PublishModelTrainingCompleted, activityRegisterOptions(app.PublishModelTrainingCompletedActivity))
+	trainingWorker.RegisterActivityWithOptions(activities.PublishModelTrainingFailed, activityRegisterOptions(app.PublishModelTrainingFailedActivity))
 	return trainingWorker
 }
 

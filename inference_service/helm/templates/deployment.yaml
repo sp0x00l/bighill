@@ -32,14 +32,82 @@ spec:
               value: {{ .Values.env.otelExporterEndpoint | quote }}
             - name: INFERENCE_SERVICE_NAME
               value: {{ .Values.env.serviceName | quote }}
+            - name: INFERENCE_DB_NAME
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.nameKey }}
+{{- else }}
+              value: {{ .Values.env.dbName | quote }}
+{{- end }}
+            - name: INFERENCE_DB_USER
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.userKey }}
+{{- else }}
+              value: {{ .Values.env.dbUser | quote }}
+{{- end }}
+            - name: INFERENCE_DB_PASSWORD
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.passwordKey }}
+{{- else }}
+              value: {{ .Values.env.dbPassword | quote }}
+{{- end }}
+            - name: INFERENCE_DB_MAX_CONNECTIONS
+              value: {{ .Values.env.dbMaxConnections | quote }}
+            - name: PGHOST
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.hostKey }}
+{{- else }}
+              value: {{ .Values.env.pgHost | quote }}
+{{- end }}
+            - name: PGPORT
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.portKey }}
+{{- else }}
+              value: {{ .Values.env.pgPort | quote }}
+{{- end }}
+            - name: PGSSLMODE
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.sslmodeKey }}
+{{- else }}
+              value: {{ .Values.env.pgSslMode | quote }}
+{{- end }}
+            - name: KAFKA_BROKER
+              value: {{ .Values.env.kafkaBroker | quote }}
+            - name: INFERENCE_SERVICE_KAFKA_GROUP_ID
+              value: {{ .Values.env.kafkaGroupId | quote }}
+            - name: INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.modelRegistrySubscriberTopic | quote }}
+            - name: INFERENCE_SERVICE_DLQ
+              value: {{ .Values.env.dlq | quote }}
             - name: INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: INFERENCE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
             - name: INFERENCE_HEALTHCHECK_PORT
               value: {{ .Values.service.healthPort | quote }}
+            - name: INFERENCE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
             - name: INFERENCE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
+            - name: INFERENCE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
           resources:
             requests:
               memory: {{ .Values.resources.requests.memory | quote }}

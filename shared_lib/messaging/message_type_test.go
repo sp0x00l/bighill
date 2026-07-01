@@ -15,6 +15,10 @@ func TestMsgTypeOrdinalsMatchMLContract(t *testing.T) {
 		MsgTypeEmbeddingSnapshotReady:     10,
 		MsgTypeDatasetCreated:             11,
 		MsgTypeDatasetDeleted:             12,
+		MsgTypeDatasetUpdated:             13,
+		MsgTypeModelTrainingCompleted:     14,
+		MsgTypeModelTrainingFailed:        15,
+		MsgTypeModelUpdated:               16,
 	}
 
 	for msgType, ordinal := range expect {
@@ -36,6 +40,10 @@ func TestMsgTypeStringMappingsRoundTrip(t *testing.T) {
 		MsgTypeEmbeddingSnapshotReady,
 		MsgTypeDatasetCreated,
 		MsgTypeDatasetDeleted,
+		MsgTypeDatasetUpdated,
+		MsgTypeModelTrainingCompleted,
+		MsgTypeModelTrainingFailed,
+		MsgTypeModelUpdated,
 	} {
 		if msgType.String() == "" {
 			t.Fatalf("missing string mapping for msg type ordinal %d", msgType)

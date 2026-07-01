@@ -83,7 +83,7 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, dataset
 	rawSnapshot, err := scanRawSnapshot(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, r.rawSnapshotAlreadyMaterializedByIdempotencyKey(ctx, idempotencyKey)
+			return r.resolveRawSnapshotIdempotencyConflict(ctx, idempotencyKey)
 		}
 		r.LogPoolStatsOnError(ctx, "insert raw snapshot failed", err)
 		return nil, fmt.Errorf("insert raw snapshot: %w", err)
@@ -250,7 +250,7 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, raw
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, r.featureSnapshotAlreadyBuiltByIdempotencyKey(ctx, idempotencyKey)
+			return r.resolveFeatureSnapshotIdempotencyConflict(ctx, idempotencyKey)
 		}
 		r.LogPoolStatsOnError(ctx, "insert feature snapshot failed", err)
 		return nil, fmt.Errorf("insert feature snapshot: %w", err)
@@ -411,7 +411,7 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, f
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, r.embeddingsAlreadyMaterializedByIdempotencyKey(ctx, idempotencyKey)
+			return r.resolveEmbeddingSnapshotIdempotencyConflict(ctx, idempotencyKey)
 		}
 		r.LogPoolStatsOnError(ctx, "insert embedding snapshot failed", err)
 		return nil, fmt.Errorf("insert embedding snapshot: %w", err)
@@ -567,28 +567,115 @@ func (r *SnapshotRepository) ReadEmbeddingByIdempotencyKey(ctx context.Context, 
 	return embeddingSnapshot, nil
 }
 
-func (r *SnapshotRepository) rawSnapshotAlreadyMaterializedByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) error {
+func (r *SnapshotRepository) resolveRawSnapshotIdempotencyConflict(ctx context.Context, idempotencyKey uuid.UUID) (*model.RawSnapshot, error) {
+	log.Trace("SnapshotRepository resolveRawSnapshotIdempotencyConflict")
+
 	existing, err := r.ReadRawByIdempotencyKey(ctx, idempotencyKey)
 	if err != nil {
-		return fmt.Errorf("raw snapshot already materialized but lookup failed: idempotency_key=%s: %w", idempotencyKey, err)
+		return nil, fmt.Errorf("raw snapshot idempotency conflict lookup failed: idempotency_key=%s: %w", idempotencyKey, err)
 	}
-	return &domain.RawSnapshotAlreadyMaterializedError{Record: existing}
+	switch existing.Status {
+	case model.SnapshotStatusReady:
+		return nil, &domain.RawSnapshotAlreadyMaterializedError{Record: existing}
+	case model.SnapshotStatusFailed:
+		return r.reopenRawSnapshotForRetry(ctx, existing.RawSnapshotID)
+	case model.SnapshotStatusPending:
+		return nil, fmt.Errorf("%w: raw_snapshot_id=%s", domain.ErrRawSnapshotInProgress, existing.RawSnapshotID)
+	default:
+		return nil, fmt.Errorf("unsupported raw snapshot status %s", existing.Status.String())
+	}
 }
 
-func (r *SnapshotRepository) featureSnapshotAlreadyBuiltByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) error {
+func (r *SnapshotRepository) resolveFeatureSnapshotIdempotencyConflict(ctx context.Context, idempotencyKey uuid.UUID) (*model.FeatureSnapshot, error) {
+	log.Trace("SnapshotRepository resolveFeatureSnapshotIdempotencyConflict")
+
 	existing, err := r.ReadFeatureByIdempotencyKey(ctx, idempotencyKey)
 	if err != nil {
-		return fmt.Errorf("feature snapshot already built but lookup failed: idempotency_key=%s: %w", idempotencyKey, err)
+		return nil, fmt.Errorf("feature snapshot idempotency conflict lookup failed: idempotency_key=%s: %w", idempotencyKey, err)
 	}
-	return &domain.FeatureSnapshotAlreadyBuiltError{Record: existing}
+	switch existing.Status {
+	case model.SnapshotStatusReady:
+		return nil, &domain.FeatureSnapshotAlreadyBuiltError{Record: existing}
+	case model.SnapshotStatusFailed:
+		return r.reopenFeatureSnapshotForRetry(ctx, existing.FeatureSnapshotID)
+	case model.SnapshotStatusPending:
+		return nil, fmt.Errorf("%w: feature_snapshot_id=%s", domain.ErrFeatureSnapshotInProgress, existing.FeatureSnapshotID)
+	default:
+		return nil, fmt.Errorf("unsupported feature snapshot status %s", existing.Status.String())
+	}
 }
 
-func (r *SnapshotRepository) embeddingsAlreadyMaterializedByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) error {
+func (r *SnapshotRepository) resolveEmbeddingSnapshotIdempotencyConflict(ctx context.Context, idempotencyKey uuid.UUID) (*model.EmbeddingSnapshot, error) {
+	log.Trace("SnapshotRepository resolveEmbeddingSnapshotIdempotencyConflict")
+
 	existing, err := r.ReadEmbeddingByIdempotencyKey(ctx, idempotencyKey)
 	if err != nil {
-		return fmt.Errorf("embeddings already materialized but lookup failed: idempotency_key=%s: %w", idempotencyKey, err)
+		return nil, fmt.Errorf("embedding snapshot idempotency conflict lookup failed: idempotency_key=%s: %w", idempotencyKey, err)
 	}
-	return &domain.EmbeddingsAlreadyMaterializedError{Record: existing}
+	switch existing.Status {
+	case model.SnapshotStatusReady:
+		return nil, &domain.EmbeddingsAlreadyMaterializedError{Record: existing}
+	case model.SnapshotStatusFailed:
+		return r.reopenEmbeddingSnapshotForRetry(ctx, existing.EmbeddingSnapshotID)
+	case model.SnapshotStatusPending:
+		return nil, fmt.Errorf("%w: embedding_snapshot_id=%s", domain.ErrEmbeddingSnapshotInProgress, existing.EmbeddingSnapshotID)
+	default:
+		return nil, fmt.Errorf("unsupported embedding snapshot status %s", existing.Status.String())
+	}
+}
+
+func (r *SnapshotRepository) reopenRawSnapshotForRetry(ctx context.Context, rawSnapshotID uuid.UUID) (*model.RawSnapshot, error) {
+	log.Trace("SnapshotRepository reopenRawSnapshotForRetry")
+
+	query := `UPDATE ` + r.Name + `.raw_snapshots
+		SET status = @status, failure_reason = NULL
+		WHERE raw_snapshot_id = @raw_snapshot_id
+		RETURNING ` + rawSnapshotColumns()
+	rawSnapshot, err := scanRawSnapshot(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
+		"raw_snapshot_id": pgtype.UUID{Bytes: rawSnapshotID, Valid: true},
+		"status":          model.SnapshotStatusPending.String(),
+	}))
+	if err != nil {
+		r.LogPoolStatsOnError(ctx, "reopen raw snapshot for retry failed", err)
+		return nil, fmt.Errorf("reopen raw snapshot for retry: %w", err)
+	}
+	return rawSnapshot, nil
+}
+
+func (r *SnapshotRepository) reopenFeatureSnapshotForRetry(ctx context.Context, featureSnapshotID uuid.UUID) (*model.FeatureSnapshot, error) {
+	log.Trace("SnapshotRepository reopenFeatureSnapshotForRetry")
+
+	query := `UPDATE ` + r.Name + `.feature_snapshots
+		SET status = @status, failure_reason = NULL
+		WHERE feature_snapshot_id = @feature_snapshot_id
+		RETURNING ` + featureSnapshotColumns()
+	featureSnapshot, err := scanFeatureSnapshot(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
+		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshotID, Valid: true},
+		"status":              model.SnapshotStatusPending.String(),
+	}))
+	if err != nil {
+		r.LogPoolStatsOnError(ctx, "reopen feature snapshot for retry failed", err)
+		return nil, fmt.Errorf("reopen feature snapshot for retry: %w", err)
+	}
+	return featureSnapshot, nil
+}
+
+func (r *SnapshotRepository) reopenEmbeddingSnapshotForRetry(ctx context.Context, embeddingSnapshotID uuid.UUID) (*model.EmbeddingSnapshot, error) {
+	log.Trace("SnapshotRepository reopenEmbeddingSnapshotForRetry")
+
+	query := `UPDATE ` + r.Name + `.embedding_snapshots
+		SET status = @status, failure_reason = NULL
+		WHERE embedding_snapshot_id = @embedding_snapshot_id
+		RETURNING ` + embeddingSnapshotColumns()
+	embeddingSnapshot, err := scanEmbeddingSnapshot(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
+		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshotID, Valid: true},
+		"status":                model.SnapshotStatusPending.String(),
+	}))
+	if err != nil {
+		r.LogPoolStatsOnError(ctx, "reopen embedding snapshot for retry failed", err)
+		return nil, fmt.Errorf("reopen embedding snapshot for retry: %w", err)
+	}
+	return embeddingSnapshot, nil
 }
 
 func rawSnapshotColumns() string {

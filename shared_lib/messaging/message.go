@@ -25,6 +25,10 @@ const (
 	MsgTypeEmbeddingSnapshotReady
 	MsgTypeDatasetCreated
 	MsgTypeDatasetDeleted
+	MsgTypeDatasetUpdated
+	MsgTypeModelTrainingCompleted
+	MsgTypeModelTrainingFailed
+	MsgTypeModelUpdated
 )
 
 var msgType = map[MsgType]string{
@@ -38,6 +42,10 @@ var msgType = map[MsgType]string{
 	MsgTypeEmbeddingSnapshotReady:     "embedding_snapshot_ready",
 	MsgTypeDatasetCreated:             "dataset_created",
 	MsgTypeDatasetDeleted:             "dataset_deleted",
+	MsgTypeDatasetUpdated:             "dataset_updated",
+	MsgTypeModelTrainingCompleted:     "model_training_completed",
+	MsgTypeModelTrainingFailed:        "model_training_failed",
+	MsgTypeModelUpdated:               "model_updated",
 }
 
 func (m MsgType) String() string {

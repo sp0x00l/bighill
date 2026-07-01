@@ -6,7 +6,9 @@ import (
 	"data_registry_service/pkg/domain/model"
 	"errors"
 	"fmt"
+	datasetpb "lib/data_contracts_lib/dataset"
 	coreDB "lib/shared_lib/db"
+	msgConn "lib/shared_lib/messaging"
 	core "lib/shared_lib/transport"
 	"strings"
 
@@ -16,18 +18,38 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
 )
 
 type datasetDB struct {
 	coreDB.Database
+	outbox msgConn.OrderedOutbox
+	topic  string
 }
 
-func NewDatasetDB(db *coreDB.Database) *datasetDB {
+type DatasetDBOption func(*datasetDB)
+
+func WithTransactionalOutbox(outbox msgConn.OrderedOutbox, topic string) DatasetDBOption {
+	log.Trace("WithTransactionalOutbox")
+
+	return func(db *datasetDB) {
+		db.outbox = outbox
+		db.topic = topic
+	}
+}
+
+func NewDatasetDB(db *coreDB.Database, opts ...DatasetDBOption) *datasetDB {
 	log.Trace("NewDatasetDB")
 
-	return &datasetDB{
-		*db,
+	datasetDB := &datasetDB{
+		Database: *db,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(datasetDB)
+		}
+	}
+	return datasetDB
 }
 
 func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) error {
@@ -134,10 +156,13 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 	var sqlStatement = `UPDATE ` + db.Name + `.datasets SET title = @title, 
 		description = @description, origin = @origin, location = @location, category = @category,
 		table_namespace = @table_namespace, table_name = @table_name, table_format = @table_format,
-		catalog_provider = @catalog_provider, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb
+		catalog_provider = @catalog_provider, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb,
+		dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
 		RETURNING title, description, origin, location, status, category,
-		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text;`
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text,
+		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
+		embedding_dimensions, embedding_count;`
 	row := db.Pool.QueryRow(ctx, sqlStatement, datasetDAO)
 
 	updatedDataset := DatasetDAO{
@@ -157,7 +182,15 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		&updatedDataset.CatalogProvider,
 		&updatedDataset.SchemaVersion,
 		&updatedDataset.SchemaMetadata,
-		&updatedDataset.ProcessingState); err {
+		&updatedDataset.ProcessingState,
+		&updatedDataset.DatasetVersion,
+		&updatedDataset.RawSnapshotID,
+		&updatedDataset.FeatureSnapshotID,
+		&updatedDataset.EmbeddingSnapshotID,
+		&updatedDataset.VectorStore,
+		&updatedDataset.CollectionName,
+		&updatedDataset.EmbeddingDimensions,
+		&updatedDataset.EmbeddingCount); err {
 	case pgx.ErrNoRows:
 		log.WithContext(ctx).Warnf("No dataset found in database for ID: %s", dataset.ID.String())
 		return nil, domainErrors.ErrResourceNotFound
@@ -189,10 +222,13 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.U
 	log.Trace("DatasetDB UpdateProcessingState")
 
 	query := `UPDATE ` + db.Name + `.datasets
-		SET processing_state = @processing_state
+		SET processing_state = @processing_state,
+			dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
 		RETURNING id, user_id, title, description, origin, location, status, category,
-		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text;`
+		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text,
+		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
+		embedding_dimensions, embedding_count;`
 
 	return db.scanRow(ctx, db.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"id":               datasetID,
@@ -201,25 +237,105 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.U
 	}))
 }
 
-func (db *datasetDB) UpdateMaterializationMetadata(ctx context.Context, dataset *model.Dataset) (*model.Dataset, error) {
-	log.Trace("DatasetDB UpdateMaterializationMetadata")
+func (db *datasetDB) RecordMaterialization(ctx context.Context, materialized *model.Dataset, state model.ProcessingState) (*model.Dataset, error) {
+	log.Trace("DatasetDB RecordMaterialization")
 
-	datasetModel := Dataset{}
-	datasetDAO := datasetModel.toDAO(dataset)
-	query := `UPDATE ` + db.Name + `.datasets
-		SET location = @location,
-			table_namespace = @table_namespace,
-			table_name = @table_name,
-			table_format = @table_format,
-			catalog_provider = @catalog_provider,
-			schema_version = @schema_version,
-			schema_metadata = @schema_metadata::jsonb,
-			processing_state = @processing_state
-		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
-		RETURNING id, user_id, title, description, origin, location, status, category,
-		table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text;`
+	tx, err := db.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		db.LogPoolStatsOnError(ctx, "begin dataset materialization transaction failed", err)
+		return nil, fmt.Errorf("begin dataset materialization transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
 
-	return db.scanRow(ctx, db.Pool.QueryRow(ctx, query, datasetDAO))
+	updated, changed, err := db.recordMaterializationTx(ctx, tx, materialized, state)
+	if err != nil {
+		return nil, err
+	}
+	if changed && db.outbox != nil {
+		if err := db.outbox.EnqueueTx(ctx, tx, datasetUpdatedMessage(db.topic, updated)); err != nil {
+			return nil, fmt.Errorf("enqueue dataset updated: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit dataset materialization transaction: %w", err)
+	}
+	return updated, nil
+}
+
+func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, materialized *model.Dataset, state model.ProcessingState) (*model.Dataset, bool, error) {
+	log.Trace("DatasetDB recordMaterializationTx")
+
+	datasetDAO := (&Dataset{}).toDAO(materialized)
+	datasetDAO["processing_state"] = pgtype.Text{String: state.String(), Valid: true}
+
+	requestedRank := processingStateRankSQL("@processing_state")
+	currentRank := processingStateRankSQL("d.processing_state")
+	query := `UPDATE ` + db.Name + `.datasets d
+		SET location = COALESCE(NULLIF(@location, ''), d.location),
+			table_namespace = COALESCE(NULLIF(@table_namespace, ''), d.table_namespace),
+			table_name = COALESCE(NULLIF(@table_name, ''), d.table_name),
+			table_format = COALESCE(NULLIF(@table_format, '')::table_format_enum, d.table_format),
+			catalog_provider = COALESCE(NULLIF(@catalog_provider, '')::catalog_provider_enum, d.catalog_provider),
+			schema_version = CASE WHEN @schema_version > 0 THEN @schema_version ELSE d.schema_version END,
+			schema_metadata = COALESCE(NULLIF(@schema_metadata, '')::jsonb, d.schema_metadata),
+			processing_state = CASE
+				WHEN ` + requestedRank + ` > ` + currentRank + ` THEN @processing_state::dataset_processing_state_enum
+				ELSE d.processing_state
+			END,
+			dataset_version = d.dataset_version + 1,
+			raw_snapshot_id = COALESCE(@raw_snapshot_id, d.raw_snapshot_id),
+			feature_snapshot_id = COALESCE(@feature_snapshot_id, d.feature_snapshot_id),
+			embedding_snapshot_id = COALESCE(@embedding_snapshot_id, d.embedding_snapshot_id),
+			vector_store = COALESCE(NULLIF(@vector_store, ''), d.vector_store),
+			collection_name = COALESCE(NULLIF(@collection_name, ''), d.collection_name),
+			embedding_dimensions = CASE WHEN @embedding_dimensions > 0 THEN @embedding_dimensions ELSE d.embedding_dimensions END,
+			embedding_count = CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END
+		WHERE d.id = @id
+			AND d.user_id = @user_id
+			AND d.status != '` + model.Blacklisted.String() + `'
+			AND d.deleted = false
+			AND (
+				` + requestedRank + ` > ` + currentRank + `
+				OR d.location IS DISTINCT FROM COALESCE(NULLIF(@location, ''), d.location)
+				OR d.table_namespace IS DISTINCT FROM COALESCE(NULLIF(@table_namespace, ''), d.table_namespace)
+				OR d.table_name IS DISTINCT FROM COALESCE(NULLIF(@table_name, ''), d.table_name)
+				OR d.table_format IS DISTINCT FROM COALESCE(NULLIF(@table_format, '')::table_format_enum, d.table_format)
+				OR d.catalog_provider IS DISTINCT FROM COALESCE(NULLIF(@catalog_provider, '')::catalog_provider_enum, d.catalog_provider)
+				OR d.schema_version IS DISTINCT FROM CASE WHEN @schema_version > 0 THEN @schema_version ELSE d.schema_version END
+				OR d.schema_metadata IS DISTINCT FROM COALESCE(NULLIF(@schema_metadata, '')::jsonb, d.schema_metadata)
+				OR d.raw_snapshot_id IS DISTINCT FROM COALESCE(@raw_snapshot_id, d.raw_snapshot_id)
+				OR d.feature_snapshot_id IS DISTINCT FROM COALESCE(@feature_snapshot_id, d.feature_snapshot_id)
+				OR d.embedding_snapshot_id IS DISTINCT FROM COALESCE(@embedding_snapshot_id, d.embedding_snapshot_id)
+				OR d.vector_store IS DISTINCT FROM COALESCE(NULLIF(@vector_store, ''), d.vector_store)
+				OR d.collection_name IS DISTINCT FROM COALESCE(NULLIF(@collection_name, ''), d.collection_name)
+				OR d.embedding_dimensions IS DISTINCT FROM CASE WHEN @embedding_dimensions > 0 THEN @embedding_dimensions ELSE d.embedding_dimensions END
+				OR d.embedding_count IS DISTINCT FROM CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END
+			)
+		RETURNING d.id, d.user_id, d.title, d.description, d.origin, d.location, d.status, d.category,
+			d.table_namespace, d.table_name, d.table_format, d.catalog_provider, d.schema_version, d.schema_metadata::text, d.processing_state::text,
+			d.dataset_version, d.raw_snapshot_id, d.feature_snapshot_id, d.embedding_snapshot_id, d.vector_store, d.collection_name,
+			d.embedding_dimensions, d.embedding_count`
+
+	updated, err := db.scanRow(ctx, tx.QueryRow(ctx, query, datasetDAO))
+	if err == nil {
+		return updated, true, nil
+	}
+	if !errors.Is(err, domainErrors.ErrResourceNotFound) {
+		return nil, false, err
+	}
+	current, err := db.readMaterializationDatasetTx(ctx, tx, materialized.ID, materialized.UserID)
+	if err != nil {
+		return nil, false, err
+	}
+	return current, false, nil
+}
+
+func (db *datasetDB) readMaterializationDatasetTx(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, userID uuid.UUID) (*model.Dataset, error) {
+	log.Trace("DatasetDB readMaterializationDatasetTx")
+
+	whereClause := "id = @id AND user_id = @user_id AND status != '" + model.Blacklisted.String() + "' AND deleted = false"
+	query := db.getSelectSQL(whereClause)
+	return db.scanRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{"user_id": userID, "id": datasetID}))
 }
 
 func (db *datasetDB) UpdatePublishedState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) error {
@@ -325,7 +441,9 @@ func (db *datasetDB) getPaginatedSelectSQL(filter string, pagination core.Pagina
 
 func (db *datasetDB) getSelectSQL(filter string) string {
 	return fmt.Sprintf(`SELECT id, user_id, title, description, origin, location, status, category,
-	table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text
+	table_namespace, table_name, table_format, catalog_provider, schema_version, schema_metadata::text, processing_state::text,
+	dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
+	embedding_dimensions, embedding_count
 	FROM %s.datasets WHERE %s;`, db.Name, filter)
 }
 
@@ -351,6 +469,14 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 			&dataset.SchemaVersion,
 			&dataset.SchemaMetadata,
 			&dataset.ProcessingState,
+			&dataset.DatasetVersion,
+			&dataset.RawSnapshotID,
+			&dataset.FeatureSnapshotID,
+			&dataset.EmbeddingSnapshotID,
+			&dataset.VectorStore,
+			&dataset.CollectionName,
+			&dataset.EmbeddingDimensions,
+			&dataset.EmbeddingCount,
 		)
 		if err != nil {
 			log.WithContext(ctx).WithError(err).Error("Failed to read datasets")
@@ -373,7 +499,9 @@ func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, 
 	var dataset DatasetDAO
 	err := row.Scan(&dataset.ID, &dataset.UserID, &dataset.Title, &dataset.Description, &dataset.Origin,
 		&dataset.Location, &dataset.Status, &dataset.Category, &dataset.TableNamespace, &dataset.TableName,
-		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.SchemaVersion, &dataset.SchemaMetadata, &dataset.ProcessingState)
+		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.SchemaVersion, &dataset.SchemaMetadata, &dataset.ProcessingState,
+		&dataset.DatasetVersion, &dataset.RawSnapshotID, &dataset.FeatureSnapshotID, &dataset.EmbeddingSnapshotID,
+		&dataset.VectorStore, &dataset.CollectionName, &dataset.EmbeddingDimensions, &dataset.EmbeddingCount)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domainErrors.ErrResourceNotFound
@@ -388,4 +516,70 @@ func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, 
 		return nil, err
 	}
 	return datasetModel, nil
+}
+
+func processingStateRankSQL(expression string) string {
+	log.Trace("processingStateRankSQL")
+
+	return `(CASE ` + expression + `::text
+		WHEN 'PENDING' THEN 0
+		WHEN 'RAW_MATERIALIZED' THEN 1
+		WHEN 'FEATURE_MATERIALIZED' THEN 2
+		WHEN 'EMBEDDINGS_MATERIALIZED' THEN 3
+		WHEN 'FAILED' THEN 4
+		ELSE -1
+	END)`
+}
+
+func datasetUpdatedMessage(topic string, dataset *model.Dataset) msgConn.OutboundMessage {
+	log.Trace("datasetUpdatedMessage")
+
+	payload := mustMarshalDataset(&datasetpb.DatasetUpdatedEvent{
+		DatasetId:           dataset.ID.String(),
+		UserId:              dataset.UserID.String(),
+		DatasetVersion:      int32(dataset.DatasetVersion),
+		ProcessingState:     dataset.ProcessingState.String(),
+		StorageLocation:     dataset.Location,
+		TableNamespace:      dataset.TableNamespace,
+		TableName:           dataset.TableName,
+		TableFormat:         dataset.TableFormat.String(),
+		CatalogProvider:     dataset.CatalogProvider.String(),
+		SchemaVersion:       int32(dataset.SchemaVersion),
+		SchemaMetadata:      dataset.SchemaMetadata,
+		RawSnapshotId:       uuidToString(dataset.RawSnapshotID),
+		FeatureSnapshotId:   uuidToString(dataset.FeatureSnapshotID),
+		EmbeddingSnapshotId: uuidToString(dataset.EmbeddingSnapshotID),
+		VectorStore:         dataset.VectorStore,
+		CollectionName:      dataset.CollectionName,
+		EmbeddingDimensions: int32(dataset.EmbeddingDimensions),
+		EmbeddingCount:      dataset.EmbeddingCount,
+	})
+	return msgConn.OutboundMessage{
+		Topic: topic,
+		Message: msgConn.Message{
+			ResourceKey: dataset.ID,
+			MsgType:     msgConn.MsgTypeDatasetUpdated,
+			Payload:     payload,
+		},
+		DispatchKey: fmt.Sprintf("dataset_updated:%s:%d", dataset.ID, dataset.DatasetVersion),
+	}
+}
+
+func uuidToString(id uuid.UUID) string {
+	log.Trace("uuidToString")
+
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
+}
+
+func mustMarshalDataset(payload proto.Message) []byte {
+	log.Trace("mustMarshalDataset")
+
+	out, err := proto.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }

@@ -20,6 +20,14 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
     catalog_provider catalog_provider_enum NOT NULL DEFAULT 'LOCAL',
     schema_version INTEGER NOT NULL DEFAULT 1,
     schema_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    dataset_version INTEGER NOT NULL DEFAULT 1,
+    raw_snapshot_id uuid,
+    feature_snapshot_id uuid,
+    embedding_snapshot_id uuid,
+    vector_store TEXT NOT NULL DEFAULT '',
+    collection_name TEXT NOT NULL DEFAULT '',
+    embedding_dimensions INTEGER NOT NULL DEFAULT 0,
+    embedding_count BIGINT NOT NULL DEFAULT 0,
     published_at TIMESTAMP WITHOUT TIME ZONE, 
     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT LOCALTIMESTAMP,
     updated_at TIMESTAMP WITHOUT TIME ZONE,
@@ -55,6 +63,9 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.metadata(
 
 CREATE INDEX index_user_id ON bighill_data_registry_db.datasets(user_id);
 CREATE INDEX index_dataset_table_ref ON bighill_data_registry_db.datasets(catalog_provider, table_namespace, table_name);
+CREATE INDEX index_dataset_raw_snapshot_id ON bighill_data_registry_db.datasets(raw_snapshot_id);
+CREATE INDEX index_dataset_feature_snapshot_id ON bighill_data_registry_db.datasets(feature_snapshot_id);
+CREATE INDEX index_dataset_embedding_snapshot_id ON bighill_data_registry_db.datasets(embedding_snapshot_id);
 CREATE INDEX index_dataset_id_connectors ON bighill_data_registry_db.connectors(user_id);
 CREATE INDEX index_dataset_id_metadata ON bighill_data_registry_db.metadata(dataset_id);
 

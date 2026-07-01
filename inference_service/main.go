@@ -2,18 +2,26 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"inference_service/pkg/app"
+	inferencemessaging "inference_service/pkg/infra/network/messaging"
+	inferencedb "inference_service/pkg/infra/repo/db"
 
+	coreDB "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
+	messagingConn "lib/shared_lib/messaging"
 	trace "lib/shared_lib/trace"
 
 	log "github.com/sirupsen/logrus"
@@ -22,15 +30,23 @@ import (
 var Version string
 
 type inferenceConfig struct {
-	ServiceName string
-	Health      healthConfig
+	ServiceName        string
+	DBName             string
+	DBConnectionString string
+	Messaging          messagingConn.MessengerConfig
+	Topics             inferencemessaging.InferenceTopics
+	Health             healthConfig
 }
 
 type healthConfig struct {
-	CpuThresholdPercentage  int
-	MemFreeThresholdPercent int
-	HealthCheckPort         int
-	ServiceLatencyThreshold time.Duration
+	CpuThresholdPercentage        int
+	MemFreeThresholdPercent       int
+	HealthCheckPort               int
+	DBConnectionString            string
+	MessageBrokerConnectionString string
+	DbLatencyThreshold            time.Duration
+	MessageBrokerLatencyThreshold time.Duration
+	ServiceLatencyThreshold       time.Duration
 }
 
 func init() {
@@ -49,10 +65,27 @@ func main() {
 	traceShutdown := trace.Init(cancelCtx, serviceName, Version)
 	defer traceShutdown()
 
-	_ = app.NewInferenceUsecase()
+	database, err := coreDB.InitDatabase(cancelCtx, cfg.DBName, cfg.DBConnectionString, log.StandardLogger())
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("database init failed")
+	}
+	defer database.Close()
+
+	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
+	defer func() {
+		_ = messagingFactory.Close(cancelCtx)
+	}()
+	subscriber, err := messagingFactory.Subscriber(cancelCtx)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
+	}
+
+	modelRepository := inferencedb.NewInferenceModelRepository(database)
+	inferenceUsecase := app.NewInferenceUsecase(modelRepository)
+	modelUpdatedSubscriber := inferencemessaging.NewModelUpdatedSubscriber(subscriber, inferenceUsecase, cfg.Topics)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
-	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck()
+	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -66,6 +99,13 @@ func main() {
 		}
 	}()
 
+	go func() {
+		if err := modelUpdatedSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(err).Error("model updated subscriber stopped unexpectedly")
+			quit <- syscall.SIGTERM
+		}
+	}()
+
 	<-quit
 
 	cancelFtn()
@@ -74,13 +114,38 @@ func main() {
 }
 
 func readInferenceConfig() inferenceConfig {
+	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
+	dbName := env.WithDefaultString("INFERENCE_DB_NAME", "bighill_inference_db")
+	dbConnectionString := postgresConnectionString(
+		env.WithDefaultString("INFERENCE_DB_USER", "bighill_inference_db_user"),
+		env.WithDefaultString("INFERENCE_DB_PASSWORD", ""),
+		env.WithDefaultString("PGHOST", "127.0.0.1"),
+		env.WithDefaultString("PGPORT", "5432"),
+		dbName,
+		env.WithDefaultString("PGSSLMODE", "disable"),
+		env.WithDefaultInt("INFERENCE_DB_MAX_CONNECTIONS", "20"),
+	)
 	return inferenceConfig{
-		ServiceName: env.WithDefaultString("INFERENCE_SERVICE_NAME", "inference-service"),
+		ServiceName:        env.WithDefaultString("INFERENCE_SERVICE_NAME", "inference-service"),
+		DBName:             dbName,
+		DBConnectionString: dbConnectionString,
+		Messaging: messagingConn.MessengerConfig{
+			DlqURL:  env.WithDefaultString("INFERENCE_SERVICE_DLQ", "http://localhost:4566/inference-dev-env-queue/"),
+			GroupID: env.WithDefaultString("INFERENCE_SERVICE_KAFKA_GROUP_ID", "inference-group"),
+			Brokers: brokers,
+		},
+		Topics: inferencemessaging.InferenceTopics{
+			ModelRegistry: env.WithDefaultString("INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry"),
+		},
 		Health: healthConfig{
-			CpuThresholdPercentage:  env.WithDefaultInt("INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercent: env.WithDefaultInt("INFERENCE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:         env.WithDefaultInt("INFERENCE_HEALTHCHECK_PORT", "5059"),
-			ServiceLatencyThreshold: secondsFromEnv("INFERENCE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			CpuThresholdPercentage:        env.WithDefaultInt("INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercent:       env.WithDefaultInt("INFERENCE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:               env.WithDefaultInt("INFERENCE_HEALTHCHECK_PORT", "5059"),
+			DBConnectionString:            dbConnectionString,
+			MessageBrokerConnectionString: brokers,
+			DbLatencyThreshold:            secondsFromEnv("INFERENCE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold: secondsFromEnv("INFERENCE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:       secondsFromEnv("INFERENCE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
 	}
 }
@@ -90,10 +155,10 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 		CpuThresholdPercentage:                       cfg.CpuThresholdPercentage,
 		MemFreeThresholdPercentage:                   cfg.MemFreeThresholdPercent,
 		HealthCheckPort:                              cfg.HealthCheckPort,
-		DBConnectionString:                           "",
-		MessageBrokerConnectionString:                "",
-		DbLatencyThresholdSec:                        0,
-		MessageBrokerLatencyThresholdSec:             0,
+		DBConnectionString:                           cfg.DBConnectionString,
+		MessageBrokerConnectionString:                cfg.MessageBrokerConnectionString,
+		DbLatencyThresholdSec:                        cfg.DbLatencyThreshold,
+		MessageBrokerLatencyThresholdSec:             cfg.MessageBrokerLatencyThreshold,
 		ServiceLatencyThresholdSec:                   cfg.ServiceLatencyThreshold,
 		HttpCheckTargets:                             map[string]string{},
 		MessageBrokerSubscriberMaxPollSilenceSec:     0,
@@ -104,4 +169,20 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 
 func secondsFromEnv(key, defaultValue string) time.Duration {
 	return time.Duration(env.WithDefaultInt(key, defaultValue)) * time.Second
+}
+
+func postgresConnectionString(user, password, host, port, dbName, sslMode string, maxConnections int) string {
+	log.Trace("postgresConnectionString")
+
+	u := url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(user, password),
+		Host:   net.JoinHostPort(host, port),
+		Path:   dbName,
+	}
+	q := u.Query()
+	q.Set("sslmode", sslMode)
+	q.Set("pool_max_conns", strconv.Itoa(maxConnections))
+	u.RawQuery = q.Encode()
+	return u.String()
 }

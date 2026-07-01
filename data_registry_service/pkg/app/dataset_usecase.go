@@ -178,7 +178,16 @@ func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Data
 
 	model.NormalizeDatasetMetadata(dataset)
 
-	return u.datasetsRepository.Replace(ctx, dataset)
+	updated, err = u.datasetsRepository.Replace(ctx, dataset)
+	if err != nil {
+		return nil, err
+	}
+	if u.eventPublisher != nil {
+		if err := u.eventPublisher.PublishDatasetUpdated(ctx, updated); err != nil {
+			return nil, err
+		}
+	}
+	return updated, nil
 }
 
 func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (updated *model.Dataset, err error) {
@@ -199,7 +208,16 @@ func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, data
 	if next == dataset.ProcessingState {
 		return dataset, nil
 	}
-	return u.datasetsRepository.UpdateProcessingState(ctx, datasetID, userID, next)
+	updated, err = u.datasetsRepository.UpdateProcessingState(ctx, datasetID, userID, next)
+	if err != nil {
+		return nil, err
+	}
+	if u.eventPublisher != nil {
+		if err := u.eventPublisher.PublishDatasetUpdated(ctx, updated); err != nil {
+			return nil, err
+		}
+	}
+	return updated, nil
 }
 
 func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, materialized *model.Dataset, state model.ProcessingState) (updated *model.Dataset, err error) {
@@ -218,20 +236,5 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 	if materialized == nil {
 		return nil, domainErrors.ErrValidationFailed.Extend("dataset materialization is required")
 	}
-	dataset, err := u.datasetsRepository.ReadByID(ctx, materialized.ID, materialized.UserID)
-	if err != nil {
-		return nil, err
-	}
-
-	dataset.Location = materialized.Location
-	dataset.TableNamespace = materialized.TableNamespace
-	dataset.TableName = materialized.TableName
-	dataset.TableFormat = materialized.TableFormat
-	dataset.CatalogProvider = materialized.CatalogProvider
-	dataset.SchemaVersion = materialized.SchemaVersion
-	dataset.SchemaMetadata = materialized.SchemaMetadata
-	dataset.ProcessingState = model.AdvanceProcessingState(dataset.ProcessingState, state)
-	model.NormalizeDatasetMetadata(dataset)
-
-	return u.datasetsRepository.UpdateMaterializationMetadata(ctx, dataset)
+	return u.datasetsRepository.RecordMaterialization(ctx, materialized, state)
 }

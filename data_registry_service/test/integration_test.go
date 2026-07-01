@@ -55,7 +55,12 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		database, err = dbconn.InitDatabase(ctx, cfg.GetName(), cfg.GetConnectionString(), log.StandardLogger())
 		Expect(err).NotTo(HaveOccurred())
 
-		datasetDB = repo.NewDatasetDB(database)
+		outboxWriter, err := sharedmessaging.NewPostgresOutbox(database.Pool, database.Name, "")
+		Expect(err).NotTo(HaveOccurred())
+		orderedOutbox, ok := outboxWriter.(sharedmessaging.OrderedOutbox)
+		Expect(ok).To(BeTrue())
+
+		datasetDB = repo.NewDatasetDB(database, repo.WithTransactionalOutbox(orderedOutbox, "data_registry"))
 		sourceDB = repo.NewSourceConnectorDB(database)
 		datasets = usecase.NewDatasetUseCase(datasetDB)
 		connectors = usecase.NewSourceUsecase(sourceDB, catalogclient.NewLocalCatalogClient())
@@ -101,25 +106,52 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		rawReady, err := datasets.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rawReady.ProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
+		Expect(rawReady.DatasetVersion).To(BeNumerically(">=", 2))
 
+		rawSnapshotID := uuid.New()
+		featureSnapshotID := uuid.New()
 		materialized, err := datasets.RecordDatasetMaterialization(ctx, &model.Dataset{
-			ID:              datasetID,
-			UserID:          userID,
-			Location:        "s3://local-dev-bucket/lakehouse/features/data.parquet",
-			TableNamespace:  "features",
-			TableName:       "movie_features",
-			TableFormat:     model.Parquet,
-			CatalogProvider: model.LocalCatalog,
-			SchemaVersion:   2,
-			SchemaMetadata:  `{"columns":["title","views"]}`,
+			ID:                datasetID,
+			UserID:            userID,
+			Location:          "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:    "features",
+			TableName:         "movie_features",
+			TableFormat:       model.Parquet,
+			CatalogProvider:   model.LocalCatalog,
+			SchemaVersion:     2,
+			SchemaMetadata:    `{"columns":["title","views"]}`,
+			RawSnapshotID:     rawSnapshotID,
+			FeatureSnapshotID: featureSnapshotID,
 		}, model.DatasetProcessingFeatureMaterialized)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(materialized.ProcessingState).To(Equal(model.DatasetProcessingFeatureMaterialized))
 		Expect(materialized.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/data.parquet"))
+		Expect(materialized.RawSnapshotID).To(Equal(rawSnapshotID))
+		Expect(materialized.FeatureSnapshotID).To(Equal(featureSnapshotID))
 
-		embedded, err := datasets.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingEmbeddingsMaterialized)
+		embeddingSnapshotID := uuid.New()
+		embedded, err := datasets.RecordDatasetMaterialization(ctx, &model.Dataset{
+			ID:                  datasetID,
+			UserID:              userID,
+			FeatureSnapshotID:   featureSnapshotID,
+			EmbeddingSnapshotID: embeddingSnapshotID,
+			VectorStore:         "pgvector",
+			CollectionName:      "movie_features",
+			EmbeddingDimensions: 384,
+			EmbeddingCount:      2,
+		}, model.DatasetProcessingEmbeddingsMaterialized)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(embedded.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+		Expect(embedded.EmbeddingSnapshotID).To(Equal(embeddingSnapshotID))
+		Expect(embedded.VectorStore).To(Equal("pgvector"))
+
+		var outboxCount int
+		err = database.Pool.QueryRow(ctx,
+			"SELECT COUNT(*) FROM "+database.Name+".outbox_messages WHERE resource_key = $1::uuid AND event_type = 'dataset_updated'",
+			datasetID.String(),
+		).Scan(&outboxCount)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(outboxCount).To(Equal(2))
 
 		lateRaw, err := datasets.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
 		Expect(err).NotTo(HaveOccurred())
@@ -238,6 +270,12 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			DatasetId:       datasetID.String(),
 			UserId:          userID.String(),
 			StorageLocation: "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:  "raw",
+			TableName:       "kafka_materialization_raw",
+			TableFormat:     "PARQUET",
+			CatalogProvider: "LOCAL",
+			SchemaVersion:   1,
+			SchemaMetadata:  "{}",
 		})).To(Succeed())
 
 		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{

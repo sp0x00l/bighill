@@ -62,4 +62,45 @@ var _ = Describe("DatasetEventPublisher", func() {
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.UserId).To(Equal(userID.String()))
 	})
+
+	It("publishes canonical dataset-updated events to the data registry topic", func() {
+		client := &registryPublishClientStub{}
+		publisher := registrymessaging.NewDatasetEventPublisher(client, "data_registry")
+		dataset := &model.Dataset{
+			ID:                  uuid.New(),
+			UserID:              uuid.New(),
+			DatasetVersion:      4,
+			ProcessingState:     model.DatasetProcessingEmbeddingsMaterialized,
+			Location:            "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:      "features",
+			TableName:           "movies",
+			TableFormat:         model.Parquet,
+			CatalogProvider:     model.LocalCatalog,
+			SchemaVersion:       3,
+			SchemaMetadata:      `{"columns":["title"]}`,
+			RawSnapshotID:       uuid.New(),
+			FeatureSnapshotID:   uuid.New(),
+			EmbeddingSnapshotID: uuid.New(),
+			VectorStore:         "pgvector",
+			CollectionName:      "movies",
+			EmbeddingDimensions: 384,
+			EmbeddingCount:      2,
+		}
+
+		Expect(publisher.PublishDatasetUpdated(context.Background(), dataset)).To(Succeed())
+
+		Expect(client.topic).To(Equal("data_registry"))
+		Expect(client.message.ResourceKey).To(Equal(dataset.ID))
+		Expect(client.message.MsgType).To(Equal(shared.MsgTypeDatasetUpdated))
+		event, ok := client.payload.(*datasetpb.DatasetUpdatedEvent)
+		Expect(ok).To(BeTrue())
+		Expect(event.DatasetId).To(Equal(dataset.ID.String()))
+		Expect(event.DatasetVersion).To(Equal(int32(4)))
+		Expect(event.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized.String()))
+		Expect(event.TableFormat).To(Equal("PARQUET"))
+		Expect(event.RawSnapshotId).To(Equal(dataset.RawSnapshotID.String()))
+		Expect(event.FeatureSnapshotId).To(Equal(dataset.FeatureSnapshotID.String()))
+		Expect(event.EmbeddingSnapshotId).To(Equal(dataset.EmbeddingSnapshotID.String()))
+		Expect(event.VectorStore).To(Equal("pgvector"))
+	})
 })

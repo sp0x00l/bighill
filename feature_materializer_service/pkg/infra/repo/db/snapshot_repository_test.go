@@ -243,9 +243,11 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("returns a domain idempotency error when the insert is replayed", func() {
+			readyRow := newRawSnapshotRow(rawSnapshotID, datasetID, userID)
+			readyRow.Status = model.SnapshotStatusReady.String()
 			poolMock.NextRows = []pgx.Row{
 				errorRow{err: pgx.ErrNoRows},
-				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
+				readyRow,
 			}
 
 			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
@@ -256,6 +258,43 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(existing.RawSnapshotID).To(Equal(rawSnapshotID))
 			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
 			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("FROM test_db.raw_snapshots WHERE idempotency_key = @idempotency_key"))
+		})
+
+		It("reopens failed raw snapshots so Temporal can retry the activity body", func() {
+			failedRow := newRawSnapshotRow(rawSnapshotID, datasetID, userID)
+			failedRow.Status = model.SnapshotStatusFailed.String()
+			failedRow.FailureReason = "object store timeout"
+			reopenedRow := failedRow
+			reopenedRow.Status = model.SnapshotStatusPending.String()
+			reopenedRow.FailureReason = ""
+			poolMock.NextRows = []pgx.Row{
+				errorRow{err: pgx.ErrNoRows},
+				failedRow,
+				reopenedRow,
+			}
+
+			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rawSnapshot.RawSnapshotID).To(Equal(rawSnapshotID))
+			Expect(rawSnapshot.Status).To(Equal(model.SnapshotStatusPending))
+			Expect(rawSnapshot.FailureReason).To(BeEmpty())
+			Expect(poolMock.QueryRowCalledCount).To(Equal(3))
+			Expect(poolMock.QueryCalls[2]).To(ContainSubstring("UPDATE test_db.raw_snapshots"))
+			Expect(poolMock.QueryCalls[2]).To(ContainSubstring("failure_reason = NULL"))
+		})
+
+		It("returns retryable in-progress errors for pending raw snapshot replays", func() {
+			poolMock.NextRows = []pgx.Row{
+				errorRow{err: pgx.ErrNoRows},
+				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
+			}
+
+			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
+
+			Expect(rawSnapshot).To(BeNil())
+			Expect(errors.Is(err, domain.ErrRawSnapshotInProgress)).To(BeTrue())
+			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
 		})
 
 		It("wraps non-idempotency insert errors", func() {
@@ -334,10 +373,12 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("returns a domain idempotency error when feature snapshot insert is replayed", func() {
+			readyRow := newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID)
+			readyRow.Status = model.SnapshotStatusReady.String()
 			poolMock.NextRows = []pgx.Row{
 				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
 				errorRow{err: pgx.ErrNoRows},
-				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
+				readyRow,
 			}
 
 			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, rawSnapshotID, idempotencyKey)
@@ -348,6 +389,30 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(existing.FeatureSnapshotID).To(Equal(featureID))
 			Expect(poolMock.QueryRowCalledCount).To(Equal(3))
 			Expect(poolMock.QueryCalls[2]).To(ContainSubstring("FROM test_db.feature_snapshots WHERE idempotency_key = @idempotency_key"))
+		})
+
+		It("reopens failed feature snapshots for retry", func() {
+			failedRow := newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID)
+			failedRow.Status = model.SnapshotStatusFailed.String()
+			failedRow.FailureReason = "builder failed"
+			reopenedRow := failedRow
+			reopenedRow.Status = model.SnapshotStatusPending.String()
+			reopenedRow.FailureReason = ""
+			poolMock.NextRows = []pgx.Row{
+				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
+				errorRow{err: pgx.ErrNoRows},
+				failedRow,
+				reopenedRow,
+			}
+
+			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, rawSnapshotID, idempotencyKey)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(featureSnapshot.FeatureSnapshotID).To(Equal(featureID))
+			Expect(featureSnapshot.Status).To(Equal(model.SnapshotStatusPending))
+			Expect(featureSnapshot.FailureReason).To(BeEmpty())
+			Expect(poolMock.QueryRowCalledCount).To(Equal(4))
+			Expect(poolMock.QueryCalls[3]).To(ContainSubstring("UPDATE test_db.feature_snapshots"))
 		})
 
 		It("does not insert when the raw snapshot is missing", func() {
@@ -398,10 +463,12 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("returns a domain idempotency error when embedding insert is replayed", func() {
+			readyRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID)
+			readyRow.Status = model.SnapshotStatusReady.String()
 			poolMock.NextRows = []pgx.Row{
 				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
 				errorRow{err: pgx.ErrNoRows},
-				newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID),
+				readyRow,
 			}
 
 			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey)
@@ -412,6 +479,30 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(existing.EmbeddingSnapshotID).To(Equal(embeddingID))
 			Expect(poolMock.QueryRowCalledCount).To(Equal(3))
 			Expect(poolMock.QueryCalls[2]).To(ContainSubstring("FROM test_db.embedding_snapshots WHERE idempotency_key = @idempotency_key"))
+		})
+
+		It("reopens failed embedding snapshots for retry", func() {
+			failedRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID)
+			failedRow.Status = model.SnapshotStatusFailed.String()
+			failedRow.FailureReason = "embedding writer failed"
+			reopenedRow := failedRow
+			reopenedRow.Status = model.SnapshotStatusPending.String()
+			reopenedRow.FailureReason = ""
+			poolMock.NextRows = []pgx.Row{
+				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
+				errorRow{err: pgx.ErrNoRows},
+				failedRow,
+				reopenedRow,
+			}
+
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
+			Expect(embeddingSnapshot.Status).To(Equal(model.SnapshotStatusPending))
+			Expect(embeddingSnapshot.FailureReason).To(BeEmpty())
+			Expect(poolMock.QueryRowCalledCount).To(Equal(4))
+			Expect(poolMock.QueryCalls[3]).To(ContainSubstring("UPDATE test_db.embedding_snapshots"))
 		})
 	})
 

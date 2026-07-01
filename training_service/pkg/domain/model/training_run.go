@@ -42,9 +42,11 @@ func ToTrainingRunStatus(value string) (TrainingRunStatus, error) {
 type TrainingRunRequest struct {
 	TrainingRunID     string
 	DatasetID         string
+	DatasetVersion    string
 	FeatureSnapshotID string
 	ModelName         string
 	ModelVersion      string
+	BaseModel         string
 	EvaluationProfile string
 }
 
@@ -55,10 +57,14 @@ type PreparedTrainingDataset struct {
 }
 
 type TrainedModelArtifact struct {
-	TrainingRunID string
-	ModelURI      string
-	ModelName     string
-	ModelVersion  string
+	TrainingRunID     string
+	ModelURI          string
+	ModelName         string
+	ModelVersion      string
+	BaseModel         string
+	ArtifactFormat    string
+	ArtifactChecksum  string
+	ArtifactSizeBytes int64
 }
 
 type EvaluationReport struct {
@@ -68,8 +74,19 @@ type EvaluationReport struct {
 }
 
 type TrainingRunResult struct {
-	TrainingRunID string
-	ModelURI      string
-	ReportURI     string
-	Status        TrainingRunStatus
+	TrainingRunID     string
+	DatasetID         string
+	DatasetVersion    string
+	FeatureSnapshotID string
+	ModelURI          string
+	ModelName         string
+	ModelVersion      string
+	BaseModel         string
+	ArtifactFormat    string
+	ArtifactChecksum  string
+	ArtifactSizeBytes int64
+	MetricsMetadata   string
+	ReportURI         string
+	FailureReason     string
+	Status            TrainingRunStatus
 }

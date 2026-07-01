@@ -260,7 +260,7 @@ gather_kafka_topics() {
         [[ -z "$ENTRY" ]] && continue
         expand_kafka_topic_template "$ENTRY" "$SHARD_FAMILIES"
       done
-    done < <(compgen -e | grep -E '(SUBSCRIBER_TOPIC|PUBLISHER_TOPIC|COMMAND_TOPIC)$' || true)
+    done < <(compgen -e | grep -E '(SERVICE_TOPIC|SUBSCRIBER_TOPIC|PUBLISHER_TOPIC|COMMAND_TOPIC)$' || true)
   }
 
   local SERVICE_DIR

@@ -31,15 +31,18 @@ func IsServiceError(err error, target *ServiceError) bool {
 }
 
 var (
-	ErrValidationFailed          = &ServiceError{Code: "validation_failed", Message: "validation failed"}
-	ErrRawSnapshotMaterialize    = &ServiceError{Code: "raw_snapshot_materialize_failed", Message: "raw snapshot materialize failed"}
-	ErrFeatureSnapshotBuild      = &ServiceError{Code: "feature_snapshot_build_failed", Message: "feature snapshot build failed"}
-	ErrEmbeddingMaterialize      = &ServiceError{Code: "embedding_materialize_failed", Message: "embedding materialize failed"}
-	ErrArtifactRead              = &ServiceError{Code: "artifact_read_failed", Message: "artifact read failed"}
-	ErrArtifactWrite             = &ServiceError{Code: "artifact_write_failed", Message: "artifact write failed"}
-	ErrCatalogRegister           = &ServiceError{Code: "catalog_register_failed", Message: "catalog register failed"}
-	ErrRegistryUpdate            = &ServiceError{Code: "registry_update_failed", Message: "registry update failed"}
-	ErrRawSnapshotNotFound       = &ServiceError{Code: "raw_snapshot_not_found", Message: "raw snapshot not found"}
-	ErrFeatureSnapshotNotFound   = &ServiceError{Code: "feature_snapshot_not_found", Message: "feature snapshot not found"}
-	ErrEmbeddingSnapshotNotFound = &ServiceError{Code: "embedding_snapshot_not_found", Message: "embedding snapshot not found"}
+	ErrValidationFailed            = &ServiceError{Code: "validation_failed", Message: "validation failed"}
+	ErrRawSnapshotMaterialize      = &ServiceError{Code: "raw_snapshot_materialize_failed", Message: "raw snapshot materialize failed"}
+	ErrFeatureSnapshotBuild        = &ServiceError{Code: "feature_snapshot_build_failed", Message: "feature snapshot build failed"}
+	ErrEmbeddingMaterialize        = &ServiceError{Code: "embedding_materialize_failed", Message: "embedding materialize failed"}
+	ErrArtifactRead                = &ServiceError{Code: "artifact_read_failed", Message: "artifact read failed"}
+	ErrArtifactWrite               = &ServiceError{Code: "artifact_write_failed", Message: "artifact write failed"}
+	ErrCatalogRegister             = &ServiceError{Code: "catalog_register_failed", Message: "catalog register failed"}
+	ErrRegistryUpdate              = &ServiceError{Code: "registry_update_failed", Message: "registry update failed"}
+	ErrRawSnapshotNotFound         = &ServiceError{Code: "raw_snapshot_not_found", Message: "raw snapshot not found"}
+	ErrFeatureSnapshotNotFound     = &ServiceError{Code: "feature_snapshot_not_found", Message: "feature snapshot not found"}
+	ErrEmbeddingSnapshotNotFound   = &ServiceError{Code: "embedding_snapshot_not_found", Message: "embedding snapshot not found"}
+	ErrRawSnapshotInProgress       = &ServiceError{Code: "raw_snapshot_in_progress", Message: "raw snapshot in progress"}
+	ErrFeatureSnapshotInProgress   = &ServiceError{Code: "feature_snapshot_in_progress", Message: "feature snapshot in progress"}
+	ErrEmbeddingSnapshotInProgress = &ServiceError{Code: "embedding_snapshot_in_progress", Message: "embedding snapshot in progress"}
 )

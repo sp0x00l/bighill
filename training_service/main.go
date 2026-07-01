@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,11 +11,13 @@ import (
 	"time"
 
 	"training_service/pkg/app"
+	trainingmessaging "training_service/pkg/infra/network/messaging"
 	"training_service/pkg/infra/temporalworker"
 
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
+	messagingConn "lib/shared_lib/messaging"
 	trace "lib/shared_lib/trace"
 
 	log "github.com/sirupsen/logrus"
@@ -26,6 +29,9 @@ var Version string
 type trainingConfig struct {
 	ServiceName string
 	Temporal    temporalConfig
+	Messaging   messagingConn.MessengerConfig
+	Topics      trainingmessaging.TrainingTopics
+	BaseModel   string
 	Health      healthConfig
 }
 
@@ -36,10 +42,12 @@ type temporalConfig struct {
 }
 
 type healthConfig struct {
-	CpuThresholdPercentage  int
-	MemFreeThresholdPercent int
-	HealthCheckPort         int
-	ServiceLatencyThreshold time.Duration
+	CpuThresholdPercentage        int
+	MemFreeThresholdPercent       int
+	HealthCheckPort               int
+	MessageBrokerConnectionString string
+	ServiceLatencyThreshold       time.Duration
+	MessageBrokerLatencyThreshold time.Duration
 }
 
 func init() {
@@ -67,15 +75,33 @@ func main() {
 	}
 	defer temporalClient.Close()
 
-	activities := temporalworker.NewTrainingActivities()
+	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
+	defer func() {
+		_ = messagingFactory.Close(cancelCtx)
+	}()
+	publisher, err := messagingFactory.Publisher(cancelCtx)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training publisher")
+	}
+	defer publisher.Close()
+	subscriber, err := messagingFactory.Subscriber(cancelCtx)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training subscriber")
+	}
+
+	trainingEventPublisher := trainingmessaging.NewTrainingEventPublisher(publisher, cfg.Topics)
+	activities := temporalworker.NewTrainingActivities(trainingEventPublisher)
 	trainingWorker := temporalworker.NewTrainingWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
 	if err := trainingWorker.Start(); err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to start Temporal worker")
 	}
 	defer trainingWorker.Stop()
 
+	workflowStarter := temporalworker.NewTrainingWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
+	datasetUpdatedSubscriber := trainingmessaging.NewDatasetUpdatedSubscriber(subscriber, workflowStarter, cfg.Topics, cfg.BaseModel)
+
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
-	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck()
+	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck().WithMessageBrokerCheck()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -85,6 +111,13 @@ func main() {
 			if err != http.ErrServerClosed {
 				log.Fatalf("unable to start health check for the %s service: %v", serviceName, err)
 			}
+			quit <- syscall.SIGTERM
+		}
+	}()
+
+	go func() {
+		if err := datasetUpdatedSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(err).Error("dataset updated subscriber stopped unexpectedly")
 			quit <- syscall.SIGTERM
 		}
 	}()
@@ -104,6 +137,7 @@ func main() {
 }
 
 func readTrainingConfig() trainingConfig {
+	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	return trainingConfig{
 		ServiceName: env.WithDefaultString("TRAINING_SERVICE_NAME", "training-service"),
 		Temporal: temporalConfig{
@@ -111,11 +145,23 @@ func readTrainingConfig() trainingConfig {
 			Namespace: env.WithDefaultString("TRAINING_SERVICE_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
 			TaskQueue: env.WithDefaultString("TRAINING_SERVICE_TEMPORAL_TASK_QUEUE", app.DefaultTrainingWorkflowTaskQueue),
 		},
+		Messaging: messagingConn.MessengerConfig{
+			DlqURL:  env.WithDefaultString("TRAINING_SERVICE_DLQ", "http://localhost:4566/training-dev-env-queue/"),
+			GroupID: env.WithDefaultString("TRAINING_SERVICE_KAFKA_GROUP_ID", "training-group"),
+			Brokers: brokers,
+		},
+		Topics: trainingmessaging.TrainingTopics{
+			DataRegistry: env.WithDefaultString("TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
+			Training:     env.WithDefaultString("TRAINING_SERVICE_TOPIC", "training"),
+		},
+		BaseModel: env.WithDefaultString("TRAINING_SERVICE_BASE_MODEL", "local-dev-base-model"),
 		Health: healthConfig{
-			CpuThresholdPercentage:  env.WithDefaultInt("TRAINING_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercent: env.WithDefaultInt("TRAINING_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:         env.WithDefaultInt("TRAINING_HEALTHCHECK_PORT", "5058"),
-			ServiceLatencyThreshold: secondsFromEnv("TRAINING_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			CpuThresholdPercentage:        env.WithDefaultInt("TRAINING_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercent:       env.WithDefaultInt("TRAINING_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:               env.WithDefaultInt("TRAINING_HEALTHCHECK_PORT", "5058"),
+			MessageBrokerConnectionString: brokers,
+			ServiceLatencyThreshold:       secondsFromEnv("TRAINING_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold: secondsFromEnv("TRAINING_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
 	}
 }
@@ -126,9 +172,9 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 		MemFreeThresholdPercentage:                   cfg.MemFreeThresholdPercent,
 		HealthCheckPort:                              cfg.HealthCheckPort,
 		DBConnectionString:                           "",
-		MessageBrokerConnectionString:                "",
+		MessageBrokerConnectionString:                cfg.MessageBrokerConnectionString,
 		DbLatencyThresholdSec:                        0,
-		MessageBrokerLatencyThresholdSec:             0,
+		MessageBrokerLatencyThresholdSec:             cfg.MessageBrokerLatencyThreshold,
 		ServiceLatencyThresholdSec:                   cfg.ServiceLatencyThreshold,
 		HttpCheckTargets:                             map[string]string{},
 		MessageBrokerSubscriberMaxPollSilenceSec:     0,

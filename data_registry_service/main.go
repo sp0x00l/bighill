@@ -90,6 +90,10 @@ func main() {
 	if !ok {
 		log.Fatal("postgres outbox does not support relay operations")
 	}
+	orderedOutbox, ok := outboxWriter.(messagingConn.OrderedOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support transactional enqueue operations")
+	}
 	relayPublisher, ok := publisher.(messagingConn.RelayPublisher)
 	if !ok {
 		log.Fatal("publisher does not support outbox relay publishing")
@@ -111,7 +115,7 @@ func main() {
 	}
 
 	sourceConnectorDB := db.NewSourceConnectorDB(database)
-	datasetDB := db.NewDatasetDB(database)
+	datasetDB := db.NewDatasetDB(database, db.WithTransactionalOutbox(orderedOutbox, cfg.Topic))
 
 	datasetEventPublisher := registrymessaging.NewDatasetEventPublisher(publisher, cfg.Topic)
 	datasetUseCase := usecase.NewDatasetUseCase(datasetDB, usecase.WithDatasetEventPublisher(datasetEventPublisher))

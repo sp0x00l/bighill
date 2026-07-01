@@ -57,21 +57,29 @@ func ToStatusType(s string) (StatusType, error) {
 }
 
 type Dataset struct {
-	ID              uuid.UUID
-	UserID          uuid.UUID
-	Title           string
-	Description     string
-	Origin          OriginType
-	Location        string
-	Status          StatusType
-	Category        string
-	TableNamespace  string
-	TableName       string
-	TableFormat     TableFormat
-	CatalogProvider CatalogProvider
-	SchemaVersion   int
-	SchemaMetadata  string
-	ProcessingState ProcessingState
+	ID                  uuid.UUID
+	UserID              uuid.UUID
+	Title               string
+	Description         string
+	Origin              OriginType
+	Location            string
+	Status              StatusType
+	Category            string
+	TableNamespace      string
+	TableName           string
+	TableFormat         TableFormat
+	CatalogProvider     CatalogProvider
+	SchemaVersion       int
+	SchemaMetadata      string
+	ProcessingState     ProcessingState
+	DatasetVersion      int
+	RawSnapshotID       uuid.UUID
+	FeatureSnapshotID   uuid.UUID
+	EmbeddingSnapshotID uuid.UUID
+	VectorStore         string
+	CollectionName      string
+	EmbeddingDimensions int
+	EmbeddingCount      int64
 }
 
 func NewDataset(ID uuid.UUID) *Dataset {
@@ -96,6 +104,9 @@ func NormalizeDatasetMetadata(dataset *Dataset) {
 	}
 	if dataset.SchemaMetadata == "" {
 		dataset.SchemaMetadata = "{}"
+	}
+	if dataset.DatasetVersion <= 0 {
+		dataset.DatasetVersion = 1
 	}
 }
 

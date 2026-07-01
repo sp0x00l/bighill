@@ -14,7 +14,7 @@ import (
 )
 
 type EmbeddingSnapshotReadyListener interface {
-	AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, error)
+	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error)
 }
 
 type embeddingSnapshotReadyEventListener struct {
@@ -47,39 +47,58 @@ func (l *embeddingSnapshotReadyEventListener) Handle(ctx context.Context, resour
 	if l.listener == nil {
 		return msgConn.NonRetryable(fmt.Errorf("embedding snapshot ready listener is nil"))
 	}
-	datasetID, userID, err := embeddingSnapshotReadyToIDs(resourceKey, payload)
+	dataset, err := embeddingSnapshotReadyToDataset(resourceKey, payload)
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
-	_, err = l.listener.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingEmbeddingsMaterialized)
+	_, err = l.listener.RecordDatasetMaterialization(ctx, dataset, model.DatasetProcessingEmbeddingsMaterialized)
 	return err
 }
 
-func embeddingSnapshotReadyToIDs(resourceKey uuid.UUID, payload *featurepb.EmbeddingSnapshotReadyEvent) (uuid.UUID, uuid.UUID, error) {
-	log.Trace("embeddingSnapshotReadyToIDs")
+func embeddingSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.EmbeddingSnapshotReadyEvent) (*model.Dataset, error) {
+	log.Trace("embeddingSnapshotReadyToDataset")
 
 	if resourceKey == uuid.Nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("resource key is required")
+		return nil, fmt.Errorf("resource key is required")
 	}
 	if payload == nil {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("embedding snapshot ready payload is required")
+		return nil, fmt.Errorf("embedding snapshot ready payload is required")
 	}
 	datasetID, err := msgConn.ParseUUID("dataset_id", payload.GetDatasetId())
 	if err != nil {
-		return uuid.Nil, uuid.Nil, err
+		return nil, err
 	}
 	if datasetID != resourceKey {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("dataset id %s does not match resource key %s", datasetID, resourceKey)
+		return nil, fmt.Errorf("dataset id %s does not match resource key %s", datasetID, resourceKey)
 	}
 	userID, err := msgConn.ParseUUID("user_id", payload.GetUserId())
 	if err != nil {
-		return uuid.Nil, uuid.Nil, err
+		return nil, err
 	}
-	if strings.TrimSpace(payload.GetVectorStore()) == "" {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("vector store is required")
+	embeddingSnapshotID, err := msgConn.ParseUUID("embedding_snapshot_id", payload.GetEmbeddingSnapshotId())
+	if err != nil {
+		return nil, err
 	}
-	if strings.TrimSpace(payload.GetCollectionName()) == "" {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("collection name is required")
+	featureSnapshotID, err := msgConn.ParseUUID("feature_snapshot_id", payload.GetFeatureSnapshotId())
+	if err != nil {
+		return nil, err
 	}
-	return datasetID, userID, nil
+	vectorStore := strings.TrimSpace(payload.GetVectorStore())
+	if vectorStore == "" {
+		return nil, fmt.Errorf("vector store is required")
+	}
+	collectionName := strings.TrimSpace(payload.GetCollectionName())
+	if collectionName == "" {
+		return nil, fmt.Errorf("collection name is required")
+	}
+	return &model.Dataset{
+		ID:                  datasetID,
+		UserID:              userID,
+		FeatureSnapshotID:   featureSnapshotID,
+		EmbeddingSnapshotID: embeddingSnapshotID,
+		VectorStore:         vectorStore,
+		CollectionName:      collectionName,
+		EmbeddingDimensions: int(payload.GetEmbeddingDimensions()),
+		EmbeddingCount:      payload.GetEmbeddingCount(),
+	}, nil
 }

@@ -45,31 +45,42 @@ var _ = Describe("Materialization event listeners", func() {
 	It("advances state when a raw snapshot is ready", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		rawSnapshotID := uuid.New()
 		uc := &materializationUsecaseStub{}
 		listener := registrymessaging.NewRawSnapshotReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.RawSnapshotReadyEvent{
 			DatasetId:       datasetID.String(),
 			UserId:          userID.String(),
-			RawSnapshotId:   uuid.NewString(),
+			RawSnapshotId:   rawSnapshotID.String(),
 			StorageLocation: "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:  "raw",
+			TableName:       "movies_raw",
+			TableFormat:     "PARQUET",
+			CatalogProvider: "LOCAL",
+			SchemaVersion:   1,
+			SchemaMetadata:  "{}",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(uc.advancedDatasetID).To(Equal(datasetID))
-		Expect(uc.advancedUserID).To(Equal(userID))
-		Expect(uc.advancedState).To(Equal(model.DatasetProcessingRawMaterialized))
+		Expect(uc.recordedDataset.ID).To(Equal(datasetID))
+		Expect(uc.recordedDataset.UserID).To(Equal(userID))
+		Expect(uc.recordedDataset.RawSnapshotID).To(Equal(rawSnapshotID))
+		Expect(uc.recordedDataset.TableName).To(Equal("movies_raw"))
+		Expect(uc.recordedState).To(Equal(model.DatasetProcessingRawMaterialized))
 	})
 
 	It("records table metadata when a feature snapshot is ready", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		featureSnapshotID := uuid.New()
+		rawSnapshotID := uuid.New()
 		uc := &materializationUsecaseStub{}
 		listener := registrymessaging.NewFeatureSnapshotReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.FeatureSnapshotReadyEvent{
-			FeatureSnapshotId: uuid.NewString(),
-			RawSnapshotId:     uuid.NewString(),
+			FeatureSnapshotId: featureSnapshotID.String(),
+			RawSnapshotId:     rawSnapshotID.String(),
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
 			StorageLocation:   "s3://local-dev-bucket/lakehouse/features/data.parquet",
@@ -87,18 +98,22 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedDataset.TableNamespace).To(Equal("features"))
 		Expect(uc.recordedDataset.TableName).To(Equal("movies"))
 		Expect(uc.recordedDataset.TableFormat).To(Equal(model.Parquet))
+		Expect(uc.recordedDataset.RawSnapshotID).To(Equal(rawSnapshotID))
+		Expect(uc.recordedDataset.FeatureSnapshotID).To(Equal(featureSnapshotID))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingFeatureMaterialized))
 	})
 
 	It("advances state when embeddings are ready", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		featureSnapshotID := uuid.New()
+		embeddingSnapshotID := uuid.New()
 		uc := &materializationUsecaseStub{}
 		listener := registrymessaging.NewEmbeddingSnapshotReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.EmbeddingSnapshotReadyEvent{
-			EmbeddingSnapshotId: uuid.NewString(),
-			FeatureSnapshotId:   uuid.NewString(),
+			EmbeddingSnapshotId: embeddingSnapshotID.String(),
+			FeatureSnapshotId:   featureSnapshotID.String(),
 			DatasetId:           datasetID.String(),
 			UserId:              userID.String(),
 			VectorStore:         "pgvector",
@@ -108,9 +123,12 @@ var _ = Describe("Materialization event listeners", func() {
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(uc.advancedDatasetID).To(Equal(datasetID))
-		Expect(uc.advancedUserID).To(Equal(userID))
-		Expect(uc.advancedState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+		Expect(uc.recordedDataset.ID).To(Equal(datasetID))
+		Expect(uc.recordedDataset.UserID).To(Equal(userID))
+		Expect(uc.recordedDataset.FeatureSnapshotID).To(Equal(featureSnapshotID))
+		Expect(uc.recordedDataset.EmbeddingSnapshotID).To(Equal(embeddingSnapshotID))
+		Expect(uc.recordedDataset.VectorStore).To(Equal("pgvector"))
+		Expect(uc.recordedState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 	})
 
 	It("returns non-retryable errors for invalid feature-ready payloads", func() {

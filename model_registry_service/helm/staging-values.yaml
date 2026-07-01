@@ -1,0 +1,22 @@
+replicaCount: 1
+image:
+  repository: "385800116362.dkr.ecr.us-east-1.amazonaws.com/bighill/mlops/model-registry-service"
+  tag: "0.0.1"
+  pullPolicy: Always
+service:
+  type: ClusterIP
+  healthPort: 5060
+env:
+  environment: "staging"
+  pgHost: "postgres.ml-ops-staging.svc.cluster.local"
+  pgPort: "5432"
+  pgSslMode: "require"
+  kafkaBroker: "kafka:9092"
+  kafkaGroupId: "model-registry-group"
+  topic: "model_registry"
+  trainingSubscriberTopic: "training"
+  dlq: "http://localhost:4566/model-registry-dev-env-queue/"
+  outbox: "postgres"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"

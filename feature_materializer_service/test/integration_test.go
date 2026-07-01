@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/url"
@@ -89,6 +90,15 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		Expect(rawSnapshot.Status).To(Equal(model.SnapshotStatusPending))
 
 		replayedRaw, err := rawUsecase.MaterializeRawSnapshot(ctx, datasetFile, idempotencyKey)
+		Expect(err).To(HaveOccurred())
+		Expect(replayedRaw).To(BeNil())
+		Expect(errors.Is(err, domain.ErrRawSnapshotInProgress)).To(BeTrue())
+
+		rawSnapshot.SchemaVersion = 1
+		rawSnapshot.SchemaMetadata = "{}"
+		Expect(snapshots.MarkRawReady(ctx, rawSnapshot)).To(Succeed())
+
+		replayedRaw, err = rawUsecase.MaterializeRawSnapshot(ctx, datasetFile, idempotencyKey)
 		Expect(err).To(HaveOccurred())
 		Expect(replayedRaw.RawSnapshotID).To(Equal(rawSnapshot.RawSnapshotID))
 		_, ok := domain.IsRawSnapshotAlreadyMaterialized(err)

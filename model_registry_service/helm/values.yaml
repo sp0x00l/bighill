@@ -1,0 +1,56 @@
+replicaCount: 1
+image:
+  repository: "model-registry-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: false
+  name: "model-registry-service"
+  annotations: {}
+service:
+  type: ClusterIP
+  healthPort: 5060
+ingress:
+  enabled: false
+  host: ""
+  certificateArn: ""
+env:
+  environment: "local-dev"
+  serviceName: "model-registry-service"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  dbCredentialsSecret:
+    name: ""
+    userKey: "bighill_model_registry_db_user"
+    passwordKey: "bighill_model_registry_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_model_registry_db"
+  dbName: "bighill_model_registry_db"
+  dbUser: "bighill_model_registry_db_user"
+  dbPassword: ""
+  dbMaxConnections: "20"
+  pgHost: "localhost"
+  pgPort: "5432"
+  pgSslMode: "require"
+  kafkaBroker: "kafka:9092"
+  kafkaGroupId: "model-registry-group"
+  topic: "model_registry"
+  trainingSubscriberTopic: "training"
+  dlq: "http://localhost:4566/model-registry-dev-env-queue/"
+  outbox: "postgres"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  healthcheckCpuThreshold: "80"
+  healthcheckFreeMemThreshold: "20"
+  healthcheckServiceLatencyThreshold: "5"
+  healthcheckDbLatencyThreshold: "5"
+  healthcheckMessageBrokerLatencyThreshold: "5"
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "768Mi"
+    cpu: "400m"

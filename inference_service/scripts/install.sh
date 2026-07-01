@@ -17,11 +17,17 @@ install()
         bash scripts/install.sh
     fi
 
+    if [ ! -f "$PROJECT_ROOT/data_contracts/build/protobufs/go.mod" ]; then
+        cd "$PROJECT_ROOT/data_contracts"
+        make build
+    fi
+
     cd "$PROJECT_ROOT/inference_service"
     rm -f go.mod go.sum
 
     go mod init inference_service
     go mod edit -replace lib/shared_lib=../shared_lib
+    go mod edit -replace lib/data_contracts_lib=../data_contracts/build/protobufs
     go mod tidy
     go mod download
 

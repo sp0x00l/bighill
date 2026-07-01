@@ -29,4 +29,7 @@ func (e *ServiceError) Is(target error) bool {
 	return e.Code == serviceError.Code
 }
 
-var ErrValidationFailed = &ServiceError{Code: "validation_failed", Message: "validation failed"}
+var (
+	ErrValidationFailed = &ServiceError{Code: "validation_failed", Message: "validation failed"}
+	ErrModelNotFound    = &ServiceError{Code: "model_not_found", Message: "model not found"}
+)

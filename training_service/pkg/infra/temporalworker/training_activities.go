@@ -10,12 +10,23 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type TrainingActivities struct{}
+type TrainingEventPublisher interface {
+	PublishModelTrainingCompleted(ctx context.Context, result *model.TrainingRunResult) error
+	PublishModelTrainingFailed(ctx context.Context, result *model.TrainingRunResult) error
+}
 
-func NewTrainingActivities() *TrainingActivities {
+type TrainingActivities struct {
+	eventPublisher TrainingEventPublisher
+}
+
+func NewTrainingActivities(publisher ...TrainingEventPublisher) *TrainingActivities {
 	log.Trace("NewTrainingActivities")
 
-	return &TrainingActivities{}
+	activities := &TrainingActivities{}
+	if len(publisher) > 0 {
+		activities.eventPublisher = publisher[0]
+	}
+	return activities
 }
 
 func (a *TrainingActivities) PrepareTrainingDataset(_ context.Context, request model.TrainingRunRequest) (*model.PreparedTrainingDataset, error) {
@@ -48,11 +59,19 @@ func (a *TrainingActivities) RunTrainingJob(_ context.Context, prepared model.Pr
 	if modelVersion == "" {
 		modelVersion = "local-dev"
 	}
+	baseModel := strings.TrimSpace(request.BaseModel)
+	if baseModel == "" {
+		baseModel = "local-dev-base-model"
+	}
 	return &model.TrainedModelArtifact{
-		TrainingRunID: request.TrainingRunID,
-		ModelURI:      "s3://local-dev-bucket/models/" + request.TrainingRunID,
-		ModelName:     modelName,
-		ModelVersion:  modelVersion,
+		TrainingRunID:     request.TrainingRunID,
+		ModelURI:          "s3://local-dev-bucket/models/" + request.TrainingRunID,
+		ModelName:         modelName,
+		ModelVersion:      modelVersion,
+		BaseModel:         baseModel,
+		ArtifactFormat:    "HF_PEFT_ADAPTER",
+		ArtifactChecksum:  "local-dev-" + request.TrainingRunID,
+		ArtifactSizeBytes: 1,
 	}, nil
 }
 
@@ -67,4 +86,31 @@ func (a *TrainingActivities) EvaluateTrainedModel(_ context.Context, artifact mo
 		ReportURI:     "s3://local-dev-bucket/evaluations/" + request.TrainingRunID + ".json",
 		Passed:        true,
 	}, nil
+}
+
+func (a *TrainingActivities) PublishModelTrainingCompleted(ctx context.Context, result model.TrainingRunResult) error {
+	log.Trace("TrainingActivities PublishModelTrainingCompleted")
+
+	if a.eventPublisher == nil {
+		return domain.ErrTrainModel.Extend("training event publisher is required")
+	}
+	if strings.TrimSpace(result.TrainingRunID) == "" {
+		return domain.ErrValidationFailed.Extend("training run id is required")
+	}
+	return a.eventPublisher.PublishModelTrainingCompleted(ctx, &result)
+}
+
+func (a *TrainingActivities) PublishModelTrainingFailed(ctx context.Context, result model.TrainingRunResult) error {
+	log.Trace("TrainingActivities PublishModelTrainingFailed")
+
+	if a.eventPublisher == nil {
+		return domain.ErrTrainModel.Extend("training event publisher is required")
+	}
+	if strings.TrimSpace(result.TrainingRunID) == "" {
+		return domain.ErrValidationFailed.Extend("training run id is required")
+	}
+	if strings.TrimSpace(result.FailureReason) == "" {
+		return domain.ErrValidationFailed.Extend("failure reason is required")
+	}
+	return a.eventPublisher.PublishModelTrainingFailed(ctx, &result)
 }

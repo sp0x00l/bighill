@@ -5,27 +5,36 @@ import (
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	log "github.com/sirupsen/logrus"
 )
 
 type DatasetDAO struct {
-	ID              pgtype.UUID
-	UserID          pgtype.UUID
-	Title           pgtype.Text
-	Description     pgtype.Text
-	Origin          pgtype.Text
-	Location        pgtype.Text
-	Status          pgtype.Text
-	Category        pgtype.Text
-	TableNamespace  pgtype.Text
-	TableName       pgtype.Text
-	TableFormat     pgtype.Text
-	CatalogProvider pgtype.Text
-	SchemaVersion   pgtype.Int4
-	SchemaMetadata  pgtype.Text
-	ProcessingState pgtype.Text
+	ID                  pgtype.UUID
+	UserID              pgtype.UUID
+	Title               pgtype.Text
+	Description         pgtype.Text
+	Origin              pgtype.Text
+	Location            pgtype.Text
+	Status              pgtype.Text
+	Category            pgtype.Text
+	TableNamespace      pgtype.Text
+	TableName           pgtype.Text
+	TableFormat         pgtype.Text
+	CatalogProvider     pgtype.Text
+	SchemaVersion       pgtype.Int4
+	SchemaMetadata      pgtype.Text
+	ProcessingState     pgtype.Text
+	DatasetVersion      pgtype.Int4
+	RawSnapshotID       pgtype.UUID
+	FeatureSnapshotID   pgtype.UUID
+	EmbeddingSnapshotID pgtype.UUID
+	VectorStore         pgtype.Text
+	CollectionName      pgtype.Text
+	EmbeddingDimensions pgtype.Int4
+	EmbeddingCount      pgtype.Int8
 }
 
 type Dataset struct {
@@ -39,8 +48,11 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 		"id":              pgtype.UUID{Bytes: dataset.ID, Valid: true},
 		"user_id":         pgtype.UUID{Bytes: dataset.UserID, Valid: true},
 		"title":           pgtype.Text{String: dataset.Title, Valid: true},
+		"description":     pgtype.Text{String: dataset.Description, Valid: dataset.Description != ""},
 		"origin":          pgtype.Text{String: dataset.Origin.String(), Valid: true},
+		"location":        pgtype.Text{String: dataset.Location, Valid: dataset.Location != ""},
 		"status":          pgtype.Text{String: dataset.Status.String(), Valid: true},
+		"category":        pgtype.Text{String: dataset.Category, Valid: dataset.Category != ""},
 		"idempotency_key": pgtype.UUID{Bytes: d.IdempotencyKey.Bytes, Valid: true},
 		"table_namespace": pgtype.Text{String: dataset.TableNamespace, Valid: true},
 		"table_name":      pgtype.Text{String: dataset.TableName, Valid: true},
@@ -55,18 +67,16 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 			String: dataset.ProcessingState.String(),
 			Valid:  true,
 		},
+		"dataset_version":       pgtype.Int4{Int32: int32(dataset.DatasetVersion), Valid: true},
+		"raw_snapshot_id":       pgtype.UUID{Bytes: dataset.RawSnapshotID, Valid: dataset.RawSnapshotID != uuid.Nil},
+		"feature_snapshot_id":   pgtype.UUID{Bytes: dataset.FeatureSnapshotID, Valid: dataset.FeatureSnapshotID != uuid.Nil},
+		"embedding_snapshot_id": pgtype.UUID{Bytes: dataset.EmbeddingSnapshotID, Valid: dataset.EmbeddingSnapshotID != uuid.Nil},
+		"vector_store":          pgtype.Text{String: dataset.VectorStore, Valid: true},
+		"collection_name":       pgtype.Text{String: dataset.CollectionName, Valid: true},
+		"embedding_dimensions":  pgtype.Int4{Int32: int32(dataset.EmbeddingDimensions), Valid: true},
+		"embedding_count":       pgtype.Int8{Int64: dataset.EmbeddingCount, Valid: true},
 	}
 
-	if dataset.Description != "" {
-		dao["description"] = pgtype.Text{String: dataset.Description, Valid: true}
-	}
-	if dataset.Location != "" {
-		dao["location"] = pgtype.Text{String: dataset.Location, Valid: true}
-	}
-
-	if dataset.Category != "" {
-		dao["category"] = pgtype.Text{String: dataset.Category, Valid: true}
-	}
 	return dao
 }
 
@@ -101,20 +111,28 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 	}
 
 	return &model.Dataset{
-		ID:              dao.ID.Bytes,
-		UserID:          dao.UserID.Bytes,
-		Title:           dao.Title.String,
-		Description:     dao.Description.String,
-		Origin:          origin,
-		Location:        dao.Location.String,
-		Status:          status,
-		Category:        dao.Category.String,
-		TableNamespace:  dao.TableNamespace.String,
-		TableName:       dao.TableName.String,
-		TableFormat:     tableFormat,
-		CatalogProvider: catalogProvider,
-		SchemaVersion:   int(dao.SchemaVersion.Int32),
-		SchemaMetadata:  dao.SchemaMetadata.String,
-		ProcessingState: processingState,
+		ID:                  dao.ID.Bytes,
+		UserID:              dao.UserID.Bytes,
+		Title:               dao.Title.String,
+		Description:         dao.Description.String,
+		Origin:              origin,
+		Location:            dao.Location.String,
+		Status:              status,
+		Category:            dao.Category.String,
+		TableNamespace:      dao.TableNamespace.String,
+		TableName:           dao.TableName.String,
+		TableFormat:         tableFormat,
+		CatalogProvider:     catalogProvider,
+		SchemaVersion:       int(dao.SchemaVersion.Int32),
+		SchemaMetadata:      dao.SchemaMetadata.String,
+		ProcessingState:     processingState,
+		DatasetVersion:      int(dao.DatasetVersion.Int32),
+		RawSnapshotID:       dao.RawSnapshotID.Bytes,
+		FeatureSnapshotID:   dao.FeatureSnapshotID.Bytes,
+		EmbeddingSnapshotID: dao.EmbeddingSnapshotID.Bytes,
+		VectorStore:         dao.VectorStore.String,
+		CollectionName:      dao.CollectionName.String,
+		EmbeddingDimensions: int(dao.EmbeddingDimensions.Int32),
+		EmbeddingCount:      dao.EmbeddingCount.Int64,
 	}, nil
 }
