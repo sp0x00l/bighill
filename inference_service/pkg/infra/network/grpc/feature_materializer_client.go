@@ -30,22 +30,8 @@ type featureMaterializerClient struct {
 func NewFeatureMaterializerClient(ctx context.Context, config FeatureMaterializerClientConfig, opts ...grpc.DialOption) (usecase.RetrievalClient, error) {
 	log.Trace("NewFeatureMaterializerClient")
 
-	address := config.Address
-	if address == "" {
-		return nil, fmt.Errorf("feature materializer grpc address is required")
-	}
-	if config.DialTimeoutMs <= 0 {
-		return nil, fmt.Errorf("feature materializer grpc dial timeout must be greater than zero")
-	}
-	if config.CallTimeoutMs <= 0 {
-		return nil, fmt.Errorf("feature materializer grpc call timeout must be greater than zero")
-	}
-	if config.RetryCount <= 0 {
-		return nil, fmt.Errorf("feature materializer grpc retry count must be greater than zero")
-	}
-
 	conn, err := rpcLib.NewClient(ctx, rpcLib.Config{
-		Address:          address,
+		Address:          config.Address,
 		Insecure:         true,
 		DialTimeout:      time.Duration(config.DialTimeoutMs) * time.Millisecond,
 		PerCallTimeout:   time.Duration(config.CallTimeoutMs) * time.Millisecond,

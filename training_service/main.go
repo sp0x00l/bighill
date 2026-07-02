@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"training_service/pkg/app"
+	"training_service/pkg/infra/executor"
 	trainingmessaging "training_service/pkg/infra/network/messaging"
 	"training_service/pkg/infra/temporalworker"
 
@@ -32,6 +34,7 @@ type trainingConfig struct {
 	Messaging   messagingConn.MessengerConfig
 	Topics      trainingmessaging.TrainingTopics
 	BaseModel   string
+	Executor    trainingExecutorConfig
 	Health      healthConfig
 }
 
@@ -48,6 +51,18 @@ type healthConfig struct {
 	MessageBrokerConnectionString string
 	ServiceLatencyThreshold       time.Duration
 	MessageBrokerLatencyThreshold time.Duration
+}
+
+type trainingExecutorConfig struct {
+	Provider                string
+	RayJobsURL              string
+	RayTrainingEntrypoint   string
+	RayEvaluationEntrypoint string
+	RayRequestTimeout       time.Duration
+	RayPollInterval         time.Duration
+	ArtifactBucketRegion    string
+	ModelURIPrefix          string
+	EvaluationURIPrefix     string
 }
 
 func init() {
@@ -89,7 +104,20 @@ func main() {
 	}
 
 	trainingEventPublisher := trainingmessaging.NewTrainingEventPublisher(publisher, cfg.Topics)
-	activities := temporalworker.NewTrainingActivities(trainingEventPublisher)
+	manifestReader, err := executor.NewObjectManifestReader(cancelCtx, cfg.Executor.ArtifactBucketRegion, nil)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training manifest reader")
+	}
+	trainingExecutor, err := newTrainingExecutor(cfg.Executor, manifestReader)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training executor")
+	}
+	activities := temporalworker.NewTrainingActivities(
+		trainingEventPublisher,
+		temporalworker.WithExecutor(trainingExecutor),
+		temporalworker.WithModelURIPrefix(cfg.Executor.ModelURIPrefix),
+		temporalworker.WithEvaluationURIPrefix(cfg.Executor.EvaluationURIPrefix),
+	)
 	trainingWorker := temporalworker.NewTrainingWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
 	if err := trainingWorker.Start(); err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to start Temporal worker")
@@ -154,6 +182,17 @@ func readTrainingConfig() trainingConfig {
 			Training:     env.WithDefaultString("TRAINING_SERVICE_TOPIC", "training"),
 		},
 		BaseModel: env.WithDefaultString("TRAINING_SERVICE_BASE_MODEL", "local-dev-base-model"),
+		Executor: trainingExecutorConfig{
+			Provider:                env.WithDefaultString("TRAINING_SERVICE_EXECUTOR_PROVIDER", "ray"),
+			RayJobsURL:              env.WithDefaultString("TRAINING_SERVICE_RAY_JOBS_URL", "http://localhost:8265"),
+			RayTrainingEntrypoint:   env.WithDefaultString("TRAINING_SERVICE_RAY_TRAINING_ENTRYPOINT", "python -m training_jobs.train"),
+			RayEvaluationEntrypoint: env.WithDefaultString("TRAINING_SERVICE_RAY_EVALUATION_ENTRYPOINT", "python -m training_jobs.evaluate"),
+			RayRequestTimeout:       secondsFromEnv("TRAINING_SERVICE_RAY_REQUEST_TIMEOUT_SECONDS", "30"),
+			RayPollInterval:         secondsFromEnv("TRAINING_SERVICE_RAY_POLL_INTERVAL_SECONDS", "30"),
+			ArtifactBucketRegion:    env.WithDefaultString("TRAINING_SERVICE_ARTIFACT_BUCKET_REGION", "local-dev"),
+			ModelURIPrefix:          env.WithDefaultString("TRAINING_SERVICE_MODEL_URI_PREFIX", "s3://local-dev-bucket/models"),
+			EvaluationURIPrefix:     env.WithDefaultString("TRAINING_SERVICE_EVALUATION_URI_PREFIX", "s3://local-dev-bucket/evaluations"),
+		},
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("TRAINING_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercent:       env.WithDefaultInt("TRAINING_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
@@ -162,6 +201,23 @@ func readTrainingConfig() trainingConfig {
 			ServiceLatencyThreshold:       secondsFromEnv("TRAINING_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
 			MessageBrokerLatencyThreshold: secondsFromEnv("TRAINING_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
+	}
+}
+
+func newTrainingExecutor(cfg trainingExecutorConfig, manifestReader executor.ManifestReader) (app.TrainingExecutor, error) {
+	log.Trace("newTrainingExecutor")
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "ray":
+		return executor.NewRayExecutor(executor.RayExecutorConfig{
+			URL:                  cfg.RayJobsURL,
+			TrainingEntrypoint:   cfg.RayTrainingEntrypoint,
+			EvaluationEntrypoint: cfg.RayEvaluationEntrypoint,
+			RequestTimeout:       cfg.RayRequestTimeout,
+			PollInterval:         cfg.RayPollInterval,
+		}, manifestReader)
+	default:
+		return nil, fmt.Errorf("unsupported training executor provider %q", cfg.Provider)
 	}
 }
 

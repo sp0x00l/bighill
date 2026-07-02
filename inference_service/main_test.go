@@ -28,6 +28,11 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_GENERATION_ENDPOINT")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_GENERATION_MODEL")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_GENERATION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_RERANKER_PROVIDER")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_RERANKER_URL")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_RERANKER_MODEL")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_RERANKER_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_RERANKER_CANDIDATE_MULTIPLIER")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_PROMPT_STRATEGY_VERSION")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_PROMPT_MAX_CONTEXT_CHARS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_PROMPT_MAX_CONTEXT_CHUNKS")).To(Succeed())
@@ -45,6 +50,11 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Generation.Provider).To(Equal("deterministic"))
 		Expect(cfg.Generation.Endpoint).To(Equal("http://localhost:11434"))
 		Expect(cfg.Generation.Model).To(Equal("llama3.1:8b"))
+		Expect(cfg.Reranker.Provider).To(Equal("disabled"))
+		Expect(cfg.Reranker.URL).To(BeEmpty())
+		Expect(cfg.Reranker.Model).To(BeEmpty())
+		Expect(cfg.Reranker.RequestTimeout).To(Equal(30 * time.Second))
+		Expect(cfg.Reranker.CandidateMultiplier).To(Equal(5))
 		Expect(cfg.Generation.PromptStrategy).To(Equal("rag-prompt-v1"))
 		Expect(cfg.Generation.MaxContextChars).To(Equal(12000))
 		Expect(cfg.Generation.MaxContextChunks).To(Equal(8))
@@ -74,6 +84,35 @@ var _ = Describe("newGenerationAdapter", func() {
 
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("unsupported generation provider"))
+	})
+})
+
+var _ = Describe("newRerankerAdapter", func() {
+	It("disables reranking when configured as disabled", func() {
+		reranker, err := newRerankerAdapter(rerankerConfig{Provider: "disabled"})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reranker).To(BeNil())
+	})
+
+	It("creates a TEI reranker", func() {
+		reranker, err := newRerankerAdapter(rerankerConfig{
+			Provider:            "tei",
+			URL:                 "http://tei.local",
+			Model:               "bge-reranker",
+			RequestTimeout:      time.Second,
+			CandidateMultiplier: 5,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reranker).NotTo(BeNil())
+	})
+
+	It("rejects unsupported providers", func() {
+		_, err := newRerankerAdapter(rerankerConfig{Provider: "unknown"})
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unsupported reranker provider"))
 	})
 })
 

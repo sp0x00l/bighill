@@ -35,9 +35,33 @@ func (p *recordingTrainingEventPublisher) PublishModelTrainingFailed(_ context.C
 	return p.err
 }
 
+type recordingTrainingExecutor struct {
+	trainingSpec   model.TrainingJobSpec
+	evaluationSpec model.EvaluationJobSpec
+	artifact       *model.TrainedModelArtifact
+	report         *model.EvaluationReport
+	err            error
+}
+
+func (e *recordingTrainingExecutor) RunTrainingJob(_ context.Context, spec model.TrainingJobSpec) (*model.TrainedModelArtifact, error) {
+	e.trainingSpec = spec
+	if e.err != nil {
+		return nil, e.err
+	}
+	return e.artifact, nil
+}
+
+func (e *recordingTrainingExecutor) EvaluateModel(_ context.Context, spec model.EvaluationJobSpec) (*model.EvaluationReport, error) {
+	e.evaluationSpec = spec
+	if e.err != nil {
+		return nil, e.err
+	}
+	return e.report, nil
+}
+
 var _ = Describe("TrainingActivities", func() {
 	It("prepares dataset metadata for a feature snapshot", func() {
-		activities := temporalworker.NewTrainingActivities()
+		activities := temporalworker.NewTrainingActivities(nil)
 
 		prepared, err := activities.PrepareTrainingDataset(context.Background(), model.TrainingRunRequest{
 			TrainingRunID:     "training-run-1",
@@ -49,7 +73,7 @@ var _ = Describe("TrainingActivities", func() {
 	})
 
 	It("rejects invalid preparation requests", func() {
-		activities := temporalworker.NewTrainingActivities()
+		activities := temporalworker.NewTrainingActivities(nil)
 
 		prepared, err := activities.PrepareTrainingDataset(context.Background(), model.TrainingRunRequest{})
 
@@ -57,8 +81,22 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 
-	It("creates model artifact metadata", func() {
-		activities := temporalworker.NewTrainingActivities()
+	It("builds a training job spec and delegates execution", func() {
+		executor := &recordingTrainingExecutor{artifact: &model.TrainedModelArtifact{
+			TrainingRunID:     "training-run-1",
+			ModelURI:          "s3://models/training-run-1",
+			ModelName:         "model",
+			ModelVersion:      "v1",
+			BaseModel:         "mistral-7b",
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactChecksum:  "sha256:abc",
+			ArtifactSizeBytes: 128,
+		}}
+		activities := temporalworker.NewTrainingActivities(
+			nil,
+			temporalworker.WithExecutor(executor),
+			temporalworker.WithModelURIPrefix("s3://models"),
+		)
 
 		artifact, err := activities.RunTrainingJob(context.Background(), model.PreparedTrainingDataset{
 			TrainingRunID: "training-run-1",
@@ -71,26 +109,49 @@ var _ = Describe("TrainingActivities", func() {
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(artifact.ModelURI).To(Equal("s3://local-dev-bucket/models/training-run-1"))
+		Expect(artifact).To(Equal(executor.artifact))
+		Expect(executor.trainingSpec.TrainingRunID).To(Equal("training-run-1"))
+		Expect(executor.trainingSpec.DatasetURI).To(Equal("s3://local-dev-bucket/features/feature-snapshot-1.parquet"))
+		Expect(executor.trainingSpec.ModelURI).To(Equal("s3://models/training-run-1"))
+		Expect(executor.trainingSpec.ArtifactManifestURI).To(Equal("s3://models/training-run-1/artifact.json"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("base_model: mistral-7b"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("path: s3://local-dev-bucket/features/feature-snapshot-1.parquet"))
+		Expect(executor.trainingSpec.RecipeHash).NotTo(BeEmpty())
+		Expect(executor.trainingSpec.SubmissionID).To(HavePrefix("train-training-run-1-"))
 		Expect(artifact.ModelName).To(Equal("model"))
 		Expect(artifact.ModelVersion).To(Equal("v1"))
 		Expect(artifact.BaseModel).To(Equal("mistral-7b"))
 		Expect(artifact.ArtifactFormat).To(Equal("HF_PEFT_ADAPTER"))
-		Expect(artifact.ArtifactChecksum).To(Equal("local-dev-training-run-1"))
+		Expect(artifact.ArtifactChecksum).To(Equal("sha256:abc"))
 		Expect(artifact.ArtifactSizeBytes).To(BeNumerically(">", 0))
 	})
 
-	It("creates evaluation report metadata", func() {
-		activities := temporalworker.NewTrainingActivities()
+	It("builds an evaluation job spec and delegates execution", func() {
+		executor := &recordingTrainingExecutor{report: &model.EvaluationReport{
+			TrainingRunID: "training-run-1",
+			ReportURI:     "s3://evaluations/training-run-1.json",
+			Passed:        true,
+		}}
+		activities := temporalworker.NewTrainingActivities(
+			nil,
+			temporalworker.WithExecutor(executor),
+			temporalworker.WithEvaluationURIPrefix("s3://evaluations"),
+		)
 
 		report, err := activities.EvaluateTrainedModel(context.Background(), model.TrainedModelArtifact{
 			TrainingRunID: "training-run-1",
 			ModelURI:      "s3://local-dev-bucket/models/training-run-1",
-		}, model.TrainingRunRequest{TrainingRunID: "training-run-1"})
+		}, model.TrainingRunRequest{TrainingRunID: "training-run-1", EvaluationProfile: "smoke"})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(report.Passed).To(BeTrue())
-		Expect(report.ReportURI).To(Equal("s3://local-dev-bucket/evaluations/training-run-1.json"))
+		Expect(report.ReportURI).To(Equal("s3://evaluations/training-run-1.json"))
+		Expect(executor.evaluationSpec.TrainingRunID).To(Equal("training-run-1"))
+		Expect(executor.evaluationSpec.ModelURI).To(Equal("s3://local-dev-bucket/models/training-run-1"))
+		Expect(executor.evaluationSpec.EvaluationProfile).To(Equal("smoke"))
+		Expect(executor.evaluationSpec.ReportURI).To(Equal("s3://evaluations/training-run-1.json"))
+		Expect(executor.evaluationSpec.ReportManifestURI).To(Equal("s3://evaluations/training-run-1.json"))
+		Expect(executor.evaluationSpec.SubmissionID).To(HavePrefix("eval-training-run-1-"))
 	})
 
 	It("publishes completed training facts", func() {
@@ -127,7 +188,7 @@ var _ = Describe("TrainingActivities", func() {
 	})
 
 	It("rejects completed training publish without a publisher", func() {
-		activities := temporalworker.NewTrainingActivities()
+		activities := temporalworker.NewTrainingActivities(nil)
 
 		err := activities.PublishModelTrainingCompleted(context.Background(), model.TrainingRunResult{TrainingRunID: "training-run-1"})
 

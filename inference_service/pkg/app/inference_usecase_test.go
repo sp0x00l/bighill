@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -86,11 +87,32 @@ func (s *retrievalClientStub) SearchEmbeddings(_ context.Context, datasetID uuid
 	if s.err != nil {
 		return nil, s.err
 	}
+	if topK < len(s.contexts) {
+		return s.contexts[:topK], nil
+	}
 	return s.contexts, nil
 }
 
 func (s *retrievalClientStub) Close() error {
 	return nil
+}
+
+type rerankerStub struct {
+	query      string
+	candidates []model.RetrievedContext
+	topK       int
+	contexts   []model.RetrievedContext
+	err        error
+}
+
+func (s *rerankerStub) Rerank(_ context.Context, query string, candidates []model.RetrievedContext, topK int) ([]model.RetrievedContext, error) {
+	s.query = query
+	s.candidates = candidates
+	s.topK = topK
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.contexts, nil
 }
 
 type generationAdapterStub struct {
@@ -227,7 +249,75 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(requestRepository.request.RequestID).To(Equal(requestID))
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
 		Expect(requestRepository.request.GenerationProvider).To(Equal("stub"))
+		Expect(requestRepository.request.PromptText).To(ContainSubstring("Retrieved context"))
+		Expect(requestRepository.request.PromptText).To(ContainSubstring("retrieved context"))
+		Expect(requestRepository.request.AnswerText).To(Equal("generated answer"))
+		Expect(requestRepository.request.RetrievedContexts).NotTo(BeEmpty())
+		var auditedContexts []model.RetrievedContextAudit
+		Expect(json.Unmarshal([]byte(requestRepository.request.RetrievedContexts), &auditedContexts)).To(Succeed())
+		Expect(auditedContexts).To(HaveLen(1))
+		Expect(auditedContexts[0].SourceText).To(Equal("retrieved context"))
+		Expect(auditedContexts[0].EmbeddingSnapshotID).To(Equal(dataset.EmbeddingSnapshotID.String()))
 	})
+
+	DescribeTable("reranking",
+		func(rerankerEnabled bool, expectedRetrievalTopK int, expectedResponseChunks []int) {
+			dataset := validInferenceDataset()
+			inferenceModel := validInferenceModel()
+			inferenceModel.DatasetID = dataset.DatasetID
+			retrieved := []model.RetrievedContext{
+				{EmbeddingRecordID: uuid.New(), EmbeddingSnapshotID: dataset.EmbeddingSnapshotID, ChunkIndex: 1, SourceText: "first", Similarity: 0.70},
+				{EmbeddingRecordID: uuid.New(), EmbeddingSnapshotID: dataset.EmbeddingSnapshotID, ChunkIndex: 2, SourceText: "second", Similarity: 0.68},
+				{EmbeddingRecordID: uuid.New(), EmbeddingSnapshotID: dataset.EmbeddingSnapshotID, ChunkIndex: 3, SourceText: "third", Similarity: 0.65},
+				{EmbeddingRecordID: uuid.New(), EmbeddingSnapshotID: dataset.EmbeddingSnapshotID, ChunkIndex: 4, SourceText: "fourth", Similarity: 0.60},
+			}
+			retrieval := &retrievalClientStub{contexts: retrieved}
+			reranker := &rerankerStub{contexts: []model.RetrievedContext{
+				withRerankScore(retrieved[2], 0.99),
+				withRerankScore(retrieved[0], 0.90),
+			}}
+			promptStrategy := testPromptStrategy()
+			options := []app.InferenceOption{
+				app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+				app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+				app.WithRetrievalClient(retrieval),
+				app.WithGenerationAdapter(&generationAdapterStub{}),
+				app.WithPromptStrategy(promptStrategy),
+				app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+				app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+			}
+			if rerankerEnabled {
+				options = append(options, app.WithReranker(reranker), app.WithRerankCandidateMultiplier(3))
+			}
+			uc := app.NewInferenceUsecase(&inferenceModelRepositoryStub{model: inferenceModel}, options...)
+
+			response, err := uc.Generate(context.Background(), model.GenerateRequest{
+				RequestID: uuid.New(),
+				DatasetID: dataset.DatasetID,
+				ModelID:   inferenceModel.ModelID,
+				QueryText: "query",
+				TopK:      2,
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(retrieval.topK).To(Equal(expectedRetrievalTopK))
+			if rerankerEnabled {
+				Expect(reranker.query).To(Equal("query"))
+				Expect(reranker.topK).To(Equal(2))
+				Expect(reranker.candidates).To(Equal(retrieved))
+			}
+			Expect(response.Contexts).To(HaveLen(len(expectedResponseChunks)))
+			for i, chunkIndex := range expectedResponseChunks {
+				Expect(response.Contexts[i].ChunkIndex).To(Equal(chunkIndex))
+			}
+			if rerankerEnabled {
+				Expect(response.Contexts[0].RerankScore).To(Equal(0.99))
+				Expect(response.Contexts[0].Similarity).To(Equal(0.65))
+			}
+		},
+		Entry("uses request topK when reranker is not configured", false, 2, []int{1, 2}),
+		Entry("over-fetches, reranks, then packs when reranker is configured", true, 6, []int{3, 1}),
+	)
 
 	It("rejects generation before embeddings are ready", func() {
 		dataset := validInferenceDataset()
@@ -356,6 +446,8 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(response.Answer).To(Equal("generated answer"))
 		Expect(requestRepository.request).NotTo(BeNil())
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
+		Expect(requestRepository.request.PromptText).To(ContainSubstring("retrieved context"))
+		Expect(requestRepository.request.AnswerText).To(Equal("generated answer"))
 	})
 })
 
@@ -366,6 +458,11 @@ func testPromptStrategy() model.PromptStrategy {
 		MaxContextChars:  200,
 		MaxContextChunks: 4,
 	}
+}
+
+func withRerankScore(context model.RetrievedContext, score float64) model.RetrievedContext {
+	context.RerankScore = score
+	return context
 }
 
 func validInferenceModel() *model.InferenceModel {

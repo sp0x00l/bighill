@@ -18,6 +18,8 @@ const (
 	PublishModelTrainingCompletedActivity = "training.publish_model_training_completed"
 	PublishModelTrainingFailedActivity    = "training.publish_model_training_failed"
 	DefaultTrainingWorkflowTaskQueue      = "training-service"
+	DefaultRunTrainingActivityTimeout     = 24 * time.Hour
+	DefaultTrainingActivityHeartbeat      = 2 * time.Minute
 )
 
 func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) (*model.TrainingRunResult, error) {
@@ -41,7 +43,19 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 	}
 
 	var artifact model.TrainedModelArtifact
-	if err := workflow.ExecuteActivity(ctx, RunTrainingJobActivity, prepared, request).Get(ctx, &artifact); err != nil {
+	runTrainingCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		ActivityID:             "run-training:" + request.TrainingRunID,
+		StartToCloseTimeout:    DefaultRunTrainingActivityTimeout,
+		ScheduleToCloseTimeout: DefaultRunTrainingActivityTimeout,
+		HeartbeatTimeout:       DefaultTrainingActivityHeartbeat,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2,
+			MaximumInterval:    time.Minute,
+			MaximumAttempts:    3,
+		},
+	})
+	if err := workflow.ExecuteActivity(runTrainingCtx, RunTrainingJobActivity, prepared, request).Get(ctx, &artifact); err != nil {
 		return nil, err
 	}
 

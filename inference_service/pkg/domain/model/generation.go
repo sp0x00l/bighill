@@ -35,6 +35,17 @@ type RetrievedContext struct {
 	SourceText          string
 	Distance            float64
 	Similarity          float64
+	RerankScore         float64
+}
+
+type RetrievedContextAudit struct {
+	EmbeddingRecordID   string  `json:"embedding_record_id"`
+	EmbeddingSnapshotID string  `json:"embedding_snapshot_id"`
+	ChunkIndex          int     `json:"chunk_index"`
+	SourceText          string  `json:"source_text"`
+	Distance            float64 `json:"distance"`
+	Similarity          float64 `json:"similarity"`
+	RerankScore         float64 `json:"rerank_score,omitempty"`
 }
 
 type GenerationRequest struct {
@@ -103,6 +114,9 @@ type InferenceRequest struct {
 	TopK                  int
 	MetadataFilters       string
 	RetrievedContextIDs   string
+	RetrievedContexts     string
+	PromptText            string
+	AnswerText            string
 	PromptStrategyVersion string
 	GenerationProvider    string
 	GenerationModel       string

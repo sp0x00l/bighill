@@ -57,20 +57,42 @@ type PreparedTrainingDataset struct {
 }
 
 type TrainedModelArtifact struct {
-	TrainingRunID     string
-	ModelURI          string
-	ModelName         string
-	ModelVersion      string
-	BaseModel         string
-	ArtifactFormat    string
-	ArtifactChecksum  string
-	ArtifactSizeBytes int64
+	TrainingRunID     string `json:"training_run_id"`
+	ModelURI          string `json:"model_uri"`
+	ModelName         string `json:"model_name"`
+	ModelVersion      string `json:"model_version"`
+	BaseModel         string `json:"base_model"`
+	ArtifactFormat    string `json:"artifact_format"`
+	ArtifactChecksum  string `json:"artifact_checksum"`
+	ArtifactSizeBytes int64  `json:"artifact_size_bytes"`
 }
 
 type EvaluationReport struct {
-	TrainingRunID string
-	ReportURI     string
-	Passed        bool
+	TrainingRunID string `json:"training_run_id"`
+	ReportURI     string `json:"report_uri"`
+	Passed        bool   `json:"passed"`
+}
+
+type TrainingJobSpec struct {
+	TrainingRunID       string
+	DatasetURI          string
+	ModelName           string
+	ModelVersion        string
+	BaseModel           string
+	ModelURI            string
+	ArtifactManifestURI string
+	RecipeYAML          string
+	RecipeHash          string
+	SubmissionID        string
+}
+
+type EvaluationJobSpec struct {
+	TrainingRunID     string
+	ModelURI          string
+	EvaluationProfile string
+	ReportURI         string
+	ReportManifestURI string
+	SubmissionID      string
 }
 
 type TrainingRunResult struct {

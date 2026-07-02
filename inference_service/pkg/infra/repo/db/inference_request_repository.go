@@ -28,12 +28,12 @@ func (r *InferenceRequestRepository) RecordInferenceRequest(ctx context.Context,
 
 	query := `INSERT INTO ` + r.Name + `.inference_requests (
 		request_id, dataset_id, model_id, embedding_snapshot_id, query_text, top_k,
-		metadata_filters, retrieved_context_ids, prompt_strategy_version, generation_provider,
-		generation_model, latency_ms, status, error_message
+		metadata_filters, retrieved_context_ids, retrieved_contexts, prompt_text, answer_text,
+		prompt_strategy_version, generation_provider, generation_model, latency_ms, status, error_message
 	) VALUES (
 		@request_id, @dataset_id, @model_id, @embedding_snapshot_id, @query_text, @top_k,
-		@metadata_filters::jsonb, @retrieved_context_ids::jsonb, @prompt_strategy_version, @generation_provider,
-		@generation_model, @latency_ms, @status, @error_message
+		@metadata_filters::jsonb, @retrieved_context_ids::jsonb, @retrieved_contexts::jsonb, @prompt_text, @answer_text,
+		@prompt_strategy_version, @generation_provider, @generation_model, @latency_ms, @status, @error_message
 	)
 	ON CONFLICT (request_id) DO UPDATE SET
 		dataset_id = EXCLUDED.dataset_id,
@@ -43,6 +43,9 @@ func (r *InferenceRequestRepository) RecordInferenceRequest(ctx context.Context,
 		top_k = EXCLUDED.top_k,
 		metadata_filters = EXCLUDED.metadata_filters,
 		retrieved_context_ids = EXCLUDED.retrieved_context_ids,
+		retrieved_contexts = EXCLUDED.retrieved_contexts,
+		prompt_text = EXCLUDED.prompt_text,
+		answer_text = EXCLUDED.answer_text,
 		prompt_strategy_version = EXCLUDED.prompt_strategy_version,
 		generation_provider = EXCLUDED.generation_provider,
 		generation_model = EXCLUDED.generation_model,
@@ -69,6 +72,9 @@ func inferenceRequestArgs(request *model.InferenceRequest) pgx.NamedArgs {
 		"top_k":                   request.TopK,
 		"metadata_filters":        request.MetadataFilters,
 		"retrieved_context_ids":   request.RetrievedContextIDs,
+		"retrieved_contexts":      request.RetrievedContexts,
+		"prompt_text":             request.PromptText,
+		"answer_text":             request.AnswerText,
 		"prompt_strategy_version": request.PromptStrategyVersion,
 		"generation_provider":     request.GenerationProvider,
 		"generation_model":        request.GenerationModel,

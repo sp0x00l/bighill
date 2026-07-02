@@ -121,6 +121,16 @@ spec:
               value: {{ .Values.env.generationModel | quote }}
             - name: INFERENCE_GENERATION_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.generationRequestTimeoutSeconds | quote }}
+            - name: INFERENCE_RERANKER_PROVIDER
+              value: {{ .Values.env.rerankerProvider | quote }}
+            - name: INFERENCE_RERANKER_URL
+              value: {{ .Values.env.rerankerUrl | quote }}
+            - name: INFERENCE_RERANKER_MODEL
+              value: {{ .Values.env.rerankerModel | quote }}
+            - name: INFERENCE_RERANKER_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.env.rerankerRequestTimeoutSeconds | quote }}
+            - name: INFERENCE_RERANKER_CANDIDATE_MULTIPLIER
+              value: {{ .Values.env.rerankerCandidateMultiplier | quote }}
             - name: INFERENCE_PROMPT_STRATEGY_VERSION
               value: {{ .Values.env.promptStrategyVersion | quote }}
             - name: INFERENCE_PROMPT_MAX_CONTEXT_CHARS

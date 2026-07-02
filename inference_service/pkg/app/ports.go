@@ -31,6 +31,10 @@ type ContextPacker interface {
 	Pack(ctx context.Context, request model.ContextPackRequest) ([]model.RetrievedContext, error)
 }
 
+type Reranker interface {
+	Rerank(ctx context.Context, query string, candidates []model.RetrievedContext, topK int) ([]model.RetrievedContext, error)
+}
+
 type PromptBuilder interface {
 	BuildPrompt(ctx context.Context, request model.PromptBuildRequest) (*model.PromptPackage, error)
 }

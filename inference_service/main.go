@@ -20,6 +20,7 @@ import (
 	inferencegrpc "inference_service/pkg/infra/network/grpc"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
 	inferencedb "inference_service/pkg/infra/repo/db"
+	"inference_service/pkg/infra/retrieval"
 
 	coreDB "lib/shared_lib/db"
 	env "lib/shared_lib/env"
@@ -41,6 +42,7 @@ type inferenceConfig struct {
 	Topics              inferencemessaging.InferenceTopics
 	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
 	Generation          generationConfig
+	Reranker            rerankerConfig
 	GRPCPort            int
 	Health              healthConfig
 }
@@ -53,6 +55,14 @@ type generationConfig struct {
 	PromptStrategy   string
 	MaxContextChars  int
 	MaxContextChunks int
+}
+
+type rerankerConfig struct {
+	Provider            string
+	URL                 string
+	Model               string
+	RequestTimeout      time.Duration
+	CandidateMultiplier int
 }
 
 type healthConfig struct {
@@ -111,12 +121,15 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create generation adapter")
 	}
+	reranker, err := newRerankerAdapter(cfg.Reranker)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create reranker adapter")
+	}
 	promptStrategy, err := promptStrategyFromConfig(cfg.Generation)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("invalid prompt strategy configuration")
 	}
-	inferenceUsecase := app.NewInferenceUsecase(
-		modelRepository,
+	inferenceOptions := []app.InferenceOption{
 		app.WithInferenceDatasetRepository(datasetRepository),
 		app.WithInferenceRequestRepository(requestRepository),
 		app.WithRetrievalClient(retrievalClient),
@@ -124,6 +137,16 @@ func main() {
 		app.WithPromptStrategy(promptStrategy),
 		app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 		app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+	}
+	if reranker != nil {
+		inferenceOptions = append(inferenceOptions,
+			app.WithReranker(reranker),
+			app.WithRerankCandidateMultiplier(cfg.Reranker.CandidateMultiplier),
+		)
+	}
+	inferenceUsecase := app.NewInferenceUsecase(
+		modelRepository,
+		inferenceOptions...,
 	)
 	modelUpdatedSubscriber := inferencemessaging.NewModelUpdatedSubscriber(subscriber, inferenceUsecase, cfg.Topics)
 	grpcService := inferencegrpc.NewInferenceGrpcServer(inferenceUsecase)
@@ -205,6 +228,13 @@ func readInferenceConfig() inferenceConfig {
 			MaxContextChars:  env.WithDefaultInt("INFERENCE_PROMPT_MAX_CONTEXT_CHARS", "12000"),
 			MaxContextChunks: env.WithDefaultInt("INFERENCE_PROMPT_MAX_CONTEXT_CHUNKS", "8"),
 		},
+		Reranker: rerankerConfig{
+			Provider:            env.WithDefaultString("INFERENCE_RERANKER_PROVIDER", "disabled"),
+			URL:                 env.WithDefaultString("INFERENCE_RERANKER_URL", ""),
+			Model:               env.WithDefaultString("INFERENCE_RERANKER_MODEL", ""),
+			RequestTimeout:      secondsFromEnv("INFERENCE_RERANKER_REQUEST_TIMEOUT_SECONDS", "30"),
+			CandidateMultiplier: env.WithDefaultInt("INFERENCE_RERANKER_CANDIDATE_MULTIPLIER", "5"),
+		},
 		GRPCPort: env.WithDefaultInt("INFERENCE_API_GRPC_PORT", "7073"),
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
@@ -229,6 +259,22 @@ func newGenerationAdapter(cfg generationConfig) (app.GenerationAdapter, error) {
 		return generation.NewHTTPGenerator("ollama", cfg.Endpoint, cfg.Model, cfg.RequestTimeout)
 	default:
 		return nil, fmt.Errorf("unsupported generation provider %q", cfg.Provider)
+	}
+}
+
+func newRerankerAdapter(cfg rerankerConfig) (app.Reranker, error) {
+	log.Trace("newRerankerAdapter")
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "", "disabled", "none":
+		return nil, nil
+	case "tei":
+		if cfg.CandidateMultiplier <= 0 {
+			return nil, fmt.Errorf("reranker candidate multiplier must be greater than zero")
+		}
+		return retrieval.NewTEIReranker(cfg.URL, cfg.Model, cfg.RequestTimeout)
+	default:
+		return nil, fmt.Errorf("unsupported reranker provider %q", cfg.Provider)
 	}
 }
 

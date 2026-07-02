@@ -52,6 +52,24 @@ spec:
               value: {{ .Values.env.dlq | quote }}
             - name: TRAINING_SERVICE_BASE_MODEL
               value: {{ .Values.env.baseModel | quote }}
+            - name: TRAINING_SERVICE_EXECUTOR_PROVIDER
+              value: {{ .Values.env.executorProvider | quote }}
+            - name: TRAINING_SERVICE_RAY_JOBS_URL
+              value: {{ .Values.env.rayJobsUrl | quote }}
+            - name: TRAINING_SERVICE_RAY_TRAINING_ENTRYPOINT
+              value: {{ .Values.env.rayTrainingEntrypoint | quote }}
+            - name: TRAINING_SERVICE_RAY_EVALUATION_ENTRYPOINT
+              value: {{ .Values.env.rayEvaluationEntrypoint | quote }}
+            - name: TRAINING_SERVICE_RAY_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.env.rayRequestTimeoutSeconds | quote }}
+            - name: TRAINING_SERVICE_RAY_POLL_INTERVAL_SECONDS
+              value: {{ .Values.env.rayPollIntervalSeconds | quote }}
+            - name: TRAINING_SERVICE_ARTIFACT_BUCKET_REGION
+              value: {{ .Values.env.artifactBucketRegion | quote }}
+            - name: TRAINING_SERVICE_MODEL_URI_PREFIX
+              value: {{ .Values.env.modelUriPrefix | quote }}
+            - name: TRAINING_SERVICE_EVALUATION_URI_PREFIX
+              value: {{ .Values.env.evaluationUriPrefix | quote }}
             - name: TRAINING_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: TRAINING_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
