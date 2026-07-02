@@ -143,8 +143,12 @@ func (g *HTTPGenerator) generateWithVLLM(ctx context.Context, request model.Gene
 		return "", fmt.Errorf("prompt is required")
 	}
 	modelName := g.model
+	endpoint := g.endpoint
 	if request.Model != nil && strings.TrimSpace(request.Model.ServingModel) != "" {
 		modelName = strings.TrimSpace(request.Model.ServingModel)
+	}
+	if request.Model != nil && strings.TrimSpace(request.Model.ServingTarget) != "" {
+		endpoint = strings.TrimRight(strings.TrimSpace(request.Model.ServingTarget), "/")
 	}
 	body, err := json.Marshal(vllmChatCompletionRequest{
 		Model: modelName,
@@ -157,7 +161,7 @@ func (g *HTTPGenerator) generateWithVLLM(ctx context.Context, request model.Gene
 	if err != nil {
 		return "", fmt.Errorf("marshal vllm request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint+"/v1/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build vllm request: %w", err)
 	}

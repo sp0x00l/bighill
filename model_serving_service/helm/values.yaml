@@ -1,0 +1,40 @@
+replicaCount: 1
+image:
+  repository: "model-serving-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: true
+  name: "model-serving-service"
+  annotations: {}
+rbac:
+  create: true
+crd:
+  create: true
+service:
+  type: ClusterIP
+  healthPort: 5061
+env:
+  environment: "local-dev"
+  serviceName: "model-serving-service"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  pollMs: "1000"
+  servedModelCrdGroup: "serving.bighill.io"
+  servedModelCrdVersion: "v1alpha1"
+  servedModelCrdResource: "servedmodels"
+  vllmImage: "vllm/vllm-openai:latest"
+  vllmImagePullPolicy: "IfNotPresent"
+  vllmServiceAccount: ""
+  vllmReplicas: "1"
+  vllmPort: "8000"
+  vllmCpu: "1"
+  vllmMemory: "4Gi"
+  vllmGpuResource: "nvidia.com/gpu"
+  vllmGpu: "1"
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "50m"
+  limits:
+    memory: "512Mi"
+    cpu: "300m"

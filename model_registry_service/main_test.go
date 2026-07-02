@@ -48,7 +48,7 @@ var _ = Describe("readModelRegistryConfig", func() {
 		Expect(cfg.Messaging.GroupID).To(Equal("model-registry-group"))
 		Expect(cfg.Messaging.Brokers).To(Equal("localhost:9092"))
 		Expect(cfg.Health.MessageBrokerConnectionString).To(Equal("localhost:9092"))
-		Expect(cfg.Serving.Enabled).To(BeFalse())
+		Expect(cfg.Serving.Enabled).To(BeTrue())
 		Expect(cfg.Serving.Namespace).To(Equal("default"))
 		Expect(cfg.Serving.CRDGroup).To(Equal("serving.bighill.io"))
 		Expect(cfg.Serving.CRDVersion).To(Equal("v1alpha1"))

@@ -90,7 +90,7 @@ func NewTrainingActivities(publisher TrainingEventPublisher, opts ...TrainingAct
 		eventPublisher:       publisher,
 		modelURIPrefix:       "s3://local-dev-bucket/models",
 		evaluationURIPrefix:  "s3://local-dev-bucket/evaluations",
-		servingLoadStatus:    "LOADED",
+		servingLoadStatus:    "NOT_LOADED",
 		artifactBucketRegion: "local-dev",
 		axolotlCommand:       "axolotl train",
 	}

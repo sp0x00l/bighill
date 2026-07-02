@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "model-serving-service.fullname" . }}
+  labels:
+    app: {{ include "model-serving-service.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "model-serving-service.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "model-serving-service.fullname" . }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "model-serving-service.fullname" .) }}
+      {{- end }}
+      containers:
+        - name: {{ include "model-serving-service.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: {{ .Values.env.environment | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.env.otelExporterEndpoint | quote }}
+            - name: MODEL_SERVING_SERVICE_NAME
+              value: {{ .Values.env.serviceName | quote }}
+            - name: MODEL_SERVING_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
+            - name: MODEL_SERVING_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MODEL_SERVING_HEALTHCHECK_PORT
+              value: {{ .Values.service.healthPort | quote }}
+            - name: MODEL_SERVING_POLL_MS
+              value: {{ .Values.env.pollMs | quote }}
+            - name: MODEL_SERVING_SERVED_MODEL_CRD_GROUP
+              value: {{ .Values.env.servedModelCrdGroup | quote }}
+            - name: MODEL_SERVING_SERVED_MODEL_CRD_VERSION
+              value: {{ .Values.env.servedModelCrdVersion | quote }}
+            - name: MODEL_SERVING_SERVED_MODEL_CRD_RESOURCE
+              value: {{ .Values.env.servedModelCrdResource | quote }}
+            - name: MODEL_SERVING_VLLM_IMAGE
+              value: {{ .Values.env.vllmImage | quote }}
+            - name: MODEL_SERVING_VLLM_IMAGE_PULL_POLICY
+              value: {{ .Values.env.vllmImagePullPolicy | quote }}
+            - name: MODEL_SERVING_VLLM_SERVICE_ACCOUNT
+              value: {{ .Values.env.vllmServiceAccount | quote }}
+            - name: MODEL_SERVING_VLLM_REPLICAS
+              value: {{ .Values.env.vllmReplicas | quote }}
+            - name: MODEL_SERVING_VLLM_PORT
+              value: {{ .Values.env.vllmPort | quote }}
+            - name: MODEL_SERVING_VLLM_CPU
+              value: {{ .Values.env.vllmCpu | quote }}
+            - name: MODEL_SERVING_VLLM_MEMORY
+              value: {{ .Values.env.vllmMemory | quote }}
+            - name: MODEL_SERVING_VLLM_GPU_RESOURCE
+              value: {{ .Values.env.vllmGpuResource | quote }}
+            - name: MODEL_SERVING_VLLM_GPU
+              value: {{ .Values.env.vllmGpu | quote }}
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory | quote }}
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | quote }}
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: 10
+            failureThreshold: 3

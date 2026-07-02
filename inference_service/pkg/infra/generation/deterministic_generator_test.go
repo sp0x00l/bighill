@@ -150,6 +150,32 @@ var _ = Describe("HTTPGenerator", func() {
 		Expect(generator.Provider()).To(Equal("vllm"))
 		Expect(generator.Model()).To(Equal("base-model"))
 	})
+
+	It("routes vLLM requests to the model serving target when present", func() {
+		generator, err := generation.NewHTTPGeneratorWithClient("vllm", "http://fallback-vllm.local", "base-model", 0, &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				Expect(r.URL.String()).To(Equal("http://served-model.default.svc.cluster.local:8000/v1/chat/completions"))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBufferString(`{"choices":[{"message":{"content":"generated from served model"}}]}`)),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		answer, err := generator.Generate(context.Background(), model.GenerationRequest{
+			Query:  "question",
+			Prompt: "prompt text",
+			Model: &model.InferenceModel{
+				ServingTarget: "http://served-model.default.svc.cluster.local:8000",
+				ServingModel:  "movie-ranker-lora",
+			},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(answer).To(Equal("generated from served model"))
+	})
 })
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

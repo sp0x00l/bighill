@@ -2,6 +2,7 @@ package k8s_test
 
 import (
 	"context"
+	stderrors "errors"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ var _ = Describe("ServedModelAdapter", func() {
 
 		Expect(adapter.EnsureServedModel(context.Background(), modelRecord)).To(Succeed())
 
-		obj, err := client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(modelRecord.ModelID), metav1.GetOptions{})
+		obj, err := client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(obj.GetLabels()).To(HaveKeyWithValue("bighill.io/model-id", modelRecord.ModelID.String()))
 		modelID, _, _ := unstructured.NestedString(obj.Object, "spec", "modelID")
@@ -53,10 +54,29 @@ var _ = Describe("ServedModelAdapter", func() {
 
 		Expect(adapter.EnsureServedModel(context.Background(), modelRecord)).To(Succeed())
 
-		obj, err := client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(modelRecord.ModelID), metav1.GetOptions{})
+		obj, err := client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		adapterURI, _, _ := unstructured.NestedString(obj.Object, "spec", "adapterURI")
 		Expect(adapterURI).To(Equal("s3://models/updated"))
+	})
+
+	It("creates distinct ServedModel CRs for different versions of the same model", func() {
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		v1 := validRegistryModel()
+		v2 := *v1
+		v2.ModelVersion = v1.ModelVersion + 1
+		v2.ServingModel = "movie-ranker-v2"
+
+		Expect(adapter.EnsureServedModel(context.Background(), v1)).To(Succeed())
+		Expect(adapter.EnsureServedModel(context.Background(), &v2)).To(Succeed())
+
+		_, err = client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(v1.ModelID, v1.ModelVersion), metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(v2.ModelID, v2.ModelVersion), metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(registryk8s.ServedModelName(v1.ModelID, v1.ModelVersion)).NotTo(Equal(registryk8s.ServedModelName(v2.ModelID, v2.ModelVersion)))
 	})
 
 	It("records loaded ServedModel status through the usecase boundary", func() {
@@ -78,16 +98,86 @@ var _ = Describe("ServedModelAdapter", func() {
 		Expect(recorder.status.ServingTarget).To(Equal(modelRecord.ServingTarget))
 		Expect(recorder.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
+
+	It("skips unchanged ServedModel status after a successful record", func() {
+		modelRecord := validRegistryModel()
+		existing := servedModelObject(modelRecord)
+		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
+		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		recorder := &servingStatusRecorderStub{}
+		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
+		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
+
+		Expect(recorder.calls).To(Equal(1))
+	})
+
+	It("continues when a ServedModel has malformed status", func() {
+		modelRecord := validRegistryModel()
+		valid := servedModelObject(modelRecord)
+		Expect(unstructured.SetNestedField(valid.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
+		malformed := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "serving.bighill.io/v1alpha1",
+			"kind":       "ServedModel",
+			"metadata": map[string]any{
+				"name":      "bad-served-model",
+				"namespace": "ml",
+			},
+			"spec": map[string]any{
+				"modelID": "not-a-uuid",
+			},
+			"status": map[string]any{
+				"servingLoadStatus": "LOADED",
+			},
+		}}
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), malformed, valid)
+		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		recorder := &servingStatusRecorderStub{}
+		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
+
+		Expect(recorder.status).NotTo(BeNil())
+		Expect(recorder.status.ModelID).To(Equal(modelRecord.ModelID))
+	})
+
+	It("does not fail the poll when recording one ServedModel status fails", func() {
+		modelRecord := validRegistryModel()
+		existing := servedModelObject(modelRecord)
+		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
+		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		recorder := &servingStatusRecorderStub{err: stderrors.New("database unavailable")}
+		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
+
+		Expect(recorder.calls).To(Equal(1))
+	})
 })
 
 type servingStatusRecorderStub struct {
 	status         *model.ServedModelStatus
 	idempotencyKey uuid.UUID
+	err            error
+	calls          int
 }
 
 func (s *servingStatusRecorderStub) RecordModelServingStatus(_ context.Context, status *model.ServedModelStatus, idempotencyKey uuid.UUID) (*model.Model, error) {
+	s.calls++
 	s.status = status
 	s.idempotencyKey = idempotencyKey
+	if s.err != nil {
+		return nil, s.err
+	}
 	return &model.Model{ModelID: status.ModelID}, nil
 }
 
@@ -131,7 +221,7 @@ func servedModelObject(modelRecord *model.Model) *unstructured.Unstructured {
 		"apiVersion": "serving.bighill.io/v1alpha1",
 		"kind":       "ServedModel",
 		"metadata": map[string]any{
-			"name":      registryk8s.ServedModelName(modelRecord.ModelID),
+			"name":      registryk8s.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion),
 			"namespace": "ml",
 		},
 		"spec": map[string]any{

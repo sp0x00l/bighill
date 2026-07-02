@@ -108,6 +108,67 @@ var _ = Describe("KubeRayExecutor", func() {
 		Expect(report.Passed).To(BeTrue())
 	})
 
+	It("treats KubeRay jobDeploymentStatus Complete as success", func() {
+		reader := &manifestReaderStub{payloads: map[string]string{
+			"s3://evals/run-complete.json": `{"training_run_id":"run-complete","report_uri":"s3://evals/run-complete.json","passed":true}`,
+		}, stats: map[string]executor.ObjectInfo{
+			"s3://evals/run-complete.json": {Location: "s3://evals/run-complete.json", SizeBytes: 10},
+		}}
+		existing := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "ray.io/v1",
+			"kind":       "RayJob",
+			"metadata": map[string]any{
+				"name":      "eval-run-complete-hash",
+				"namespace": "ml",
+			},
+			"status": map[string]any{
+				"jobDeploymentStatus": "Complete",
+			},
+		}}
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
+		kuberay, err := executor.NewKubeRayExecutorWithClient(kubeRayConfig(), reader, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		report, err := kuberay.EvaluateModel(context.Background(), model.EvaluationJobSpec{
+			TrainingRunID:     "run-complete",
+			ReportManifestURI: "s3://evals/run-complete.json",
+			SubmissionID:      "eval-run-complete-hash",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(report.Passed).To(BeTrue())
+	})
+
+	It("recovers the manifest when a RayJob is missing after create", func() {
+		reader := &lateManifestReader{
+			location: "s3://models/run-gc/artifact.json",
+			payload:  `{"training_run_id":"run-gc","model_uri":"s3://models/run-gc","model_name":"ranker","model_version":"v1","base_model":"mistral","artifact_format":"HF_PEFT_ADAPTER","artifact_checksum":"sha256:gc","artifact_size_bytes":123}`,
+			stat:     executor.ObjectInfo{Location: "s3://models/run-gc", SizeBytes: 123},
+		}
+		createCalls := 0
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		client.PrependReactor("create", "rayjobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+			createCalls++
+			return true, action.(ktesting.CreateAction).GetObject(), nil
+		})
+		client.PrependReactor("get", "rayjobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.NewNotFound(schema.GroupResource{Group: "ray.io", Resource: "rayjobs"}, action.(ktesting.GetAction).GetName())
+		})
+		kuberay, err := executor.NewKubeRayExecutorWithClient(kubeRayConfig(), reader, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		artifact, err := kuberay.RunTrainingJob(context.Background(), model.TrainingJobSpec{
+			TrainingRunID:       "run-gc",
+			ArtifactManifestURI: "s3://models/run-gc/artifact.json",
+			SubmissionID:        "train-run-gc-hash",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(artifact.ModelURI).To(Equal("s3://models/run-gc"))
+		Expect(createCalls).To(Equal(1))
+		Expect(reader.readCalls).To(Equal(2))
+	})
+
 	It("returns failed RayJob status as a training failure", func() {
 		existing := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "ray.io/v1",
@@ -142,6 +203,25 @@ var _ = Describe("KubeRayExecutor", func() {
 		Expect(len(name)).To(BeNumerically("<=", 63))
 	})
 })
+
+type lateManifestReader struct {
+	location  string
+	payload   string
+	stat      executor.ObjectInfo
+	readCalls int
+}
+
+func (r *lateManifestReader) Read(_ context.Context, location string) ([]byte, error) {
+	r.readCalls++
+	if location != r.location || r.readCalls == 1 {
+		return []byte{}, nil
+	}
+	return []byte(r.payload), nil
+}
+
+func (r *lateManifestReader) Stat(_ context.Context, location string) (executor.ObjectInfo, error) {
+	return r.stat, nil
+}
 
 func kubeRayConfig() executor.KubeRayExecutorConfig {
 	return executor.KubeRayExecutorConfig{

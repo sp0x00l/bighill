@@ -151,18 +151,30 @@ func waitForKubeRayJob[T any](ctx context.Context, executor *KubeRayExecutor, fa
 	if err := executor.ensureRayJob(ctx, name, submissionID, entrypoint, envVars); err != nil {
 		return nil, err
 	}
+	missingAfterCreate := 0
 	for {
 		status, found, err := executor.jobStatus(ctx, name)
 		if err != nil {
 			return nil, err
 		}
 		if !found {
+			if result, resultErr := readResult(ctx); resultErr == nil {
+				return result, nil
+			}
+			if missingAfterCreate < rayJobRegistrationAttempts {
+				missingAfterCreate++
+				recordKubeRayHeartbeat(ctx, name)
+				if err := sleepContext(ctx, executor.pollInterval); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			return nil, failureError.Extend("kuberay job disappeared after create")
 		}
-		switch strings.ToUpper(status.Status) {
-		case "SUCCEEDED":
+		switch kubeRayTerminalStatus(status.Status) {
+		case kubeRayTerminalSucceeded:
 			return readResult(ctx)
-		case "FAILED", "STOPPED":
+		case kubeRayTerminalFailed:
 			return nil, failureError.Extend("kuberay job " + strings.ToLower(status.Status) + ": " + status.Message)
 		default:
 			recordKubeRayHeartbeat(ctx, name)
@@ -203,6 +215,19 @@ func (e *KubeRayExecutor) jobStatus(ctx context.Context, name string) (kubeRayJo
 		message, _, _ = unstructured.NestedString(obj.Object, "status", "reason")
 	}
 	return kubeRayJobStatus{Status: status, Message: message}, true, nil
+}
+
+func kubeRayTerminalStatus(status string) kubeRayTerminal {
+	log.Trace("kubeRayTerminalStatus")
+
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "SUCCEEDED", "SUCCESS", "COMPLETED", "COMPLETE":
+		return kubeRayTerminalSucceeded
+	case "FAILED", "FAIL", "STOPPED":
+		return kubeRayTerminalFailed
+	default:
+		return kubeRayTerminalRunning
+	}
 }
 
 func (e *KubeRayExecutor) rayJobObject(name, submissionID, entrypoint string, envVars map[string]string) *unstructured.Unstructured {
@@ -325,6 +350,14 @@ type kubeRayJobStatus struct {
 	Status  string
 	Message string
 }
+
+type kubeRayTerminal int
+
+const (
+	kubeRayTerminalRunning kubeRayTerminal = iota
+	kubeRayTerminalSucceeded
+	kubeRayTerminalFailed
+)
 
 func KubeRayJobName(submissionID string) string {
 	log.Trace("KubeRayJobName")

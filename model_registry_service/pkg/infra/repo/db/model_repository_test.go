@@ -349,18 +349,20 @@ var _ = Describe("ModelRepository", func() {
 			ready.ServingLoadStatus = model.ModelLoadStatusLoaded
 			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
 
-			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "")
+			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "", idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
 			Expect(modelRecord.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("UPDATE test_db.models"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("serving_status_idempotency_key IS DISTINCT FROM @serving_status_idempotency_key"))
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
 			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
 			Expect(args).To(HaveKeyWithValue("serving_target", ready.ServingTarget))
 			Expect(args).To(HaveKeyWithValue("serving_model", ready.ServingModel))
+			Expect(args).To(HaveKeyWithValue("serving_status_idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}))
 		})
 
 		It("enqueues serving status changes in the same transaction", func() {
@@ -376,7 +378,7 @@ var _ = Describe("ModelRepository", func() {
 			ready.ServingLoadStatus = model.ModelLoadStatusLoaded
 			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
 
-			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "")
+			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "", idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
@@ -402,7 +404,7 @@ var _ = Describe("ModelRepository", func() {
 				newModelRow(registered),
 			}
 
-			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, registered.Status, registered.ServingLoadStatus, registered.ServingTarget, registered.ServingModel, "")
+			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, registered.Status, registered.ServingLoadStatus, registered.ServingTarget, registered.ServingModel, "", idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.ModelID).To(Equal(modelID))

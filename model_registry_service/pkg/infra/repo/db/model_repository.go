@@ -194,11 +194,11 @@ func (r *ModelRepository) UpdateStatus(ctx context.Context, modelID uuid.UUID, s
 	return modelRecord, nil
 }
 
-func (r *ModelRepository) UpdateServingStatus(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string) (*model.Model, error) {
+func (r *ModelRepository) UpdateServingStatus(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string, idempotencyKey uuid.UUID) (*model.Model, error) {
 	log.Trace("ModelRepository UpdateServingStatus")
 
 	if r.outbox != nil {
-		return r.updateServingStatusTx(ctx, modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason)
+		return r.updateServingStatusTx(ctx, modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason, idempotencyKey)
 	}
 
 	query := `UPDATE ` + r.Name + `.models
@@ -206,13 +206,22 @@ func (r *ModelRepository) UpdateServingStatus(ctx context.Context, modelID uuid.
 			serving_load_status = @serving_load_status,
 			serving_target = @serving_target,
 			serving_model = @serving_model,
-			failure_reason = @failure_reason
+			failure_reason = @failure_reason,
+			serving_status_idempotency_key = @serving_status_idempotency_key
 		WHERE model_id = @model_id
+			AND serving_status_idempotency_key IS DISTINCT FROM @serving_status_idempotency_key
+			AND (
+				status IS DISTINCT FROM @status
+				OR serving_load_status IS DISTINCT FROM @serving_load_status
+				OR serving_target IS DISTINCT FROM @serving_target
+				OR serving_model IS DISTINCT FROM @serving_model
+				OR failure_reason IS DISTINCT FROM @failure_reason
+			)
 		RETURNING ` + modelColumns()
-	modelRecord, err := scanModel(r.Pool.QueryRow(ctx, query, servingStatusArgs(modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason)))
+	modelRecord, err := scanModel(r.Pool.QueryRow(ctx, query, servingStatusArgs(modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason, idempotencyKey)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrModelNotFound
+			return r.ReadByID(ctx, modelID)
 		}
 		r.LogPoolStatsOnError(ctx, "update model serving status failed", err)
 		return nil, fmt.Errorf("update model serving status: %w", err)
@@ -257,7 +266,7 @@ func (r *ModelRepository) updateStatusTx(ctx context.Context, modelID uuid.UUID,
 	return modelRecord, nil
 }
 
-func (r *ModelRepository) updateServingStatusTx(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string) (*model.Model, error) {
+func (r *ModelRepository) updateServingStatusTx(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string, idempotencyKey uuid.UUID) (*model.Model, error) {
 	log.Trace("ModelRepository updateServingStatusTx")
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -271,8 +280,10 @@ func (r *ModelRepository) updateServingStatusTx(ctx context.Context, modelID uui
 			serving_load_status = @serving_load_status,
 			serving_target = @serving_target,
 			serving_model = @serving_model,
-			failure_reason = @failure_reason
+			failure_reason = @failure_reason,
+			serving_status_idempotency_key = @serving_status_idempotency_key
 		WHERE model_id = @model_id
+			AND serving_status_idempotency_key IS DISTINCT FROM @serving_status_idempotency_key
 			AND (
 				status IS DISTINCT FROM @status
 				OR serving_load_status IS DISTINCT FROM @serving_load_status
@@ -281,7 +292,7 @@ func (r *ModelRepository) updateServingStatusTx(ctx context.Context, modelID uui
 				OR failure_reason IS DISTINCT FROM @failure_reason
 			)
 		RETURNING ` + modelColumns()
-	modelRecord, err := scanModel(tx.QueryRow(ctx, query, servingStatusArgs(modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason)))
+	modelRecord, err := scanModel(tx.QueryRow(ctx, query, servingStatusArgs(modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason, idempotencyKey)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			existing, readErr := readModelByIDTx(ctx, tx, r.Name, modelID)
@@ -344,16 +355,17 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 	}
 }
 
-func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string) pgx.NamedArgs {
+func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string, idempotencyKey uuid.UUID) pgx.NamedArgs {
 	log.Trace("servingStatusArgs")
 
 	return pgx.NamedArgs{
-		"model_id":            pgtype.UUID{Bytes: modelID, Valid: true},
-		"status":              status.String(),
-		"serving_load_status": servingLoadStatus.String(),
-		"serving_target":      servingTarget,
-		"serving_model":       servingModel,
-		"failure_reason":      failureReason,
+		"model_id":                       pgtype.UUID{Bytes: modelID, Valid: true},
+		"status":                         status.String(),
+		"serving_load_status":            servingLoadStatus.String(),
+		"serving_target":                 servingTarget,
+		"serving_model":                  servingModel,
+		"failure_reason":                 failureReason,
+		"serving_status_idempotency_key": pgtype.UUID{Bytes: idempotencyKey, Valid: true},
 	}
 }
 

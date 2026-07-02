@@ -5,7 +5,7 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 . $BIGHILL_ROOT/database/scripts/config.sh $1
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
-    export MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED=false
+    export MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED=true
 elif [ "$1" = "staging" ]; then
     export MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED=true
 elif [ "$1" = "prod" ]; then

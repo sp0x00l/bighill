@@ -233,7 +233,7 @@ func readModelRegistryConfig() registryConfig {
 			Training:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC", "training"),
 		},
 		Serving: servingConfig{
-			Enabled:         env.WithDefaultBool("MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED", false),
+			Enabled:         env.WithDefaultBool("MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED", true),
 			Namespace:       env.WithDefaultString("MODEL_REGISTRY_SERVING_NAMESPACE", "default"),
 			CRDGroup:        env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_GROUP", "serving.bighill.io"),
 			CRDVersion:      env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_VERSION", "v1alpha1"),

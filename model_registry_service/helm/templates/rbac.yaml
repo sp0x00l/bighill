@@ -1,0 +1,30 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "model-registry-service.fullname" . }}
+  labels:
+    app: {{ include "model-registry-service.fullname" . }}
+rules:
+  - apiGroups: ["serving.bighill.io"]
+    resources: ["servedmodels"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["serving.bighill.io"]
+    resources: ["servedmodels/status"]
+    verbs: ["get", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "model-registry-service.fullname" . }}
+  labels:
+    app: {{ include "model-registry-service.fullname" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "model-registry-service.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default (include "model-registry-service.fullname" .) }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

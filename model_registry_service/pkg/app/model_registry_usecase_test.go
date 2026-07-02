@@ -23,6 +23,7 @@ type modelRepositoryStub struct {
 	readModel    *model.Model
 	status       model.ModelStatus
 	loadStatus   model.ModelLoadStatus
+	servingKey   uuid.UUID
 	createErr    error
 	readErr      error
 	updateErr    error
@@ -48,9 +49,10 @@ func (s *modelRepositoryStub) UpdateStatus(_ context.Context, _ uuid.UUID, statu
 	return s.readModel, s.updateErr
 }
 
-func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _, _, _ string) (*model.Model, error) {
+func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _, _, _ string, idempotencyKey uuid.UUID) (*model.Model, error) {
 	s.status = status
 	s.loadStatus = loadStatus
+	s.servingKey = idempotencyKey
 	if s.readModel != nil {
 		s.readModel.Status = status
 		s.readModel.ServingLoadStatus = loadStatus
@@ -150,17 +152,19 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		modelRecord := validModel()
 		repo := &modelRepositoryStub{readModel: modelRecord}
 		uc := app.NewModelRegistryUsecase(repo)
+		idempotencyKey := uuid.New()
 
 		result, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
 			ModelID:           modelRecord.ModelID,
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v1",
 			ServingLoadStatus: model.ModelLoadStatusLoaded,
-		}, uuid.New())
+		}, idempotencyKey)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(repo.status).To(Equal(model.ModelStatusReady))
 		Expect(repo.loadStatus).To(Equal(model.ModelLoadStatusLoaded))
+		Expect(repo.servingKey).To(Equal(idempotencyKey))
 		Expect(result.Status).To(Equal(model.ModelStatusReady))
 	})
 
@@ -168,6 +172,7 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		modelRecord := validModel()
 		repo := &modelRepositoryStub{readModel: modelRecord}
 		uc := app.NewModelRegistryUsecase(repo)
+		idempotencyKey := uuid.New()
 
 		result, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
 			ModelID:           modelRecord.ModelID,
@@ -175,11 +180,12 @@ var _ = Describe("ModelRegistryUsecase", func() {
 			ServingModel:      "movie-ranker-v1",
 			ServingLoadStatus: model.ModelLoadStatusFailed,
 			FailureReason:     "adapter load failed",
-		}, uuid.New())
+		}, idempotencyKey)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(repo.status).To(Equal(model.ModelStatusFailed))
 		Expect(repo.loadStatus).To(Equal(model.ModelLoadStatusFailed))
+		Expect(repo.servingKey).To(Equal(idempotencyKey))
 		Expect(result.Status).To(Equal(model.ModelStatusFailed))
 	})
 

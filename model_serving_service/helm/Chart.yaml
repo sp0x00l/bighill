@@ -1,0 +1,6 @@
+apiVersion: v2
+name: model-serving-service
+description: Model serving operator service
+type: application
+version: 0.1.0
+appVersion: "0.0.1"

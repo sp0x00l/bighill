@@ -29,7 +29,7 @@ def main() -> None:
     adapter_uri = os.environ.get("TRAINING_ADAPTER_URI", model_uri).strip()
     serving_target = os.environ.get("TRAINING_SERVING_TARGET", "").strip()
     serving_model = os.environ.get("TRAINING_SERVING_MODEL", "").strip()
-    serving_load_status = os.environ.get("TRAINING_SERVING_LOAD_STATUS", "LOADED").strip()
+    serving_load_status = os.environ.get("TRAINING_SERVING_LOAD_STATUS", "NOT_LOADED").strip()
     command = require_env("TRAINING_AXOLOTL_COMMAND")
 
     work_dir = Path(os.environ.get("TRAINING_JOB_WORK_DIR", f"/tmp/training_jobs/{training_run_id}")).resolve()

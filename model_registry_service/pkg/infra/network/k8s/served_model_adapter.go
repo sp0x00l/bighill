@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +50,7 @@ type ServedModelStatusObserver struct {
 	adapter      *ServedModelAdapter
 	recorder     ServingStatusRecorder
 	pollInterval time.Duration
+	seen         map[string]uuid.UUID
 }
 
 func NewServedModelAdapter(config ServedModelConfig) (*ServedModelAdapter, error) {
@@ -101,13 +103,14 @@ func NewServedModelStatusObserver(adapter *ServedModelAdapter, recorder ServingS
 		adapter:      adapter,
 		recorder:     recorder,
 		pollInterval: pollInterval,
+		seen:         map[string]uuid.UUID{},
 	}, nil
 }
 
 func (a *ServedModelAdapter) EnsureServedModel(ctx context.Context, registeredModel *model.Model) error {
 	log.Trace("ServedModelAdapter EnsureServedModel")
 
-	name := ServedModelName(registeredModel.ModelID)
+	name := ServedModelName(registeredModel.ModelID, registeredModel.ModelVersion)
 	obj := a.servedModelObject(name, registeredModel)
 	_, err := a.client.Resource(a.gvr).Namespace(a.namespace).Create(ctx, obj, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
@@ -132,7 +135,10 @@ func (o *ServedModelStatusObserver) Start(ctx context.Context) error {
 	log.Trace("ServedModelStatusObserver Start")
 
 	if err := o.ProcessOnce(ctx); err != nil {
-		return err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		log.WithContext(ctx).WithError(err).Error("served model status poll failed")
 	}
 	ticker := time.NewTicker(o.pollInterval)
 	defer ticker.Stop()
@@ -142,7 +148,10 @@ func (o *ServedModelStatusObserver) Start(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if err := o.ProcessOnce(ctx); err != nil {
-				return err
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err
+				}
+				log.WithContext(ctx).WithError(err).Error("served model status poll failed")
 			}
 		}
 	}
@@ -158,15 +167,24 @@ func (o *ServedModelStatusObserver) ProcessOnce(ctx context.Context) error {
 	for i := range items.Items {
 		status, ok, err := servedModelStatusFromObject(&items.Items[i])
 		if err != nil {
-			return err
+			log.WithContext(ctx).WithError(err).WithField("served_model", items.Items[i].GetName()).Error("served model status ignored")
+			continue
 		}
 		if !ok {
 			continue
 		}
 		key := servedModelStatusID(status, items.Items[i].GetGeneration())
-		if _, err := o.recorder.RecordModelServingStatus(ctx, status, key); err != nil {
-			return err
+		if o.seen[items.Items[i].GetName()] == key {
+			continue
 		}
+		if _, err := o.recorder.RecordModelServingStatus(ctx, status, key); err != nil {
+			log.WithContext(ctx).WithError(err).WithFields(log.Fields{
+				"served_model": items.Items[i].GetName(),
+				"model_id":     status.ModelID,
+			}).Error("served model status recording failed")
+			continue
+		}
+		o.seen[items.Items[i].GetName()] = key
 	}
 	return nil
 }
@@ -208,9 +226,6 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 
 	statusRaw, _, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
 	if statusRaw == "" {
-		statusRaw, _, _ = unstructured.NestedString(obj.Object, "status", "loadStatus")
-	}
-	if statusRaw == "" {
 		return nil, false, nil
 	}
 	loadStatus, err := model.ToModelLoadStatus(statusRaw)
@@ -231,9 +246,6 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 		servingModel, _, _ = unstructured.NestedString(obj.Object, "spec", "servingModel")
 	}
 	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
-	if failureReason == "" {
-		failureReason, _, _ = unstructured.NestedString(obj.Object, "status", "message")
-	}
 	return &model.ServedModelStatus{
 		ModelID:           modelID,
 		ServingTarget:     servingTarget,
@@ -246,14 +258,14 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 func servedModelStatusID(status *model.ServedModelStatus, generation int64) uuid.UUID {
 	log.Trace("servedModelStatusID")
 
-	input := fmt.Sprintf("served-model:%s:%s:%s:%d", status.ModelID, status.ServingLoadStatus.String(), status.ServingModel, generation)
+	input := fmt.Sprintf("served-model:%s:%s:%s:%s:%s:%d", status.ModelID, status.ServingLoadStatus.String(), status.ServingTarget, status.ServingModel, status.FailureReason, generation)
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(input))
 }
 
-func ServedModelName(modelID uuid.UUID) string {
+func ServedModelName(modelID uuid.UUID, modelVersion int) string {
 	log.Trace("ServedModelName")
 
-	return dns1123Name("served-model-" + modelID.String())
+	return dns1123Name(fmt.Sprintf("served-model-%s-v%d", modelID.String(), modelVersion))
 }
 
 func dns1123Name(value string) string {

@@ -273,7 +273,7 @@ var _ = Describe("TrainModelWorkflow", func() {
 		Expect(publisher.completedResult).NotTo(BeNil())
 		Expect(publisher.completedResult.ModelURI).To(Equal("s3://models/training-run-ray"))
 		Expect(publisher.completedResult.ReportURI).To(Equal("s3://evaluations/training-run-ray.json"))
-		Expect(publisher.completedResult.ServingLoadStatus).To(Equal("LOADED"))
+		Expect(publisher.completedResult.ServingLoadStatus).To(Equal("NOT_LOADED"))
 	})
 })
 

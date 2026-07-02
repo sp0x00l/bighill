@@ -4,9 +4,11 @@ image:
   tag: "0.0.1"
   pullPolicy: IfNotPresent
 serviceAccount:
-  create: false
+  create: true
   name: "model-registry-service"
   annotations: {}
+rbac:
+  create: true
 service:
   type: ClusterIP
   healthPort: 5060
@@ -42,7 +44,7 @@ env:
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"
-  servingReconciliationEnabled: "false"
+  servingReconciliationEnabled: "true"
   servingNamespace: "default"
   servingCrdGroup: "serving.bighill.io"
   servingCrdVersion: "v1alpha1"

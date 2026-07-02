@@ -171,7 +171,7 @@ func (u *modelRegistryUsecase) RecordModelServingStatus(ctx context.Context, ser
 		status = model.ModelStatusFailed
 		failureReason = servedModelStatus.FailureReason
 	}
-	return u.repo.UpdateServingStatus(ctx, servedModelStatus.ModelID, status, servedModelStatus.ServingLoadStatus, servedModelStatus.ServingTarget, servedModelStatus.ServingModel, failureReason)
+	return u.repo.UpdateServingStatus(ctx, servedModelStatus.ModelID, status, servedModelStatus.ServingLoadStatus, servedModelStatus.ServingTarget, servedModelStatus.ServingModel, failureReason, idempotencyKey)
 }
 
 func (u *modelRegistryUsecase) ensureServedModel(ctx context.Context, registeredModel *model.Model) error {

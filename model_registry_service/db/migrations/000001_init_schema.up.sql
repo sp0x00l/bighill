@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     serving_target text NOT NULL DEFAULT '',
     serving_model text NOT NULL DEFAULT '',
     serving_load_status model_load_status_enum NOT NULL DEFAULT 'NOT_LOADED',
+    serving_status_idempotency_key uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     metrics_metadata jsonb NOT NULL,
     status model_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text NOT NULL DEFAULT '',

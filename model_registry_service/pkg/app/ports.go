@@ -14,7 +14,7 @@ type ModelRepository interface {
 	ReadByID(ctx context.Context, modelID uuid.UUID) (*model.Model, error)
 	ReadByTrainingRunID(ctx context.Context, trainingRunID uuid.UUID) (*model.Model, error)
 	UpdateStatus(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, artifactLocation string, failureReason string) (*model.Model, error)
-	UpdateServingStatus(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string) (*model.Model, error)
+	UpdateServingStatus(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string, idempotencyKey uuid.UUID) (*model.Model, error)
 }
 
 type ModelServingDeployer interface {
