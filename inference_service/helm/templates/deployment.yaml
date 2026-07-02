@@ -131,6 +131,18 @@ spec:
               value: {{ .Values.env.rerankerRequestTimeoutSeconds | quote }}
             - name: INFERENCE_RERANKER_CANDIDATE_MULTIPLIER
               value: {{ .Values.env.rerankerCandidateMultiplier | quote }}
+            - name: INFERENCE_PREFERENCE_DATASET_EXPORT_ENABLED
+              value: {{ .Values.env.preferenceDatasetExportEnabled | quote }}
+            - name: INFERENCE_PREFERENCE_DATASET_URI_TEMPLATE
+              value: {{ .Values.env.preferenceDatasetUriTemplate | quote }}
+            - name: INFERENCE_PREFERENCE_DATASET_MIN_EXAMPLES
+              value: {{ .Values.env.preferenceDatasetMinExamples | quote }}
+            - name: INFERENCE_PREFERENCE_DATASET_LIMIT
+              value: {{ .Values.env.preferenceDatasetLimit | quote }}
+            - name: INFERENCE_PREFERENCE_DATASET_BUCKET_REGION
+              value: {{ .Values.env.preferenceDatasetBucketRegion | quote }}
+            - name: INFERENCE_PREFERENCE_DATASET_UPLOAD_PART_SIZE_MB
+              value: {{ .Values.env.preferenceDatasetUploadPartSizeMb | quote }}
             - name: INFERENCE_PROMPT_STRATEGY_VERSION
               value: {{ .Values.env.promptStrategyVersion | quote }}
             - name: INFERENCE_PROMPT_MAX_CONTEXT_TOKENS

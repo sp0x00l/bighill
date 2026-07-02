@@ -37,6 +37,7 @@ type trainingConfig struct {
 	Messaging              messagingConn.MessengerConfig
 	Topics                 trainingmessaging.TrainingTopics
 	BaseModel              string
+	EvaluationProfile      string
 	Profile                model.TrainingProfile
 	Executor               trainingExecutorConfig
 	Health                 healthConfig
@@ -168,7 +169,7 @@ func main() {
 
 	if cfg.TrainingTriggerEnabled {
 		workflowStarter := temporalworker.NewTrainingWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
-		datasetUpdatedSubscriber := trainingmessaging.NewDatasetUpdatedSubscriber(subscriber, workflowStarter, cfg.Topics, cfg.BaseModel, cfg.Profile)
+		datasetUpdatedSubscriber := trainingmessaging.NewDatasetUpdatedSubscriber(subscriber, workflowStarter, cfg.Topics, cfg.BaseModel, cfg.Profile, cfg.EvaluationProfile)
 		go func() {
 			if err := datasetUpdatedSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
 				log.WithContext(cancelCtx).WithError(err).Error("dataset updated subscriber stopped unexpectedly")
@@ -212,7 +213,8 @@ func readTrainingConfig() trainingConfig {
 			DataRegistry: env.WithDefaultString("TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 			Training:     env.WithDefaultString("TRAINING_SERVICE_TOPIC", "training"),
 		},
-		BaseModel: env.WithDefaultString("TRAINING_SERVICE_BASE_MODEL", "local-dev-base-model"),
+		BaseModel:         env.WithDefaultString("TRAINING_SERVICE_BASE_MODEL", "local-dev-base-model"),
+		EvaluationProfile: env.WithDefaultString("TRAINING_SERVICE_EVALUATION_PROFILE", "smoke"),
 		Profile: model.TrainingProfile{
 			Name:                      env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_NAME", "local-dev-qlora"),
 			Trainer:                   env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_TRAINER", "sft"),

@@ -28,45 +28,49 @@ type TrainingTopics struct {
 }
 
 type datasetUpdatedSubscriber struct {
-	subscriber msgConn.Subscriber
-	starter    TrainingWorkflowStarter
-	topics     TrainingTopics
-	baseModel  string
-	profile    model.TrainingProfile
+	subscriber        msgConn.Subscriber
+	starter           TrainingWorkflowStarter
+	topics            TrainingTopics
+	baseModel         string
+	profile           model.TrainingProfile
+	evaluationProfile string
 }
 
-func NewDatasetUpdatedSubscriber(subscriber msgConn.Subscriber, starter TrainingWorkflowStarter, topics TrainingTopics, baseModel string, profile model.TrainingProfile) DatasetUpdatedSubscriber {
+func NewDatasetUpdatedSubscriber(subscriber msgConn.Subscriber, starter TrainingWorkflowStarter, topics TrainingTopics, baseModel string, profile model.TrainingProfile, evaluationProfile string) DatasetUpdatedSubscriber {
 	log.Trace("NewDatasetUpdatedSubscriber")
 
 	return &datasetUpdatedSubscriber{
-		subscriber: subscriber,
-		starter:    starter,
-		topics:     topics,
-		baseModel:  baseModel,
-		profile:    profile,
+		subscriber:        subscriber,
+		starter:           starter,
+		topics:            topics,
+		baseModel:         baseModel,
+		profile:           profile,
+		evaluationProfile: evaluationProfile,
 	}
 }
 
 func (s *datasetUpdatedSubscriber) Start(ctx context.Context) error {
 	log.Trace("datasetUpdatedSubscriber Start")
 
-	msgConn.AddListener(s.subscriber, NewDatasetUpdatedEventListener(s.starter, s.baseModel, s.profile))
+	msgConn.AddListener(s.subscriber, NewDatasetUpdatedEventListener(s.starter, s.baseModel, s.profile, s.evaluationProfile))
 	return s.subscriber.Subscribe(ctx, []string{s.topics.DataRegistry})
 }
 
 type datasetUpdatedEventListener struct {
-	starter   TrainingWorkflowStarter
-	baseModel string
-	profile   model.TrainingProfile
+	starter           TrainingWorkflowStarter
+	baseModel         string
+	profile           model.TrainingProfile
+	evaluationProfile string
 }
 
-func NewDatasetUpdatedEventListener(starter TrainingWorkflowStarter, baseModel string, profile model.TrainingProfile) *datasetUpdatedEventListener {
+func NewDatasetUpdatedEventListener(starter TrainingWorkflowStarter, baseModel string, profile model.TrainingProfile, evaluationProfile string) *datasetUpdatedEventListener {
 	log.Trace("NewDatasetUpdatedEventListener")
 
 	return &datasetUpdatedEventListener{
-		starter:   starter,
-		baseModel: baseModel,
-		profile:   profile,
+		starter:           starter,
+		baseModel:         baseModel,
+		profile:           profile,
+		evaluationProfile: evaluationProfile,
 	}
 }
 
@@ -88,7 +92,7 @@ func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uu
 	if l.starter == nil {
 		return msgConn.NonRetryable(fmt.Errorf("training workflow starter is nil"))
 	}
-	request, shouldStart, err := datasetUpdatedToTrainingRunRequest(resourceKey, payload, l.baseModel, l.profile)
+	request, shouldStart, err := datasetUpdatedToTrainingRunRequest(resourceKey, payload, l.baseModel, l.profile, l.evaluationProfile)
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
@@ -98,7 +102,7 @@ func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uu
 	return l.starter.StartTrainingWorkflow(ctx, request)
 }
 
-func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetpb.DatasetUpdatedEvent, baseModel string, profile model.TrainingProfile) (model.TrainingRunRequest, bool, error) {
+func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetpb.DatasetUpdatedEvent, baseModel string, profile model.TrainingProfile, evaluationProfile string) (model.TrainingRunRequest, bool, error) {
 	log.Trace("datasetUpdatedToTrainingRunRequest")
 
 	if resourceKey == uuid.Nil {
@@ -134,6 +138,11 @@ func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetp
 	if strings.TrimSpace(baseModel) == "" {
 		return model.TrainingRunRequest{}, false, fmt.Errorf("base model is required")
 	}
+	profile = resolveTrainingProfile(profile, datasetID, payload.GetDatasetVersion(), featureSnapshotID)
+	evaluationProfile = strings.TrimSpace(resolveTemplate(evaluationProfile, datasetID, payload.GetDatasetVersion(), featureSnapshotID))
+	if evaluationProfile == "" {
+		evaluationProfile = "smoke"
+	}
 	return model.TrainingRunRequest{
 		TrainingRunID:     trainingRunID.String(),
 		DatasetID:         datasetID.String(),
@@ -142,7 +151,24 @@ func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetp
 		ModelName:         modelName,
 		ModelVersion:      fmt.Sprintf("%d", payload.GetDatasetVersion()),
 		BaseModel:         baseModel,
-		EvaluationProfile: "smoke",
+		EvaluationProfile: evaluationProfile,
 		TrainingProfile:   profile,
 	}, true, nil
+}
+
+func resolveTrainingProfile(profile model.TrainingProfile, datasetID uuid.UUID, datasetVersion int32, featureSnapshotID uuid.UUID) model.TrainingProfile {
+	log.Trace("resolveTrainingProfile")
+
+	profile.PreferenceDatasetURI = resolveTemplate(profile.PreferenceDatasetURI, datasetID, datasetVersion, featureSnapshotID)
+	return profile
+}
+
+func resolveTemplate(value string, datasetID uuid.UUID, datasetVersion int32, featureSnapshotID uuid.UUID) string {
+	log.Trace("resolveTemplate")
+
+	rendered := strings.TrimSpace(value)
+	rendered = strings.ReplaceAll(rendered, "{dataset_id}", datasetID.String())
+	rendered = strings.ReplaceAll(rendered, "{dataset_version}", fmt.Sprintf("%d", datasetVersion))
+	rendered = strings.ReplaceAll(rendered, "{feature_snapshot_id}", featureSnapshotID.String())
+	return rendered
 }

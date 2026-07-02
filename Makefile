@@ -23,6 +23,7 @@ test:
 	@$(MAKE) -C training_jobs test
 	@shared_lib/scripts/install.sh
 	@shared_lib/scripts/test.sh $(ENV)
+	@$(MAKE) -C e2e_tests test
 
 	@scripts/stop-servers.sh
 	@scripts/stop-infra.sh $(ENV)

@@ -52,6 +52,10 @@ func (u *recordingInferenceUsecase) RecordFeedback(context.Context, *model.Infer
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) ExportPreferenceDataset(context.Context, model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+	return nil, nil
+}
+
 var _ = Describe("InferenceTopics", func() {
 	It("subscribes to registry topics", func() {
 		Expect(inferencemessaging.InferenceTopics{

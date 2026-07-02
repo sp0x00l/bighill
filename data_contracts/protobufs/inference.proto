@@ -7,6 +7,7 @@ option go_package = "lib/data_contracts_lib/inference";
 service InferenceService {
   rpc Generate(GenerateRequest) returns (GenerateResponse);
   rpc RecordFeedback(RecordFeedbackRequest) returns (RecordFeedbackResponse);
+  rpc ExportPreferenceDataset(ExportPreferenceDatasetRequest) returns (ExportPreferenceDatasetResponse);
 }
 
 message GenerateRequest {
@@ -46,9 +47,28 @@ message RecordFeedbackRequest {
   bool accepted = 4;
   int32 rating = 5;
   string comment = 6;
+  string preferred_answer = 7;
 }
 
 message RecordFeedbackResponse {
   string feedback_id = 1;
   string request_id = 2;
+}
+
+message ExportPreferenceDatasetRequest {
+  string request_id = 1;
+  string dataset_id = 2;
+  string model_id = 3;
+  string output_uri = 4;
+  int32 min_examples = 5;
+  int32 limit = 6;
+}
+
+message ExportPreferenceDatasetResponse {
+  string request_id = 1;
+  string dataset_id = 2;
+  string model_id = 3;
+  string output_uri = 4;
+  int32 example_count = 5;
+  bool exported = 6;
 }

@@ -151,15 +151,39 @@ func (s *inferenceRequestRepositoryStub) RecordInferenceRequest(_ context.Contex
 }
 
 type inferenceFeedbackRepositoryStub struct {
-	feedback       *model.InferenceFeedback
-	idempotencyKey uuid.UUID
-	err            error
+	feedback          *model.InferenceFeedback
+	idempotencyKey    uuid.UUID
+	preferenceRequest model.PreferenceDatasetExportRequest
+	preferenceDataset *model.PreferenceDataset
+	err               error
 }
 
 func (s *inferenceFeedbackRepositoryStub) RecordFeedback(_ context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
 	s.feedback = feedback
 	s.idempotencyKey = idempotencyKey
 	return feedback, s.err
+}
+
+func (s *inferenceFeedbackRepositoryStub) ReadPreferenceDataset(_ context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+	s.preferenceRequest = request
+	if s.preferenceDataset != nil {
+		return s.preferenceDataset, s.err
+	}
+	return &model.PreferenceDataset{RequestID: request.RequestID, DatasetID: request.DatasetID, ModelID: request.ModelID}, s.err
+}
+
+type preferenceDatasetWriterStub struct {
+	dataset *model.PreferenceDataset
+	err     error
+}
+
+func (s *preferenceDatasetWriterStub) WritePreferenceDataset(_ context.Context, dataset *model.PreferenceDataset) (*model.PreferenceDataset, error) {
+	s.dataset = dataset
+	if s.err != nil {
+		return nil, s.err
+	}
+	dataset.Exported = true
+	return dataset, nil
 }
 
 var _ = Describe("InferenceUsecase", func() {
@@ -224,6 +248,80 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(recorded).To(Equal(feedback))
 		Expect(feedbackRepository.feedback).To(Equal(feedback))
 		Expect(feedbackRepository.idempotencyKey).To(Equal(idempotencyKey))
+	})
+
+	It("exports a preference dataset when feedback creates enough complete pairs", func() {
+		requestID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID: requestID,
+			DatasetID: datasetID,
+			ModelID:   modelID,
+			Examples: []model.PreferenceExample{{
+				PreferenceExampleID: uuid.New(),
+				RequestID:           requestID,
+				DatasetID:           datasetID,
+				ModelID:             modelID,
+				PromptText:          "prompt",
+				AcceptedAnswer:      "chosen",
+				RejectedAnswer:      "rejected",
+			}},
+		}}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithPreferenceDatasetWriter(writer),
+			app.WithPreferenceDatasetAutoExport("s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl", 1, 100),
+		)
+		feedback := &model.InferenceFeedback{
+			FeedbackID: uuid.New(),
+			RequestID:  requestID,
+			UserID:     uuid.New(),
+			Accepted:   false,
+			Rating:     -1,
+			Comment:    "not grounded",
+		}
+
+		recorded, err := uc.RecordFeedback(context.Background(), feedback, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recorded).To(Equal(feedback))
+		Expect(feedbackRepository.preferenceRequest.RequestID).To(Equal(requestID))
+		Expect(feedbackRepository.preferenceRequest.MinExamples).To(Equal(1))
+		Expect(feedbackRepository.preferenceRequest.Limit).To(Equal(100))
+		Expect(writer.dataset).NotTo(BeNil())
+		Expect(writer.dataset.OutputURI).To(Equal("s3://local-dev-bucket/preferences/" + datasetID.String() + "/preference_dataset.jsonl"))
+		Expect(writer.dataset.Exported).To(BeTrue())
+	})
+
+	It("does not write a preference dataset before the configured threshold is met", func() {
+		requestID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID: requestID,
+			DatasetID: uuid.New(),
+			ModelID:   uuid.New(),
+			Examples:  []model.PreferenceExample{},
+		}}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithPreferenceDatasetWriter(writer),
+			app.WithPreferenceDatasetAutoExport("s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl", 1, 100),
+		)
+
+		_, err := uc.RecordFeedback(context.Background(), &model.InferenceFeedback{
+			FeedbackID: uuid.New(),
+			RequestID:  requestID,
+			UserID:     uuid.New(),
+			Accepted:   true,
+			Rating:     1,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(writer.dataset).To(BeNil())
 	})
 
 	It("generates from retrieved RAG contexts", func() {

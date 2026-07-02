@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"inference_service/pkg/domain"
@@ -20,6 +21,7 @@ type InferenceUsecase interface {
 	ReadModel(ctx context.Context, modelID uuid.UUID) (*model.InferenceModel, error)
 	Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error)
 	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
+	ExportPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
 }
 
 type inferenceUsecase struct {
@@ -32,6 +34,10 @@ type inferenceUsecase struct {
 	reranker                  Reranker
 	promptBuilder             PromptBuilder
 	generator                 GenerationAdapter
+	preferenceDatasetWriter   PreferenceDatasetWriter
+	preferenceDatasetTemplate string
+	preferenceDatasetMin      int
+	preferenceDatasetLimit    int
 	promptStrategy            model.PromptStrategy
 	rerankCandidateMultiplier int
 }
@@ -67,6 +73,24 @@ func WithInferenceFeedbackRepository(repository InferenceFeedbackRepository) Inf
 
 	return func(u *inferenceUsecase) {
 		u.feedbackRepository = repository
+	}
+}
+
+func WithPreferenceDatasetWriter(writer PreferenceDatasetWriter) InferenceOption {
+	log.Trace("WithPreferenceDatasetWriter")
+
+	return func(u *inferenceUsecase) {
+		u.preferenceDatasetWriter = writer
+	}
+}
+
+func WithPreferenceDatasetAutoExport(uriTemplate string, minExamples int, limit int) InferenceOption {
+	log.Trace("WithPreferenceDatasetAutoExport")
+
+	return func(u *inferenceUsecase) {
+		u.preferenceDatasetTemplate = strings.TrimSpace(uriTemplate)
+		u.preferenceDatasetMin = minExamples
+		u.preferenceDatasetLimit = limit
 	}
 }
 
@@ -153,7 +177,40 @@ func (u *inferenceUsecase) ReadModel(ctx context.Context, modelID uuid.UUID) (*m
 func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
 	log.Trace("InferenceUsecase RecordFeedback")
 
-	return u.feedbackRepository.RecordFeedback(ctx, feedback, idempotencyKey)
+	record, err := u.feedbackRepository.RecordFeedback(ctx, feedback, idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if u.preferenceDatasetWriter != nil && strings.TrimSpace(u.preferenceDatasetTemplate) != "" {
+		if _, err := u.ExportPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
+			RequestID:   record.RequestID,
+			OutputURI:   u.preferenceDatasetTemplate,
+			MinExamples: u.preferenceDatasetMin,
+			Limit:       u.preferenceDatasetLimit,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return record, nil
+}
+
+func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+	log.Trace("InferenceUsecase ExportPreferenceDataset")
+
+	dataset, err := u.feedbackRepository.ReadPreferenceDataset(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if request.OutputURI != "" {
+		dataset.OutputURI = preferenceDatasetOutputURI(request.OutputURI, dataset)
+	}
+	if dataset.ExampleCount() < request.MinExamples {
+		return dataset, nil
+	}
+	if u.preferenceDatasetWriter == nil {
+		return dataset, nil
+	}
+	return u.preferenceDatasetWriter.WritePreferenceDataset(ctx, dataset)
 }
 
 func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateRequest) (response *model.GenerateResponse, err error) {
@@ -258,6 +315,16 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		log.WithContext(ctx).WithError(err).Warn("failed to record completed inference request")
 	}
 	return response, nil
+}
+
+func preferenceDatasetOutputURI(uriTemplate string, dataset *model.PreferenceDataset) string {
+	log.Trace("preferenceDatasetOutputURI")
+
+	outputURI := strings.TrimSpace(uriTemplate)
+	outputURI = strings.ReplaceAll(outputURI, "{request_id}", dataset.RequestID.String())
+	outputURI = strings.ReplaceAll(outputURI, "{dataset_id}", dataset.DatasetID.String())
+	outputURI = strings.ReplaceAll(outputURI, "{model_id}", dataset.ModelID.String())
+	return outputURI
 }
 
 func (u *inferenceUsecase) recordInferenceRequest(ctx context.Context, request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, promptText string, answerText string, startedAt time.Time, generationProvider string, generationModel string, status model.InferenceRequestStatus, errorMessage string) error {

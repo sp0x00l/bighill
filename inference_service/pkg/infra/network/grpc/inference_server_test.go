@@ -26,8 +26,10 @@ type inferenceUsecaseStub struct {
 	request        model.GenerateRequest
 	feedback       *model.InferenceFeedback
 	feedbackKey    uuid.UUID
+	exportRequest  model.PreferenceDatasetExportRequest
 	result         *model.GenerateResponse
 	feedbackResult *model.InferenceFeedback
+	exportResult   *model.PreferenceDataset
 	err            error
 }
 
@@ -55,6 +57,11 @@ func (s *inferenceUsecaseStub) RecordFeedback(_ context.Context, feedback *model
 		return s.feedbackResult, s.err
 	}
 	return feedback, s.err
+}
+
+func (s *inferenceUsecaseStub) ExportPreferenceDataset(_ context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+	s.exportRequest = request
+	return s.exportResult, s.err
 }
 
 type featureMaterializerServiceClientStub struct {
@@ -162,12 +169,13 @@ var _ = Describe("InferenceServer", func() {
 		server := NewInferenceGrpcServer(uc)
 
 		response, err := server.RecordFeedback(context.Background(), &inferencepb.RecordFeedbackRequest{
-			FeedbackId: feedbackID.String(),
-			RequestId:  requestID.String(),
-			UserId:     userID.String(),
-			Accepted:   false,
-			Rating:     -1,
-			Comment:    " not grounded ",
+			FeedbackId:      feedbackID.String(),
+			RequestId:       requestID.String(),
+			UserId:          userID.String(),
+			Accepted:        false,
+			Rating:          -1,
+			Comment:         " not grounded ",
+			PreferredAnswer: "grounded answer",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -179,7 +187,55 @@ var _ = Describe("InferenceServer", func() {
 		Expect(uc.feedback.Accepted).To(BeFalse())
 		Expect(uc.feedback.Rating).To(Equal(-1))
 		Expect(uc.feedback.Comment).To(Equal("not grounded"))
+		Expect(uc.feedback.PreferredAnswer).To(Equal("grounded answer"))
 		Expect(uc.feedbackKey).To(Equal(feedbackID))
+	})
+
+	It("maps preference dataset export requests into the usecase", func() {
+		requestID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		uc := &inferenceUsecaseStub{exportResult: &model.PreferenceDataset{
+			RequestID: requestID,
+			DatasetID: datasetID,
+			ModelID:   modelID,
+			OutputURI: "s3://local-dev-bucket/preferences/dataset.jsonl",
+			Exported:  true,
+			Examples: []model.PreferenceExample{{
+				PreferenceExampleID: uuid.New(),
+			}},
+		}}
+		server := NewInferenceGrpcServer(uc)
+
+		response, err := server.ExportPreferenceDataset(context.Background(), &inferencepb.ExportPreferenceDatasetRequest{
+			RequestId:   requestID.String(),
+			DatasetId:   datasetID.String(),
+			ModelId:     modelID.String(),
+			OutputUri:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.exportRequest.RequestID).To(Equal(requestID))
+		Expect(uc.exportRequest.DatasetID).To(Equal(datasetID))
+		Expect(uc.exportRequest.ModelID).To(Equal(modelID))
+		Expect(uc.exportRequest.MinExamples).To(Equal(1))
+		Expect(uc.exportRequest.Limit).To(Equal(100))
+		Expect(response.GetOutputUri()).To(Equal("s3://local-dev-bucket/preferences/dataset.jsonl"))
+		Expect(response.GetExampleCount()).To(Equal(int32(1)))
+		Expect(response.GetExported()).To(BeTrue())
+	})
+
+	It("rejects invalid preference dataset export requests", func() {
+		server := NewInferenceGrpcServer(&inferenceUsecaseStub{})
+
+		_, err := server.ExportPreferenceDataset(context.Background(), &inferencepb.ExportPreferenceDatasetRequest{
+			RequestId: uuid.NewString(),
+			OutputUri: "s3://local-dev-bucket/preferences/dataset.jsonl",
+		})
+
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
 
 	It("rejects invalid feedback requests", func() {

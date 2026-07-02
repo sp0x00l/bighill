@@ -24,6 +24,11 @@ type InferenceRequestRepository interface {
 
 type InferenceFeedbackRepository interface {
 	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
+	ReadPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
+}
+
+type PreferenceDatasetWriter interface {
+	WritePreferenceDataset(ctx context.Context, dataset *model.PreferenceDataset) (*model.PreferenceDataset, error)
 }
 
 type RetrievalClient interface {

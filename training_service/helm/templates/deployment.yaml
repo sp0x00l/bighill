@@ -54,6 +54,8 @@ spec:
               value: {{ .Values.env.dlq | quote }}
             - name: TRAINING_SERVICE_BASE_MODEL
               value: {{ .Values.env.baseModel | quote }}
+            - name: TRAINING_SERVICE_EVALUATION_PROFILE
+              value: {{ .Values.env.evaluationProfile | quote }}
             - name: TRAINING_SERVICE_TRAINING_PROFILE_NAME
               value: {{ .Values.env.trainingProfileName | quote }}
             - name: TRAINING_SERVICE_TRAINING_PROFILE_TRAINER

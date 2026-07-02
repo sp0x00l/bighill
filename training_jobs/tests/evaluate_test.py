@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from training_jobs import evaluate
 
@@ -110,6 +111,74 @@ class EvaluationJobTests(unittest.TestCase):
             report = json.loads((storage / "evals" / "reports" / "run-2.json").read_text(encoding="utf-8"))
             self.assertFalse(report["passed"])
             self.assertEqual(report["failure_reason"], "low faithfulness")
+            self.assertEqual(report["evaluator_name"], "external")
+
+    def test_ragas_evaluator_is_selected_by_profile_and_persists_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            storage = root / "local_s3"
+            model_dir = storage / "models" / "run-3"
+            model_dir.mkdir(parents=True)
+            (model_dir / "adapter_model.safetensors").write_text("weights", encoding="utf-8")
+            eval_dataset = storage / "evals" / "run-3.jsonl"
+            eval_dataset.parent.mkdir(parents=True)
+            eval_dataset.write_text(
+                json.dumps(
+                    {
+                        "question": "What is the refund policy?",
+                        "answer": "Returns are allowed for thirty days.",
+                        "contexts": ["The refund policy allows returns for thirty days."],
+                        "ground_truth": "Returns are allowed for thirty days.",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            profile = json.dumps(
+                {
+                    "evaluator": "ragas",
+                    "evaluator_version": "ragas-v1",
+                    "metric_suite": "rag",
+                    "dataset_uri": "s3://evals/run-3.jsonl",
+                    "dataset_mode": "labeled",
+                    "judge_provider": "openai",
+                    "judge_model": "local-judge",
+                    "judge_template_version": "judge-v1",
+                    "metrics": ["faithfulness", "answer_relevancy"],
+                    "thresholds": {"faithfulness": 0.8, "answer_relevancy": 0.7},
+                }
+            )
+            with EnvPatch(
+                {
+                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(storage),
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "local-dev",
+                    "TRAINING_RUN_ID": "run-3",
+                    "TRAINING_MODEL_URI": "s3://models/run-3",
+                    "TRAINING_EVALUATION_PROFILE": profile,
+                    "TRAINING_EVALUATION_REPORT_URI": "s3://evals/reports/run-3.json",
+                    "TRAINING_EVALUATION_MANIFEST_URI": "s3://evals/reports/run-3.json",
+                    "TRAINING_JOB_WORK_DIR": str(root / "work"),
+                }
+            ), mock.patch.object(evaluate, "ragas_dataset", return_value="dataset") as dataset_mock, mock.patch.object(
+                evaluate, "ragas_metrics", return_value=["faithfulness", "answer_relevancy"]
+            ), mock.patch.object(evaluate, "ragas_llm", return_value="judge"), mock.patch.object(
+                evaluate, "call_ragas_evaluate", return_value={"faithfulness": 0.91, "answer_relevancy": 0.83}
+            ):
+                evaluate.main()
+
+            dataset_mock.assert_called_once()
+            report = json.loads((storage / "evals" / "reports" / "run-3.json").read_text(encoding="utf-8"))
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["evaluator_name"], "ragas")
+            self.assertEqual(report["evaluator_version"], "ragas-v1")
+            self.assertEqual(report["metric_suite"], "rag")
+            self.assertEqual(report["eval_dataset_uri"], "s3://evals/run-3.jsonl")
+            self.assertEqual(report["eval_dataset_mode"], "labeled")
+            self.assertEqual(report["judge_provider"], "openai")
+            self.assertEqual(report["judge_model"], "local-judge")
+            self.assertEqual(report["judge_template_version"], "judge-v1")
+            self.assertEqual(report["metrics"]["faithfulness"], 0.91)
+            self.assertEqual(report["thresholds"]["answer_relevancy"], 0.7)
 
 
 if __name__ == "__main__":

@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_feedback (
     accepted boolean NOT NULL,
     rating integer NOT NULL,
     comment text NOT NULL DEFAULT '',
+    preferred_answer text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now()
 );
 

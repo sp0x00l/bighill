@@ -19,6 +19,7 @@ import (
 	"inference_service/pkg/infra/generation"
 	inferencegrpc "inference_service/pkg/infra/network/grpc"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
+	inferencepreference "inference_service/pkg/infra/preference"
 	inferencedb "inference_service/pkg/infra/repo/db"
 	"inference_service/pkg/infra/retrieval"
 
@@ -43,6 +44,7 @@ type inferenceConfig struct {
 	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
 	Generation          generationConfig
 	Reranker            rerankerConfig
+	PreferenceDataset   preferenceDatasetConfig
 	GRPCPort            int
 	Health              healthConfig
 }
@@ -63,6 +65,15 @@ type rerankerConfig struct {
 	Model               string
 	RequestTimeout      time.Duration
 	CandidateMultiplier int
+}
+
+type preferenceDatasetConfig struct {
+	ExportEnabled    bool
+	URITemplate      string
+	MinExamples      int
+	Limit            int
+	BucketRegion     string
+	UploadPartSizeMB int64
 }
 
 type healthConfig struct {
@@ -144,6 +155,16 @@ func main() {
 		inferenceOptions = append(inferenceOptions,
 			app.WithReranker(reranker),
 			app.WithRerankCandidateMultiplier(cfg.Reranker.CandidateMultiplier),
+		)
+	}
+	preferenceDatasetWriter := inferencepreference.NewS3ObjectDatasetWriter(cancelCtx, cfg.PreferenceDataset.BucketRegion, cfg.PreferenceDataset.UploadPartSizeMB*1024*1024)
+	if preferenceDatasetWriter == nil {
+		log.WithContext(cancelCtx).Fatal("unable to create preference dataset writer")
+	}
+	inferenceOptions = append(inferenceOptions, app.WithPreferenceDatasetWriter(preferenceDatasetWriter))
+	if cfg.PreferenceDataset.ExportEnabled {
+		inferenceOptions = append(inferenceOptions,
+			app.WithPreferenceDatasetAutoExport(cfg.PreferenceDataset.URITemplate, cfg.PreferenceDataset.MinExamples, cfg.PreferenceDataset.Limit),
 		)
 	}
 	inferenceUsecase := app.NewInferenceUsecase(
@@ -236,6 +257,14 @@ func readInferenceConfig() inferenceConfig {
 			Model:               env.WithDefaultString("INFERENCE_RERANKER_MODEL", ""),
 			RequestTimeout:      secondsFromEnv("INFERENCE_RERANKER_REQUEST_TIMEOUT_SECONDS", "30"),
 			CandidateMultiplier: env.WithDefaultInt("INFERENCE_RERANKER_CANDIDATE_MULTIPLIER", "5"),
+		},
+		PreferenceDataset: preferenceDatasetConfig{
+			ExportEnabled:    env.WithDefaultBool("INFERENCE_PREFERENCE_DATASET_EXPORT_ENABLED", false),
+			URITemplate:      env.WithDefaultString("INFERENCE_PREFERENCE_DATASET_URI_TEMPLATE", "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl"),
+			MinExamples:      env.WithDefaultInt("INFERENCE_PREFERENCE_DATASET_MIN_EXAMPLES", "1"),
+			Limit:            env.WithDefaultInt("INFERENCE_PREFERENCE_DATASET_LIMIT", "1000"),
+			BucketRegion:     env.WithDefaultString("INFERENCE_PREFERENCE_DATASET_BUCKET_REGION", "local-dev"),
+			UploadPartSizeMB: env.WithDefaultInt64("INFERENCE_PREFERENCE_DATASET_UPLOAD_PART_SIZE_MB", "10"),
 		},
 		GRPCPort: env.WithDefaultInt("INFERENCE_API_GRPC_PORT", "7073"),
 		Health: healthConfig{

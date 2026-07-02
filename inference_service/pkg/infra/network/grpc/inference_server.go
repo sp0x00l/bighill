@@ -150,12 +150,13 @@ func (s *InferenceServer) RecordFeedback(ctx context.Context, req *inferencepb.R
 		return nil, status.Error(codes.InvalidArgument, "rating must be between -1 and 1")
 	}
 	feedback, err := s.usecase.RecordFeedback(ctx, &model.InferenceFeedback{
-		FeedbackID: feedbackID,
-		RequestID:  requestID,
-		UserID:     userID,
-		Accepted:   req.GetAccepted(),
-		Rating:     rating,
-		Comment:    strings.TrimSpace(req.GetComment()),
+		FeedbackID:      feedbackID,
+		RequestID:       requestID,
+		UserID:          userID,
+		Accepted:        req.GetAccepted(),
+		Rating:          rating,
+		Comment:         strings.TrimSpace(req.GetComment()),
+		PreferredAnswer: strings.TrimSpace(req.GetPreferredAnswer()),
 	}, feedbackID)
 	if err != nil {
 		return nil, inferenceStatusError(err)
@@ -163,6 +164,63 @@ func (s *InferenceServer) RecordFeedback(ctx context.Context, req *inferencepb.R
 	return &inferencepb.RecordFeedbackResponse{
 		FeedbackId: feedback.FeedbackID.String(),
 		RequestId:  feedback.RequestID.String(),
+	}, nil
+}
+
+func (s *InferenceServer) ExportPreferenceDataset(ctx context.Context, req *inferencepb.ExportPreferenceDatasetRequest) (*inferencepb.ExportPreferenceDatasetResponse, error) {
+	log.Trace("InferenceServer ExportPreferenceDataset")
+
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "preference dataset export request is required")
+	}
+	requestID, err := uuid.Parse(req.GetRequestId())
+	if err != nil || requestID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid request_id")
+	}
+	var datasetID uuid.UUID
+	if strings.TrimSpace(req.GetDatasetId()) != "" {
+		datasetID, err = uuid.Parse(req.GetDatasetId())
+		if err != nil || datasetID == uuid.Nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid dataset_id")
+		}
+	}
+	var modelID uuid.UUID
+	if strings.TrimSpace(req.GetModelId()) != "" {
+		modelID, err = uuid.Parse(req.GetModelId())
+		if err != nil || modelID == uuid.Nil {
+			return nil, status.Error(codes.InvalidArgument, "invalid model_id")
+		}
+	}
+	outputURI := strings.TrimSpace(req.GetOutputUri())
+	if outputURI == "" {
+		return nil, status.Error(codes.InvalidArgument, "output_uri is required")
+	}
+	minExamples := int(req.GetMinExamples())
+	if minExamples < 0 {
+		return nil, status.Error(codes.InvalidArgument, "min_examples cannot be negative")
+	}
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "limit must be greater than zero")
+	}
+	dataset, err := s.usecase.ExportPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
+		RequestID:   requestID,
+		DatasetID:   datasetID,
+		ModelID:     modelID,
+		OutputURI:   outputURI,
+		MinExamples: minExamples,
+		Limit:       limit,
+	})
+	if err != nil {
+		return nil, inferenceStatusError(err)
+	}
+	return &inferencepb.ExportPreferenceDatasetResponse{
+		RequestId:    dataset.RequestID.String(),
+		DatasetId:    dataset.DatasetID.String(),
+		ModelId:      dataset.ModelID.String(),
+		OutputUri:    dataset.OutputURI,
+		ExampleCount: int32(dataset.ExampleCount()),
+		Exported:     dataset.Exported,
 	}, nil
 }
 

@@ -160,17 +160,18 @@ var _ = Describe("TrainingActivities", func() {
 			temporalworker.WithArtifactBucketRegion("eu-west-1"),
 		)
 
+		evaluationProfile := `{"evaluator":"ragas","dataset_uri":"s3://evals/run-1.jsonl"}`
 		report, err := activities.EvaluateTrainedModel(context.Background(), model.TrainedModelArtifact{
 			TrainingRunID: "training-run-1",
 			ModelURI:      "s3://local-dev-bucket/models/training-run-1",
-		}, model.TrainingRunRequest{TrainingRunID: "training-run-1", EvaluationProfile: "smoke"})
+		}, model.TrainingRunRequest{TrainingRunID: "training-run-1", EvaluationProfile: evaluationProfile})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(report.Passed).To(BeTrue())
 		Expect(report.ReportURI).To(Equal("s3://evaluations/training-run-1.json"))
 		Expect(executor.evaluationSpec.TrainingRunID).To(Equal("training-run-1"))
 		Expect(executor.evaluationSpec.ModelURI).To(Equal("s3://local-dev-bucket/models/training-run-1"))
-		Expect(executor.evaluationSpec.EvaluationProfile).To(Equal("smoke"))
+		Expect(executor.evaluationSpec.EvaluationProfile).To(Equal(evaluationProfile))
 		Expect(executor.evaluationSpec.ReportURI).To(Equal("s3://evaluations/training-run-1.json"))
 		Expect(executor.evaluationSpec.ReportManifestURI).To(Equal("s3://evaluations/training-run-1.json"))
 		Expect(executor.evaluationSpec.ArtifactBucketRegion).To(Equal("eu-west-1"))

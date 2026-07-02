@@ -28,6 +28,7 @@ env:
   dataRegistrySubscriberTopic: "data_registry"
   dlq: "http://localhost:4566/training-dev-env-queue/"
   baseModel: "local-dev-base-model"
+  evaluationProfile: "smoke"
   trainingProfileName: "local-dev-qlora"
   trainingProfileTrainer: "sft"
   trainingProfileAdapter: "qlora"

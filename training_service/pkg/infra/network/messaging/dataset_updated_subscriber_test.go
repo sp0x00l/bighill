@@ -38,7 +38,8 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		featureSnapshotID := uuid.New()
 		starter := &recordingTrainingWorkflowStarter{}
 		profile := trainingProfile()
-		listener := trainingmessaging.NewDatasetUpdatedEventListener(starter, "mistral-7b", profile)
+		profile.PreferenceDatasetURI = "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl"
+		listener := trainingmessaging.NewDatasetUpdatedEventListener(starter, "mistral-7b", profile, `{"evaluator":"ragas","dataset_uri":"s3://evals/{dataset_id}.jsonl"}`)
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:         datasetID.String(),
@@ -59,13 +60,14 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		Expect(starter.request.ModelName).To(Equal("movie_features"))
 		Expect(starter.request.ModelVersion).To(Equal("4"))
 		Expect(starter.request.BaseModel).To(Equal("mistral-7b"))
-		Expect(starter.request.TrainingProfile).To(Equal(profile))
+		Expect(starter.request.TrainingProfile.PreferenceDatasetURI).To(Equal("s3://local-dev-bucket/preferences/" + datasetID.String() + "/preference_dataset.jsonl"))
+		Expect(starter.request.EvaluationProfile).To(ContainSubstring(`s3://evals/` + datasetID.String() + `.jsonl`))
 	})
 
 	It("ignores non-feature-ready dataset updates", func() {
 		datasetID := uuid.New()
 		starter := &recordingTrainingWorkflowStarter{}
-		listener := trainingmessaging.NewDatasetUpdatedEventListener(starter, "mistral-7b", trainingProfile())
+		listener := trainingmessaging.NewDatasetUpdatedEventListener(starter, "mistral-7b", trainingProfile(), "smoke")
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:       datasetID.String(),
@@ -81,7 +83,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 
 	It("rejects ready non-parquet dataset updates", func() {
 		datasetID := uuid.New()
-		listener := trainingmessaging.NewDatasetUpdatedEventListener(&recordingTrainingWorkflowStarter{}, "mistral-7b", trainingProfile())
+		listener := trainingmessaging.NewDatasetUpdatedEventListener(&recordingTrainingWorkflowStarter{}, "mistral-7b", trainingProfile(), "smoke")
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:         datasetID.String(),

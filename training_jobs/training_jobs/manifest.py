@@ -32,6 +32,14 @@ class EvaluationReportManifest:
     passed: bool
     metrics: dict[str, float] = field(default_factory=dict)
     thresholds: dict[str, float] = field(default_factory=dict)
+    evaluator_name: str = ""
+    evaluator_version: str = ""
+    metric_suite: str = ""
+    eval_dataset_uri: str = ""
+    eval_dataset_mode: str = ""
+    judge_provider: str = ""
+    judge_model: str = ""
+    judge_template_version: str = ""
     failure_reason: str = ""
 
     def to_json(self) -> bytes:

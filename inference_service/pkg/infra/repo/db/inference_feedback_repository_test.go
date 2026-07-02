@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"inference_service/pkg/domain/model"
 	inferencedb "inference_service/pkg/infra/repo/db"
@@ -36,12 +37,13 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		userID = uuid.New()
 		idempotencyKey = uuid.New()
 		feedback = &model.InferenceFeedback{
-			FeedbackID: feedbackID,
-			RequestID:  requestID,
-			UserID:     userID,
-			Accepted:   false,
-			Rating:     -1,
-			Comment:    "wrong answer",
+			FeedbackID:      feedbackID,
+			RequestID:       requestID,
+			UserID:          userID,
+			Accepted:        false,
+			Rating:          -1,
+			Comment:         "wrong answer",
+			PreferredAnswer: "corrected answer",
 		}
 	})
 
@@ -55,8 +57,10 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		Expect(pool.commitCalled).To(BeTrue())
 		Expect(pool.rollbackCalled).To(BeFalse())
 		Expect(pool.lastQuery).To(ContainSubstring("INSERT INTO test_db.inference_feedback"))
+		Expect(pool.lastQuery).To(ContainSubstring("preferred_answer"))
 		Expect(pool.lastQuery).To(ContainSubstring("JOIN test_db.inference_requests"))
 		Expect(pool.lastQuery).To(ContainSubstring("WHERE req.model_id IS NOT NULL"))
+		Expect(pool.lastQuery).To(ContainSubstring("CASE WHEN f.accepted THEN req.answer_text ELSE f.preferred_answer END"))
 		Expect(pool.lastQuery).To(ContainSubstring("INSERT INTO test_db.preference_examples"))
 		args := namedArgs(pool.lastArgs)
 		Expect(args).To(SatisfyAll(
@@ -67,6 +71,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			HaveKeyWithValue("accepted", false),
 			HaveKeyWithValue("rating", -1),
 			HaveKeyWithValue("comment", "wrong answer"),
+			HaveKeyWithValue("preferred_answer", "corrected answer"),
 		))
 		Expect(args["preference_example_id"]).To(Equal(pgtype.UUID{
 			Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte("preference:"+idempotencyKey.String())),
@@ -82,6 +87,47 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		Expect(record).To(BeNil())
 		Expect(err).To(MatchError(ContainSubstring("record inference feedback: insert failed")))
 	})
+
+	It("reads complete preference pairs for the request dataset and model", func() {
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		exampleID := uuid.New()
+		feedbackID := uuid.New()
+		rawExamples := fmt.Sprintf(`[{
+			"preference_example_id": %q,
+			"feedback_id": %q,
+			"request_id": %q,
+			"dataset_id": %q,
+			"model_id": %q,
+			"prompt_text": "Prompt",
+			"accepted_answer": "Correct answer",
+			"rejected_answer": "Wrong answer",
+			"rating": -1,
+			"feedback_label": "REJECTED"
+		}]`, exampleID.String(), feedbackID.String(), requestID.String(), datasetID.String(), modelID.String())
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), modelID.String(), rawExamples}}}
+
+		dataset, err := repository.ReadPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
+			RequestID: requestID,
+			OutputURI: "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
+			Limit: 100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.RequestID).To(Equal(requestID))
+		Expect(dataset.DatasetID).To(Equal(datasetID))
+		Expect(dataset.ModelID).To(Equal(modelID))
+		Expect(dataset.Examples).To(HaveLen(1))
+		Expect(dataset.Examples[0].AcceptedAnswer).To(Equal("Correct answer"))
+		Expect(dataset.Examples[0].RejectedAnswer).To(Equal("Wrong answer"))
+		Expect(pool.lastQuery).To(ContainSubstring("p.accepted_answer <> ''"))
+		Expect(pool.lastQuery).To(ContainSubstring("p.rejected_answer <> ''"))
+		args := namedArgs(pool.lastArgs)
+		Expect(args).To(SatisfyAll(
+			HaveKeyWithValue("request_id", pgtype.UUID{Bytes: requestID, Valid: true}),
+			HaveKeyWithValue("limit", 100),
+		))
+	})
 })
 
 func feedbackRow(feedback *model.InferenceFeedback) pgx.Row {
@@ -92,5 +138,6 @@ func feedbackRow(feedback *model.InferenceFeedback) pgx.Row {
 		feedback.Accepted,
 		feedback.Rating,
 		feedback.Comment,
+		feedback.PreferredAnswer,
 	}}
 }

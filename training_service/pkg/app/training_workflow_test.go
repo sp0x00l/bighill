@@ -57,9 +57,19 @@ var _ = Describe("TrainModelWorkflow", func() {
 			ArtifactSizeBytes: 128,
 		}
 		report := model.EvaluationReport{
-			TrainingRunID: request.TrainingRunID,
-			ReportURI:     "s3://local-dev-bucket/evaluations/training-run-1.json",
-			Passed:        true,
+			TrainingRunID:        request.TrainingRunID,
+			ReportURI:            "s3://local-dev-bucket/evaluations/training-run-1.json",
+			Passed:               true,
+			Metrics:              map[string]float64{"faithfulness": 0.91},
+			Thresholds:           map[string]float64{"faithfulness": 0.8},
+			EvaluatorName:        "ragas",
+			EvaluatorVersion:     "ragas-v1",
+			MetricSuite:          "rag",
+			EvalDatasetURI:       "s3://evals/run-1.jsonl",
+			EvalDatasetMode:      "labeled",
+			JudgeProvider:        "openai",
+			JudgeModel:           "local-judge",
+			JudgeTemplateVersion: "judge-v1",
 		}
 
 		env.RegisterActivityWithOptions(func(model.TrainingRunRequest) (*model.PreparedTrainingDataset, error) {
@@ -95,6 +105,7 @@ var _ = Describe("TrainModelWorkflow", func() {
 		Expect(result.DatasetVersion).To(Equal("3"))
 		Expect(result.ModelURI).To(Equal(artifact.ModelURI))
 		Expect(result.ReportURI).To(Equal(report.ReportURI))
+		Expect(result.MetricsMetadata).To(MatchJSON(`{"passed":true,"metrics":{"faithfulness":0.91},"thresholds":{"faithfulness":0.8},"report_uri":"s3://local-dev-bucket/evaluations/training-run-1.json","evaluator_name":"ragas","evaluator_version":"ragas-v1","metric_suite":"rag","eval_dataset_uri":"s3://evals/run-1.jsonl","eval_dataset_mode":"labeled","judge_provider":"openai","judge_model":"local-judge","judge_template_version":"judge-v1"}`))
 		Expect(evaluationInfo.ActivityID).To(Equal("evaluate:training-run-1"))
 		Expect(evaluationInfo.StartToCloseTimeout).To(Equal(app.DefaultEvaluateTrainingActivityTimeout))
 		Expect(evaluationInfo.ScheduleToCloseTimeout).To(Equal(app.DefaultEvaluateTrainingActivityTimeout))

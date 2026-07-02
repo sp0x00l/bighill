@@ -120,15 +120,31 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 
 func evaluationMetricsMetadata(report model.EvaluationReport) string {
 	raw, err := json.Marshal(struct {
-		Passed     bool               `json:"passed"`
-		Metrics    map[string]float64 `json:"metrics,omitempty"`
-		Thresholds map[string]float64 `json:"thresholds,omitempty"`
-		ReportURI   string             `json:"report_uri,omitempty"`
+		Passed               bool               `json:"passed"`
+		Metrics              map[string]float64 `json:"metrics,omitempty"`
+		Thresholds           map[string]float64 `json:"thresholds,omitempty"`
+		ReportURI            string             `json:"report_uri,omitempty"`
+		EvaluatorName        string             `json:"evaluator_name,omitempty"`
+		EvaluatorVersion     string             `json:"evaluator_version,omitempty"`
+		MetricSuite          string             `json:"metric_suite,omitempty"`
+		EvalDatasetURI       string             `json:"eval_dataset_uri,omitempty"`
+		EvalDatasetMode      string             `json:"eval_dataset_mode,omitempty"`
+		JudgeProvider        string             `json:"judge_provider,omitempty"`
+		JudgeModel           string             `json:"judge_model,omitempty"`
+		JudgeTemplateVersion string             `json:"judge_template_version,omitempty"`
 	}{
-		Passed:     report.Passed,
-		Metrics:    report.Metrics,
-		Thresholds: report.Thresholds,
-		ReportURI:   report.ReportURI,
+		Passed:               report.Passed,
+		Metrics:              report.Metrics,
+		Thresholds:           report.Thresholds,
+		ReportURI:            report.ReportURI,
+		EvaluatorName:        report.EvaluatorName,
+		EvaluatorVersion:     report.EvaluatorVersion,
+		MetricSuite:          report.MetricSuite,
+		EvalDatasetURI:       report.EvalDatasetURI,
+		EvalDatasetMode:      report.EvalDatasetMode,
+		JudgeProvider:        report.JudgeProvider,
+		JudgeModel:           report.JudgeModel,
+		JudgeTemplateVersion: report.JudgeTemplateVersion,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal evaluation metrics metadata: %v", err))
