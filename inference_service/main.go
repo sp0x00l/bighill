@@ -53,7 +53,7 @@ type generationConfig struct {
 	Model            string
 	RequestTimeout   time.Duration
 	PromptStrategy   string
-	MaxContextChars  int
+	MaxContextTokens int
 	MaxContextChunks int
 }
 
@@ -110,6 +110,7 @@ func main() {
 	modelRepository := inferencedb.NewInferenceModelRepository(database)
 	datasetRepository := inferencedb.NewInferenceDatasetRepository(database)
 	requestRepository := inferencedb.NewInferenceRequestRepository(database)
+	feedbackRepository := inferencedb.NewInferenceFeedbackRepository(database)
 	retrievalClient, err := inferencegrpc.NewFeatureMaterializerClient(cancelCtx, cfg.FeatureMaterializer)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create feature materializer client")
@@ -132,6 +133,7 @@ func main() {
 	inferenceOptions := []app.InferenceOption{
 		app.WithInferenceDatasetRepository(datasetRepository),
 		app.WithInferenceRequestRepository(requestRepository),
+		app.WithInferenceFeedbackRepository(feedbackRepository),
 		app.WithRetrievalClient(retrievalClient),
 		app.WithGenerationAdapter(generator),
 		app.WithPromptStrategy(promptStrategy),
@@ -225,7 +227,7 @@ func readInferenceConfig() inferenceConfig {
 			Model:            env.WithDefaultString("INFERENCE_GENERATION_MODEL", "llama3.1:8b"),
 			RequestTimeout:   secondsFromEnv("INFERENCE_GENERATION_REQUEST_TIMEOUT_SECONDS", "60"),
 			PromptStrategy:   env.WithDefaultString("INFERENCE_PROMPT_STRATEGY_VERSION", "rag-prompt-v1"),
-			MaxContextChars:  env.WithDefaultInt("INFERENCE_PROMPT_MAX_CONTEXT_CHARS", "12000"),
+			MaxContextTokens: env.WithDefaultInt("INFERENCE_PROMPT_MAX_CONTEXT_TOKENS", "3000"),
 			MaxContextChunks: env.WithDefaultInt("INFERENCE_PROMPT_MAX_CONTEXT_CHUNKS", "8"),
 		},
 		Reranker: rerankerConfig{
@@ -255,8 +257,8 @@ func newGenerationAdapter(cfg generationConfig) (app.GenerationAdapter, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
 	case "", "deterministic":
 		return generation.NewDeterministicGenerator(), nil
-	case "ollama":
-		return generation.NewHTTPGenerator("ollama", cfg.Endpoint, cfg.Model, cfg.RequestTimeout)
+	case "ollama", "vllm":
+		return generation.NewHTTPGenerator(strings.ToLower(strings.TrimSpace(cfg.Provider)), cfg.Endpoint, cfg.Model, cfg.RequestTimeout)
 	default:
 		return nil, fmt.Errorf("unsupported generation provider %q", cfg.Provider)
 	}
@@ -269,8 +271,8 @@ func newRerankerAdapter(cfg rerankerConfig) (app.Reranker, error) {
 	case "", "disabled", "none":
 		return nil, nil
 	case "tei":
-		if cfg.CandidateMultiplier <= 0 {
-			return nil, fmt.Errorf("reranker candidate multiplier must be greater than zero")
+		if cfg.CandidateMultiplier < 2 {
+			return nil, fmt.Errorf("reranker candidate multiplier must be at least 2")
 		}
 		return retrieval.NewTEIReranker(cfg.URL, cfg.Model, cfg.RequestTimeout)
 	default:
@@ -284,7 +286,7 @@ func promptStrategyFromConfig(cfg generationConfig) (model.PromptStrategy, error
 	strategy := model.PromptStrategy{
 		Version:          strings.TrimSpace(cfg.PromptStrategy),
 		SystemPrompt:     "You answer using only the retrieved context. If the context does not contain the answer, say that the answer is not available in the retrieved context.",
-		MaxContextChars:  cfg.MaxContextChars,
+		MaxContextTokens: cfg.MaxContextTokens,
 		MaxContextChunks: cfg.MaxContextChunks,
 	}
 	if strategy.Version == "" {
@@ -293,8 +295,8 @@ func promptStrategyFromConfig(cfg generationConfig) (model.PromptStrategy, error
 	if strategy.SystemPrompt == "" {
 		return model.PromptStrategy{}, fmt.Errorf("prompt system prompt is required")
 	}
-	if strategy.MaxContextChars <= 0 {
-		return model.PromptStrategy{}, fmt.Errorf("prompt max context chars must be greater than zero")
+	if strategy.MaxContextTokens <= 0 {
+		return model.PromptStrategy{}, fmt.Errorf("prompt max context tokens must be greater than zero")
 	}
 	if strategy.MaxContextChunks <= 0 {
 		return model.PromptStrategy{}, fmt.Errorf("prompt max context chunks must be greater than zero")

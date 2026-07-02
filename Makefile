@@ -20,6 +20,7 @@ build-all:
 
 test:
 	@cd data_contracts && make install && make build
+	@$(MAKE) -C training_jobs test
 	@shared_lib/scripts/install.sh
 	@shared_lib/scripts/test.sh $(ENV)
 

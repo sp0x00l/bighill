@@ -61,16 +61,18 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		models = repo.NewInferenceModelRepository(database)
 		datasets = repo.NewInferenceDatasetRepository(database)
 		requests := repo.NewInferenceRequestRepository(database)
+		feedbacks := repo.NewInferenceFeedbackRepository(database)
 		promptStrategy := model.PromptStrategy{
 			Version:          "rag-prompt-v1",
 			SystemPrompt:     "Use context only.",
-			MaxContextChars:  12000,
+			MaxContextTokens: 3000,
 			MaxContextChunks: 8,
 		}
 		modelsUse = app.NewInferenceUsecase(
 			models,
 			app.WithInferenceDatasetRepository(datasets),
 			app.WithInferenceRequestRepository(requests),
+			app.WithInferenceFeedbackRepository(feedbacks),
 			app.WithRetrievalClient(&integrationRetrievalClient{}),
 			app.WithGenerationAdapter(generation.NewDeterministicGenerator()),
 			app.WithPromptStrategy(promptStrategy),
@@ -139,6 +141,10 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			ArtifactFormat:    "HF_PEFT_ADAPTER",
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
+			AdapterUri:        "s3://local-dev-bucket/models/" + modelID.String(),
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v1",
+			ServingLoadStatus: model.ModelLoadStatusLoaded.String(),
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			Status:            "READY",
 		})).To(Succeed())
@@ -199,6 +205,10 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			ArtifactFormat:    "HF_PEFT_ADAPTER",
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
+			AdapterURI:        "s3://local-dev-bucket/models/" + modelID.String(),
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v1",
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			Status:            model.ModelStatusReady,
 		}, uuid.New())
@@ -270,6 +280,109 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(response.GetRequestId()).NotTo(BeEmpty())
 		Expect(response.GetGenerationProvider()).To(Equal("deterministic"))
 		Expect(response.GetContexts()).To(HaveLen(1))
+
+		feedbackID := uuid.New()
+		feedback, err := client.RecordFeedback(ctx, &inferencepb.RecordFeedbackRequest{
+			FeedbackId: feedbackID.String(),
+			RequestId:  response.GetRequestId(),
+			UserId:     userID.String(),
+			Accepted:   false,
+			Rating:     -1,
+			Comment:    "not enough detail",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(feedback.GetFeedbackId()).To(Equal(feedbackID.String()))
+		var label string
+		var rejectedAnswer string
+		Expect(database.Pool.QueryRow(ctx, `
+			SELECT feedback_label, rejected_answer
+			FROM `+database.Name+`.preference_examples
+			WHERE feedback_id = $1
+		`, feedbackID).Scan(&label, &rejectedAnswer)).To(Succeed())
+		Expect(label).To(Equal("REJECTED"))
+		Expect(rejectedAnswer).To(ContainSubstring("integration retrieved context"))
+	})
+
+	It("over-fetches, reranks, packs, generates, and audits the reranked context", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		modelID := uuid.New()
+		embeddingSnapshotID := uuid.New()
+		requestID := uuid.New()
+		_, err := models.UpsertModel(ctx, &model.InferenceModel{
+			ModelID:           modelID,
+			TrainingRunID:     uuid.New(),
+			DatasetID:         datasetID,
+			Name:              "movie-ranker",
+			ModelVersion:      1,
+			BaseModel:         "mistral-7b",
+			ArtifactLocation:  "s3://local-dev-bucket/models/" + modelID.String(),
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactChecksum:  "sha256:abc",
+			ArtifactSizeBytes: 128,
+			AdapterURI:        "s3://local-dev-bucket/models/" + modelID.String(),
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v1",
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+			MetricsMetadata:   `{"eval_loss":0.12}`,
+			Status:            model.ModelStatusReady,
+		}, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = datasets.UpsertDataset(ctx, &model.InferenceDataset{
+			DatasetID:                datasetID,
+			UserID:                   userID,
+			DatasetVersion:           1,
+			ProcessingState:          model.DatasetProcessingEmbeddingsMaterialized,
+			EmbeddingSnapshotID:      embeddingSnapshotID,
+			EmbeddingDimensions:      384,
+			EmbeddingCount:           10,
+			EmbeddingStrategyVersion: "rag-v1",
+		}, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieval := &rerankIntegrationRetrievalClient{embeddingSnapshotID: embeddingSnapshotID}
+		reranker := &rerankIntegrationReranker{}
+		promptStrategy := model.PromptStrategy{
+			Version:          "rag-prompt-v1",
+			SystemPrompt:     "Use context only.",
+			MaxContextTokens: 3000,
+			MaxContextChunks: 2,
+		}
+		usecase := app.NewInferenceUsecase(
+			models,
+			app.WithInferenceDatasetRepository(datasets),
+			app.WithInferenceRequestRepository(repo.NewInferenceRequestRepository(database)),
+			app.WithRetrievalClient(retrieval),
+			app.WithReranker(reranker),
+			app.WithRerankCandidateMultiplier(5),
+			app.WithGenerationAdapter(generation.NewDeterministicGenerator()),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		response, err := usecase.Generate(ctx, model.GenerateRequest{
+			RequestID: requestID,
+			DatasetID: datasetID,
+			ModelID:   modelID,
+			QueryText: "which context wins?",
+			TopK:      2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retrieval.topK).To(Equal(10))
+		Expect(reranker.topK).To(Equal(2))
+		Expect(response.Contexts).To(HaveLen(2))
+		Expect(response.Contexts[0].SourceText).To(Equal("highest relevance context"))
+		Expect(response.Answer).To(ContainSubstring("highest relevance context"))
+		var auditedContexts string
+		Expect(database.Pool.QueryRow(ctx, `
+			SELECT retrieved_contexts::text
+			FROM `+database.Name+`.inference_requests
+			WHERE request_id = $1
+		`, requestID).Scan(&auditedContexts)).To(Succeed())
+		Expect(auditedContexts).To(ContainSubstring("highest relevance context"))
+		Expect(auditedContexts).To(ContainSubstring("rerank_score"))
 	})
 })
 
@@ -289,8 +402,45 @@ func (c *integrationRetrievalClient) Close() error {
 	return nil
 }
 
+type rerankIntegrationRetrievalClient struct {
+	embeddingSnapshotID uuid.UUID
+	topK                int
+}
+
+func (c *rerankIntegrationRetrievalClient) SearchEmbeddings(_ context.Context, _ uuid.UUID, _ string, topK int, _ map[string]string) ([]model.RetrievedContext, error) {
+	c.topK = topK
+	contexts := make([]model.RetrievedContext, 0, topK)
+	for i := 0; i < topK; i++ {
+		contexts = append(contexts, model.RetrievedContext{
+			EmbeddingRecordID:   uuid.New(),
+			EmbeddingSnapshotID: c.embeddingSnapshotID,
+			ChunkIndex:          i,
+			SourceText:          fmt.Sprintf("candidate context %d", i),
+			Similarity:          0.5,
+		})
+	}
+	contexts[3].SourceText = "highest relevance context"
+	return contexts, nil
+}
+
+func (c *rerankIntegrationRetrievalClient) Close() error {
+	return nil
+}
+
+type rerankIntegrationReranker struct {
+	topK int
+}
+
+func (r *rerankIntegrationReranker) Rerank(_ context.Context, _ string, candidates []model.RetrievedContext, topK int) ([]model.RetrievedContext, error) {
+	r.topK = topK
+	reranked := []model.RetrievedContext{candidates[3], candidates[1]}
+	reranked[0].RerankScore = 0.99
+	reranked[1].RerankScore = 0.72
+	return reranked[:topK], nil
+}
+
 func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"inference_requests", "inference_models", "inference_datasets"} {
+	for _, table := range []string{"preference_examples", "inference_feedback", "inference_requests", "inference_models", "inference_datasets"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}

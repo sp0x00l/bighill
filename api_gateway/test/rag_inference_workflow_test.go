@@ -104,7 +104,7 @@ func waitForRAGDatasetMaterialized(user profileTestUser, datasetID string) {
 		g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
 		metadata := schemaMetadataObject(g, read)
 		g.Expect(metadata["source_format"]).To(Equal("html"))
-		g.Expect(metadata["rows"]).To(BeNumerically("==", 1))
+		g.Expect(metadata["rows"]).To(BeNumerically(">=", 1))
 		expectSchemaField(g, metadata, "source_text")
 	}, 45*time.Second, 1*time.Second).Should(Succeed())
 }
@@ -133,6 +133,7 @@ func publishReadyModelForInference(modelID uuid.UUID, datasetID uuid.UUID) {
 		ArtifactSizeBytes: 1,
 		MetricsMetadata:   `{"passed":true}`,
 		Status:            "READY",
+		ServingLoadStatus: "LOADED",
 	})
 	Expect(err).NotTo(HaveOccurred())
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,15 +12,16 @@ import (
 )
 
 const (
-	TrainModelWorkflowName                = "training.train_model"
-	PrepareTrainingDatasetActivity        = "training.prepare_training_dataset"
-	RunTrainingJobActivity                = "training.run_training_job"
-	EvaluateTrainedModelActivity          = "training.evaluate_trained_model"
-	PublishModelTrainingCompletedActivity = "training.publish_model_training_completed"
-	PublishModelTrainingFailedActivity    = "training.publish_model_training_failed"
-	DefaultTrainingWorkflowTaskQueue      = "training-service"
-	DefaultRunTrainingActivityTimeout     = 24 * time.Hour
-	DefaultTrainingActivityHeartbeat      = 2 * time.Minute
+	TrainModelWorkflowName                 = "training.train_model"
+	PrepareTrainingDatasetActivity         = "training.prepare_training_dataset"
+	RunTrainingJobActivity                 = "training.run_training_job"
+	EvaluateTrainedModelActivity           = "training.evaluate_trained_model"
+	PublishModelTrainingCompletedActivity  = "training.publish_model_training_completed"
+	PublishModelTrainingFailedActivity     = "training.publish_model_training_failed"
+	DefaultTrainingWorkflowTaskQueue       = "training-service"
+	DefaultRunTrainingActivityTimeout      = 24 * time.Hour
+	DefaultEvaluateTrainingActivityTimeout = 24 * time.Hour
+	DefaultTrainingActivityHeartbeat       = 2 * time.Minute
 )
 
 func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) (*model.TrainingRunResult, error) {
@@ -60,7 +62,19 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 	}
 
 	var report model.EvaluationReport
-	if err := workflow.ExecuteActivity(ctx, EvaluateTrainedModelActivity, artifact, request).Get(ctx, &report); err != nil {
+	evaluateCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		ActivityID:             "evaluate:" + request.TrainingRunID,
+		StartToCloseTimeout:    DefaultEvaluateTrainingActivityTimeout,
+		ScheduleToCloseTimeout: DefaultEvaluateTrainingActivityTimeout,
+		HeartbeatTimeout:       DefaultTrainingActivityHeartbeat,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2,
+			MaximumInterval:    time.Minute,
+			MaximumAttempts:    3,
+		},
+	})
+	if err := workflow.ExecuteActivity(evaluateCtx, EvaluateTrainedModelActivity, artifact, request).Get(ctx, &report); err != nil {
 		return nil, err
 	}
 
@@ -77,14 +91,18 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 		ArtifactFormat:    artifact.ArtifactFormat,
 		ArtifactChecksum:  artifact.ArtifactChecksum,
 		ArtifactSizeBytes: artifact.ArtifactSizeBytes,
-		MetricsMetadata:   fmt.Sprintf(`{"passed":%t}`, report.Passed),
+		AdapterURI:        artifact.AdapterURI,
+		ServingTarget:     artifact.ServingTarget,
+		ServingModel:      artifact.ServingModel,
+		ServingLoadStatus: artifact.ServingLoadStatus,
+		MetricsMetadata:   evaluationMetricsMetadata(report),
 		ReportURI:         report.ReportURI,
 		Status:            model.TrainingRunStatusCompleted,
 	}
 
 	if !report.Passed {
 		result.Status = model.TrainingRunStatusFailed
-		result.FailureReason = "model evaluation failed"
+		result.FailureReason = report.FailureReason
 		if err := workflow.ExecuteActivity(ctx, PublishModelTrainingFailedActivity, *result).Get(ctx, nil); err != nil {
 			return nil, err
 		}
@@ -98,4 +116,22 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 
 	logger.Info("TrainModelWorkflow completed", "training_run_id", request.TrainingRunID, "model_uri", result.ModelURI)
 	return result, nil
+}
+
+func evaluationMetricsMetadata(report model.EvaluationReport) string {
+	raw, err := json.Marshal(struct {
+		Passed     bool               `json:"passed"`
+		Metrics    map[string]float64 `json:"metrics,omitempty"`
+		Thresholds map[string]float64 `json:"thresholds,omitempty"`
+		ReportURI   string             `json:"report_uri,omitempty"`
+	}{
+		Passed:     report.Passed,
+		Metrics:    report.Metrics,
+		Thresholds: report.Thresholds,
+		ReportURI:   report.ReportURI,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshal evaluation metrics metadata: %v", err))
+	}
+	return string(raw)
 }

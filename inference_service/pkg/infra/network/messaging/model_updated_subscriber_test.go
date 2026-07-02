@@ -48,6 +48,10 @@ func (u *recordingInferenceUsecase) Generate(context.Context, model.GenerateRequ
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) RecordFeedback(context.Context, *model.InferenceFeedback, uuid.UUID) (*model.InferenceFeedback, error) {
+	return nil, nil
+}
+
 var _ = Describe("InferenceTopics", func() {
 	It("subscribes to registry topics", func() {
 		Expect(inferencemessaging.InferenceTopics{
@@ -83,6 +87,10 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 			ArtifactFormat:    "HF_PEFT_ADAPTER",
 			ArtifactChecksum:  "checksum",
 			ArtifactSizeBytes: 42,
+			AdapterUri:        "s3://local-dev-bucket/models/model-1",
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v2",
+			ServingLoadStatus: "LOADED",
 			MetricsMetadata:   `{"accuracy":0.9}`,
 			Status:            "READY",
 		})
@@ -92,6 +100,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(uc.model.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.model.DatasetID).To(Equal(datasetID))
 		Expect(uc.model.Status).To(Equal(model.ModelStatusReady))
+		Expect(uc.model.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 		Expect(uc.model.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/model-1"))
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})

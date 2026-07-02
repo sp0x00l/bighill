@@ -16,4 +16,8 @@ message ModelUpdatedEvent {
   string metrics_metadata = 11;
   string status = 12;
   string failure_reason = 13;
+  string adapter_uri = 14;
+  string serving_target = 15;
+  string serving_model = 16;
+  string serving_load_status = 17;
 }

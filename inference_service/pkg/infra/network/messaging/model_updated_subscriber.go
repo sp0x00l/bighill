@@ -167,6 +167,10 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	servingLoadStatus, err := model.ToModelLoadStatus(strings.TrimSpace(payload.GetServingLoadStatus()))
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	inferenceModel := &model.InferenceModel{
 		ModelID:           modelID,
 		TrainingRunID:     trainingRunID,
@@ -178,6 +182,10 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		ArtifactFormat:    strings.TrimSpace(payload.GetArtifactFormat()),
 		ArtifactChecksum:  strings.TrimSpace(payload.GetArtifactChecksum()),
 		ArtifactSizeBytes: payload.GetArtifactSizeBytes(),
+		AdapterURI:        strings.TrimSpace(payload.GetAdapterUri()),
+		ServingTarget:     strings.TrimSpace(payload.GetServingTarget()),
+		ServingModel:      strings.TrimSpace(payload.GetServingModel()),
+		ServingLoadStatus: servingLoadStatus,
 		MetricsMetadata:   strings.TrimSpace(payload.GetMetricsMetadata()),
 		Status:            status,
 		FailureReason:     strings.TrimSpace(payload.GetFailureReason()),
@@ -211,6 +219,9 @@ func validateModelUpdatedEvent(inferenceModel *model.InferenceModel) error {
 	}
 	if inferenceModel.Status == model.ModelStatusReady && strings.TrimSpace(inferenceModel.ArtifactLocation) == "" {
 		return fmt.Errorf("artifact location is required for ready models")
+	}
+	if inferenceModel.Status == model.ModelStatusReady && inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
+		return fmt.Errorf("ready models must be loaded by the serving layer")
 	}
 	if inferenceModel.Status == model.ModelStatusFailed && strings.TrimSpace(inferenceModel.FailureReason) == "" {
 		return fmt.Errorf("failure reason is required for failed models")

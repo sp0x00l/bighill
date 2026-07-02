@@ -62,6 +62,10 @@ func (p *trainingEventPublisher) PublishModelTrainingCompleted(ctx context.Conte
 		ArtifactSizeBytes: result.ArtifactSizeBytes,
 		MetricsMetadata:   result.MetricsMetadata,
 		ReportLocation:    result.ReportURI,
+		AdapterUri:        result.AdapterURI,
+		ServingTarget:     result.ServingTarget,
+		ServingModel:      result.ServingModel,
+		ServingLoadStatus: result.ServingLoadStatus,
 	})
 }
 

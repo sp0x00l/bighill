@@ -40,6 +40,8 @@ spec:
               value: {{ .Values.env.temporalNamespace | quote }}
             - name: TRAINING_SERVICE_TEMPORAL_TASK_QUEUE
               value: {{ .Values.env.temporalTaskQueue | quote }}
+            - name: TRAINING_SERVICE_TRAINING_TRIGGER_ENABLED
+              value: {{ .Values.env.trainingTriggerEnabled | quote }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
             - name: TRAINING_SERVICE_KAFKA_GROUP_ID
@@ -52,6 +54,32 @@ spec:
               value: {{ .Values.env.dlq | quote }}
             - name: TRAINING_SERVICE_BASE_MODEL
               value: {{ .Values.env.baseModel | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_NAME
+              value: {{ .Values.env.trainingProfileName | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_TRAINER
+              value: {{ .Values.env.trainingProfileTrainer | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_ADAPTER
+              value: {{ .Values.env.trainingProfileAdapter | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_QUANTIZATION
+              value: {{ .Values.env.trainingProfileQuantization | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_PREFERENCE_DATASET_URI
+              value: {{ .Values.env.trainingProfilePreferenceDatasetUri | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_SEQUENCE_LENGTH
+              value: {{ .Values.env.trainingProfileSequenceLength | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_SAMPLE_PACKING
+              value: {{ .Values.env.trainingProfileSamplePacking | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_LEARNING_RATE
+              value: {{ .Values.env.trainingProfileLearningRate | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_EPOCHS
+              value: {{ .Values.env.trainingProfileEpochs | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_MICRO_BATCH_SIZE
+              value: {{ .Values.env.trainingProfileMicroBatchSize | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_GRADIENT_ACCUMULATION_STEPS
+              value: {{ .Values.env.trainingProfileGradientAccumulationSteps | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_LORA_R
+              value: {{ .Values.env.trainingProfileLoraR | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_LORA_ALPHA
+              value: {{ .Values.env.trainingProfileLoraAlpha | quote }}
             - name: TRAINING_SERVICE_EXECUTOR_PROVIDER
               value: {{ .Values.env.executorProvider | quote }}
             - name: TRAINING_SERVICE_RAY_JOBS_URL
@@ -60,16 +88,46 @@ spec:
               value: {{ .Values.env.rayTrainingEntrypoint | quote }}
             - name: TRAINING_SERVICE_RAY_EVALUATION_ENTRYPOINT
               value: {{ .Values.env.rayEvaluationEntrypoint | quote }}
+            - name: TRAINING_SERVICE_AXOLOTL_COMMAND
+              value: {{ .Values.env.axolotlCommand | quote }}
             - name: TRAINING_SERVICE_RAY_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.rayRequestTimeoutSeconds | quote }}
             - name: TRAINING_SERVICE_RAY_POLL_INTERVAL_SECONDS
               value: {{ .Values.env.rayPollIntervalSeconds | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_NAMESPACE
+              value: {{ .Values.env.kubeRayNamespace | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_RAY_VERSION
+              value: {{ .Values.env.kubeRayRayVersion | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_IMAGE
+              value: {{ .Values.env.kubeRayImage | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_IMAGE_PULL_POLICY
+              value: {{ .Values.env.kubeRayImagePullPolicy | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_SERVICE_ACCOUNT
+              value: {{ .Values.env.kubeRayServiceAccount | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_TTL_SECONDS_AFTER_FINISHED
+              value: {{ .Values.env.kubeRayTtlSecondsAfterFinished | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_WORKER_REPLICAS
+              value: {{ .Values.env.kubeRayWorkerReplicas | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_CPU
+              value: {{ .Values.env.kubeRayCpu | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_MEMORY
+              value: {{ .Values.env.kubeRayMemory | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_GPU_RESOURCE
+              value: {{ .Values.env.kubeRayGpuResource | quote }}
+            - name: TRAINING_SERVICE_KUBERAY_GPU
+              value: {{ .Values.env.kubeRayGpu | quote }}
             - name: TRAINING_SERVICE_ARTIFACT_BUCKET_REGION
               value: {{ .Values.env.artifactBucketRegion | quote }}
             - name: TRAINING_SERVICE_MODEL_URI_PREFIX
               value: {{ .Values.env.modelUriPrefix | quote }}
             - name: TRAINING_SERVICE_EVALUATION_URI_PREFIX
               value: {{ .Values.env.evaluationUriPrefix | quote }}
+            - name: TRAINING_SERVICE_SERVING_TARGET
+              value: {{ .Values.env.servingTarget | quote }}
+            - name: TRAINING_SERVICE_SERVING_MODEL
+              value: {{ .Values.env.servingModel | quote }}
+            - name: TRAINING_SERVICE_SERVING_LOAD_STATUS
+              value: {{ .Values.env.servingLoadStatus | quote }}
             - name: TRAINING_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: TRAINING_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT

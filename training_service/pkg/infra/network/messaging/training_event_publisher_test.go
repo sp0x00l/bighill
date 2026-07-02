@@ -52,6 +52,10 @@ var _ = Describe("TrainingEventPublisher", func() {
 			ArtifactFormat:    "HF_PEFT_ADAPTER",
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
+			AdapterURI:        "s3://local-dev-bucket/models/run",
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v4",
+			ServingLoadStatus: "LOADED",
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			ReportURI:         "s3://local-dev-bucket/evals/run.json",
 			Status:            model.TrainingRunStatusCompleted,
@@ -67,6 +71,10 @@ var _ = Describe("TrainingEventPublisher", func() {
 		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.ModelName).To(Equal("movie-ranker"))
 		Expect(event.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/run"))
+		Expect(event.AdapterUri).To(Equal("s3://local-dev-bucket/models/run"))
+		Expect(event.ServingTarget).To(Equal("vllm-local"))
+		Expect(event.ServingModel).To(Equal("movie-ranker-v4"))
+		Expect(event.ServingLoadStatus).To(Equal("LOADED"))
 	})
 
 	It("publishes failed model training facts to the training topic", func() {

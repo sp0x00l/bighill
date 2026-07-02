@@ -1,4 +1,5 @@
-CREATE TYPE inference_model_status_enum AS ENUM ('PENDING', 'READY', 'FAILED');
+CREATE TYPE inference_model_status_enum AS ENUM ('PENDING', 'CANDIDATE', 'EVALUATED', 'READY', 'FAILED');
+CREATE TYPE inference_model_load_status_enum AS ENUM ('NOT_LOADED', 'LOADED', 'FAILED');
 CREATE TYPE inference_dataset_processing_state_enum AS ENUM ('PENDING', 'RAW_MATERIALIZED', 'FEATURE_MATERIALIZED', 'EMBEDDINGS_MATERIALIZED', 'FAILED');
 CREATE TYPE inference_request_status_enum AS ENUM ('COMPLETED', 'FAILED');
 
@@ -14,6 +15,10 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     artifact_format text NOT NULL DEFAULT '',
     artifact_checksum text NOT NULL DEFAULT '',
     artifact_size_bytes bigint NOT NULL DEFAULT 0,
+    adapter_uri text NOT NULL DEFAULT '',
+    serving_target text NOT NULL DEFAULT '',
+    serving_model text NOT NULL DEFAULT '',
+    serving_load_status inference_model_load_status_enum NOT NULL DEFAULT 'NOT_LOADED',
     metrics_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     status inference_model_status_enum NOT NULL,
     failure_reason text NOT NULL DEFAULT '',
@@ -107,3 +112,37 @@ ON bighill_inference_db.inference_requests(embedding_snapshot_id);
 
 CREATE INDEX IF NOT EXISTS index_inference_requests_created_at
 ON bighill_inference_db.inference_requests(created_at);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_feedback (
+    feedback_id uuid PRIMARY KEY,
+    idempotency_key uuid NOT NULL UNIQUE,
+    request_id uuid NOT NULL REFERENCES bighill_inference_db.inference_requests(request_id),
+    user_id uuid NOT NULL,
+    accepted boolean NOT NULL,
+    rating integer NOT NULL,
+    comment text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS index_inference_feedback_request_id
+ON bighill_inference_db.inference_feedback(request_id);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_examples (
+    preference_example_id uuid PRIMARY KEY,
+    feedback_id uuid NOT NULL UNIQUE REFERENCES bighill_inference_db.inference_feedback(feedback_id),
+    request_id uuid NOT NULL,
+    dataset_id uuid NOT NULL,
+    model_id uuid NOT NULL,
+    prompt_text text NOT NULL,
+    accepted_answer text NOT NULL DEFAULT '',
+    rejected_answer text NOT NULL DEFAULT '',
+    rating integer NOT NULL,
+    feedback_label text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS index_preference_examples_dataset_id
+ON bighill_inference_db.preference_examples(dataset_id);
+
+CREATE INDEX IF NOT EXISTS index_preference_examples_model_id
+ON bighill_inference_db.preference_examples(model_id);

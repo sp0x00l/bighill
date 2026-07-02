@@ -48,6 +48,23 @@ type TrainingRunRequest struct {
 	ModelVersion      string
 	BaseModel         string
 	EvaluationProfile string
+	TrainingProfile   TrainingProfile
+}
+
+type TrainingProfile struct {
+	Name                      string
+	Trainer                   string
+	Adapter                   string
+	Quantization              string
+	PreferenceDatasetURI      string
+	SequenceLength            int
+	SamplePacking             bool
+	LearningRate              float64
+	Epochs                    float64
+	MicroBatchSize            int
+	GradientAccumulationSteps int
+	LoRAR                     int
+	LoRAAlpha                 int
 }
 
 type PreparedTrainingDataset struct {
@@ -65,34 +82,50 @@ type TrainedModelArtifact struct {
 	ArtifactFormat    string `json:"artifact_format"`
 	ArtifactChecksum  string `json:"artifact_checksum"`
 	ArtifactSizeBytes int64  `json:"artifact_size_bytes"`
+	AdapterURI        string `json:"adapter_uri"`
+	ServingTarget     string `json:"serving_target"`
+	ServingModel      string `json:"serving_model"`
+	ServingLoadStatus string `json:"serving_load_status"`
+	RecipeHash        string `json:"recipe_hash"`
 }
 
 type EvaluationReport struct {
-	TrainingRunID string `json:"training_run_id"`
-	ReportURI     string `json:"report_uri"`
-	Passed        bool   `json:"passed"`
+	TrainingRunID string             `json:"training_run_id"`
+	ReportURI     string             `json:"report_uri"`
+	Passed        bool               `json:"passed"`
+	Metrics       map[string]float64 `json:"metrics,omitempty"`
+	Thresholds    map[string]float64 `json:"thresholds,omitempty"`
+	FailureReason string             `json:"failure_reason,omitempty"`
 }
 
 type TrainingJobSpec struct {
-	TrainingRunID       string
-	DatasetURI          string
-	ModelName           string
-	ModelVersion        string
-	BaseModel           string
-	ModelURI            string
-	ArtifactManifestURI string
-	RecipeYAML          string
-	RecipeHash          string
-	SubmissionID        string
+	TrainingRunID        string
+	DatasetURI           string
+	ModelName            string
+	ModelVersion         string
+	BaseModel            string
+	TrainingProfile      TrainingProfile
+	ModelURI             string
+	AdapterURI           string
+	ServingTarget        string
+	ServingModel         string
+	ServingLoadStatus    string
+	ArtifactManifestURI  string
+	ArtifactBucketRegion string
+	AxolotlCommand       string
+	RecipeYAML           string
+	RecipeHash           string
+	SubmissionID         string
 }
 
 type EvaluationJobSpec struct {
-	TrainingRunID     string
-	ModelURI          string
-	EvaluationProfile string
-	ReportURI         string
-	ReportManifestURI string
-	SubmissionID      string
+	TrainingRunID        string
+	ModelURI             string
+	EvaluationProfile    string
+	ReportURI            string
+	ReportManifestURI    string
+	ArtifactBucketRegion string
+	SubmissionID         string
 }
 
 type TrainingRunResult struct {
@@ -108,6 +141,10 @@ type TrainingRunResult struct {
 	ArtifactFormat    string
 	ArtifactChecksum  string
 	ArtifactSizeBytes int64
+	AdapterURI        string
+	ServingTarget     string
+	ServingModel      string
+	ServingLoadStatus string
 	MetricsMetadata   string
 	ReportURI         string
 	FailureReason     string

@@ -5,11 +5,11 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 . $BIGHILL_ROOT/database/scripts/config.sh $1
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
-    :
+    export MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED=false
 elif [ "$1" = "staging" ]; then
-    :
+    export MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED=true
 elif [ "$1" = "prod" ]; then
-    :
+    export MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED=true
 else
     echo "Error: Invalid environment provided to model_registry_service config"
     echo "Usage: './config.sh [local-dev|cicd|staging|prod]'"
@@ -29,6 +29,12 @@ export MODEL_REGISTRY_SERVICE_OUTBOX=postgres
 export MODEL_REGISTRY_SERVICE_OUTBOX_RELAY_POLL_MS=250
 export MODEL_REGISTRY_SERVICE_OUTBOX_RELAY_BATCH_SIZE=100
 export MODEL_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS=2000
+export MODEL_REGISTRY_SERVING_NAMESPACE=default
+export MODEL_REGISTRY_SERVING_CRD_GROUP=serving.bighill.io
+export MODEL_REGISTRY_SERVING_CRD_VERSION=v1alpha1
+export MODEL_REGISTRY_SERVING_CRD_RESOURCE=servedmodels
+export MODEL_REGISTRY_SERVING_CRD_KIND=ServedModel
+export MODEL_REGISTRY_SERVING_STATUS_POLL_MS=1000
 export MODEL_REGISTRY_HEALTHCHECK_CPU_THRESHOLD_PERCENT=80
 export MODEL_REGISTRY_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT=20
 export MODEL_REGISTRY_HEALTHCHECK_PORT=5060

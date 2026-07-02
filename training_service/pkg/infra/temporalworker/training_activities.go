@@ -20,10 +20,15 @@ type TrainingEventPublisher interface {
 }
 
 type TrainingActivities struct {
-	eventPublisher      TrainingEventPublisher
-	executor            app.TrainingExecutor
-	modelURIPrefix      string
-	evaluationURIPrefix string
+	eventPublisher       TrainingEventPublisher
+	executor             app.TrainingExecutor
+	modelURIPrefix       string
+	evaluationURIPrefix  string
+	servingTarget        string
+	servingModel         string
+	servingLoadStatus    string
+	artifactBucketRegion string
+	axolotlCommand       string
 }
 
 type TrainingActivitiesOption func(*TrainingActivities)
@@ -52,13 +57,42 @@ func WithEvaluationURIPrefix(prefix string) TrainingActivitiesOption {
 	}
 }
 
+func WithServingConfig(target string, modelName string, loadStatus string) TrainingActivitiesOption {
+	log.Trace("WithServingConfig")
+
+	return func(a *TrainingActivities) {
+		a.servingTarget = strings.TrimSpace(target)
+		a.servingModel = strings.TrimSpace(modelName)
+		a.servingLoadStatus = strings.TrimSpace(loadStatus)
+	}
+}
+
+func WithArtifactBucketRegion(region string) TrainingActivitiesOption {
+	log.Trace("WithArtifactBucketRegion")
+
+	return func(a *TrainingActivities) {
+		a.artifactBucketRegion = strings.TrimSpace(region)
+	}
+}
+
+func WithAxolotlCommand(command string) TrainingActivitiesOption {
+	log.Trace("WithAxolotlCommand")
+
+	return func(a *TrainingActivities) {
+		a.axolotlCommand = strings.TrimSpace(command)
+	}
+}
+
 func NewTrainingActivities(publisher TrainingEventPublisher, opts ...TrainingActivitiesOption) *TrainingActivities {
 	log.Trace("NewTrainingActivities")
 
 	activities := &TrainingActivities{
-		eventPublisher:      publisher,
-		modelURIPrefix:      "s3://local-dev-bucket/models",
-		evaluationURIPrefix: "s3://local-dev-bucket/evaluations",
+		eventPublisher:       publisher,
+		modelURIPrefix:       "s3://local-dev-bucket/models",
+		evaluationURIPrefix:  "s3://local-dev-bucket/evaluations",
+		servingLoadStatus:    "LOADED",
+		artifactBucketRegion: "local-dev",
+		axolotlCommand:       "axolotl train",
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -94,7 +128,11 @@ func (a *TrainingActivities) RunTrainingJob(ctx context.Context, prepared model.
 	if err != nil {
 		return nil, err
 	}
-	return a.executor.RunTrainingJob(ctx, spec)
+	artifact, err := a.executor.RunTrainingJob(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return applyServingMetadata(artifact, spec), nil
 }
 
 func (a *TrainingActivities) EvaluateTrainedModel(ctx context.Context, artifact model.TrainedModelArtifact, request model.TrainingRunRequest) (*model.EvaluationReport, error) {
@@ -131,28 +169,64 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 		return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("base model is required")
 	}
 	modelURI := a.modelURIPrefix + "/" + trainingRunID
+	servingModel := a.servingModel
+	if servingModel == "" {
+		servingModel = modelName
+	}
 	recipe := axolotlRecipeYAML(model.TrainingJobSpec{
-		TrainingRunID: trainingRunID,
-		DatasetURI:    datasetURI,
-		ModelName:     modelName,
-		ModelVersion:  modelVersion,
-		BaseModel:     baseModel,
-		ModelURI:      modelURI,
+		TrainingRunID:   trainingRunID,
+		DatasetURI:      datasetURI,
+		ModelName:       modelName,
+		ModelVersion:    modelVersion,
+		BaseModel:       baseModel,
+		TrainingProfile: request.TrainingProfile,
+		ModelURI:        modelURI,
+		AdapterURI:      modelURI,
+		ServingTarget:   a.servingTarget,
+		ServingModel:    servingModel,
 	})
 	hash := sha256.Sum256([]byte(recipe))
 	recipeHash := hex.EncodeToString(hash[:])
 	return model.TrainingJobSpec{
-		TrainingRunID:       trainingRunID,
-		DatasetURI:          datasetURI,
-		ModelName:           modelName,
-		ModelVersion:        modelVersion,
-		BaseModel:           baseModel,
-		ModelURI:            modelURI,
-		ArtifactManifestURI: modelURI + "/artifact.json",
-		RecipeYAML:          recipe,
-		RecipeHash:          recipeHash,
-		SubmissionID:        deterministicSubmissionID("train", trainingRunID, recipeHash),
+		TrainingRunID:        trainingRunID,
+		DatasetURI:           datasetURI,
+		ModelName:            modelName,
+		ModelVersion:         modelVersion,
+		BaseModel:            baseModel,
+		TrainingProfile:      request.TrainingProfile,
+		ModelURI:             modelURI,
+		AdapterURI:           modelURI,
+		ServingTarget:        a.servingTarget,
+		ServingModel:         servingModel,
+		ServingLoadStatus:    a.servingLoadStatus,
+		ArtifactManifestURI:  modelURI + "/artifact.json",
+		ArtifactBucketRegion: a.artifactBucketRegion,
+		AxolotlCommand:       a.axolotlCommand,
+		RecipeYAML:           recipe,
+		RecipeHash:           recipeHash,
+		SubmissionID:         deterministicSubmissionID("train", trainingRunID, recipeHash),
 	}, nil
+}
+
+func applyServingMetadata(artifact *model.TrainedModelArtifact, spec model.TrainingJobSpec) *model.TrainedModelArtifact {
+	log.Trace("applyServingMetadata")
+
+	if artifact == nil {
+		return nil
+	}
+	if strings.TrimSpace(artifact.AdapterURI) == "" {
+		artifact.AdapterURI = spec.AdapterURI
+	}
+	if strings.TrimSpace(artifact.ServingTarget) == "" {
+		artifact.ServingTarget = spec.ServingTarget
+	}
+	if strings.TrimSpace(artifact.ServingModel) == "" {
+		artifact.ServingModel = spec.ServingModel
+	}
+	if strings.TrimSpace(artifact.ServingLoadStatus) == "" {
+		artifact.ServingLoadStatus = spec.ServingLoadStatus
+	}
+	return artifact
 }
 
 func (a *TrainingActivities) evaluationJobSpec(artifact model.TrainedModelArtifact, request model.TrainingRunRequest) (model.EvaluationJobSpec, error) {
@@ -165,29 +239,54 @@ func (a *TrainingActivities) evaluationJobSpec(artifact model.TrainedModelArtifa
 	reportURI := a.evaluationURIPrefix + "/" + trainingRunID + ".json"
 	hash := sha256.Sum256([]byte(artifact.ModelURI + "|" + strings.TrimSpace(request.EvaluationProfile)))
 	return model.EvaluationJobSpec{
-		TrainingRunID:     trainingRunID,
-		ModelURI:          artifact.ModelURI,
-		EvaluationProfile: strings.TrimSpace(request.EvaluationProfile),
-		ReportURI:         reportURI,
-		ReportManifestURI: reportURI,
-		SubmissionID:      deterministicSubmissionID("eval", trainingRunID, hex.EncodeToString(hash[:])),
+		TrainingRunID:        trainingRunID,
+		ModelURI:             artifact.ModelURI,
+		EvaluationProfile:    strings.TrimSpace(request.EvaluationProfile),
+		ReportURI:            reportURI,
+		ReportManifestURI:    reportURI,
+		ArtifactBucketRegion: a.artifactBucketRegion,
+		SubmissionID:         deterministicSubmissionID("eval", trainingRunID, hex.EncodeToString(hash[:])),
 	}, nil
 }
 
 func axolotlRecipeYAML(spec model.TrainingJobSpec) string {
 	log.Trace("axolotlRecipeYAML")
 
+	profile := spec.TrainingProfile
+	quantization := ""
+	switch strings.ToLower(strings.TrimSpace(profile.Quantization)) {
+	case "4bit":
+		quantization = "load_in_4bit: true\n"
+	case "8bit":
+		quantization = "load_in_8bit: true\n"
+	}
+	trainer := strings.ToLower(strings.TrimSpace(profile.Trainer))
+	if trainer == "" {
+		trainer = "sft"
+	}
+	preferenceDataset := ""
+	if strings.TrimSpace(profile.PreferenceDatasetURI) != "" {
+		preferenceDataset = fmt.Sprintf("preference_dataset: %s\n", strings.TrimSpace(profile.PreferenceDatasetURI))
+	}
 	return fmt.Sprintf(`base_model: %s
 model_name: %s
 model_version: %s
+training_profile: %s
+trainer: %s
 datasets:
   - path: %s
+%s
 output_dir: %s
-adapter: lora
-load_in_8bit: true
-sequence_len: 2048
-sample_packing: true
-`, spec.BaseModel, spec.ModelName, spec.ModelVersion, spec.DatasetURI, spec.ModelURI)
+adapter: %s
+%ssequence_len: %d
+sample_packing: %t
+learning_rate: %.8g
+num_epochs: %.8g
+micro_batch_size: %d
+gradient_accumulation_steps: %d
+lora_r: %d
+lora_alpha: %d
+`, spec.BaseModel, spec.ModelName, spec.ModelVersion, profile.Name, trainer, spec.DatasetURI, preferenceDataset, spec.ModelURI, profile.Adapter, quantization, profile.SequenceLength, profile.SamplePacking, profile.LearningRate, profile.Epochs, profile.MicroBatchSize, profile.GradientAccumulationSteps, profile.LoRAR, profile.LoRAAlpha)
 }
 
 func deterministicSubmissionID(prefix, trainingRunID, hash string) string {

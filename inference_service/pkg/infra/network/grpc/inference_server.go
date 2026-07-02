@@ -127,6 +127,45 @@ func (s *InferenceServer) Generate(ctx context.Context, req *inferencepb.Generat
 	return generateResponseToPB(response), nil
 }
 
+func (s *InferenceServer) RecordFeedback(ctx context.Context, req *inferencepb.RecordFeedbackRequest) (*inferencepb.RecordFeedbackResponse, error) {
+	log.Trace("InferenceServer RecordFeedback")
+
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "feedback request is required")
+	}
+	feedbackID, err := uuid.Parse(req.GetFeedbackId())
+	if err != nil || feedbackID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid feedback_id")
+	}
+	requestID, err := uuid.Parse(req.GetRequestId())
+	if err != nil || requestID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid request_id")
+	}
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil || userID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+	rating := int(req.GetRating())
+	if rating < -1 || rating > 1 {
+		return nil, status.Error(codes.InvalidArgument, "rating must be between -1 and 1")
+	}
+	feedback, err := s.usecase.RecordFeedback(ctx, &model.InferenceFeedback{
+		FeedbackID: feedbackID,
+		RequestID:  requestID,
+		UserID:     userID,
+		Accepted:   req.GetAccepted(),
+		Rating:     rating,
+		Comment:    strings.TrimSpace(req.GetComment()),
+	}, feedbackID)
+	if err != nil {
+		return nil, inferenceStatusError(err)
+	}
+	return &inferencepb.RecordFeedbackResponse{
+		FeedbackId: feedback.FeedbackID.String(),
+		RequestId:  feedback.RequestID.String(),
+	}, nil
+}
+
 func generateResponseToPB(response *model.GenerateResponse) *inferencepb.GenerateResponse {
 	log.Trace("generateResponseToPB")
 

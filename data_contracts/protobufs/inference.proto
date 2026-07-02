@@ -6,6 +6,7 @@ option go_package = "lib/data_contracts_lib/inference";
 
 service InferenceService {
   rpc Generate(GenerateRequest) returns (GenerateResponse);
+  rpc RecordFeedback(RecordFeedbackRequest) returns (RecordFeedbackResponse);
 }
 
 message GenerateRequest {
@@ -36,4 +37,18 @@ message RetrievedContext {
   string source_text = 4;
   double distance = 5;
   double similarity = 6;
+}
+
+message RecordFeedbackRequest {
+  string feedback_id = 1;
+  string request_id = 2;
+  string user_id = 3;
+  bool accepted = 4;
+  int32 rating = 5;
+  string comment = 6;
+}
+
+message RecordFeedbackResponse {
+  string feedback_id = 1;
+  string request_id = 2;
 }

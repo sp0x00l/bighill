@@ -96,16 +96,20 @@ var _ = Describe("TrainingActivities", func() {
 			nil,
 			temporalworker.WithExecutor(executor),
 			temporalworker.WithModelURIPrefix("s3://models"),
+			temporalworker.WithServingConfig("vllm-local", "movie-ranker-v1", "LOADED"),
+			temporalworker.WithArtifactBucketRegion("eu-west-1"),
+			temporalworker.WithAxolotlCommand("axolotl train"),
 		)
 
 		artifact, err := activities.RunTrainingJob(context.Background(), model.PreparedTrainingDataset{
 			TrainingRunID: "training-run-1",
 			DatasetURI:    "s3://local-dev-bucket/features/feature-snapshot-1.parquet",
 		}, model.TrainingRunRequest{
-			TrainingRunID: "training-run-1",
-			ModelName:     "model",
-			ModelVersion:  "v1",
-			BaseModel:     "mistral-7b",
+			TrainingRunID:   "training-run-1",
+			ModelName:       "model",
+			ModelVersion:    "v1",
+			BaseModel:       "mistral-7b",
+			TrainingProfile: trainingProfile(),
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -113,8 +117,21 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(executor.trainingSpec.TrainingRunID).To(Equal("training-run-1"))
 		Expect(executor.trainingSpec.DatasetURI).To(Equal("s3://local-dev-bucket/features/feature-snapshot-1.parquet"))
 		Expect(executor.trainingSpec.ModelURI).To(Equal("s3://models/training-run-1"))
+		Expect(executor.trainingSpec.AdapterURI).To(Equal("s3://models/training-run-1"))
+		Expect(executor.trainingSpec.ServingTarget).To(Equal("vllm-local"))
+		Expect(executor.trainingSpec.ServingModel).To(Equal("movie-ranker-v1"))
+		Expect(executor.trainingSpec.ServingLoadStatus).To(Equal("LOADED"))
 		Expect(executor.trainingSpec.ArtifactManifestURI).To(Equal("s3://models/training-run-1/artifact.json"))
+		Expect(executor.trainingSpec.ArtifactBucketRegion).To(Equal("eu-west-1"))
+		Expect(executor.trainingSpec.AxolotlCommand).To(Equal("axolotl train"))
 		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("base_model: mistral-7b"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("training_profile: profile-v1"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("trainer: dpo"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("preference_dataset: s3://local-dev-bucket/preferences/profile-v1.jsonl"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("adapter: qlora"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("load_in_4bit: true"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("learning_rate: 0.0002"))
+		Expect(executor.trainingSpec.TrainingProfile).To(Equal(trainingProfile()))
 		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("path: s3://local-dev-bucket/features/feature-snapshot-1.parquet"))
 		Expect(executor.trainingSpec.RecipeHash).NotTo(BeEmpty())
 		Expect(executor.trainingSpec.SubmissionID).To(HavePrefix("train-training-run-1-"))
@@ -124,6 +141,10 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(artifact.ArtifactFormat).To(Equal("HF_PEFT_ADAPTER"))
 		Expect(artifact.ArtifactChecksum).To(Equal("sha256:abc"))
 		Expect(artifact.ArtifactSizeBytes).To(BeNumerically(">", 0))
+		Expect(artifact.AdapterURI).To(Equal("s3://models/training-run-1"))
+		Expect(artifact.ServingTarget).To(Equal("vllm-local"))
+		Expect(artifact.ServingModel).To(Equal("movie-ranker-v1"))
+		Expect(artifact.ServingLoadStatus).To(Equal("LOADED"))
 	})
 
 	It("builds an evaluation job spec and delegates execution", func() {
@@ -136,6 +157,7 @@ var _ = Describe("TrainingActivities", func() {
 			nil,
 			temporalworker.WithExecutor(executor),
 			temporalworker.WithEvaluationURIPrefix("s3://evaluations"),
+			temporalworker.WithArtifactBucketRegion("eu-west-1"),
 		)
 
 		report, err := activities.EvaluateTrainedModel(context.Background(), model.TrainedModelArtifact{
@@ -151,6 +173,7 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(executor.evaluationSpec.EvaluationProfile).To(Equal("smoke"))
 		Expect(executor.evaluationSpec.ReportURI).To(Equal("s3://evaluations/training-run-1.json"))
 		Expect(executor.evaluationSpec.ReportManifestURI).To(Equal("s3://evaluations/training-run-1.json"))
+		Expect(executor.evaluationSpec.ArtifactBucketRegion).To(Equal("eu-west-1"))
 		Expect(executor.evaluationSpec.SubmissionID).To(HavePrefix("eval-training-run-1-"))
 	})
 
@@ -203,3 +226,21 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 })
+
+func trainingProfile() model.TrainingProfile {
+	return model.TrainingProfile{
+		Name:                      "profile-v1",
+		Trainer:                   "dpo",
+		Adapter:                   "qlora",
+		Quantization:              "4bit",
+		PreferenceDatasetURI:      "s3://local-dev-bucket/preferences/profile-v1.jsonl",
+		SequenceLength:            2048,
+		SamplePacking:             true,
+		LearningRate:              0.0002,
+		Epochs:                    3,
+		MicroBatchSize:            1,
+		GradientAccumulationSteps: 4,
+		LoRAR:                     16,
+		LoRAAlpha:                 32,
+	}
+}

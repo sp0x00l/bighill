@@ -150,6 +150,18 @@ func (s *inferenceRequestRepositoryStub) RecordInferenceRequest(_ context.Contex
 	return s.err
 }
 
+type inferenceFeedbackRepositoryStub struct {
+	feedback       *model.InferenceFeedback
+	idempotencyKey uuid.UUID
+	err            error
+}
+
+func (s *inferenceFeedbackRepositoryStub) RecordFeedback(_ context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
+	s.feedback = feedback
+	s.idempotencyKey = idempotencyKey
+	return feedback, s.err
+}
+
 var _ = Describe("InferenceUsecase", func() {
 	It("records a complete model update", func() {
 		repository := &inferenceModelRepositoryStub{}
@@ -188,6 +200,30 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(recorded.DatasetID).To(Equal(datasetRepository.upserted.DatasetID))
 		Expect(datasetRepository.idempotencyKey).To(Equal(idempotencyKey))
+	})
+
+	It("records inference feedback through the repository", func() {
+		feedbackRepository := &inferenceFeedbackRepositoryStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+		)
+		idempotencyKey := uuid.New()
+		feedback := &model.InferenceFeedback{
+			FeedbackID: uuid.New(),
+			RequestID:  uuid.New(),
+			UserID:     uuid.New(),
+			Accepted:   false,
+			Rating:     -1,
+			Comment:    "not grounded",
+		}
+
+		recorded, err := uc.RecordFeedback(context.Background(), feedback, idempotencyKey)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recorded).To(Equal(feedback))
+		Expect(feedbackRepository.feedback).To(Equal(feedback))
+		Expect(feedbackRepository.idempotencyKey).To(Equal(idempotencyKey))
 	})
 
 	It("generates from retrieved RAG contexts", func() {
@@ -380,6 +416,38 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
 	})
 
+	It("rejects generation when the ready model is not loaded by the serving layer", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.DatasetID = dataset.DatasetID
+		inferenceModel.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		requestRepository := &inferenceRequestRepositoryStub{}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithRetrievalClient(&retrievalClientStub{}),
+			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		_, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID: uuid.New(),
+			DatasetID: dataset.DatasetID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      4,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrModelNotReady)).To(BeTrue())
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
+	})
+
 	It("rejects generation when the model belongs to a different dataset", func() {
 		dataset := validInferenceDataset()
 		inferenceModel := validInferenceModel()
@@ -455,7 +523,7 @@ func testPromptStrategy() model.PromptStrategy {
 	return model.PromptStrategy{
 		Version:          "test-rag-prompt-v1",
 		SystemPrompt:     "Use context only.",
-		MaxContextChars:  200,
+		MaxContextTokens: 200,
 		MaxContextChunks: 4,
 	}
 }
@@ -477,6 +545,10 @@ func validInferenceModel() *model.InferenceModel {
 		ArtifactFormat:    "HF_PEFT_ADAPTER",
 		ArtifactChecksum:  "checksum",
 		ArtifactSizeBytes: 10,
+		AdapterURI:        "s3://local-dev-bucket/models/model-1",
+		ServingTarget:     "vllm-local",
+		ServingModel:      "sentence-transformer-v1",
+		ServingLoadStatus: model.ModelLoadStatusLoaded,
 		MetricsMetadata:   "{}",
 		Status:            model.ModelStatusReady,
 	}

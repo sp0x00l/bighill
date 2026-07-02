@@ -13,10 +13,10 @@ import (
 )
 
 var _ = Describe("RAG pipeline", func() {
-	It("packs retrieved contexts within chunk and character limits", func() {
+	It("packs retrieved contexts within chunk and token limits", func() {
 		packer := app.NewContextWindowPacker(model.PromptStrategy{
 			Version:          "test-prompt",
-			MaxContextChars:  10,
+			MaxContextTokens: 2,
 			MaxContextChunks: 2,
 		})
 
@@ -30,7 +30,7 @@ var _ = Describe("RAG pipeline", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(contexts).To(HaveLen(1))
-		Expect(contexts[0].SourceText).To(Equal("first cont"))
+		Expect(contexts[0].SourceText).To(Equal("first context"))
 	})
 
 	It("builds a prompt with dataset lineage and retrieved context", func() {
@@ -39,7 +39,7 @@ var _ = Describe("RAG pipeline", func() {
 		builder := app.NewDefaultPromptBuilder(model.PromptStrategy{
 			Version:          "test-prompt",
 			SystemPrompt:     "Use context only.",
-			MaxContextChars:  1000,
+			MaxContextTokens: 1000,
 			MaxContextChunks: 4,
 		})
 

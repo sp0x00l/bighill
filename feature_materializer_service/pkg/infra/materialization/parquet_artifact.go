@@ -153,11 +153,11 @@ func pdfRows(ctx context.Context, data []byte, extractor DocumentExtractor, clea
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	cleaned, err := cleaner.Clean(ctx, extraction.Text)
+	cleanedRows, err := cleanTextRows(ctx, cleaner, sectionTexts(extraction))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if cleaned == "" {
+	if len(cleanedRows) == 0 {
 		return nil, nil, nil, domain.ErrValidationFailed.Extend("pdf text is empty")
 	}
 	metadata := map[string]any{
@@ -167,8 +167,9 @@ func pdfRows(ctx context.Context, data []byte, extractor DocumentExtractor, clea
 		"extractor_version": extractor.Version(),
 		"cleaner_name":      cleaner.Name(),
 		"cleaner_version":   cleaner.Version(),
+		"structure_aware":   true,
 	}
-	return []map[string]string{{sourceTextField: cleaned}}, []string{sourceTextField}, metadata, nil
+	return sourceTextRows(cleanedRows), []string{sourceTextField}, metadata, nil
 }
 
 func htmlRows(ctx context.Context, data []byte, extractor DocumentExtractor, cleaner TextCleaner) ([]map[string]string, []string, map[string]any, error) {
@@ -184,11 +185,11 @@ func htmlRows(ctx context.Context, data []byte, extractor DocumentExtractor, cle
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	cleaned, err := cleaner.Clean(ctx, extraction.Text)
+	cleanedRows, err := cleanTextRows(ctx, cleaner, sectionTexts(extraction))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if cleaned == "" {
+	if len(cleanedRows) == 0 {
 		return nil, nil, nil, domain.ErrValidationFailed.Extend("html text is empty")
 	}
 	metadata := map[string]any{
@@ -197,8 +198,9 @@ func htmlRows(ctx context.Context, data []byte, extractor DocumentExtractor, cle
 		"extractor_version": extractor.Version(),
 		"cleaner_name":      cleaner.Name(),
 		"cleaner_version":   cleaner.Version(),
+		"structure_aware":   true,
 	}
-	return []map[string]string{{sourceTextField: cleaned}}, []string{sourceTextField}, metadata, nil
+	return sourceTextRows(cleanedRows), []string{sourceTextField}, metadata, nil
 }
 
 func textRows(ctx context.Context, data []byte, cleaner TextCleaner, sourceFormat string) ([]map[string]string, []string, map[string]any, error) {
@@ -207,19 +209,39 @@ func textRows(ctx context.Context, data []byte, cleaner TextCleaner, sourceForma
 	if cleaner == nil {
 		cleaner = NewBasicTextCleaner()
 	}
-	cleaned, err := cleaner.Clean(ctx, string(data))
+	rawText := string(data)
+	var rows []string
+	if sourceFormat == "markdown" {
+		rows = markdownSections(rawText)
+	} else {
+		rows = plainTextSections(rawText)
+	}
+	cleanedRows, err := cleanTextRows(ctx, cleaner, rows)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if cleaned == "" {
+	if len(cleanedRows) == 0 {
 		return nil, nil, nil, domain.ErrValidationFailed.Extend("text artifact is empty")
 	}
 	metadata := map[string]any{
 		"source_format":   sourceFormat,
 		"cleaner_name":    cleaner.Name(),
 		"cleaner_version": cleaner.Version(),
+		"structure_aware": sourceFormat == "markdown",
 	}
-	return []map[string]string{{sourceTextField: cleaned}}, []string{sourceTextField}, metadata, nil
+	return sourceTextRows(cleanedRows), []string{sourceTextField}, metadata, nil
+}
+
+func sourceTextRows(texts []string) []map[string]string {
+	log.Trace("sourceTextRows")
+
+	rows := make([]map[string]string, 0, len(texts))
+	for _, text := range texts {
+		if strings.TrimSpace(text) != "" {
+			rows = append(rows, map[string]string{sourceTextField: text})
+		}
+	}
+	return rows
 }
 
 func csvRows(data []byte) ([]map[string]string, []string, error) {

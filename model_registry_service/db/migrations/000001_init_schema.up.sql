@@ -1,4 +1,5 @@
-CREATE TYPE model_status_enum AS ENUM ('PENDING', 'READY', 'FAILED');
+CREATE TYPE model_status_enum AS ENUM ('PENDING', 'CANDIDATE', 'EVALUATED', 'READY', 'FAILED');
+CREATE TYPE model_load_status_enum AS ENUM ('NOT_LOADED', 'LOADED', 'FAILED');
 
 CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     model_id uuid PRIMARY KEY,
@@ -12,6 +13,10 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     artifact_format text NOT NULL,
     artifact_checksum text NOT NULL,
     artifact_size_bytes bigint NOT NULL,
+    adapter_uri text NOT NULL DEFAULT '',
+    serving_target text NOT NULL DEFAULT '',
+    serving_model text NOT NULL DEFAULT '',
+    serving_load_status model_load_status_enum NOT NULL DEFAULT 'NOT_LOADED',
     metrics_metadata jsonb NOT NULL,
     status model_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text NOT NULL DEFAULT '',

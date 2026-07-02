@@ -34,6 +34,8 @@ type connectionPoolStub struct {
 	queryCalled    bool
 	execCalled     bool
 	closeCalled    bool
+	commitCalled   bool
+	rollbackCalled bool
 
 	lastQuery string
 	lastArgs  []any
@@ -78,7 +80,57 @@ func (p *connectionPoolStub) Exec(_ context.Context, sql string, args ...any) (p
 }
 
 func (p *connectionPoolStub) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
+	return &inferenceTxStub{pool: p}, nil
+}
+
+type inferenceTxStub struct {
+	pool *connectionPoolStub
+}
+
+func (tx *inferenceTxStub) Begin(context.Context) (pgx.Tx, error) {
+	return tx, nil
+}
+
+func (tx *inferenceTxStub) Commit(context.Context) error {
+	tx.pool.commitCalled = true
+	return nil
+}
+
+func (tx *inferenceTxStub) Rollback(context.Context) error {
+	tx.pool.rollbackCalled = true
+	return nil
+}
+
+func (tx *inferenceTxStub) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	return 0, nil
+}
+
+func (tx *inferenceTxStub) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults {
+	return nil
+}
+
+func (tx *inferenceTxStub) LargeObjects() pgx.LargeObjects {
+	return pgx.LargeObjects{}
+}
+
+func (tx *inferenceTxStub) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
 	return nil, nil
+}
+
+func (tx *inferenceTxStub) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return tx.pool.Exec(ctx, sql, args...)
+}
+
+func (tx *inferenceTxStub) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return tx.pool.Query(ctx, sql, args...)
+}
+
+func (tx *inferenceTxStub) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return tx.pool.QueryRow(ctx, sql, args...)
+}
+
+func (tx *inferenceTxStub) Conn() *pgx.Conn {
+	return nil
 }
 
 func (p *connectionPoolStub) capture(sql string, args ...any) {
@@ -119,6 +171,8 @@ func assignScanValue(dest any, value any) {
 		default:
 			Fail(fmt.Sprintf("unsupported int64 scan value %T", value))
 		}
+	case *bool:
+		*typed = value.(bool)
 	default:
 		Fail(fmt.Sprintf("unsupported scan destination %T", dest))
 	}
@@ -143,6 +197,10 @@ func validInferenceModel() *model.InferenceModel {
 		ArtifactFormat:    "ONNX",
 		ArtifactChecksum:  "sha256:model",
 		ArtifactSizeBytes: 9216,
+		AdapterURI:        "s3://models/fraud-rag-ranker/7",
+		ServingTarget:     "vllm-local",
+		ServingModel:      "fraud-rag-ranker-v7",
+		ServingLoadStatus: model.ModelLoadStatusLoaded,
 		MetricsMetadata:   `{"accuracy":0.93}`,
 		Status:            model.ModelStatusReady,
 		FailureReason:     "",
@@ -161,6 +219,10 @@ func inferenceModelRow(inferenceModel *model.InferenceModel) pgx.Row {
 		inferenceModel.ArtifactFormat,
 		inferenceModel.ArtifactChecksum,
 		inferenceModel.ArtifactSizeBytes,
+		inferenceModel.AdapterURI,
+		inferenceModel.ServingTarget,
+		inferenceModel.ServingModel,
+		inferenceModel.ServingLoadStatus.String(),
 		inferenceModel.MetricsMetadata,
 		inferenceModel.Status.String(),
 		inferenceModel.FailureReason,
@@ -202,6 +264,10 @@ var _ = Describe("InferenceModelRepository", func() {
 				HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}),
 				HaveKeyWithValue("name", inferenceModel.Name),
 				HaveKeyWithValue("model_version", inferenceModel.ModelVersion),
+				HaveKeyWithValue("adapter_uri", inferenceModel.AdapterURI),
+				HaveKeyWithValue("serving_target", inferenceModel.ServingTarget),
+				HaveKeyWithValue("serving_model", inferenceModel.ServingModel),
+				HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()),
 				HaveKeyWithValue("metrics_metadata", inferenceModel.MetricsMetadata),
 				HaveKeyWithValue("status", model.ModelStatusReady.String()),
 			))
@@ -241,13 +307,25 @@ var _ = Describe("InferenceModelRepository", func() {
 		It("surfaces invalid persisted status values", func() {
 			inferenceModel := validInferenceModel()
 			row := inferenceModelRow(inferenceModel).(*repositoryRow)
-			row.values[11] = "BROKEN"
+			row.values[15] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
 			record, err := repository.ReadByID(ctx, inferenceModel.ModelID)
 
 			Expect(record).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring(`invalid model status "BROKEN"`)))
+		})
+
+		It("surfaces invalid persisted serving load status values", func() {
+			inferenceModel := validInferenceModel()
+			row := inferenceModelRow(inferenceModel).(*repositoryRow)
+			row.values[13] = "BROKEN"
+			pool.nextRows = []pgx.Row{row}
+
+			record, err := repository.ReadByID(ctx, inferenceModel.ModelID)
+
+			Expect(record).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring(`invalid model load status "BROKEN"`)))
 		})
 	})
 })

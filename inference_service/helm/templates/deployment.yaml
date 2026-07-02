@@ -133,8 +133,8 @@ spec:
               value: {{ .Values.env.rerankerCandidateMultiplier | quote }}
             - name: INFERENCE_PROMPT_STRATEGY_VERSION
               value: {{ .Values.env.promptStrategyVersion | quote }}
-            - name: INFERENCE_PROMPT_MAX_CONTEXT_CHARS
-              value: {{ .Values.env.promptMaxContextChars | quote }}
+            - name: INFERENCE_PROMPT_MAX_CONTEXT_TOKENS
+              value: {{ .Values.env.promptMaxContextTokens | quote }}
             - name: INFERENCE_PROMPT_MAX_CONTEXT_CHUNKS
               value: {{ .Values.env.promptMaxContextChunks | quote }}
             - name: INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT

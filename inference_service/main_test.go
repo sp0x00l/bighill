@@ -34,7 +34,7 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_RERANKER_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_RERANKER_CANDIDATE_MULTIPLIER")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_PROMPT_STRATEGY_VERSION")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_PROMPT_MAX_CONTEXT_CHARS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_PROMPT_MAX_CONTEXT_TOKENS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_PROMPT_MAX_CONTEXT_CHUNKS")).To(Succeed())
 	})
 
@@ -56,7 +56,7 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Reranker.RequestTimeout).To(Equal(30 * time.Second))
 		Expect(cfg.Reranker.CandidateMultiplier).To(Equal(5))
 		Expect(cfg.Generation.PromptStrategy).To(Equal("rag-prompt-v1"))
-		Expect(cfg.Generation.MaxContextChars).To(Equal(12000))
+		Expect(cfg.Generation.MaxContextTokens).To(Equal(3000))
 		Expect(cfg.Generation.MaxContextChunks).To(Equal(8))
 		Expect(cfg.GRPCPort).To(Equal(7073))
 		Expect(cfg.Health.HealthCheckPort).To(Equal(5059))
@@ -85,6 +85,19 @@ var _ = Describe("newGenerationAdapter", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("unsupported generation provider"))
 	})
+
+	It("creates a vLLM HTTP generator", func() {
+		generator, err := newGenerationAdapter(generationConfig{
+			Provider:       "vllm",
+			Endpoint:       "http://vllm.local",
+			Model:          "base-model",
+			RequestTimeout: time.Second,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(generator.Provider()).To(Equal("vllm"))
+		Expect(generator.Model()).To(Equal("base-model"))
+	})
 })
 
 var _ = Describe("newRerankerAdapter", func() {
@@ -108,6 +121,18 @@ var _ = Describe("newRerankerAdapter", func() {
 		Expect(reranker).NotTo(BeNil())
 	})
 
+	It("rejects a TEI reranker without over-fetch", func() {
+		_, err := newRerankerAdapter(rerankerConfig{
+			Provider:            "tei",
+			URL:                 "http://tei.local",
+			Model:               "bge-reranker",
+			RequestTimeout:      time.Second,
+			CandidateMultiplier: 1,
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("reranker candidate multiplier must be at least 2")))
+	})
+
 	It("rejects unsupported providers", func() {
 		_, err := newRerankerAdapter(rerankerConfig{Provider: "unknown"})
 
@@ -120,14 +145,14 @@ var _ = Describe("promptStrategyFromConfig", func() {
 	It("builds an explicit prompt strategy from config", func() {
 		strategy, err := promptStrategyFromConfig(generationConfig{
 			PromptStrategy:   "rag-v1",
-			MaxContextChars:  1200,
+			MaxContextTokens: 1200,
 			MaxContextChunks: 6,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(strategy.Version).To(Equal("rag-v1"))
 		Expect(strategy.SystemPrompt).NotTo(BeEmpty())
-		Expect(strategy.MaxContextChars).To(Equal(1200))
+		Expect(strategy.MaxContextTokens).To(Equal(1200))
 		Expect(strategy.MaxContextChunks).To(Equal(6))
 	})
 

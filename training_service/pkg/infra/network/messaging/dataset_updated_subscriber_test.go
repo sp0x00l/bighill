@@ -37,7 +37,8 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		datasetID := uuid.New()
 		featureSnapshotID := uuid.New()
 		starter := &recordingTrainingWorkflowStarter{}
-		listener := trainingmessaging.NewDatasetUpdatedEventListener(starter, "mistral-7b")
+		profile := trainingProfile()
+		listener := trainingmessaging.NewDatasetUpdatedEventListener(starter, "mistral-7b", profile)
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:         datasetID.String(),
@@ -58,12 +59,13 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		Expect(starter.request.ModelName).To(Equal("movie_features"))
 		Expect(starter.request.ModelVersion).To(Equal("4"))
 		Expect(starter.request.BaseModel).To(Equal("mistral-7b"))
+		Expect(starter.request.TrainingProfile).To(Equal(profile))
 	})
 
 	It("ignores non-feature-ready dataset updates", func() {
 		datasetID := uuid.New()
 		starter := &recordingTrainingWorkflowStarter{}
-		listener := trainingmessaging.NewDatasetUpdatedEventListener(starter, "mistral-7b")
+		listener := trainingmessaging.NewDatasetUpdatedEventListener(starter, "mistral-7b", trainingProfile())
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:       datasetID.String(),
@@ -79,7 +81,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 
 	It("rejects ready non-parquet dataset updates", func() {
 		datasetID := uuid.New()
-		listener := trainingmessaging.NewDatasetUpdatedEventListener(&recordingTrainingWorkflowStarter{}, "mistral-7b")
+		listener := trainingmessaging.NewDatasetUpdatedEventListener(&recordingTrainingWorkflowStarter{}, "mistral-7b", trainingProfile())
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:         datasetID.String(),
@@ -94,3 +96,20 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		Expect(shared.IsNonRetryable(err)).To(BeTrue())
 	})
 })
+
+func trainingProfile() model.TrainingProfile {
+	return model.TrainingProfile{
+		Name:                      "profile-v1",
+		Trainer:                   "sft",
+		Adapter:                   "qlora",
+		Quantization:              "4bit",
+		SequenceLength:            2048,
+		SamplePacking:             true,
+		LearningRate:              0.0002,
+		Epochs:                    3,
+		MicroBatchSize:            1,
+		GradientAccumulationSteps: 4,
+		LoRAR:                     16,
+		LoRAAlpha:                 32,
+	}
+}

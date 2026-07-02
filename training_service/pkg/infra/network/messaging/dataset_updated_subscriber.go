@@ -32,9 +32,10 @@ type datasetUpdatedSubscriber struct {
 	starter    TrainingWorkflowStarter
 	topics     TrainingTopics
 	baseModel  string
+	profile    model.TrainingProfile
 }
 
-func NewDatasetUpdatedSubscriber(subscriber msgConn.Subscriber, starter TrainingWorkflowStarter, topics TrainingTopics, baseModel string) DatasetUpdatedSubscriber {
+func NewDatasetUpdatedSubscriber(subscriber msgConn.Subscriber, starter TrainingWorkflowStarter, topics TrainingTopics, baseModel string, profile model.TrainingProfile) DatasetUpdatedSubscriber {
 	log.Trace("NewDatasetUpdatedSubscriber")
 
 	return &datasetUpdatedSubscriber{
@@ -42,27 +43,30 @@ func NewDatasetUpdatedSubscriber(subscriber msgConn.Subscriber, starter Training
 		starter:    starter,
 		topics:     topics,
 		baseModel:  baseModel,
+		profile:    profile,
 	}
 }
 
 func (s *datasetUpdatedSubscriber) Start(ctx context.Context) error {
 	log.Trace("datasetUpdatedSubscriber Start")
 
-	msgConn.AddListener(s.subscriber, NewDatasetUpdatedEventListener(s.starter, s.baseModel))
+	msgConn.AddListener(s.subscriber, NewDatasetUpdatedEventListener(s.starter, s.baseModel, s.profile))
 	return s.subscriber.Subscribe(ctx, []string{s.topics.DataRegistry})
 }
 
 type datasetUpdatedEventListener struct {
 	starter   TrainingWorkflowStarter
 	baseModel string
+	profile   model.TrainingProfile
 }
 
-func NewDatasetUpdatedEventListener(starter TrainingWorkflowStarter, baseModel string) *datasetUpdatedEventListener {
+func NewDatasetUpdatedEventListener(starter TrainingWorkflowStarter, baseModel string, profile model.TrainingProfile) *datasetUpdatedEventListener {
 	log.Trace("NewDatasetUpdatedEventListener")
 
 	return &datasetUpdatedEventListener{
 		starter:   starter,
 		baseModel: baseModel,
+		profile:   profile,
 	}
 }
 
@@ -84,7 +88,7 @@ func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uu
 	if l.starter == nil {
 		return msgConn.NonRetryable(fmt.Errorf("training workflow starter is nil"))
 	}
-	request, shouldStart, err := datasetUpdatedToTrainingRunRequest(resourceKey, payload, l.baseModel)
+	request, shouldStart, err := datasetUpdatedToTrainingRunRequest(resourceKey, payload, l.baseModel, l.profile)
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
@@ -94,7 +98,7 @@ func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uu
 	return l.starter.StartTrainingWorkflow(ctx, request)
 }
 
-func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetpb.DatasetUpdatedEvent, baseModel string) (model.TrainingRunRequest, bool, error) {
+func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetpb.DatasetUpdatedEvent, baseModel string, profile model.TrainingProfile) (model.TrainingRunRequest, bool, error) {
 	log.Trace("datasetUpdatedToTrainingRunRequest")
 
 	if resourceKey == uuid.Nil {
@@ -139,5 +143,6 @@ func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetp
 		ModelVersion:      fmt.Sprintf("%d", payload.GetDatasetVersion()),
 		BaseModel:         baseModel,
 		EvaluationProfile: "smoke",
+		TrainingProfile:   profile,
 	}, true, nil
 }

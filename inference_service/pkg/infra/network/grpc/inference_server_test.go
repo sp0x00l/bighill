@@ -23,9 +23,12 @@ func TestInferenceGrpc(t *testing.T) {
 }
 
 type inferenceUsecaseStub struct {
-	request model.GenerateRequest
-	result  *model.GenerateResponse
-	err     error
+	request        model.GenerateRequest
+	feedback       *model.InferenceFeedback
+	feedbackKey    uuid.UUID
+	result         *model.GenerateResponse
+	feedbackResult *model.InferenceFeedback
+	err            error
 }
 
 func (s *inferenceUsecaseStub) RecordModelUpdated(context.Context, *model.InferenceModel, uuid.UUID) (*model.InferenceModel, error) {
@@ -43,6 +46,15 @@ func (s *inferenceUsecaseStub) ReadModel(context.Context, uuid.UUID) (*model.Inf
 func (s *inferenceUsecaseStub) Generate(_ context.Context, request model.GenerateRequest) (*model.GenerateResponse, error) {
 	s.request = request
 	return s.result, s.err
+}
+
+func (s *inferenceUsecaseStub) RecordFeedback(_ context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
+	s.feedback = feedback
+	s.feedbackKey = idempotencyKey
+	if s.feedbackResult != nil {
+		return s.feedbackResult, s.err
+	}
+	return feedback, s.err
 }
 
 type featureMaterializerServiceClientStub struct {
@@ -139,6 +151,47 @@ var _ = Describe("InferenceServer", func() {
 			ModelId:   modelID.String(),
 			QueryText: "query",
 		})
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+	})
+
+	It("maps feedback requests into the usecase", func() {
+		feedbackID := uuid.New()
+		requestID := uuid.New()
+		userID := uuid.New()
+		uc := &inferenceUsecaseStub{}
+		server := NewInferenceGrpcServer(uc)
+
+		response, err := server.RecordFeedback(context.Background(), &inferencepb.RecordFeedbackRequest{
+			FeedbackId: feedbackID.String(),
+			RequestId:  requestID.String(),
+			UserId:     userID.String(),
+			Accepted:   false,
+			Rating:     -1,
+			Comment:    " not grounded ",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetFeedbackId()).To(Equal(feedbackID.String()))
+		Expect(response.GetRequestId()).To(Equal(requestID.String()))
+		Expect(uc.feedback.FeedbackID).To(Equal(feedbackID))
+		Expect(uc.feedback.RequestID).To(Equal(requestID))
+		Expect(uc.feedback.UserID).To(Equal(userID))
+		Expect(uc.feedback.Accepted).To(BeFalse())
+		Expect(uc.feedback.Rating).To(Equal(-1))
+		Expect(uc.feedback.Comment).To(Equal("not grounded"))
+		Expect(uc.feedbackKey).To(Equal(feedbackID))
+	})
+
+	It("rejects invalid feedback requests", func() {
+		server := NewInferenceGrpcServer(&inferenceUsecaseStub{})
+
+		_, err := server.RecordFeedback(context.Background(), &inferencepb.RecordFeedbackRequest{
+			FeedbackId: uuid.NewString(),
+			RequestId:  uuid.NewString(),
+			UserId:     uuid.NewString(),
+			Rating:     2,
+		})
+
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
 })

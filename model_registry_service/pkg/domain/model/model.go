@@ -13,6 +13,10 @@ type Model struct {
 	ArtifactFormat    string
 	ArtifactChecksum  string
 	ArtifactSizeBytes int64
+	AdapterURI        string
+	ServingTarget     string
+	ServingModel      string
+	ServingLoadStatus ModelLoadStatus
 	MetricsMetadata   string
 	Status            ModelStatus
 	FailureReason     string

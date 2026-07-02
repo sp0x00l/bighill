@@ -22,6 +22,10 @@ type InferenceRequestRepository interface {
 	RecordInferenceRequest(ctx context.Context, request *model.InferenceRequest) error
 }
 
+type InferenceFeedbackRepository interface {
+	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
+}
+
 type RetrievalClient interface {
 	SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error)
 	Close() error

@@ -17,6 +17,10 @@ message ModelTrainingCompletedEvent {
   int64 artifact_size_bytes = 12;
   string metrics_metadata = 13;
   string report_location = 14;
+  string adapter_uri = 15;
+  string serving_target = 16;
+  string serving_model = 17;
+  string serving_load_status = 18;
 }
 
 message ModelTrainingFailedEvent {

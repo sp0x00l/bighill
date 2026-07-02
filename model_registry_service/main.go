@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"model_registry_service/pkg/app"
+	registryk8s "model_registry_service/pkg/infra/network/k8s"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 	modeldb "model_registry_service/pkg/infra/repo/db"
 
@@ -37,6 +38,7 @@ type registryConfig struct {
 	OutboxBackend      string
 	OutboxRelay        messagingConn.OutboxRelayConfig
 	Topics             registrymessaging.ModelRegistryTopics
+	Serving            servingConfig
 	Health             healthConfig
 }
 
@@ -49,6 +51,16 @@ type healthConfig struct {
 	DbLatencyThreshold            time.Duration
 	MessageBrokerLatencyThreshold time.Duration
 	ServiceLatencyThreshold       time.Duration
+}
+
+type servingConfig struct {
+	Enabled         bool
+	Namespace       string
+	CRDGroup        string
+	CRDVersion      string
+	CRDResource     string
+	CRDKind         string
+	StatusPollEvery time.Duration
 }
 
 func init() {
@@ -124,7 +136,32 @@ func main() {
 		modeldb.WithTransactionalOutbox(orderedOutbox, cfg.Topics.ModelRegistry),
 		modeldb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
-	modelUsecase := app.NewModelRegistryUsecase(modelRepository)
+	var servingObserver *registryk8s.ServedModelStatusObserver
+	modelUsecaseOptions := []app.ModelRegistryOption{}
+	var servedModelAdapter *registryk8s.ServedModelAdapter
+	if cfg.Serving.Enabled {
+		servedModelAdapter, err = registryk8s.NewServedModelAdapter(registryk8s.ServedModelConfig{
+			Namespace:    cfg.Serving.Namespace,
+			Group:        cfg.Serving.CRDGroup,
+			Version:      cfg.Serving.CRDVersion,
+			Resource:     cfg.Serving.CRDResource,
+			Kind:         cfg.Serving.CRDKind,
+			PollInterval: cfg.Serving.StatusPollEvery,
+		})
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create served model adapter")
+		}
+		modelUsecaseOptions = append(modelUsecaseOptions, app.WithModelServingDeployer(servedModelAdapter))
+	} else {
+		log.WithContext(cancelCtx).Info("served model reconciliation disabled; model serving status will only change through explicit registry events")
+	}
+	modelUsecase := app.NewModelRegistryUsecase(modelRepository, modelUsecaseOptions...)
+	if servedModelAdapter != nil {
+		servingObserver, err = registryk8s.NewServedModelStatusObserver(servedModelAdapter, modelUsecase, cfg.Serving.StatusPollEvery)
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create served model observer")
+		}
+	}
 	trainingEventSubscriber := registrymessaging.NewTrainingEventSubscriber(subscriber, modelUsecase, cfg.Topics)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
@@ -148,6 +185,14 @@ func main() {
 			quit <- syscall.SIGTERM
 		}
 	}()
+	if servingObserver != nil {
+		go func() {
+			if err := servingObserver.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
+				log.WithContext(cancelCtx).WithError(err).Error("served model status observer stopped unexpectedly")
+				quit <- syscall.SIGTERM
+			}
+		}()
+	}
 
 	<-quit
 
@@ -186,6 +231,15 @@ func readModelRegistryConfig() registryConfig {
 		Topics: registrymessaging.ModelRegistryTopics{
 			ModelRegistry: env.WithDefaultString("MODEL_REGISTRY_SERVICE_TOPIC", "model_registry"),
 			Training:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC", "training"),
+		},
+		Serving: servingConfig{
+			Enabled:         env.WithDefaultBool("MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED", false),
+			Namespace:       env.WithDefaultString("MODEL_REGISTRY_SERVING_NAMESPACE", "default"),
+			CRDGroup:        env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_GROUP", "serving.bighill.io"),
+			CRDVersion:      env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_VERSION", "v1alpha1"),
+			CRDResource:     env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_RESOURCE", "servedmodels"),
+			CRDKind:         env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_KIND", "ServedModel"),
+			StatusPollEvery: time.Duration(env.WithDefaultInt("MODEL_REGISTRY_SERVING_STATUS_POLL_MS", "1000")) * time.Millisecond,
 		},
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("MODEL_REGISTRY_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),

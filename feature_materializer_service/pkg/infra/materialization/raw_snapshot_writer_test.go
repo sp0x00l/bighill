@@ -132,11 +132,11 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(artifact.SchemaMetadata).To(ContainSubstring("source_text"))
 		Expect(artifact.SchemaMetadata).To(ContainSubstring("fake-pdf-extractor"))
 		Expect(artifact.SchemaMetadata).To(ContainSubstring("go-basic-text-cleaner"))
-		Expect(artifact.RowCount).To(Equal(int64(1)))
+		Expect(artifact.RowCount).To(Equal(int64(2)))
 
 		rows, err := materialization.ExtractTextRowsFromParquet(ctx, artifact.Data, 10)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).To(Equal([]string{"Hello PDF content"}))
+		Expect(rows).To(Equal([]string{"Hello PDF", "content"}))
 	})
 
 	It("normalizes HTML artifacts to source text Parquet with extractor metadata", func() {
@@ -152,7 +152,7 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(artifact.SchemaMetadata).To(ContainSubstring("go-basic-text-cleaner"))
 		rows, err := materialization.ExtractTextRowsFromParquet(ctx, artifact.Data, 10)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).To(Equal([]string{"Guide Clean HTML content."}))
+		Expect(rows).To(Equal([]string{"Guide", "Clean HTML content."}))
 	})
 
 	It("normalizes markdown artifacts with source metadata", func() {
@@ -164,7 +164,7 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(artifact.SchemaMetadata).To(ContainSubstring(`"source_format":"markdown"`))
 		rows, err := materialization.ExtractTextRowsFromParquet(ctx, artifact.Data, 10)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).To(Equal([]string{"# Guide A markdown document."}))
+		Expect(rows).To(Equal([]string{"# Guide", "A markdown document."}))
 	})
 
 	It("reads and writes artifacts through the local object store boundary", func() {

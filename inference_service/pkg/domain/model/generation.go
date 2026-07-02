@@ -61,7 +61,7 @@ type GenerationRequest struct {
 type PromptStrategy struct {
 	Version          string
 	SystemPrompt     string
-	MaxContextChars  int
+	MaxContextTokens int
 	MaxContextChunks int
 }
 

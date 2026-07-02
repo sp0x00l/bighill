@@ -10,6 +10,7 @@ import (
 	"model_registry_service/pkg/domain/model"
 	modeldb "model_registry_service/pkg/infra/repo/db"
 
+	modelregistrypb "lib/data_contracts_lib/model_registry"
 	coreDB "lib/shared_lib/db"
 	msgConn "lib/shared_lib/messaging"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestModelRepository(t *testing.T) {
@@ -143,6 +145,10 @@ type modelRow struct {
 	ArtifactFormat    string
 	ArtifactChecksum  string
 	ArtifactSizeBytes int64
+	AdapterURI        string
+	ServingTarget     string
+	ServingModel      string
+	ServingLoadStatus string
 	MetricsMetadata   string
 	Status            string
 	FailureReason     string
@@ -159,9 +165,13 @@ func (r modelRow) Scan(dest ...any) error {
 	*(dest[7].(*string)) = r.ArtifactFormat
 	*(dest[8].(*string)) = r.ArtifactChecksum
 	*(dest[9].(*int64)) = r.ArtifactSizeBytes
-	*(dest[10].(*string)) = r.MetricsMetadata
-	*(dest[11].(*string)) = r.Status
-	*(dest[12].(*string)) = r.FailureReason
+	*(dest[10].(*string)) = r.AdapterURI
+	*(dest[11].(*string)) = r.ServingTarget
+	*(dest[12].(*string)) = r.ServingModel
+	*(dest[13].(*string)) = r.ServingLoadStatus
+	*(dest[14].(*string)) = r.MetricsMetadata
+	*(dest[15].(*string)) = r.Status
+	*(dest[16].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -212,6 +222,10 @@ var _ = Describe("ModelRepository", func() {
 			ArtifactFormat:    "HF_PEFT_ADAPTER",
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
+			AdapterURI:        "s3://local-dev-bucket/models/run",
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v7",
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			Status:            model.ModelStatusReady,
 		}
@@ -240,6 +254,10 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("name", registered.Name))
 			Expect(args).To(HaveKeyWithValue("model_version", registered.ModelVersion))
 			Expect(args).To(HaveKeyWithValue("artifact_format", registered.ArtifactFormat))
+			Expect(args).To(HaveKeyWithValue("adapter_uri", registered.AdapterURI))
+			Expect(args).To(HaveKeyWithValue("serving_target", registered.ServingTarget))
+			Expect(args).To(HaveKeyWithValue("serving_model", registered.ServingModel))
+			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
 			Expect(args).To(HaveKeyWithValue("metrics_metadata", registered.MetricsMetadata))
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
 		})
@@ -273,6 +291,12 @@ var _ = Describe("ModelRepository", func() {
 			Expect(outbox.message.Topic).To(Equal("model_registry"))
 			Expect(outbox.message.Message.ResourceKey).To(Equal(modelID))
 			Expect(outbox.message.DispatchKey).To(ContainSubstring("model_updated:"))
+			var payload modelregistrypb.ModelUpdatedEvent
+			Expect(proto.Unmarshal(outbox.message.Message.Payload, &payload)).To(Succeed())
+			Expect(payload.GetAdapterUri()).To(Equal(registered.AdapterURI))
+			Expect(payload.GetServingTarget()).To(Equal(registered.ServingTarget))
+			Expect(payload.GetServingModel()).To(Equal(registered.ServingModel))
+			Expect(payload.GetServingLoadStatus()).To(Equal(model.ModelLoadStatusLoaded.String()))
 			Expect(signalCount).To(Equal(1))
 		})
 	})
@@ -317,6 +341,77 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("artifact_location", ready.ArtifactLocation))
 		})
 	})
+
+	Describe("UpdateServingStatus", func() {
+		It("updates serving status and returns the updated model", func() {
+			ready := *registered
+			ready.Status = model.ModelStatusReady
+			ready.ServingLoadStatus = model.ModelLoadStatusLoaded
+			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
+
+			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
+			Expect(modelRecord.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("UPDATE test_db.models"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
+			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
+			Expect(args).To(HaveKeyWithValue("serving_target", ready.ServingTarget))
+			Expect(args).To(HaveKeyWithValue("serving_model", ready.ServingModel))
+		})
+
+		It("enqueues serving status changes in the same transaction", func() {
+			outbox := &orderedOutboxStub{}
+			signalCount := 0
+			dbCore := coreDB.NewDatabase(poolMock, "test_db")
+			repository = modeldb.NewModelRepository(dbCore,
+				modeldb.WithTransactionalOutbox(outbox, "model_registry"),
+				modeldb.WithOutboxSignal(func() { signalCount++ }),
+			)
+			ready := *registered
+			ready.Status = model.ModelStatusReady
+			ready.ServingLoadStatus = model.ModelLoadStatusLoaded
+			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
+
+			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
+			Expect(poolMock.CommitCalled).To(BeTrue())
+			Expect(outbox.calls).To(Equal(1))
+			Expect(outbox.tx).NotTo(BeNil())
+			Expect(outbox.message.Topic).To(Equal("model_registry"))
+			var payload modelregistrypb.ModelUpdatedEvent
+			Expect(proto.Unmarshal(outbox.message.Message.Payload, &payload)).To(Succeed())
+			Expect(payload.GetStatus()).To(Equal(model.ModelStatusReady.String()))
+			Expect(payload.GetServingLoadStatus()).To(Equal(model.ModelLoadStatusLoaded.String()))
+			Expect(signalCount).To(Equal(1))
+		})
+
+		It("does not enqueue an outbox message when serving status is unchanged", func() {
+			outbox := &orderedOutboxStub{}
+			dbCore := coreDB.NewDatabase(poolMock, "test_db")
+			repository = modeldb.NewModelRepository(dbCore,
+				modeldb.WithTransactionalOutbox(outbox, "model_registry"),
+			)
+			poolMock.NextRows = []pgx.Row{
+				errorRow{err: pgx.ErrNoRows},
+				newModelRow(registered),
+			}
+
+			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, registered.Status, registered.ServingLoadStatus, registered.ServingTarget, registered.ServingModel, "")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(modelRecord.ModelID).To(Equal(modelID))
+			Expect(poolMock.CommitCalled).To(BeTrue())
+			Expect(outbox.calls).To(Equal(0))
+			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
+			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("SELECT model_id::text"))
+		})
+	})
 })
 
 func newModelRow(modelRecord *model.Model) modelRow {
@@ -331,6 +426,10 @@ func newModelRow(modelRecord *model.Model) modelRow {
 		ArtifactFormat:    modelRecord.ArtifactFormat,
 		ArtifactChecksum:  modelRecord.ArtifactChecksum,
 		ArtifactSizeBytes: modelRecord.ArtifactSizeBytes,
+		AdapterURI:        modelRecord.AdapterURI,
+		ServingTarget:     modelRecord.ServingTarget,
+		ServingModel:      modelRecord.ServingModel,
+		ServingLoadStatus: modelRecord.ServingLoadStatus.String(),
 		MetricsMetadata:   modelRecord.MetricsMetadata,
 		Status:            modelRecord.Status.String(),
 		FailureReason:     modelRecord.FailureReason,

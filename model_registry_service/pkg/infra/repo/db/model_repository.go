@@ -70,10 +70,14 @@ func (r *ModelRepository) Create(ctx context.Context, registeredModel *model.Mod
 
 	query := `INSERT INTO ` + r.Name + `.models (
 		model_id, idempotency_key, training_run_id, dataset_id, name, model_version, base_model,
-		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes, metrics_metadata, status, failure_reason
+		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
+		adapter_uri, serving_target, serving_model, serving_load_status,
+		metrics_metadata, status, failure_reason
 	) VALUES (
 		@model_id, @idempotency_key, @training_run_id, @dataset_id, @name, @model_version, @base_model,
-		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes, @metrics_metadata::jsonb, @status, @failure_reason
+		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
+		@adapter_uri, @serving_target, @serving_model, @serving_load_status,
+		@metrics_metadata::jsonb, @status, @failure_reason
 	)
 	RETURNING ` + modelColumns()
 
@@ -99,10 +103,14 @@ func (r *ModelRepository) createTx(ctx context.Context, registeredModel *model.M
 
 	query := `INSERT INTO ` + r.Name + `.models (
 		model_id, idempotency_key, training_run_id, dataset_id, name, model_version, base_model,
-		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes, metrics_metadata, status, failure_reason
+		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
+		adapter_uri, serving_target, serving_model, serving_load_status,
+		metrics_metadata, status, failure_reason
 	) VALUES (
 		@model_id, @idempotency_key, @training_run_id, @dataset_id, @name, @model_version, @base_model,
-		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes, @metrics_metadata::jsonb, @status, @failure_reason
+		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
+		@adapter_uri, @serving_target, @serving_model, @serving_load_status,
+		@metrics_metadata::jsonb, @status, @failure_reason
 	)
 	RETURNING ` + modelColumns()
 
@@ -186,6 +194,32 @@ func (r *ModelRepository) UpdateStatus(ctx context.Context, modelID uuid.UUID, s
 	return modelRecord, nil
 }
 
+func (r *ModelRepository) UpdateServingStatus(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string) (*model.Model, error) {
+	log.Trace("ModelRepository UpdateServingStatus")
+
+	if r.outbox != nil {
+		return r.updateServingStatusTx(ctx, modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason)
+	}
+
+	query := `UPDATE ` + r.Name + `.models
+		SET status = @status,
+			serving_load_status = @serving_load_status,
+			serving_target = @serving_target,
+			serving_model = @serving_model,
+			failure_reason = @failure_reason
+		WHERE model_id = @model_id
+		RETURNING ` + modelColumns()
+	modelRecord, err := scanModel(r.Pool.QueryRow(ctx, query, servingStatusArgs(modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason)))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrModelNotFound
+		}
+		r.LogPoolStatsOnError(ctx, "update model serving status failed", err)
+		return nil, fmt.Errorf("update model serving status: %w", err)
+	}
+	return modelRecord, nil
+}
+
 func (r *ModelRepository) updateStatusTx(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, artifactLocation string, failureReason string) (*model.Model, error) {
 	log.Trace("ModelRepository updateStatusTx")
 
@@ -223,6 +257,54 @@ func (r *ModelRepository) updateStatusTx(ctx context.Context, modelID uuid.UUID,
 	return modelRecord, nil
 }
 
+func (r *ModelRepository) updateServingStatusTx(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string) (*model.Model, error) {
+	log.Trace("ModelRepository updateServingStatusTx")
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin model serving status transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	query := `UPDATE ` + r.Name + `.models
+		SET status = @status,
+			serving_load_status = @serving_load_status,
+			serving_target = @serving_target,
+			serving_model = @serving_model,
+			failure_reason = @failure_reason
+		WHERE model_id = @model_id
+			AND (
+				status IS DISTINCT FROM @status
+				OR serving_load_status IS DISTINCT FROM @serving_load_status
+				OR serving_target IS DISTINCT FROM @serving_target
+				OR serving_model IS DISTINCT FROM @serving_model
+				OR failure_reason IS DISTINCT FROM @failure_reason
+			)
+		RETURNING ` + modelColumns()
+	modelRecord, err := scanModel(tx.QueryRow(ctx, query, servingStatusArgs(modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason)))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			existing, readErr := readModelByIDTx(ctx, tx, r.Name, modelID)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, fmt.Errorf("commit unchanged model serving status transaction: %w", err)
+			}
+			return existing, nil
+		}
+		return nil, fmt.Errorf("update model serving status: %w", err)
+	}
+	if err := r.outbox.EnqueueTx(ctx, tx, modelUpdatedMessage(r.topic, modelRecord)); err != nil {
+		return nil, fmt.Errorf("enqueue model updated: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit model serving status transaction: %w", err)
+	}
+	r.notifyOutbox()
+	return modelRecord, nil
+}
+
 func (r *ModelRepository) notifyOutbox() {
 	log.Trace("ModelRepository notifyOutbox")
 
@@ -252,9 +334,26 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 		"artifact_format":     registeredModel.ArtifactFormat,
 		"artifact_checksum":   registeredModel.ArtifactChecksum,
 		"artifact_size_bytes": registeredModel.ArtifactSizeBytes,
+		"adapter_uri":         registeredModel.AdapterURI,
+		"serving_target":      registeredModel.ServingTarget,
+		"serving_model":       registeredModel.ServingModel,
+		"serving_load_status": registeredModel.ServingLoadStatus.String(),
 		"metrics_metadata":    registeredModel.MetricsMetadata,
 		"status":              registeredModel.Status.String(),
 		"failure_reason":      registeredModel.FailureReason,
+	}
+}
+
+func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string) pgx.NamedArgs {
+	log.Trace("servingStatusArgs")
+
+	return pgx.NamedArgs{
+		"model_id":            pgtype.UUID{Bytes: modelID, Valid: true},
+		"status":              status.String(),
+		"serving_load_status": servingLoadStatus.String(),
+		"serving_target":      servingTarget,
+		"serving_model":       servingModel,
+		"failure_reason":      failureReason,
 	}
 }
 
@@ -262,13 +361,15 @@ func modelColumns() string {
 	log.Trace("modelColumns")
 
 	return `model_id::text, training_run_id::text, dataset_id::text, name, model_version, base_model,
-		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes, metrics_metadata::text, status::text, failure_reason`
+		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
+		adapter_uri, serving_target, serving_model, serving_load_status::text,
+		metrics_metadata::text, status::text, failure_reason`
 }
 
 func scanModel(row pgx.Row) (*model.Model, error) {
 	log.Trace("scanModel")
 
-	var modelID, trainingRunID, datasetID, statusRaw string
+	var modelID, trainingRunID, datasetID, statusRaw, servingLoadStatusRaw string
 	modelRecord := &model.Model{}
 	if err := row.Scan(
 		&modelID,
@@ -281,6 +382,10 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 		&modelRecord.ArtifactFormat,
 		&modelRecord.ArtifactChecksum,
 		&modelRecord.ArtifactSizeBytes,
+		&modelRecord.AdapterURI,
+		&modelRecord.ServingTarget,
+		&modelRecord.ServingModel,
+		&servingLoadStatusRaw,
 		&modelRecord.MetricsMetadata,
 		&statusRaw,
 		&modelRecord.FailureReason,
@@ -291,10 +396,31 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	servingLoadStatus, err := model.ToModelLoadStatus(servingLoadStatusRaw)
+	if err != nil {
+		return nil, err
+	}
 	modelRecord.ModelID = uuid.MustParse(modelID)
 	modelRecord.TrainingRunID = uuid.MustParse(trainingRunID)
 	modelRecord.DatasetID = uuid.MustParse(datasetID)
 	modelRecord.Status = status
+	modelRecord.ServingLoadStatus = servingLoadStatus
+	return modelRecord, nil
+}
+
+func readModelByIDTx(ctx context.Context, tx pgx.Tx, schemaName string, modelID uuid.UUID) (*model.Model, error) {
+	log.Trace("readModelByIDTx")
+
+	query := `SELECT ` + modelColumns() + ` FROM ` + schemaName + `.models WHERE model_id = @model_id`
+	modelRecord, err := scanModel(tx.QueryRow(ctx, query, pgx.NamedArgs{
+		"model_id": pgtype.UUID{Bytes: modelID, Valid: true},
+	}))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrModelNotFound
+		}
+		return nil, fmt.Errorf("read unchanged model serving status: %w", err)
+	}
 	return modelRecord, nil
 }
 
@@ -319,6 +445,10 @@ func modelUpdatedMessage(topic string, modelRecord *model.Model) msgConn.Outboun
 		ArtifactFormat:    modelRecord.ArtifactFormat,
 		ArtifactChecksum:  modelRecord.ArtifactChecksum,
 		ArtifactSizeBytes: modelRecord.ArtifactSizeBytes,
+		AdapterUri:        modelRecord.AdapterURI,
+		ServingTarget:     modelRecord.ServingTarget,
+		ServingModel:      modelRecord.ServingModel,
+		ServingLoadStatus: modelRecord.ServingLoadStatus.String(),
 		MetricsMetadata:   modelRecord.MetricsMetadata,
 		Status:            modelRecord.Status.String(),
 		FailureReason:     modelRecord.FailureReason,

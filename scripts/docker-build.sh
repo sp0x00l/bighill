@@ -9,6 +9,7 @@ PROJECT_ROOT="$(get_project_root)"
 
 API_GATEWAY_BUILD_VERSION="0.0.1"
 MIGRATIONS_SERVICE_BUILD_VERSION="0.0.1"
+TRAINING_JOBS_BUILD_VERSION="0.0.1"
 
 validate_args() {
   local ENVIRONMENT="$1"
@@ -116,6 +117,23 @@ build_db_migrations() {
     -t "migrations:${MIGRATIONS_SERVICE_BUILD_VERSION}" -f "$FILE_NAME" .
 }
 
+build_training_jobs() {
+  local TARGETARCH="$1"
+  local FILE_NAME="training-jobs.Dockerfile"
+
+  echo "Building training-jobs:${TRAINING_JOBS_BUILD_VERSION} with ${FILE_NAME}"
+  cd "$PROJECT_ROOT"
+
+  prepare_cache_dirs
+  docker buildx build --load --platform "linux/${TARGETARCH}" \
+    --build-arg TARGETARCH="${TARGETARCH}" \
+    --cache-from type=local,src="$CACHE_FROM_DIR" \
+    --cache-to type=local,dest="$CACHE_TO_DIR",mode=max \
+    -t "training-jobs:${TRAINING_JOBS_BUILD_VERSION}" -f "$FILE_NAME" .
+  rm -rf "$CACHE_FROM_DIR" 2>/dev/null || true
+  mv "$CACHE_TO_DIR" "$CACHE_FROM_DIR" 2>/dev/null || true
+}
+
 build_all_docker_images() {
   if [ -z "${1:-}" ]; then
     echo "Error: No environment provided."
@@ -195,6 +213,12 @@ build_all_docker_images() {
       echo "Warning: Could not find SERVICE_NAME for ${SERVICE_DIR}, skipping..."
     fi
   done
+
+  if ! is_excluded "training-jobs"; then
+    build_training_jobs "$TARGETARCH"
+  else
+    echo "Skipping training-jobs (excluded)"
+  fi
 
   if ! is_excluded "migrations"; then
     build_db_migrations "$TARGETARCH"

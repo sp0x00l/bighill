@@ -19,12 +19,14 @@ type InferenceUsecase interface {
 	RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error)
 	ReadModel(ctx context.Context, modelID uuid.UUID) (*model.InferenceModel, error)
 	Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error)
+	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
 }
 
 type inferenceUsecase struct {
 	modelRepository           InferenceModelRepository
 	datasetRepository         InferenceDatasetRepository
 	requestRepository         InferenceRequestRepository
+	feedbackRepository        InferenceFeedbackRepository
 	retrievalClient           RetrievalClient
 	contextPacker             ContextPacker
 	reranker                  Reranker
@@ -57,6 +59,14 @@ func WithInferenceRequestRepository(repository InferenceRequestRepository) Infer
 
 	return func(u *inferenceUsecase) {
 		u.requestRepository = repository
+	}
+}
+
+func WithInferenceFeedbackRepository(repository InferenceFeedbackRepository) InferenceOption {
+	log.Trace("WithInferenceFeedbackRepository")
+
+	return func(u *inferenceUsecase) {
+		u.feedbackRepository = repository
 	}
 }
 
@@ -140,6 +150,12 @@ func (u *inferenceUsecase) ReadModel(ctx context.Context, modelID uuid.UUID) (*m
 	return u.modelRepository.ReadByID(ctx, modelID)
 }
 
+func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
+	log.Trace("InferenceUsecase RecordFeedback")
+
+	return u.feedbackRepository.RecordFeedback(ctx, feedback, idempotencyKey)
+}
+
 func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateRequest) (response *model.GenerateResponse, err error) {
 	log.Trace("InferenceUsecase Generate")
 
@@ -163,6 +179,10 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	generationModel := u.generator.Model()
 	if inferenceModel.Status != model.ModelStatusReady {
 		err = domain.ErrModelNotReady.Extend("model is not ready")
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	if inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
+		err = domain.ErrModelNotReady.Extend("model is not loaded by serving layer")
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	if inferenceModel.DatasetID != request.DatasetID {

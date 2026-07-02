@@ -22,6 +22,7 @@ type modelRepositoryStub struct {
 	createdModel *model.Model
 	readModel    *model.Model
 	status       model.ModelStatus
+	loadStatus   model.ModelLoadStatus
 	createErr    error
 	readErr      error
 	updateErr    error
@@ -45,6 +46,26 @@ func (s *modelRepositoryStub) ReadByTrainingRunID(context.Context, uuid.UUID) (*
 func (s *modelRepositoryStub) UpdateStatus(_ context.Context, _ uuid.UUID, status model.ModelStatus, _, _ string) (*model.Model, error) {
 	s.status = status
 	return s.readModel, s.updateErr
+}
+
+func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _, _, _ string) (*model.Model, error) {
+	s.status = status
+	s.loadStatus = loadStatus
+	if s.readModel != nil {
+		s.readModel.Status = status
+		s.readModel.ServingLoadStatus = loadStatus
+	}
+	return s.readModel, s.updateErr
+}
+
+type modelServingDeployerStub struct {
+	servedModel *model.Model
+	err         error
+}
+
+func (s *modelServingDeployerStub) EnsureServedModel(_ context.Context, registeredModel *model.Model) error {
+	s.servedModel = registeredModel
+	return s.err
 }
 
 var _ = Describe("ModelRegistryUsecase", func() {
@@ -81,23 +102,40 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(repo.status).To(Equal(model.ModelStatusFailed))
 	})
 
-	It("records completed training as a ready model", func() {
+	It("records completed training as an evaluated model when it is not loaded for serving", func() {
 		repo := &modelRepositoryStub{}
-		uc := app.NewModelRegistryUsecase(repo)
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, app.WithModelServingDeployer(deployer))
 		trainedModel := validModel()
 		trainedModel.ArtifactLocation = "s3://models/run/model"
 
 		result, err := uc.RecordModelTrainingCompleted(context.Background(), trainedModel, uuid.New())
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Status).To(Equal(model.ModelStatusReady))
+		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
 		Expect(repo.createdModel.ArtifactLocation).To(Equal("s3://models/run/model"))
+		Expect(deployer.servedModel).To(Equal(result))
+	})
+
+	It("records completed training as ready when the serving layer has loaded it", func() {
+		repo := &modelRepositoryStub{}
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, app.WithModelServingDeployer(deployer))
+		trainedModel := validModel()
+		trainedModel.ServingLoadStatus = model.ModelLoadStatusLoaded
+
+		result, err := uc.RecordModelTrainingCompleted(context.Background(), trainedModel, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusReady))
+		Expect(deployer.servedModel).To(BeNil())
 	})
 
 	It("returns existing training-run records on replay", func() {
 		existing := validModel()
 		repo := &modelRepositoryStub{readModel: existing, createErr: domain.ErrModelExists}
-		uc := app.NewModelRegistryUsecase(repo)
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, app.WithModelServingDeployer(deployer))
 		trainedModel := validModel()
 		trainedModel.ArtifactLocation = "s3://models/run/model"
 
@@ -105,6 +143,44 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal(existing))
+		Expect(deployer.servedModel).To(Equal(existing))
+	})
+
+	It("records serving loaded as a ready model", func() {
+		modelRecord := validModel()
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		uc := app.NewModelRegistryUsecase(repo)
+
+		result, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v1",
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(repo.status).To(Equal(model.ModelStatusReady))
+		Expect(repo.loadStatus).To(Equal(model.ModelLoadStatusLoaded))
+		Expect(result.Status).To(Equal(model.ModelStatusReady))
+	})
+
+	It("records serving failed as a failed model", func() {
+		modelRecord := validModel()
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		uc := app.NewModelRegistryUsecase(repo)
+
+		result, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v1",
+			ServingLoadStatus: model.ModelLoadStatusFailed,
+			FailureReason:     "adapter load failed",
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(repo.status).To(Equal(model.ModelStatusFailed))
+		Expect(repo.loadStatus).To(Equal(model.ModelLoadStatusFailed))
+		Expect(result.Status).To(Equal(model.ModelStatusFailed))
 	})
 
 	It("records failed training as a failed model", func() {
@@ -134,6 +210,9 @@ func validModel() *model.Model {
 		ArtifactFormat:    "HF_PEFT_ADAPTER",
 		ArtifactChecksum:  "sha256:pending",
 		ArtifactSizeBytes: 1,
+		AdapterURI:        "s3://local-dev-bucket/models/pending",
+		ServingTarget:     "vllm-local",
+		ServingModel:      "movie-ranker-v1",
 		MetricsMetadata:   `{"eval_loss":0.12}`,
 	}
 }

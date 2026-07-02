@@ -4,10 +4,21 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"inference_service/pkg/domain/model"
 
+	tiktoken "github.com/pkoukk/tiktoken-go"
+	tiktokenloader "github.com/pkoukk/tiktoken-go-loader"
 	log "github.com/sirupsen/logrus"
+)
+
+const promptEncodingName = "cl100k_base"
+
+var (
+	promptEncodingOnce sync.Once
+	promptEncoding     *tiktoken.Tiktoken
+	promptEncodingErr  error
 )
 
 type ContextWindowPacker struct {
@@ -26,27 +37,46 @@ func (p *ContextWindowPacker) Pack(_ context.Context, request model.ContextPackR
 	log.Trace("ContextWindowPacker Pack")
 
 	strategy := p.strategy
-	packed := make([]model.RetrievedContext, 0, minInt(len(request.Contexts), strategy.MaxContextChunks))
-	remainingChars := strategy.MaxContextChars
+	encoding, err := loadPromptEncoding()
+	if err != nil {
+		return nil, err
+	}
+	packed := make([]model.RetrievedContext, 0, min(len(request.Contexts), strategy.MaxContextChunks))
+	remainingTokens := strategy.MaxContextTokens
 	for _, retrieved := range request.Contexts {
-		if len(packed) >= strategy.MaxContextChunks || remainingChars <= 0 {
+		if len(packed) >= strategy.MaxContextChunks || remainingTokens <= 0 {
 			break
 		}
 		sourceText := strings.TrimSpace(retrieved.SourceText)
 		if sourceText == "" {
 			continue
 		}
-		if len(sourceText) > remainingChars {
-			sourceText = strings.TrimSpace(sourceText[:remainingChars])
+		tokens := encoding.Encode(sourceText, nil, nil)
+		if len(tokens) > remainingTokens {
+			tokens = tokens[:remainingTokens]
+			sourceText = strings.TrimSpace(encoding.Decode(tokens))
 		}
 		if sourceText == "" {
 			continue
 		}
 		retrieved.SourceText = sourceText
 		packed = append(packed, retrieved)
-		remainingChars -= len(sourceText)
+		remainingTokens -= len(tokens)
 	}
 	return packed, nil
+}
+
+func loadPromptEncoding() (*tiktoken.Tiktoken, error) {
+	log.Trace("loadPromptEncoding")
+
+	promptEncodingOnce.Do(func() {
+		tiktoken.SetBpeLoader(tiktokenloader.NewOfflineLoader())
+		promptEncoding, promptEncodingErr = tiktoken.GetEncoding(promptEncodingName)
+		if promptEncodingErr != nil {
+			promptEncodingErr = fmt.Errorf("get prompt tokenizer encoding %s: %w", promptEncodingName, promptEncodingErr)
+		}
+	})
+	return promptEncoding, promptEncodingErr
 }
 
 type DefaultPromptBuilder struct {
@@ -96,13 +126,4 @@ func (b *DefaultPromptBuilder) BuildPrompt(_ context.Context, request model.Prom
 		Strategy: strategy,
 		Contexts: request.Contexts,
 	}, nil
-}
-
-func minInt(a, b int) int {
-	log.Trace("minInt")
-
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -108,6 +108,20 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: MODEL_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED
+              value: {{ .Values.env.servingReconciliationEnabled | quote }}
+            - name: MODEL_REGISTRY_SERVING_NAMESPACE
+              value: {{ .Values.env.servingNamespace | quote }}
+            - name: MODEL_REGISTRY_SERVING_CRD_GROUP
+              value: {{ .Values.env.servingCrdGroup | quote }}
+            - name: MODEL_REGISTRY_SERVING_CRD_VERSION
+              value: {{ .Values.env.servingCrdVersion | quote }}
+            - name: MODEL_REGISTRY_SERVING_CRD_RESOURCE
+              value: {{ .Values.env.servingCrdResource | quote }}
+            - name: MODEL_REGISTRY_SERVING_CRD_KIND
+              value: {{ .Values.env.servingCrdKind | quote }}
+            - name: MODEL_REGISTRY_SERVING_STATUS_POLL_MS
+              value: {{ .Values.env.servingStatusPollMs | quote }}
             - name: MODEL_REGISTRY_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: MODEL_REGISTRY_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT

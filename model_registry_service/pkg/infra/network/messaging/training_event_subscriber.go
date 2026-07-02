@@ -157,7 +157,14 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 		ArtifactFormat:    strings.TrimSpace(payload.GetArtifactFormat()),
 		ArtifactChecksum:  strings.TrimSpace(payload.GetArtifactChecksum()),
 		ArtifactSizeBytes: payload.GetArtifactSizeBytes(),
+		AdapterURI:        strings.TrimSpace(payload.GetAdapterUri()),
+		ServingTarget:     strings.TrimSpace(payload.GetServingTarget()),
+		ServingModel:      strings.TrimSpace(payload.GetServingModel()),
 		MetricsMetadata:   metricsMetadata,
+	}
+	trainedModel.ServingLoadStatus, err = model.ToModelLoadStatus(strings.TrimSpace(payload.GetServingLoadStatus()))
+	if err != nil {
+		return nil, uuid.Nil, err
 	}
 	if err := validateCompletedModelEvent(trainedModel); err != nil {
 		return nil, uuid.Nil, err
@@ -220,6 +227,9 @@ func validateCompletedModelEvent(trainedModel *model.Model) error {
 	}
 	if strings.TrimSpace(trainedModel.ArtifactFormat) == "" {
 		return fmt.Errorf("artifact format is required")
+	}
+	if strings.TrimSpace(trainedModel.AdapterURI) == "" {
+		return fmt.Errorf("adapter uri is required")
 	}
 	if strings.TrimSpace(trainedModel.MetricsMetadata) == "" {
 		return fmt.Errorf("metrics metadata is required")

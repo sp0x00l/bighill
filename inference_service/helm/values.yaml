@@ -53,7 +53,7 @@ env:
   rerankerRequestTimeoutSeconds: "30"
   rerankerCandidateMultiplier: "5"
   promptStrategyVersion: "rag-prompt-v1"
-  promptMaxContextChars: "12000"
+  promptMaxContextTokens: "3000"
   promptMaxContextChunks: "8"
   healthcheckCpuThreshold: "80"
   healthcheckFreeMemThreshold: "20"

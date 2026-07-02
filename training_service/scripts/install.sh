@@ -26,8 +26,11 @@ install()
     rm -f go.mod go.sum
 
     go mod init training_service
+    go mod edit -go=1.25.0
     go mod edit -replace lib/shared_lib=../shared_lib
     go mod edit -replace lib/data_contracts_lib=../data_contracts/build/protobufs
+    go mod edit -require k8s.io/apimachinery@v0.35.0
+    go mod edit -require k8s.io/client-go@v0.35.0
     go mod tidy
     go mod download
 

@@ -64,6 +64,10 @@ func (r *recordingModelRegistryUsecase) RecordModelTrainingFailed(_ context.Cont
 	return failedModel, r.err
 }
 
+func (r *recordingModelRegistryUsecase) RecordModelServingStatus(context.Context, *model.ServedModelStatus, uuid.UUID) (*model.Model, error) {
+	return nil, nil
+}
+
 var _ = Describe("Training event listeners", func() {
 	It("maps completed training events into ready model registrations", func() {
 		datasetID := uuid.New()
@@ -84,6 +88,10 @@ var _ = Describe("Training event listeners", func() {
 			ArtifactFormat:    "HF_PEFT_ADAPTER",
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
+			AdapterUri:        "s3://local-dev-bucket/models/run",
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v4",
+			ServingLoadStatus: "LOADED",
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			ReportLocation:    "s3://local-dev-bucket/evals/run.json",
 		})
@@ -94,6 +102,8 @@ var _ = Describe("Training event listeners", func() {
 		Expect(uc.completedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.completedModel.ModelVersion).To(Equal(4))
 		Expect(uc.completedModel.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/run"))
+		Expect(uc.completedModel.AdapterURI).To(Equal("s3://local-dev-bucket/models/run"))
+		Expect(uc.completedModel.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 	})
 
 	It("maps failed training events into failed model registrations", func() {
@@ -143,16 +153,19 @@ var _ = Describe("Training event listeners", func() {
 		listener := registrymessaging.NewModelTrainingCompletedEventListener(&recordingModelRegistryUsecase{err: expectedErr})
 
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingCompletedEvent{
-			TrainingRunId:    uuid.NewString(),
-			DatasetId:        datasetID.String(),
-			DatasetVersion:   "1",
-			ModelId:          uuid.NewString(),
-			ModelName:        "movie-ranker",
-			ModelVersion:     "1",
-			BaseModel:        "mistral-7b",
-			ArtifactLocation: "s3://local-dev-bucket/models/run",
-			ArtifactFormat:   "HF_PEFT_ADAPTER",
-			MetricsMetadata:  `{"eval_loss":0.12}`,
+			TrainingRunId:     uuid.NewString(),
+			DatasetId:         datasetID.String(),
+			DatasetVersion:    "1",
+			ModelId:           uuid.NewString(),
+			ModelName:         "movie-ranker",
+			ModelVersion:      "1",
+			BaseModel:         "mistral-7b",
+			ArtifactLocation:  "s3://local-dev-bucket/models/run",
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactChecksum:  "sha256:abc",
+			ArtifactSizeBytes: 128,
+			AdapterUri:        "s3://local-dev-bucket/models/run",
+			MetricsMetadata:   `{"eval_loss":0.12}`,
 		})
 
 		Expect(errors.Is(err, expectedErr)).To(BeTrue())

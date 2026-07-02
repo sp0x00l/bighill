@@ -187,6 +187,10 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			ArtifactFormat:    "HF_PEFT_ADAPTER",
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
+			AdapterUri:        "s3://local-dev-bucket/models/" + trainingRunID.String(),
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v7",
+			ServingLoadStatus: "LOADED",
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			ReportLocation:    "s3://local-dev-bucket/evals/" + trainingRunID.String() + ".json",
 		})).To(Succeed())
@@ -196,6 +200,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(modelRecord.DatasetID).To(Equal(datasetID))
 			g.Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
+			g.Expect(modelRecord.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 			g.Expect(modelRecord.ModelVersion).To(Equal(7))
 			g.Expect(modelRecord.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/" + trainingRunID.String()))
 			g.Expect(modelRecord.ArtifactFormat).To(Equal("HF_PEFT_ADAPTER"))
@@ -217,6 +222,9 @@ func validIntegrationModel() *model.Model {
 		ArtifactFormat:    "HF_PEFT_ADAPTER",
 		ArtifactChecksum:  "sha256:pending",
 		ArtifactSizeBytes: 1,
+		AdapterURI:        "s3://local-dev-bucket/models/pending",
+		ServingTarget:     "vllm-local",
+		ServingModel:      "movie-ranker-v1",
 		MetricsMetadata:   `{"eval_loss":0.12}`,
 	}
 }

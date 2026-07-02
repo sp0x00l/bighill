@@ -73,6 +73,8 @@ func (g *HTTPGenerator) Generate(ctx context.Context, request model.GenerationRe
 	switch g.provider {
 	case "ollama":
 		return g.generateWithOllama(ctx, request)
+	case "vllm":
+		return g.generateWithVLLM(ctx, request)
 	default:
 		return "", fmt.Errorf("unsupported generation provider %q", g.provider)
 	}
@@ -94,9 +96,6 @@ func (g *HTTPGenerator) generateWithOllama(ctx context.Context, request model.Ge
 	log.Trace("HTTPGenerator generateWithOllama")
 
 	prompt := strings.TrimSpace(request.Prompt)
-	if prompt == "" {
-		prompt = fallbackPrompt(request)
-	}
 	if prompt == "" {
 		return "", fmt.Errorf("prompt is required")
 	}
@@ -136,26 +135,59 @@ func (g *HTTPGenerator) generateWithOllama(ctx context.Context, request model.Ge
 	return answer, nil
 }
 
-func fallbackPrompt(request model.GenerationRequest) string {
-	log.Trace("fallbackPrompt")
+func (g *HTTPGenerator) generateWithVLLM(ctx context.Context, request model.GenerationRequest) (string, error) {
+	log.Trace("HTTPGenerator generateWithVLLM")
 
-	query := strings.TrimSpace(request.Query)
-	if query == "" {
-		return ""
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		return "", fmt.Errorf("prompt is required")
 	}
-	var b strings.Builder
-	b.WriteString("Answer using only the retrieved context.\n\n")
-	for i, retrieved := range request.Contexts {
-		sourceText := strings.TrimSpace(retrieved.SourceText)
-		if sourceText == "" {
-			continue
-		}
-		b.WriteString(fmt.Sprintf("[context:%d]\n%s\n\n", i+1, sourceText))
+	modelName := g.model
+	if request.Model != nil && strings.TrimSpace(request.Model.ServingModel) != "" {
+		modelName = strings.TrimSpace(request.Model.ServingModel)
 	}
-	b.WriteString("Question:\n")
-	b.WriteString(query)
-	b.WriteString("\n\nAnswer:")
-	return b.String()
+	body, err := json.Marshal(vllmChatCompletionRequest{
+		Model: modelName,
+		Messages: []vllmChatMessage{{
+			Role:    "user",
+			Content: prompt,
+		}},
+		Temperature: 0,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal vllm request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build vllm request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("vllm generate request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("vllm generate failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var parsed vllmChatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("decode vllm response: %w", err)
+	}
+	if len(parsed.Choices) == 0 {
+		return "", fmt.Errorf("vllm returned no choices")
+	}
+	answer := strings.TrimSpace(parsed.Choices[0].Message.Content)
+	if answer == "" {
+		answer = strings.TrimSpace(parsed.Choices[0].Text)
+	}
+	if answer == "" {
+		return "", fmt.Errorf("vllm returned an empty response")
+	}
+	return answer, nil
 }
 
 type ollamaGenerateRequest struct {
@@ -166,4 +198,24 @@ type ollamaGenerateRequest struct {
 
 type ollamaGenerateResponse struct {
 	Response string `json:"response"`
+}
+
+type vllmChatCompletionRequest struct {
+	Model       string            `json:"model"`
+	Messages    []vllmChatMessage `json:"messages"`
+	Temperature float64           `json:"temperature"`
+}
+
+type vllmChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type vllmChatCompletionResponse struct {
+	Choices []vllmChoice `json:"choices"`
+}
+
+type vllmChoice struct {
+	Message vllmChatMessage `json:"message"`
+	Text    string          `json:"text"`
 }
