@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 
-	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
 	corePagination "lib/shared_lib/transport"
 	usecasetrace "lib/shared_lib/usecasetrace"
@@ -29,29 +28,14 @@ type DatasetUsecase interface {
 
 type datasetUseCase struct {
 	datasetsRepository DatasetRepositoryAdapter
-	eventPublisher     DatasetEventPublisher
 }
 
-type DatasetUseCaseOption func(*datasetUseCase)
-
-func WithDatasetEventPublisher(publisher DatasetEventPublisher) DatasetUseCaseOption {
-	return func(u *datasetUseCase) {
-		u.eventPublisher = publisher
-	}
-}
-
-func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter, opts ...DatasetUseCaseOption) *datasetUseCase {
+func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter) *datasetUseCase {
 	log.Trace("NewDatasetUseCase")
 
-	u := &datasetUseCase{
+	return &datasetUseCase{
 		datasetsRepository: datasetsRepository,
 	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(u)
-		}
-	}
-	return u
 }
 
 func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) (err error) {
@@ -68,16 +52,7 @@ func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Datas
 
 	model.NormalizeDatasetMetadata(dataset)
 
-	if err := u.datasetsRepository.Create(ctx, dataset, idempotencyKey); err != nil {
-		return err
-	}
-	if u.eventPublisher != nil {
-		if err := u.eventPublisher.PublishDatasetCreated(ctx, dataset); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return u.datasetsRepository.Create(ctx, dataset, idempotencyKey)
 }
 
 func (u *datasetUseCase) ReadPublishedDatasets(ctx context.Context, pagination corePagination.Pagination, filters []model.Filter) (datasets []*model.Dataset, total int, err error) {
@@ -141,16 +116,7 @@ func (u *datasetUseCase) DeleteDataset(ctx context.Context, datasetID uuid.UUID,
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if err := u.datasetsRepository.Delete(ctx, datasetID, userID); err != nil {
-		return err
-	}
-	if u.eventPublisher != nil {
-		if err := u.eventPublisher.PublishDatasetDeleted(ctx, datasetID, userID); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return u.datasetsRepository.Delete(ctx, datasetID, userID)
 }
 
 func (u *datasetUseCase) PublishDataset(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) (err error) {
@@ -178,16 +144,7 @@ func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Data
 
 	model.NormalizeDatasetMetadata(dataset)
 
-	updated, err = u.datasetsRepository.Replace(ctx, dataset)
-	if err != nil {
-		return nil, err
-	}
-	if u.eventPublisher != nil {
-		if err := u.eventPublisher.PublishDatasetUpdated(ctx, updated); err != nil {
-			return nil, err
-		}
-	}
-	return updated, nil
+	return u.datasetsRepository.Replace(ctx, dataset)
 }
 
 func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (updated *model.Dataset, err error) {
@@ -199,23 +156,9 @@ func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, data
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	dataset, err := u.datasetsRepository.ReadByID(ctx, datasetID, userID)
+	updated, _, err = u.datasetsRepository.UpdateProcessingState(ctx, datasetID, userID, state)
 	if err != nil {
 		return nil, err
-	}
-
-	next := model.AdvanceProcessingState(dataset.ProcessingState, state)
-	if next == dataset.ProcessingState {
-		return dataset, nil
-	}
-	updated, err = u.datasetsRepository.UpdateProcessingState(ctx, datasetID, userID, next)
-	if err != nil {
-		return nil, err
-	}
-	if u.eventPublisher != nil {
-		if err := u.eventPublisher.PublishDatasetUpdated(ctx, updated); err != nil {
-			return nil, err
-		}
 	}
 	return updated, nil
 }
@@ -233,8 +176,5 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.record_materialization", attrs...)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if materialized == nil {
-		return nil, domainErrors.ErrValidationFailed.Extend("dataset materialization is required")
-	}
 	return u.datasetsRepository.RecordMaterialization(ctx, materialized, state)
 }

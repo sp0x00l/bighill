@@ -1,15 +1,18 @@
 CREATE TYPE model_status_enum AS ENUM ('PENDING', 'READY', 'FAILED');
 
 CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
-    model_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    model_id uuid PRIMARY KEY,
     idempotency_key uuid UNIQUE NOT NULL,
     training_run_id uuid NOT NULL,
     dataset_id uuid NOT NULL,
     name text NOT NULL,
-    model_version integer NOT NULL DEFAULT 1,
+    model_version integer NOT NULL,
     base_model text NOT NULL,
-    artifact_location text NOT NULL DEFAULT '',
-    metrics_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    artifact_location text NOT NULL,
+    artifact_format text NOT NULL,
+    artifact_checksum text NOT NULL,
+    artifact_size_bytes bigint NOT NULL,
+    metrics_metadata jsonb NOT NULL,
     status model_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),

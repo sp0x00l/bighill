@@ -37,6 +37,8 @@ spec:
               value: {{ .Values.env.redisAddress | quote }}
             - name: PROFILE_SERVICE_NAME
               value: {{ .Values.env.serviceName | quote }}
+            - name: PROFILE_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
             - name: PROFILE_SERVICE_HTTP_PORT
               value: {{ .Values.service.httpPort | quote }}
             - name: PROFILE_SERVICE_REDIS_ADDRESS
@@ -51,6 +53,8 @@ spec:
               value: {{ .Values.env.emailValidationTtlMinutes | quote }}
             - name: PROFILE_OAUTH_STATE_TTL_MINUTES
               value: {{ .Values.env.oauthStateTtlMinutes | quote }}
+            - name: PROFILE_USE_STAGING_TEST_EMAIL_TOKEN
+              value: {{ .Values.env.useStagingTestEmailToken | quote }}
             - name: PROFILE_OAUTH_GOOGLE_CLIENT_ID
 {{- if .Values.env.oauthCredentialsSecret.name }}
               valueFrom:

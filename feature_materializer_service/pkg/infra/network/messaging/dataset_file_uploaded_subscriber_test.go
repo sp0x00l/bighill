@@ -67,25 +67,22 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 
-	It("defaults table metadata at the infra entry point", func() {
+	It("returns non-retryable errors when table metadata is missing", func() {
 		datasetID := uuid.New()
 		uc := &recordingRawSnapshotUsecase{}
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetFileUploadedEvent{
-			DatasetId:       datasetID.String(),
-			UserId:          uuid.NewString(),
-			StorageLocation: "s3://local-dev-bucket/raw/user/dataset/file.csv",
-			ContentType:     "text/csv",
-			FileExtension:   "csv",
+			DatasetId:         datasetID.String(),
+			UserId:            uuid.NewString(),
+			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
+			ContentType:       "text/csv",
+			FileExtension:     "csv",
+			ProcessingProfile: "TEXT_RAG",
 		})
 
-		Expect(err).NotTo(HaveOccurred())
-		Expect(uc.datasetFile.TableNamespace).To(Equal("default"))
-		Expect(uc.datasetFile.TableName).To(HavePrefix("dataset_"))
-		Expect(uc.datasetFile.TableFormat).To(Equal("PARQUET"))
-		Expect(uc.datasetFile.CatalogProvider).To(Equal("LOCAL"))
-		Expect(uc.datasetFile.ProcessingProfile).To(Equal(model.ProcessingProfileGenericParquet))
+		Expect(err).To(HaveOccurred())
+		Expect(sharedMessaging.IsNonRetryable(err)).To(BeTrue())
 	})
 
 	It("uses a deterministic idempotency key for the same dataset file", func() {
@@ -93,11 +90,16 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		first := &recordingRawSnapshotUsecase{}
 		second := &recordingRawSnapshotUsecase{}
 		event := &datasetpb.DatasetFileUploadedEvent{
-			DatasetId:       datasetID.String(),
-			UserId:          uuid.NewString(),
-			StorageLocation: "s3://local-dev-bucket/raw/user/dataset/file.csv",
-			ContentType:     "text/csv",
-			FileExtension:   "csv",
+			DatasetId:         datasetID.String(),
+			UserId:            uuid.NewString(),
+			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
+			ContentType:       "text/csv",
+			FileExtension:     "csv",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
 		}
 
 		Expect(featuremessaging.NewDatasetFileUploadedEventListener(first).Handle(context.Background(), datasetID, event)).To(Succeed())
@@ -111,11 +113,16 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(&recordingRawSnapshotUsecase{})
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetFileUploadedEvent{
-			DatasetId:       uuid.NewString(),
-			UserId:          uuid.NewString(),
-			StorageLocation: "s3://local-dev-bucket/raw/user/dataset/file.csv",
-			ContentType:     "text/csv",
-			FileExtension:   "csv",
+			DatasetId:         uuid.NewString(),
+			UserId:            uuid.NewString(),
+			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
+			ContentType:       "text/csv",
+			FileExtension:     "csv",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
 		})
 
 		Expect(err).To(HaveOccurred())

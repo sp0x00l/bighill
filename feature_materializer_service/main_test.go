@@ -40,3 +40,15 @@ var _ = Describe("newQueryEmbeddingProviderFactory", func() {
 		Expect(provider.Dimensions()).To(Equal(7))
 	})
 })
+
+var _ = Describe("newEmbeddingProvider", func() {
+	It("uses the deterministic provider without requiring an HTTP endpoint", func() {
+		provider, err := newEmbeddingProvider(embeddingConfig{
+			Provider:   "deterministic",
+			Dimensions: 384,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(provider.Dimensions()).To(Equal(384))
+	})
+})

@@ -282,6 +282,10 @@ type embeddingSnapshotRow struct {
 	EmbeddingDimensions int
 	EmbeddingCount      int64
 	StrategyVersion     string
+	ExtractorName       string
+	ExtractorVersion    string
+	CleanerName         string
+	CleanerVersion      string
 	ChunkerName         string
 	ChunkerVersion      string
 	ChunkSize           int
@@ -303,15 +307,19 @@ func (r embeddingSnapshotRow) Scan(dest ...any) error {
 	*(dest[6].(*int)) = r.EmbeddingDimensions
 	*(dest[7].(*int64)) = r.EmbeddingCount
 	*(dest[8].(*string)) = r.StrategyVersion
-	*(dest[9].(*string)) = r.ChunkerName
-	*(dest[10].(*string)) = r.ChunkerVersion
-	*(dest[11].(*int)) = r.ChunkSize
-	*(dest[12].(*int)) = r.ChunkOverlap
-	*(dest[13].(*string)) = r.EmbeddingProvider
-	*(dest[14].(*string)) = r.EmbeddingModel
-	*(dest[15].(*bool)) = r.ActiveForRetrieval
-	*(dest[16].(*string)) = r.Status
-	*(dest[17].(*string)) = r.FailureReason
+	*(dest[9].(*string)) = r.ExtractorName
+	*(dest[10].(*string)) = r.ExtractorVersion
+	*(dest[11].(*string)) = r.CleanerName
+	*(dest[12].(*string)) = r.CleanerVersion
+	*(dest[13].(*string)) = r.ChunkerName
+	*(dest[14].(*string)) = r.ChunkerVersion
+	*(dest[15].(*int)) = r.ChunkSize
+	*(dest[16].(*int)) = r.ChunkOverlap
+	*(dest[17].(*string)) = r.EmbeddingProvider
+	*(dest[18].(*string)) = r.EmbeddingModel
+	*(dest[19].(*bool)) = r.ActiveForRetrieval
+	*(dest[20].(*string)) = r.Status
+	*(dest[21].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -609,6 +617,8 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
 			Expect(embeddingSnapshot.Status).To(Equal(model.SnapshotStatusPending))
 			Expect(embeddingSnapshot.StrategyVersion).To(Equal(strategy.StrategyVersion))
+			Expect(embeddingSnapshot.ExtractorName).To(Equal(strategy.ExtractorName))
+			Expect(embeddingSnapshot.CleanerName).To(Equal(strategy.CleanerName))
 			Expect(embeddingSnapshot.EmbeddingProvider).To(Equal(strategy.EmbeddingProvider))
 			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.feature_snapshots WHERE feature_snapshot_id = @feature_snapshot_id"))
@@ -619,6 +629,10 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("strategy_version", strategy.StrategyVersion))
+			Expect(args).To(HaveKeyWithValue("extractor_name", strategy.ExtractorName))
+			Expect(args).To(HaveKeyWithValue("extractor_version", strategy.ExtractorVersion))
+			Expect(args).To(HaveKeyWithValue("cleaner_name", strategy.CleanerName))
+			Expect(args).To(HaveKeyWithValue("cleaner_version", strategy.CleanerVersion))
 			Expect(args).To(HaveKeyWithValue("chunker_name", strategy.ChunkerName))
 			Expect(args).To(HaveKeyWithValue("chunker_version", strategy.ChunkerVersion))
 			Expect(args).To(HaveKeyWithValue("chunk_size", strategy.ChunkSize))
@@ -683,6 +697,10 @@ var _ = Describe("SnapshotRepository", func() {
 				EmbeddingDimensions: 384,
 				EmbeddingCount:      3,
 				StrategyVersion:     model.DefaultEmbeddingStrategyVersion,
+				ExtractorName:       model.DefaultExtractorName,
+				ExtractorVersion:    model.DefaultExtractorVersion,
+				CleanerName:         model.DefaultCleanerName,
+				CleanerVersion:      model.DefaultCleanerVersion,
 				ChunkerName:         model.DefaultChunkerName,
 				ChunkerVersion:      model.DefaultChunkerVersion,
 				ChunkSize:           model.DefaultChunkSize,
@@ -702,6 +720,8 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("vector_store", "pgvector"))
 			Expect(args).To(HaveKeyWithValue("collection_name", "movies"))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
+			Expect(args).To(HaveKeyWithValue("extractor_name", model.DefaultExtractorName))
+			Expect(args).To(HaveKeyWithValue("cleaner_name", model.DefaultCleanerName))
 			Expect(args).To(HaveKeyWithValue("embedding_provider", "ollama"))
 		})
 
@@ -825,6 +845,10 @@ func newEmbeddingSnapshotRow(embeddingSnapshotID, featureSnapshotID, datasetID, 
 		EmbeddingDimensions: strategy.EmbeddingDimensions,
 		EmbeddingCount:      3,
 		StrategyVersion:     strategy.StrategyVersion,
+		ExtractorName:       strategy.ExtractorName,
+		ExtractorVersion:    strategy.ExtractorVersion,
+		CleanerName:         strategy.CleanerName,
+		CleanerVersion:      strategy.CleanerVersion,
 		ChunkerName:         strategy.ChunkerName,
 		ChunkerVersion:      strategy.ChunkerVersion,
 		ChunkSize:           strategy.ChunkSize,
@@ -838,6 +862,10 @@ func newEmbeddingSnapshotRow(embeddingSnapshotID, featureSnapshotID, datasetID, 
 func validEmbeddingStrategy() model.EmbeddingStrategy {
 	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
 		StrategyVersion:     "rag-v1",
+		ExtractorName:       model.DefaultExtractorName,
+		ExtractorVersion:    "v1",
+		CleanerName:         "go-basic-text-cleaner",
+		CleanerVersion:      "v1",
 		ChunkerName:         "go-token-window",
 		ChunkerVersion:      "v1",
 		ChunkSize:           128,

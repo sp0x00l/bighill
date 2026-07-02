@@ -35,6 +35,8 @@ spec:
               value: {{ .Values.env.otelExporterEndpoint | quote }}
             - name: DATA_INGESTION_SERVICE_NAME
               value: {{ .Values.env.serviceName | quote }}
+            - name: DATA_INGESTION_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
             - name: DATA_INGESTION_API_HTTP_PORT
               value: {{ .Values.service.httpPort | quote }}
             - name: DATA_INGESTION_SERVICE_REDIS_ADDRESS

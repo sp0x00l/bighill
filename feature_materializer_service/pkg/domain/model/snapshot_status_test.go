@@ -37,6 +37,8 @@ var _ = Describe("EmbeddingStrategy", func() {
 		})
 
 		Expect(strategy.StrategyVersion).To(Equal(model.DefaultEmbeddingStrategyVersion))
+		Expect(strategy.ExtractorName).To(Equal(model.DefaultExtractorName))
+		Expect(strategy.CleanerName).To(Equal(model.DefaultCleanerName))
 		Expect(strategy.ChunkerName).To(Equal(model.DefaultChunkerName))
 		Expect(strategy.ChunkOverlap).To(Equal(0))
 		Expect(strategy.EmbeddingProvider).To(Equal("ollama"))
@@ -48,13 +50,24 @@ var _ = Describe("EmbeddingStrategy", func() {
 		second := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{EmbeddingModel: "bge-m3", ChunkSize: 512})
 
 		Expect(first.CanonicalKey()).To(ContainSubstring("embedding_model=bge-small-en-v1.5"))
+		Expect(first.CanonicalKey()).To(ContainSubstring("extractor=go-document-extractor-suite"))
+		Expect(first.CanonicalKey()).To(ContainSubstring("cleaner=go-basic-text-cleaner"))
 		Expect(first.CanonicalKey()).NotTo(Equal(second.CanonicalKey()))
+	})
+
+	It("changes the canonical key when extractor or cleaner versions change", func() {
+		first := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{ExtractorVersion: "v1", CleanerVersion: "v1"})
+		second := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{ExtractorVersion: "v2", CleanerVersion: "v1"})
+		third := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{ExtractorVersion: "v1", CleanerVersion: "v2"})
+
+		Expect(first.CanonicalKey()).NotTo(Equal(second.CanonicalKey()))
+		Expect(first.CanonicalKey()).NotTo(Equal(third.CanonicalKey()))
 	})
 })
 
 var _ = Describe("ProcessingProfile", func() {
-	It("converts known profiles and defaults empty values to generic parquet", func() {
-		profile, err := model.ToProcessingProfile("")
+	It("converts known profiles", func() {
+		profile, err := model.ToProcessingProfile("GENERIC_PARQUET")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(profile).To(Equal(model.ProcessingProfileGenericParquet))
 		Expect(profile.RequiresEmbeddings()).To(BeFalse())
@@ -67,6 +80,11 @@ var _ = Describe("ProcessingProfile", func() {
 
 	It("rejects unknown profiles", func() {
 		_, err := model.ToProcessingProfile("CUSTOM")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("rejects empty profiles instead of defaulting", func() {
+		_, err := model.ToProcessingProfile("")
 		Expect(err).To(HaveOccurred())
 	})
 })

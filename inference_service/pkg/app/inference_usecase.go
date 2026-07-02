@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
+	"time"
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
@@ -22,8 +24,12 @@ type InferenceUsecase interface {
 type inferenceUsecase struct {
 	modelRepository   InferenceModelRepository
 	datasetRepository InferenceDatasetRepository
+	requestRepository InferenceRequestRepository
 	retrievalClient   RetrievalClient
+	contextPacker     ContextPacker
+	promptBuilder     PromptBuilder
 	generator         GenerationAdapter
+	promptStrategy    model.PromptStrategy
 }
 
 type InferenceOption func(*inferenceUsecase)
@@ -41,6 +47,38 @@ func WithRetrievalClient(client RetrievalClient) InferenceOption {
 
 	return func(u *inferenceUsecase) {
 		u.retrievalClient = client
+	}
+}
+
+func WithInferenceRequestRepository(repository InferenceRequestRepository) InferenceOption {
+	log.Trace("WithInferenceRequestRepository")
+
+	return func(u *inferenceUsecase) {
+		u.requestRepository = repository
+	}
+}
+
+func WithContextPacker(packer ContextPacker) InferenceOption {
+	log.Trace("WithContextPacker")
+
+	return func(u *inferenceUsecase) {
+		u.contextPacker = packer
+	}
+}
+
+func WithPromptBuilder(builder PromptBuilder) InferenceOption {
+	log.Trace("WithPromptBuilder")
+
+	return func(u *inferenceUsecase) {
+		u.promptBuilder = builder
+	}
+}
+
+func WithPromptStrategy(strategy model.PromptStrategy) InferenceOption {
+	log.Trace("WithPromptStrategy")
+
+	return func(u *inferenceUsecase) {
+		u.promptStrategy = strategy
 	}
 }
 
@@ -69,137 +107,170 @@ func NewInferenceUsecase(repository InferenceModelRepository, opts ...InferenceO
 func (u *inferenceUsecase) RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error) {
 	log.Trace("InferenceUsecase RecordModelUpdated")
 
-	if inferenceModel == nil {
-		return nil, domain.ErrValidationFailed.Extend("model update is required")
-	}
-	if inferenceModel.ModelID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("model id is required")
-	}
-	if inferenceModel.TrainingRunID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("training run id is required")
-	}
-	if inferenceModel.DatasetID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("dataset id is required")
-	}
-	if strings.TrimSpace(inferenceModel.ArtifactLocation) == "" && inferenceModel.Status == model.ModelStatusReady {
-		return nil, domain.ErrValidationFailed.Extend("artifact location is required for ready models")
-	}
-	if idempotencyKey == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("idempotency key is required")
-	}
-	if u.modelRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("inference model repository is required")
-	}
 	return u.modelRepository.UpsertModel(ctx, inferenceModel, idempotencyKey)
 }
 
 func (u *inferenceUsecase) RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error) {
 	log.Trace("InferenceUsecase RecordDatasetUpdated")
 
-	if dataset == nil {
-		return nil, domain.ErrValidationFailed.Extend("dataset update is required")
-	}
-	if dataset.DatasetID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("dataset id is required")
-	}
-	if dataset.UserID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("user id is required")
-	}
-	if dataset.DatasetVersion <= 0 {
-		return nil, domain.ErrValidationFailed.Extend("dataset version is required")
-	}
-	if idempotencyKey == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("idempotency key is required")
-	}
-	if u.datasetRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("inference dataset repository is required")
-	}
 	return u.datasetRepository.UpsertDataset(ctx, dataset, idempotencyKey)
 }
 
 func (u *inferenceUsecase) ReadModel(ctx context.Context, modelID uuid.UUID) (*model.InferenceModel, error) {
 	log.Trace("InferenceUsecase ReadModel")
 
-	if modelID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("model id is required")
-	}
-	if u.modelRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("inference model repository is required")
-	}
 	return u.modelRepository.ReadByID(ctx, modelID)
 }
 
-func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error) {
+func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateRequest) (response *model.GenerateResponse, err error) {
 	log.Trace("InferenceUsecase Generate")
 
-	if request.DatasetID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("dataset id is required")
-	}
-	request.QueryText = strings.TrimSpace(request.QueryText)
-	if request.QueryText == "" {
-		return nil, domain.ErrValidationFailed.Extend("query text is required")
-	}
-	if request.TopK <= 0 {
-		request.TopK = 5
-	}
-	if u.datasetRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("inference dataset repository is required")
-	}
-	if u.retrievalClient == nil {
-		return nil, domain.ErrValidationFailed.Extend("retrieval client is required")
-	}
-	if u.generator == nil {
-		return nil, domain.ErrValidationFailed.Extend("generation adapter is required")
-	}
+	startedAt := time.Now()
 
-	dataset, err := u.datasetRepository.ReadDataset(ctx, request.DatasetID)
+	var dataset *model.InferenceDataset
+	var inferenceModel *model.InferenceModel
+	var contexts []model.RetrievedContext
+
+	dataset, err = u.datasetRepository.ReadDataset(ctx, request.DatasetID)
 	if err != nil {
 		return nil, err
 	}
-	if !dataset.IsRAGReady() {
-		return nil, domain.ErrDatasetNotReady.Extend("dataset embeddings are not materialized")
-	}
-
-	var inferenceModel *model.InferenceModel
-	if request.ModelID != uuid.Nil {
-		if u.modelRepository == nil {
-			return nil, domain.ErrValidationFailed.Extend("inference model repository is required")
-		}
-		inferenceModel, err = u.modelRepository.ReadByID(ctx, request.ModelID)
-		if err != nil {
-			return nil, err
-		}
-		if inferenceModel.Status != model.ModelStatusReady {
-			return nil, domain.ErrValidationFailed.Extend("model is not ready")
-		}
-		if inferenceModel.DatasetID != request.DatasetID {
-			return nil, domain.ErrValidationFailed.Extend("model dataset does not match request dataset")
-		}
-	}
-
-	contexts, err := u.retrievalClient.SearchEmbeddings(ctx, request.DatasetID, request.QueryText, request.TopK)
+	inferenceModel, err = u.modelRepository.ReadByID(ctx, request.ModelID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", domain.ErrRetrievalFailed, err)
+		return nil, err
 	}
-	answer, err := u.generator.Generate(ctx, model.GenerationRequest{
-		Dataset:  dataset,
-		Model:    inferenceModel,
+	generationProvider := u.generator.Provider()
+	generationModel := u.generator.Model()
+	if inferenceModel.Status != model.ModelStatusReady {
+		err = domain.ErrModelNotReady.Extend("model is not ready")
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	if inferenceModel.DatasetID != request.DatasetID {
+		err = domain.ErrModelMismatch.Extend("model dataset does not match request dataset")
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	if !dataset.IsRAGReady() {
+		err = domain.ErrDatasetNotReady.Extend("dataset embeddings are not materialized")
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+
+	contexts, err = u.retrievalClient.SearchEmbeddings(ctx, request.DatasetID, request.QueryText, request.TopK, request.MetadataFilters)
+	if err != nil {
+		err = fmt.Errorf("%w: %w", domain.ErrRetrievalFailed, err)
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	contexts, err = u.contextPacker.Pack(ctx, model.ContextPackRequest{
 		Query:    request.QueryText,
 		Contexts: contexts,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", domain.ErrGenerationFailed, err)
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	promptPackage, err := u.promptBuilder.BuildPrompt(ctx, model.PromptBuildRequest{
+		Query:    request.QueryText,
+		Dataset:  dataset,
+		Model:    inferenceModel,
+		Contexts: contexts,
+	})
+	if err != nil {
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	answer, err := u.generator.Generate(ctx, model.GenerationRequest{
+		RequestID:             request.RequestID,
+		Dataset:               dataset,
+		Model:                 inferenceModel,
+		Query:                 request.QueryText,
+		Prompt:                promptPackage.Prompt,
+		PromptStrategyVersion: promptPackage.Strategy.Version,
+		Contexts:              promptPackage.Contexts,
+	})
+	if err != nil {
+		err = fmt.Errorf("%w: %w", domain.ErrGenerationFailed, err)
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 
-	modelID := uuid.Nil
-	if inferenceModel != nil {
-		modelID = inferenceModel.ModelID
+	response = &model.GenerateResponse{
+		RequestID:             request.RequestID,
+		DatasetID:             request.DatasetID,
+		ModelID:               inferenceModel.ModelID,
+		QueryText:             request.QueryText,
+		Answer:                answer,
+		Contexts:              contexts,
+		PromptStrategyVersion: promptPackage.Strategy.Version,
+		GenerationProvider:    generationProvider,
+		GenerationModel:       generationModel,
 	}
-	return &model.GenerateResponse{
-		DatasetID: request.DatasetID,
-		ModelID:   modelID,
-		QueryText: request.QueryText,
-		Answer:    answer,
-		Contexts:  contexts,
+	if err := u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, startedAt, generationProvider, generationModel, model.InferenceRequestStatusCompleted, ""); err != nil {
+		log.WithContext(ctx).WithError(err).Warn("failed to record completed inference request")
+	}
+	return response, nil
+}
+
+func (u *inferenceUsecase) recordInferenceRequest(ctx context.Context, request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, startedAt time.Time, generationProvider string, generationModel string, status model.InferenceRequestStatus, errorMessage string) error {
+	log.Trace("InferenceUsecase recordInferenceRequest")
+
+	record, err := inferenceRequestRecord(request, dataset, inferenceModel, contexts, u.promptStrategy, startedAt, generationProvider, generationModel, status, errorMessage)
+	if err != nil {
+		return err
+	}
+	if err := u.requestRepository.RecordInferenceRequest(ctx, record); err != nil {
+		return fmt.Errorf("record inference request: %w", err)
+	}
+	return nil
+}
+
+func inferenceRequestRecord(request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, strategy model.PromptStrategy, startedAt time.Time, generationProvider string, generationModel string, status model.InferenceRequestStatus, errorMessage string) (*model.InferenceRequest, error) {
+	log.Trace("inferenceRequestRecord")
+
+	metadataFilters, err := marshalMetadataFilters(request.MetadataFilters)
+	if err != nil {
+		return nil, err
+	}
+	retrievedContextIDs, err := marshalRetrievedContextIDs(contexts)
+	if err != nil {
+		return nil, err
+	}
+	return &model.InferenceRequest{
+		RequestID:             request.RequestID,
+		DatasetID:             dataset.DatasetID,
+		ModelID:               inferenceModel.ModelID,
+		EmbeddingSnapshotID:   dataset.EmbeddingSnapshotID,
+		QueryText:             request.QueryText,
+		TopK:                  request.TopK,
+		MetadataFilters:       metadataFilters,
+		RetrievedContextIDs:   retrievedContextIDs,
+		PromptStrategyVersion: strategy.Version,
+		GenerationProvider:    generationProvider,
+		GenerationModel:       generationModel,
+		LatencyMs:             time.Since(startedAt).Milliseconds(),
+		Status:                status,
+		ErrorMessage:          errorMessage,
 	}, nil
+}
+
+func marshalMetadataFilters(filters map[string]string) (string, error) {
+	log.Trace("marshalMetadataFilters")
+
+	raw, err := json.Marshal(filters)
+	if err != nil {
+		return "", fmt.Errorf("marshal metadata filters: %w", err)
+	}
+	return string(raw), nil
+}
+
+func marshalRetrievedContextIDs(contexts []model.RetrievedContext) (string, error) {
+	log.Trace("marshalRetrievedContextIDs")
+
+	ids := make([]string, 0, len(contexts))
+	for i, retrieved := range contexts {
+		if retrieved.EmbeddingRecordID == uuid.Nil {
+			return "", fmt.Errorf("retrieved context %d has empty embedding record id", i)
+		}
+		ids = append(ids, retrieved.EmbeddingRecordID.String())
+	}
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return "", fmt.Errorf("marshal retrieved context ids: %w", err)
+	}
+	return string(raw), nil
 }

@@ -171,19 +171,19 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		ModelID:           modelID,
 		TrainingRunID:     trainingRunID,
 		DatasetID:         datasetID,
-		Name:              withDefault(payload.GetName(), "model_"+strings.ReplaceAll(modelID.String(), "-", "_")),
+		Name:              strings.TrimSpace(payload.GetName()),
 		ModelVersion:      int(payload.GetModelVersion()),
 		BaseModel:         strings.TrimSpace(payload.GetBaseModel()),
 		ArtifactLocation:  strings.TrimSpace(payload.GetArtifactLocation()),
 		ArtifactFormat:    strings.TrimSpace(payload.GetArtifactFormat()),
 		ArtifactChecksum:  strings.TrimSpace(payload.GetArtifactChecksum()),
 		ArtifactSizeBytes: payload.GetArtifactSizeBytes(),
-		MetricsMetadata:   withDefault(payload.GetMetricsMetadata(), "{}"),
+		MetricsMetadata:   strings.TrimSpace(payload.GetMetricsMetadata()),
 		Status:            status,
 		FailureReason:     strings.TrimSpace(payload.GetFailureReason()),
 	}
-	if inferenceModel.ModelVersion <= 0 {
-		inferenceModel.ModelVersion = 1
+	if err := validateModelUpdatedEvent(inferenceModel); err != nil {
+		return nil, uuid.Nil, err
 	}
 	idempotencyKey := uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
 		modelID.String(),
@@ -192,6 +192,30 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		inferenceModel.ArtifactChecksum,
 	}, ":")))
 	return inferenceModel, idempotencyKey, nil
+}
+
+func validateModelUpdatedEvent(inferenceModel *model.InferenceModel) error {
+	log.Trace("validateModelUpdatedEvent")
+
+	if strings.TrimSpace(inferenceModel.BaseModel) == "" {
+		return fmt.Errorf("base model is required")
+	}
+	if strings.TrimSpace(inferenceModel.Name) == "" {
+		return fmt.Errorf("model name is required")
+	}
+	if inferenceModel.ModelVersion <= 0 {
+		return fmt.Errorf("model version is required")
+	}
+	if strings.TrimSpace(inferenceModel.MetricsMetadata) == "" {
+		return fmt.Errorf("metrics metadata is required")
+	}
+	if inferenceModel.Status == model.ModelStatusReady && strings.TrimSpace(inferenceModel.ArtifactLocation) == "" {
+		return fmt.Errorf("artifact location is required for ready models")
+	}
+	if inferenceModel.Status == model.ModelStatusFailed && strings.TrimSpace(inferenceModel.FailureReason) == "" {
+		return fmt.Errorf("failure reason is required for failed models")
+	}
+	return nil
 }
 
 func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.DatasetUpdatedEvent) (*model.InferenceDataset, uuid.UUID, error) {
@@ -243,7 +267,7 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 		CatalogProvider:          strings.TrimSpace(payload.GetCatalogProvider()),
 		ProcessingProfile:        strings.TrimSpace(payload.GetProcessingProfile()),
 		SchemaVersion:            int(payload.GetSchemaVersion()),
-		SchemaMetadata:           withDefault(payload.GetSchemaMetadata(), "{}"),
+		SchemaMetadata:           strings.TrimSpace(payload.GetSchemaMetadata()),
 		RawSnapshotID:            rawSnapshotID,
 		FeatureSnapshotID:        featureSnapshotID,
 		EmbeddingSnapshotID:      embeddingSnapshotID,
@@ -259,11 +283,8 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 		EmbeddingProvider:        strings.TrimSpace(payload.GetEmbeddingProvider()),
 		EmbeddingModel:           strings.TrimSpace(payload.GetEmbeddingModel()),
 	}
-	if dataset.DatasetVersion <= 0 {
-		dataset.DatasetVersion = 1
-	}
-	if dataset.SchemaVersion <= 0 {
-		dataset.SchemaVersion = 1
+	if err := validateDatasetUpdatedEvent(dataset); err != nil {
+		return nil, uuid.Nil, err
 	}
 
 	idempotencyKey := uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
@@ -291,12 +312,17 @@ func parseOptionalEventUUID(field, value string) (uuid.UUID, error) {
 	return parsed, nil
 }
 
-func withDefault(value, defaultValue string) string {
-	log.Trace("withDefault")
+func validateDatasetUpdatedEvent(dataset *model.InferenceDataset) error {
+	log.Trace("validateDatasetUpdatedEvent")
 
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return defaultValue
+	if dataset.DatasetVersion <= 0 {
+		return fmt.Errorf("dataset version is required")
 	}
-	return value
+	if dataset.SchemaVersion <= 0 {
+		return fmt.Errorf("schema version is required")
+	}
+	if strings.TrimSpace(dataset.SchemaMetadata) == "" {
+		return fmt.Errorf("schema metadata is required")
+	}
+	return nil
 }

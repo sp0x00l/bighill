@@ -1,6 +1,8 @@
 DROP TRIGGER IF EXISTS inference_datasets_updated_at ON bighill_inference_db.inference_datasets;
 DROP TRIGGER IF EXISTS inference_models_updated_at ON bighill_inference_db.inference_models;
+DROP TABLE IF EXISTS bighill_inference_db.inference_requests;
 DROP TABLE IF EXISTS bighill_inference_db.inference_datasets;
 DROP TABLE IF EXISTS bighill_inference_db.inference_models;
+DROP TYPE IF EXISTS inference_request_status_enum;
 DROP TYPE IF EXISTS inference_dataset_processing_state_enum;
 DROP TYPE IF EXISTS inference_model_status_enum;

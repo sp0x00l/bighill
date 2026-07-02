@@ -117,6 +117,22 @@ func eventToDatasetFile(resourceKey uuid.UUID, payload *datasetpb.DatasetFileUpl
 	if fileExtension == "" {
 		return nil, uuid.Nil, fmt.Errorf("file extension is required")
 	}
+	tableNamespace, err := requiredDatasetFileUploadedString("table namespace", payload.GetTableNamespace())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	tableName, err := requiredDatasetFileUploadedString("table name", payload.GetTableName())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	tableFormat, err := requiredDatasetFileUploadedString("table format", payload.GetTableFormat())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	catalogProvider, err := requiredDatasetFileUploadedString("catalog provider", payload.GetCatalogProvider())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	processingProfile, err := model.ToProcessingProfile(payload.GetProcessingProfile())
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("processing profile is invalid: %w", err)
@@ -128,22 +144,22 @@ func eventToDatasetFile(resourceKey uuid.UUID, payload *datasetpb.DatasetFileUpl
 		StorageLocation:   storageLocation,
 		ContentType:       contentType,
 		FileExtension:     fileExtension,
-		TableNamespace:    withDefault(payload.GetTableNamespace(), "default"),
-		TableName:         withDefault(payload.GetTableName(), "dataset_"+strings.ReplaceAll(datasetID.String(), "-", "")),
-		TableFormat:       withDefault(payload.GetTableFormat(), "PARQUET"),
-		CatalogProvider:   withDefault(payload.GetCatalogProvider(), "LOCAL"),
+		TableNamespace:    tableNamespace,
+		TableName:         tableName,
+		TableFormat:       tableFormat,
+		CatalogProvider:   catalogProvider,
 		ProcessingProfile: processingProfile,
 	}
 	idempotencyKey := uuid.NewSHA1(uuid.NameSpaceURL, []byte(datasetID.String()+":"+storageLocation))
 	return datasetFile, idempotencyKey, nil
 }
 
-func withDefault(value, defaultValue string) string {
-	log.Trace("withDefault")
+func requiredDatasetFileUploadedString(fieldName string, value string) (string, error) {
+	log.Trace("requiredDatasetFileUploadedString")
 
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return defaultValue
+		return "", fmt.Errorf("%s is required", fieldName)
 	}
-	return value
+	return value, nil
 }

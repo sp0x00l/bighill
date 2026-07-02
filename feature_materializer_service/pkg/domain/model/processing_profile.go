@@ -22,7 +22,7 @@ func (p ProcessingProfile) String() string {
 	case ProcessingProfileInstructionTuning:
 		return "INSTRUCTION_TUNING"
 	default:
-		return "GENERIC_PARQUET"
+		return "UNKNOWN"
 	}
 }
 
@@ -32,7 +32,7 @@ func (p ProcessingProfile) RequiresEmbeddings() bool {
 
 func ToProcessingProfile(value string) (ProcessingProfile, error) {
 	switch strings.ToUpper(strings.TrimSpace(value)) {
-	case "", "GENERIC_PARQUET":
+	case "GENERIC_PARQUET":
 		return ProcessingProfileGenericParquet, nil
 	case "TEXT_RAG":
 		return ProcessingProfileTextRAG, nil

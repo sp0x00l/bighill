@@ -83,7 +83,6 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training publisher")
 	}
-	defer publisher.Close()
 	subscriber, err := messagingFactory.Subscriber(cancelCtx)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training subscriber")

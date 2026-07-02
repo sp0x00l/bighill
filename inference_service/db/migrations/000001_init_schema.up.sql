@@ -1,5 +1,6 @@
 CREATE TYPE inference_model_status_enum AS ENUM ('PENDING', 'READY', 'FAILED');
 CREATE TYPE inference_dataset_processing_state_enum AS ENUM ('PENDING', 'RAW_MATERIALIZED', 'FEATURE_MATERIALIZED', 'EMBEDDINGS_MATERIALIZED', 'FAILED');
+CREATE TYPE inference_request_status_enum AS ENUM ('COMPLETED', 'FAILED');
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     model_id uuid PRIMARY KEY,
@@ -76,3 +77,30 @@ CREATE TRIGGER inference_datasets_updated_at
 BEFORE UPDATE ON bighill_inference_db.inference_datasets
 FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_requests (
+    request_id uuid PRIMARY KEY,
+    dataset_id uuid NOT NULL,
+    model_id uuid,
+    embedding_snapshot_id uuid,
+    query_text text NOT NULL,
+    top_k integer NOT NULL,
+    metadata_filters jsonb NOT NULL DEFAULT '{}'::jsonb,
+    retrieved_context_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+    prompt_strategy_version text NOT NULL,
+    generation_provider text NOT NULL,
+    generation_model text NOT NULL,
+    latency_ms bigint NOT NULL,
+    status inference_request_status_enum NOT NULL,
+    error_message text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS index_inference_requests_dataset_id
+ON bighill_inference_db.inference_requests(dataset_id);
+
+CREATE INDEX IF NOT EXISTS index_inference_requests_embedding_snapshot_id
+ON bighill_inference_db.inference_requests(embedding_snapshot_id);
+
+CREATE INDEX IF NOT EXISTS index_inference_requests_created_at
+ON bighill_inference_db.inference_requests(created_at);

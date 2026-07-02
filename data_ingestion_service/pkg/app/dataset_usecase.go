@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"data_ingestion_service/pkg/domain/model"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
 	"github.com/google/uuid"
@@ -21,26 +22,45 @@ func NewDatasetUseCase(datasetsRepository DatasetsRepositoryAdapter) *DatasetUse
 	}
 }
 
-func (u *DatasetUsecase) AddDataset(ctx context.Context, datasetID, userID uuid.UUID) (err error) {
+func (u *DatasetUsecase) AddDataset(ctx context.Context, dataset *model.Dataset) (err error) {
 	log.Trace("DatasetUsecase AddDataset")
-	ctx, span := usecasetrace.StartSpan(ctx, "data_ingestion_service/app", "dataset.add_dataset",
-		attribute.String("dataset_id", datasetID.String()),
-		attribute.String("user_id", userID.String()),
-	)
+	var attrs []attribute.KeyValue
+	if dataset != nil {
+		attrs = append(attrs,
+			attribute.String("dataset_id", dataset.DatasetID.String()),
+			attribute.String("user_id", dataset.UserID.String()),
+		)
+	}
+	ctx, span := usecasetrace.StartSpan(ctx, "data_ingestion_service/app", "dataset.add_dataset", attrs...)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	return u.datasetsRepository.Save(ctx, datasetID, userID)
+	return u.datasetsRepository.Upsert(ctx, dataset)
 }
 
-func (u *DatasetUsecase) IsValidForUpload(ctx context.Context, datasetID, userID uuid.UUID) (valid bool, err error) {
-	log.Trace("DatasetUsecase IsValidForUpload")
-	ctx, span := usecasetrace.StartSpan(ctx, "data_ingestion_service/app", "dataset.is_valid_for_upload",
+func (u *DatasetUsecase) UpdateDataset(ctx context.Context, dataset *model.Dataset) (err error) {
+	log.Trace("DatasetUsecase UpdateDataset")
+	var attrs []attribute.KeyValue
+	if dataset != nil {
+		attrs = append(attrs,
+			attribute.String("dataset_id", dataset.DatasetID.String()),
+			attribute.String("user_id", dataset.UserID.String()),
+		)
+	}
+	ctx, span := usecasetrace.StartSpan(ctx, "data_ingestion_service/app", "dataset.update_dataset", attrs...)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	return u.datasetsRepository.Upsert(ctx, dataset)
+}
+
+func (u *DatasetUsecase) DatasetForUpload(ctx context.Context, datasetID, userID uuid.UUID) (dataset *model.Dataset, err error) {
+	log.Trace("DatasetUsecase DatasetForUpload")
+	ctx, span := usecasetrace.StartSpan(ctx, "data_ingestion_service/app", "dataset.dataset_for_upload",
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("user_id", userID.String()),
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	return u.datasetsRepository.IsValid(ctx, datasetID, userID)
+	return u.datasetsRepository.ReadForUpload(ctx, datasetID, userID)
 }
 
 func (u *DatasetUsecase) BlacklistDataset(ctx context.Context, datasetID, userID uuid.UUID) (err error) {

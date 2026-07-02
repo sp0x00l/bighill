@@ -43,6 +43,7 @@ type stubDatasetRepository struct {
 	updateProcessingUserID    uuid.UUID
 	updateProcessingState     model.ProcessingState
 	updateProcessingResult    *model.Dataset
+	updateProcessingChanged   bool
 	updateProcessingErr       error
 
 	updateMaterializationDataset *model.Dataset
@@ -53,32 +54,6 @@ type stubDatasetRepository struct {
 	replaceDataset *model.Dataset
 	replaceResult  *model.Dataset
 	replaceErr     error
-}
-
-type stubDatasetEventPublisher struct {
-	createdDataset   *model.Dataset
-	createdErr       error
-	deletedDatasetID uuid.UUID
-	deletedUserID    uuid.UUID
-	deletedErr       error
-	updatedDataset   *model.Dataset
-	updatedErr       error
-}
-
-func (s *stubDatasetEventPublisher) PublishDatasetCreated(_ context.Context, dataset *model.Dataset) error {
-	s.createdDataset = dataset
-	return s.createdErr
-}
-
-func (s *stubDatasetEventPublisher) PublishDatasetDeleted(_ context.Context, datasetID uuid.UUID, userID uuid.UUID) error {
-	s.deletedDatasetID = datasetID
-	s.deletedUserID = userID
-	return s.deletedErr
-}
-
-func (s *stubDatasetEventPublisher) PublishDatasetUpdated(_ context.Context, dataset *model.Dataset) error {
-	s.updatedDataset = dataset
-	return s.updatedErr
 }
 
 func (s *stubDatasetRepository) Close() {}
@@ -124,11 +99,11 @@ func (s *stubDatasetRepository) UpdatePublishedState(_ context.Context, datasetI
 	return s.publishErr
 }
 
-func (s *stubDatasetRepository) UpdateProcessingState(_ context.Context, datasetID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, error) {
+func (s *stubDatasetRepository) UpdateProcessingState(_ context.Context, datasetID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, bool, error) {
 	s.updateProcessingDatasetID = datasetID
 	s.updateProcessingUserID = userID
 	s.updateProcessingState = state
-	return s.updateProcessingResult, s.updateProcessingErr
+	return s.updateProcessingResult, s.updateProcessingChanged, s.updateProcessingErr
 }
 
 func (s *stubDatasetRepository) RecordMaterialization(_ context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error) {
@@ -168,16 +143,6 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.createIdempotencyKey).To(Equal(idempotencyKey))
 	})
 
-	It("publishes a dataset-created event after create succeeds", func() {
-		publisher := &stubDatasetEventPublisher{}
-		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
-		dataset := &model.Dataset{ID: datasetID, UserID: userID}
-
-		Expect(uc.CreateDataset(ctx, dataset, uuid.New())).To(Succeed())
-
-		Expect(publisher.createdDataset).To(Equal(dataset))
-	})
-
 	It("returns repository create errors", func() {
 		expectedErr := errors.New("create failed")
 		repo.createErr = expectedErr
@@ -214,16 +179,6 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.deleteUserID).To(Equal(userID))
 	})
 
-	It("publishes a dataset-deleted event after delete succeeds", func() {
-		publisher := &stubDatasetEventPublisher{}
-		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
-
-		Expect(uc.DeleteDataset(ctx, datasetID, userID)).To(Succeed())
-
-		Expect(publisher.deletedDatasetID).To(Equal(datasetID))
-		Expect(publisher.deletedUserID).To(Equal(userID))
-	})
-
 	It("publishes a dataset through the repository", func() {
 		Expect(uc.PublishDataset(ctx, datasetID, userID)).To(Succeed())
 		Expect(repo.publishDatasetID).To(Equal(datasetID))
@@ -241,24 +196,12 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.replaceDataset).To(Equal(replacement))
 	})
 
-	It("publishes a dataset-updated event after replace succeeds", func() {
-		publisher := &stubDatasetEventPublisher{}
-		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
-		replacement := &model.Dataset{ID: datasetID, UserID: userID, Title: "updated"}
-		repo.replaceResult = replacement
-
-		got, err := uc.ReplaceDataset(ctx, replacement)
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal(replacement))
-		Expect(publisher.updatedDataset).To(Equal(replacement))
-	})
-
 	It("advances dataset processing state through the repository", func() {
 		existing := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingPending}
 		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingRawMaterialized}
 		repo.readDataset = existing
 		repo.updateProcessingResult = updated
+		repo.updateProcessingChanged = true
 
 		got, err := uc.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
 
@@ -269,29 +212,15 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.updateProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
 	})
 
-	It("publishes a dataset-updated event after processing state advances", func() {
-		publisher := &stubDatasetEventPublisher{}
-		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
-		existing := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingPending}
-		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingRawMaterialized}
-		repo.readDataset = existing
-		repo.updateProcessingResult = updated
-
-		_, err := uc.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(publisher.updatedDataset).To(Equal(updated))
-	})
-
 	It("does not downgrade dataset processing state for late events", func() {
 		existing := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingEmbeddingsMaterialized}
-		repo.readDataset = existing
+		repo.updateProcessingResult = existing
 
 		got, err := uc.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(existing))
-		Expect(repo.updateProcessingDatasetID).To(Equal(uuid.Nil))
+		Expect(repo.updateProcessingDatasetID).To(Equal(datasetID))
 	})
 
 	It("records feature materialization metadata and advances processing state", func() {
@@ -322,9 +251,7 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.updateMaterializationDataset.FeatureSnapshotID).To(Equal(materialized.FeatureSnapshotID))
 	})
 
-	It("does not publish materialization updates outside the repository transaction", func() {
-		publisher := &stubDatasetEventPublisher{}
-		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetEventPublisher(publisher))
+	It("records materialization updates through the repository transaction boundary", func() {
 		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingEmbeddingsMaterialized}
 		repo.updateMaterializationResult = updated
 
@@ -339,7 +266,6 @@ var _ = Describe("DatasetUsecase", func() {
 		}, model.DatasetProcessingEmbeddingsMaterialized)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(publisher.updatedDataset).To(BeNil())
 		Expect(repo.updateMaterializationState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 	})
 })

@@ -8,6 +8,10 @@ build()
   local BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 
   cd $BIGHILL_ROOT/feature_materializer_service
+  if [ ! -f "$BIGHILL_ROOT/pdf_extractor_lib/cpp/build/bin/libgo_pdf_extractor_lib.a" ]; then
+    "$BIGHILL_ROOT/pdf_extractor_lib/scripts/build_cpp.sh"
+  fi
+
   if [ ! -d "build" ]; then
     mkdir -p $BIGHILL_ROOT/feature_materializer_service/build
   else

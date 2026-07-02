@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	"data_ingestion_service/pkg/domain/model"
+
 	"github.com/google/uuid"
-	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	log "github.com/sirupsen/logrus"
 
@@ -26,25 +26,32 @@ func NewDatasetDB(db *coreDb.Database) *DatasetDB {
 	}
 }
 
-// Save adds a dataset to the database if it does not already exist
-func (db *DatasetDB) Save(ctx context.Context, datasetID, userID uuid.UUID) error {
-	log.Trace("DatasetDB Save")
+// Upsert stores the latest registry-owned dataset metadata projection.
+func (db *DatasetDB) Upsert(ctx context.Context, dataset *model.Dataset) error {
+	log.Trace("DatasetDB Upsert")
 
-	dto := ToDAO(datasetID, userID)
-
-	var sqlStatement = `INSERT INTO ` + db.Name + `.datasets (dataset_id, user_id) VALUES (@dataset_id, @user_id);`
-	_, err := db.Pool.Exec(ctx, sqlStatement, dto)
+	var sqlStatement = `INSERT INTO ` + db.Name + `.datasets (
+		dataset_id, user_id, storage_location, table_namespace, table_name, table_format,
+		catalog_provider, processing_profile, schema_version, schema_metadata, blacklisted
+	) VALUES (
+		@dataset_id, @user_id, @storage_location, @table_namespace, @table_name, @table_format,
+		@catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, false
+	)
+	ON CONFLICT (dataset_id) DO UPDATE SET
+		user_id = EXCLUDED.user_id,
+		storage_location = EXCLUDED.storage_location,
+		table_namespace = EXCLUDED.table_namespace,
+		table_name = EXCLUDED.table_name,
+		table_format = EXCLUDED.table_format,
+		catalog_provider = EXCLUDED.catalog_provider,
+		processing_profile = EXCLUDED.processing_profile,
+		schema_version = EXCLUDED.schema_version,
+		schema_metadata = EXCLUDED.schema_metadata;`
+	_, err := db.Pool.Exec(ctx, sqlStatement, ToDAO(dataset))
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			if pgErr.Code == pgerrcode.UniqueViolation {
-				return domain.ErrResourceAlreadyExists
-			}
-		}
-		log.WithContext(ctx).WithError(err).Error("database error. Failed to add dataset")
-		return fmt.Errorf("database error. Failed to add dataset: %w", err)
+		log.WithContext(ctx).WithError(err).Error("database error. Failed to upsert dataset")
+		return fmt.Errorf("database error. Failed to upsert dataset: %w", err)
 	}
-
 	return nil
 }
 
@@ -52,7 +59,7 @@ func (db *DatasetDB) Save(ctx context.Context, datasetID, userID uuid.UUID) erro
 func (db *DatasetDB) BlacklistDataset(ctx context.Context, datasetID, userID uuid.UUID) error {
 	log.Trace("DatasetDB BlacklistDataset")
 
-	dto := ToDAO(datasetID, userID)
+	dto := IDsToDAO(datasetID, userID)
 	var sqlStatement = `UPDATE ` + db.Name + `.datasets SET blacklisted = true WHERE dataset_id = @dataset_id AND user_id = @user_id;`
 	cmdTag, err := db.Pool.Exec(ctx, sqlStatement, dto)
 	if err != nil {
@@ -69,7 +76,7 @@ func (db *DatasetDB) BlacklistDataset(ctx context.Context, datasetID, userID uui
 func (db *DatasetDB) DeleteDataset(ctx context.Context, datasetID, userID uuid.UUID) error {
 	log.Trace("DatasetDB DeleteDataset")
 
-	dto := ToDAO(datasetID, userID)
+	dto := IDsToDAO(datasetID, userID)
 
 	var sqlStatement = `DELETE FROM ` + db.Name + `.datasets WHERE dataset_id = @dataset_id AND user_id = @user_id;`
 	cmdTag, err := db.Pool.Exec(ctx, sqlStatement, dto)
@@ -83,27 +90,66 @@ func (db *DatasetDB) DeleteDataset(ctx context.Context, datasetID, userID uuid.U
 	return nil
 }
 
-// IsValid checks if a dataset exists in the database and is not published or deleted
-func (db *DatasetDB) IsValid(ctx context.Context, datasetID, userID uuid.UUID) (bool, error) {
-	log.Trace("DatasetDB IsValid")
+func (db *DatasetDB) ReadForUpload(ctx context.Context, datasetID, userID uuid.UUID) (*model.Dataset, error) {
+	log.Trace("DatasetDB ReadForUpload")
 
-	dto := ToDAO(datasetID, userID)
-
-	var sqlStatement = `SELECT EXISTS(SELECT 1 FROM ` + db.Name + `.datasets WHERE dataset_id = @dataset_id AND user_id = @user_id AND blacklisted = false);`
-
-	var exists bool
-	err := db.Pool.QueryRow(ctx, sqlStatement, dto).Scan(&exists)
+	query := `SELECT dataset_id::text, user_id::text, storage_location, table_namespace, table_name,
+		table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text
+		FROM ` + db.Name + `.datasets
+		WHERE dataset_id = @dataset_id AND user_id = @user_id AND blacklisted = false`
+	dataset, err := scanDataset(db.Pool.QueryRow(ctx, query, IDsToDAO(datasetID, userID)))
 	if err != nil {
-		log.WithContext(ctx).WithError(err).Error("database error. Failed to check if dataset exists")
-		return false, fmt.Errorf("database error. Failed to check if dataset exists: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrResourceNotFound
+		}
+		log.WithContext(ctx).WithError(err).Error("database error. Failed to read dataset for upload")
+		return nil, fmt.Errorf("database error. Failed to read dataset for upload: %w", err)
 	}
-
-	return exists, nil
+	return dataset, nil
 }
 
-func ToDAO(datasetID, userID uuid.UUID) pgx.NamedArgs {
+func ToDAO(dataset *model.Dataset) pgx.NamedArgs {
+	return pgx.NamedArgs{
+		"dataset_id":         pgtype.UUID{Bytes: dataset.DatasetID, Valid: true},
+		"user_id":            pgtype.UUID{Bytes: dataset.UserID, Valid: true},
+		"storage_location":   dataset.StorageLocation,
+		"table_namespace":    dataset.TableNamespace,
+		"table_name":         dataset.TableName,
+		"table_format":       dataset.TableFormat,
+		"catalog_provider":   dataset.CatalogProvider,
+		"processing_profile": dataset.ProcessingProfile,
+		"schema_version":     dataset.SchemaVersion,
+		"schema_metadata":    dataset.SchemaMetadata,
+	}
+}
+
+func IDsToDAO(datasetID, userID uuid.UUID) pgx.NamedArgs {
 	return pgx.NamedArgs{
 		"dataset_id": pgtype.UUID{Bytes: datasetID, Valid: true},
 		"user_id":    pgtype.UUID{Bytes: userID, Valid: true},
 	}
+}
+
+func scanDataset(row pgx.Row) (*model.Dataset, error) {
+	log.Trace("scanDataset")
+
+	var datasetID, userID string
+	dataset := &model.Dataset{}
+	if err := row.Scan(
+		&datasetID,
+		&userID,
+		&dataset.StorageLocation,
+		&dataset.TableNamespace,
+		&dataset.TableName,
+		&dataset.TableFormat,
+		&dataset.CatalogProvider,
+		&dataset.ProcessingProfile,
+		&dataset.SchemaVersion,
+		&dataset.SchemaMetadata,
+	); err != nil {
+		return nil, err
+	}
+	dataset.DatasetID = uuid.MustParse(datasetID)
+	dataset.UserID = uuid.MustParse(userID)
+	return dataset, nil
 }

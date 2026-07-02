@@ -30,15 +30,24 @@ func NewDataRegistryClient(ctx context.Context, config infra.QueryEngineConfig, 
 
 	address := config.RegistryAddress
 	if address == "" {
-		address = "localhost:7071"
+		return nil, fmt.Errorf("data registry grpc address is required")
+	}
+	if config.RegistryDialMs <= 0 {
+		return nil, fmt.Errorf("data registry grpc dial timeout must be greater than zero")
+	}
+	if config.RegistryCallMs <= 0 {
+		return nil, fmt.Errorf("data registry grpc call timeout must be greater than zero")
+	}
+	if config.RegistryRetryCount <= 0 {
+		return nil, fmt.Errorf("data registry grpc retry count must be greater than zero")
 	}
 
 	conn, err := rpcLib.NewClient(ctx, rpcLib.Config{
 		Address:          address,
 		Insecure:         true,
-		DialTimeout:      time.Duration(defaultPositiveInt(config.RegistryDialMs, 500)) * time.Millisecond,
-		PerCallTimeout:   time.Duration(defaultPositiveInt(config.RegistryCallMs, 15000)) * time.Millisecond,
-		MaxRetryAttempts: defaultPositiveInt(config.RegistryRetryCount, 3),
+		DialTimeout:      time.Duration(config.RegistryDialMs) * time.Millisecond,
+		PerCallTimeout:   time.Duration(config.RegistryCallMs) * time.Millisecond,
+		MaxRetryAttempts: config.RegistryRetryCount,
 	}, opts...)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("dataRegistryClient grpc connection instantiation failed")
@@ -76,13 +85,4 @@ func (c *dataRegistryClient) ReadSourceConnector(ctx context.Context, connectorI
 		return nil, fmt.Errorf("read source connector returned empty connector")
 	}
 	return resp.GetConnector(), nil
-}
-
-func defaultPositiveInt(value, defaultValue int) int {
-	log.Trace("dataRegistryClient defaultPositiveInt")
-
-	if value <= 0 {
-		return defaultValue
-	}
-	return value
 }

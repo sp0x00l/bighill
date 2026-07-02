@@ -1,0 +1,45 @@
+# Dockerfile.build.glibc - Build pdf_extractor_lib for Debian/glibc.
+# Used for CI tests on Ubuntu runners.
+
+FROM golang:1.25-bookworm AS builder
+
+ARG TARGETARCH=arm64
+ARG BUILD_TYPE=Debug
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc g++ \
+    libc6-dev \
+    pkg-config \
+    cmake \
+    libpoppler-cpp-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+COPY pdf_extractor_lib/ /src/pdf_extractor_lib/
+COPY shared_lib/ /src/shared_lib/
+
+ENV CPP_ROOT=/src/pdf_extractor_lib/cpp
+
+RUN rm -rf /src/pdf_extractor_lib/cpp/build/* && \
+    mkdir -p /src/pdf_extractor_lib/cpp/build/bin /build/bin
+
+WORKDIR /src/pdf_extractor_lib/cpp
+RUN cmake -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+    -DCPP_ROOT=$CPP_ROOT \
+    -DCMAKE_CXX_COMPILER=g++ \
+    -DCMAKE_C_COMPILER=gcc \
+    .
+RUN make -j"$(nproc)"
+
+RUN cp /src/pdf_extractor_lib/cpp/build/bin/libgo_pdf_extractor_lib.a /build/bin/
+RUN nm /build/bin/libgo_pdf_extractor_lib.a | grep -E "pdf_extract_text|pdf_free_result" \
+    || echo "Warning: Some symbols may be missing"
+
+FROM scratch
+COPY --from=builder /build/bin/libgo_pdf_extractor_lib.a /build/bin/
+

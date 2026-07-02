@@ -73,7 +73,7 @@ local_start_kafka() {
     wait_for_kafka_ready 60 2
     
     # Purge stale messages from previous test runs
-    purge_kafka_topics "$KAFKA_BROKER" "$PROJECT_ROOT"
+    purge_kafka_topics "$KAFKA_BROKER" "$PROJECT_ROOT" "true"
 }
 
 local_start_temporal() {
@@ -222,7 +222,7 @@ cicd_start_infra() {
     compose_wait_for_migrations "$COMPOSE_FILE"
 
     # Purge stale messages from previous test runs
-    purge_kafka_topics "$KAFKA_BROKER" "$PROJECT_ROOT"
+    purge_kafka_topics "$KAFKA_BROKER" "$PROJECT_ROOT" "true"
     wait_for_kafka_ready 60 2
 }
 

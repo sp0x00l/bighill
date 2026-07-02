@@ -5,11 +5,60 @@ import (
 	"context"
 	"encoding/csv"
 	"io"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	log "github.com/sirupsen/logrus"
 )
+
+func IsPDF(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
+	log.Trace("rest IsPDF")
+
+	if fileSize < 5 {
+		return false
+	}
+	defer file.Seek(0, io.SeekStart)
+
+	header := make([]byte, 5)
+	if _, err := io.ReadFull(file, header); err != nil {
+		log.WithContext(ctx).Warnf("failed to read PDF header: %v", err)
+		return false
+	}
+	return bytes.Equal(header, []byte("%PDF-"))
+}
+
+func IsHTML(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
+	log.Trace("rest IsHTML")
+
+	sample, ok := readTextSample(ctx, file, fileSize)
+	if !ok {
+		return false
+	}
+	lower := strings.ToLower(string(sample))
+	return strings.Contains(lower, "<!doctype html") ||
+		strings.Contains(lower, "<html") ||
+		strings.Contains(lower, "<body") ||
+		strings.Contains(lower, "<article") ||
+		strings.Contains(lower, "<main") ||
+		strings.Contains(lower, "<p>")
+}
+
+func IsMarkdown(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
+	log.Trace("rest IsMarkdown")
+
+	return IsText(ctx, file, fileSize)
+}
+
+func IsText(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
+	log.Trace("rest IsText")
+
+	sample, ok := readTextSample(ctx, file, fileSize)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(string(sample)) != ""
+}
 
 // https://parquet.apache.org/docs/file-format/
 // IsParquet checks if the given file is a valid Parquet file by checking
@@ -29,7 +78,7 @@ func IsParquet(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
 
 	// Check the 4-byte magic number at the beginning of the file
 	header := make([]byte, 4)
-	if _, err := file.Read(header); err != nil {
+	if _, err := io.ReadFull(file, header); err != nil {
 		log.WithContext(ctx).Warnf("failed to read file start: %v", err)
 		return false
 	}
@@ -45,7 +94,7 @@ func IsParquet(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
 	}
 
 	footer := make([]byte, 4)
-	if _, err := file.Read(footer); err != nil {
+	if _, err := io.ReadFull(file, footer); err != nil {
 		log.WithContext(ctx).Warnf("failed to read file footer, %v", err)
 		return false
 	}
@@ -71,7 +120,7 @@ func IsJSON(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
 	buffer := make([]byte, min(fileSize, readSizeBytes)) // Read at most 512 bytes
 
 	// Read the first portion of the file
-	if _, err := file.Read(buffer); err != nil {
+	if _, err := io.ReadFull(file, buffer); err != nil {
 		log.WithContext(ctx).Warnf("failed to read file start, %v", err)
 		return false
 	}
@@ -98,7 +147,7 @@ func IsJSON(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
 			return false
 		}
 
-		if _, err := file.Read(buffer); err != nil {
+		if _, err := io.ReadFull(file, buffer); err != nil {
 			log.WithContext(ctx).Warnf("failed to read file end, %v", err)
 			return false
 		}
@@ -150,6 +199,44 @@ func IsCSV(ctx context.Context, file io.ReadSeeker, fileSize int) bool {
 	}
 
 	return true
+}
+
+func readTextSample(ctx context.Context, file io.ReadSeeker, fileSize int) ([]byte, bool) {
+	log.Trace("rest readTextSample")
+
+	if fileSize <= 0 {
+		return nil, false
+	}
+	defer file.Seek(0, io.SeekStart)
+
+	readSizeBytes := min(fileSize, 1*1000*1000)
+	buffer := make([]byte, readSizeBytes)
+	n, err := io.ReadFull(file, buffer)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		log.WithContext(ctx).Warnf("failed to read text sample, %v", err)
+		return nil, false
+	}
+	buffer = buffer[:n]
+	if len(buffer) == 0 || !utf8.Valid(buffer) {
+		buffer = trimPartialUTF8Suffix(buffer)
+	}
+	if len(buffer) == 0 || !utf8.Valid(buffer) {
+		return nil, false
+	}
+	return buffer, true
+}
+
+func trimPartialUTF8Suffix(buffer []byte) []byte {
+	log.Trace("rest trimPartialUTF8Suffix")
+
+	for len(buffer) > 0 {
+		r, size := utf8.DecodeLastRune(buffer)
+		if r != utf8.RuneError || size != 1 {
+			return buffer
+		}
+		buffer = buffer[:len(buffer)-1]
+	}
+	return buffer
 }
 
 // firstNonSpaceChar returns the first non-space character in the byte slice.

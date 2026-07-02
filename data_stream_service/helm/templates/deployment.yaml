@@ -35,6 +35,8 @@ spec:
               value: {{ .Values.env.otelExporterEndpoint | quote }}
             - name: DATA_STREAM_SERVICE_NAME
               value: {{ .Values.env.serviceName | quote }}
+            - name: DATA_STREAM_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
             - name: DATA_STREAM_API_GRPC_HOST
               value: "0.0.0.0"
             - name: DATA_STREAM_API_GRPC_PORT

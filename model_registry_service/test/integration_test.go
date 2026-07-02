@@ -170,6 +170,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 
 		datasetID := uuid.New()
 		trainingRunID := uuid.New()
+		modelID := uuid.New()
 		Expect(relayPublisher.Publish(runCtx, topics.Training, sharedmessaging.Message{
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeModelTrainingCompleted,
@@ -178,6 +179,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			DatasetId:         datasetID.String(),
 			DatasetVersion:    "7",
 			FeatureSnapshotId: uuid.NewString(),
+			ModelId:           modelID.String(),
 			ModelName:         "movie-ranker",
 			ModelVersion:      "7",
 			BaseModel:         "mistral-7b",
@@ -205,11 +207,17 @@ var _ = Describe("Model registry integration", Ordered, func() {
 
 func validIntegrationModel() *model.Model {
 	return &model.Model{
-		TrainingRunID:   uuid.New(),
-		DatasetID:       uuid.New(),
-		Name:            "movie-ranker",
-		BaseModel:       "mistral-7b",
-		MetricsMetadata: `{"eval_loss":0.12}`,
+		ModelID:           uuid.New(),
+		TrainingRunID:     uuid.New(),
+		DatasetID:         uuid.New(),
+		Name:              "movie-ranker",
+		ModelVersion:      1,
+		BaseModel:         "mistral-7b",
+		ArtifactLocation:  "s3://local-dev-bucket/models/pending",
+		ArtifactFormat:    "HF_PEFT_ADAPTER",
+		ArtifactChecksum:  "sha256:pending",
+		ArtifactSizeBytes: 1,
+		MetricsMetadata:   `{"eval_loss":0.12}`,
 	}
 }
 

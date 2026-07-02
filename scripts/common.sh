@@ -553,9 +553,12 @@ purge_kafka_topics() {
   
   local BROKER="$1"
   local PROJECT_ROOT="${2:-$(get_project_root)}"
+  local SKIP_WAIT="${3:-false}"
   
   # Wait for Kafka to be fully ready before purging topics
-  wait_for_kafka_ready
+  if [[ "$SKIP_WAIT" != "true" ]]; then
+    wait_for_kafka_ready
+  fi
   
   local TOPICS
   TOPICS=$(gather_kafka_topics "$PROJECT_ROOT")

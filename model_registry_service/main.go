@@ -81,6 +81,9 @@ func main() {
 	if !ok {
 		log.Fatal("postgres outbox does not support ordered transactional enqueue")
 	}
+	outboxSignal := make(chan struct{}, 1)
+	outboxWriter = messagingConn.NewSignaledOutbox(outboxWriter, outboxSignal)
+	cfg.OutboxRelay.Signal = outboxSignal
 	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
 	if !ok {
 		log.Fatal("postgres outbox does not support relay operations")
@@ -89,16 +92,23 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create outbox relay publisher")
 	}
-	defer outboxPublisher.Close()
 	relayPublisher, ok := outboxPublisher.(messagingConn.RelayPublisher)
 	if !ok {
 		log.Fatal("publisher does not support outbox relay publishing")
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
+	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
+	relayDone := make(chan struct{})
 	go func() {
-		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+		defer close(relayDone)
+		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
 			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
 		}
+	}()
+	defer func() {
+		stopOutboxRelay()
+		<-relayDone
+		outboxPublisher.Close()
 	}()
 
 	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
@@ -110,7 +120,10 @@ func main() {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
 	}
 
-	modelRepository := modeldb.NewModelRepository(database, modeldb.WithTransactionalOutbox(orderedOutbox, cfg.Topics.ModelRegistry))
+	modelRepository := modeldb.NewModelRepository(database,
+		modeldb.WithTransactionalOutbox(orderedOutbox, cfg.Topics.ModelRegistry),
+		modeldb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	)
 	modelUsecase := app.NewModelRegistryUsecase(modelRepository)
 	trainingEventSubscriber := registrymessaging.NewTrainingEventSubscriber(subscriber, modelUsecase, cfg.Topics)
 

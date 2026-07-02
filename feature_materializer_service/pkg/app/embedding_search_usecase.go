@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strings"
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
@@ -48,23 +47,6 @@ func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, datasetID
 	)
 	defer endFeatureMaterializerSpanOnReturn(ctx, span, &err)
 
-	if datasetID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("dataset id is required")
-	}
-	queryText = strings.TrimSpace(queryText)
-	if queryText == "" {
-		return nil, domain.ErrValidationFailed.Extend("query text is required")
-	}
-	if topK <= 0 {
-		topK = 5
-	}
-	if u.repository == nil {
-		return nil, domain.ErrEmbeddingSearch.Extend("embedding search repository is required")
-	}
-	if u.providerFactory == nil {
-		return nil, domain.ErrEmbeddingSearch.Extend("query embedding provider factory is required")
-	}
-
 	activeSnapshot, err := u.repository.ReadActiveEmbeddingSnapshot(ctx, datasetID)
 	if err != nil {
 		return nil, err
@@ -74,11 +56,8 @@ func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, datasetID
 	if err != nil {
 		return nil, fmt.Errorf("%w: create query embedding provider: %w", domain.ErrEmbeddingSearch, err)
 	}
-	if provider == nil {
-		return nil, domain.ErrEmbeddingSearch.Extend("query embedding provider is required")
-	}
 	if provider.Dimensions() != activeSnapshot.EmbeddingDimensions {
-		return nil, domain.ErrValidationFailed.Extend("query embedding provider dimensions do not match active embedding snapshot")
+		return nil, domain.ErrEmbeddingSearch.Extend("query embedding provider dimensions do not match active embedding snapshot")
 	}
 
 	vectors, err := provider.Embed(ctx, []string{queryText})
@@ -107,6 +86,10 @@ func embeddingStrategyFromSnapshot(snapshot *model.EmbeddingSnapshot) model.Embe
 	}
 	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
 		StrategyVersion:     snapshot.StrategyVersion,
+		ExtractorName:       snapshot.ExtractorName,
+		ExtractorVersion:    snapshot.ExtractorVersion,
+		CleanerName:         snapshot.CleanerName,
+		CleanerVersion:      snapshot.CleanerVersion,
 		ChunkerName:         snapshot.ChunkerName,
 		ChunkerVersion:      snapshot.ChunkerVersion,
 		ChunkSize:           snapshot.ChunkSize,

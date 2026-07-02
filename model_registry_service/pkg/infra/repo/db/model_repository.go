@@ -23,8 +23,9 @@ import (
 
 type ModelRepository struct {
 	coreDB.Database
-	outbox msgConn.OrderedOutbox
-	topic  string
+	outbox       msgConn.OrderedOutbox
+	topic        string
+	outboxSignal func()
 }
 
 type ModelRepositoryOption func(*ModelRepository)
@@ -35,6 +36,14 @@ func WithTransactionalOutbox(outbox msgConn.OrderedOutbox, topic string) ModelRe
 	return func(r *ModelRepository) {
 		r.outbox = outbox
 		r.topic = topic
+	}
+}
+
+func WithOutboxSignal(signal func()) ModelRepositoryOption {
+	log.Trace("WithOutboxSignal")
+
+	return func(r *ModelRepository) {
+		r.outboxSignal = signal
 	}
 }
 
@@ -110,6 +119,7 @@ func (r *ModelRepository) createTx(ctx context.Context, registeredModel *model.M
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit model create transaction: %w", err)
 	}
+	r.notifyOutbox()
 	return modelRecord, nil
 }
 
@@ -209,7 +219,16 @@ func (r *ModelRepository) updateStatusTx(ctx context.Context, modelID uuid.UUID,
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit model status transaction: %w", err)
 	}
+	r.notifyOutbox()
 	return modelRecord, nil
+}
+
+func (r *ModelRepository) notifyOutbox() {
+	log.Trace("ModelRepository notifyOutbox")
+
+	if r.outboxSignal != nil {
+		r.outboxSignal()
+	}
 }
 
 func (r *ModelRepository) Close() {

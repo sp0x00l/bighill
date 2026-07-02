@@ -86,11 +86,13 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
 	}
+	outboxSignal := make(chan struct{}, 1)
+	outboxWriter = messagingConn.NewSignaledOutbox(outboxWriter, outboxSignal)
+	cfg.OutboxRelay.Signal = outboxSignal
 	publisher, err := messagingConn.NewPublisher(cfg.Messaging.Brokers, messagingConn.WithOutbox(outboxWriter))
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
 	}
-	defer publisher.Close()
 	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
 	if !ok {
 		log.Fatal("postgres outbox does not support relay operations")
@@ -100,10 +102,18 @@ func main() {
 		log.Fatal("publisher does not support outbox relay publishing")
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
+	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
+	relayDone := make(chan struct{})
 	go func() {
-		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+		defer close(relayDone)
+		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
 			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
 		}
+	}()
+	defer func() {
+		stopOutboxRelay()
+		<-relayDone
+		publisher.Close()
 	}()
 
 	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
@@ -143,9 +153,13 @@ func main() {
 
 	formatDetector := rest.NewDetector(
 		map[string]rest.FormatValidatorFunc{
-			rest.FileTypeCSV:     rest.IsCSV,
-			rest.FileTypeJSON:    rest.IsJSON,
-			rest.FileTypeParquet: rest.IsParquet,
+			rest.FileTypeCSV:      rest.IsCSV,
+			rest.FileTypeJSON:     rest.IsJSON,
+			rest.FileTypeParquet:  rest.IsParquet,
+			rest.FileTypePDF:      rest.IsPDF,
+			rest.FileTypeHTML:     rest.IsHTML,
+			rest.FileTypeMarkdown: rest.IsMarkdown,
+			rest.FileTypeText:     rest.IsText,
 		},
 	)
 

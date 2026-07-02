@@ -91,11 +91,13 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
 	}
+	outboxSignal := make(chan struct{}, 1)
+	outboxWriter = messagingConn.NewSignaledOutbox(outboxWriter, outboxSignal)
+	cfg.outboxRelayConfig.Signal = outboxSignal
 	msgPublisher, err := messagingConn.NewPublisher(cfg.messagingConfig.Brokers, messagingConn.WithOutbox(outboxWriter))
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
 	}
-	defer msgPublisher.Close()
 	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
 	if !ok {
 		log.Fatal("postgres outbox does not support relay operations")
@@ -105,10 +107,18 @@ func main() {
 		log.Fatal("publisher does not support outbox relay publishing")
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.outboxRelayConfig)
+	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
+	relayDone := make(chan struct{})
 	go func() {
-		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+		defer close(relayDone)
+		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
 			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
 		}
+	}()
+	defer func() {
+		stopOutboxRelay()
+		<-relayDone
+		msgPublisher.Close()
 	}()
 
 	profilePublisher := messaging.NewUserEventPublisher(msgPublisher, cfg.kafkaPublisherTopic)

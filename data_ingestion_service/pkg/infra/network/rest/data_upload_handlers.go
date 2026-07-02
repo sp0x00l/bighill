@@ -2,8 +2,11 @@ package rest
 
 import (
 	"context"
+	"data_ingestion_service/pkg/domain"
 	"data_ingestion_service/pkg/domain/model"
 	rest "data_ingestion_service/pkg/infra/network/restsupport"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -16,9 +19,14 @@ import (
 
 // Supported file formats prioritized by file extension
 var (
-	csvPriorityFormats     = []string{FileTypeCSV, FileTypeParquet, FileTypeJSON}
-	jsonPriorityFormats    = []string{FileTypeJSON, FileTypeParquet, FileTypeCSV}
-	parquetPriorityFormats = []string{FileTypeParquet, FileTypeJSON, FileTypeCSV}
+	csvPriorityFormats      = []string{FileTypeCSV, FileTypeParquet, FileTypeJSON, FileTypePDF, FileTypeHTML, FileTypeMarkdown, FileTypeText}
+	jsonPriorityFormats     = []string{FileTypeJSON, FileTypeParquet, FileTypePDF, FileTypeHTML, FileTypeCSV, FileTypeMarkdown, FileTypeText}
+	parquetPriorityFormats  = []string{FileTypeParquet, FileTypeJSON, FileTypePDF, FileTypeHTML, FileTypeCSV, FileTypeMarkdown, FileTypeText}
+	pdfPriorityFormats      = []string{FileTypePDF, FileTypeParquet, FileTypeJSON, FileTypeHTML, FileTypeCSV, FileTypeMarkdown, FileTypeText}
+	htmlPriorityFormats     = []string{FileTypeHTML, FileTypePDF, FileTypeParquet, FileTypeJSON, FileTypeCSV, FileTypeMarkdown, FileTypeText}
+	markdownPriorityFormats = []string{FileTypeMarkdown, FileTypeHTML, FileTypePDF, FileTypeParquet, FileTypeJSON, FileTypeCSV, FileTypeText}
+	textPriorityFormats     = []string{FileTypeText, FileTypeHTML, FileTypePDF, FileTypeParquet, FileTypeJSON, FileTypeCSV}
+	defaultPriorityFormats  = []string{FileTypeParquet, FileTypeJSON, FileTypePDF, FileTypeHTML, FileTypeCSV, FileTypeMarkdown, FileTypeText}
 )
 
 type FileDetector interface {
@@ -31,7 +39,7 @@ type DataUploadUseCase interface {
 }
 
 type DatasetUsecase interface {
-	IsValidForUpload(ctx context.Context, datasetID, userID uuid.UUID) (bool, error)
+	DatasetForUpload(ctx context.Context, datasetID, userID uuid.UUID) (*model.Dataset, error)
 }
 
 type Authenticator interface {
@@ -59,9 +67,16 @@ func NewDataUploadHandlers(uploadUseCase DataUploadUseCase, datasetUseCase Datas
 		maxFileSizeBytes:        maxFileSizeBytes,
 		MaxBytesReaderSizeBytes: maxFileSizeBytes + 1000, // add extra space for the request
 		supportedFilesFormats: map[string][]string{
-			FileTypeCSV:     csvPriorityFormats,
-			FileTypeJSON:    jsonPriorityFormats,
-			FileTypeParquet: parquetPriorityFormats,
+			FileTypeCSV:      csvPriorityFormats,
+			FileTypeJSON:     jsonPriorityFormats,
+			FileTypeParquet:  parquetPriorityFormats,
+			FileTypePDF:      pdfPriorityFormats,
+			FileTypeHTML:     htmlPriorityFormats,
+			"htm":            htmlPriorityFormats,
+			FileTypeMarkdown: markdownPriorityFormats,
+			"md":             markdownPriorityFormats,
+			FileTypeText:     textPriorityFormats,
+			"txt":            textPriorityFormats,
 		},
 	}
 }
@@ -102,14 +117,18 @@ func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request
 	userID := authResult.UserID
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
 
-	isDatasetValid, err := h.datasetsUsecase.IsValidForUpload(ctx, datasetID, userID)
+	dataset, err := h.datasetsUsecase.DatasetForUpload(ctx, datasetID, userID)
 	if err != nil {
+		if errors.Is(err, domain.ErrResourceNotFound) {
+			log.WithContext(ctx).Error("no valid dataset found for upload")
+			return nil, rest.ErrNotFound().WithMessage("No valid dataset found for upload")
+		}
 		log.WithContext(ctx).WithError(err).Error("failed to validate dataset for upload")
 		return nil, rest.ErrInternalServer().Wrap(err).WithMessage("Failed to validate dataset for upload")
 	}
-	if !isDatasetValid {
-		log.WithContext(ctx).Error("no valid dataset found for upload")
-		return nil, rest.ErrNotFound().WithMessage("No valid dataset found for upload")
+	if err := requireDatasetUploadMetadata(dataset); err != nil {
+		log.WithContext(ctx).WithError(err).Error("dataset materialization metadata is incomplete")
+		return nil, rest.ErrInternalServer().Wrap(err).WithMessage("Dataset materialization metadata is incomplete")
 	}
 
 	// Set the maximum file size for the request (this includes the entire request body) to prevent abuse.
@@ -151,11 +170,16 @@ func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request
 	}
 
 	upload := &model.DataFile{
-		DatasetID:   datasetID,
-		UserID:      userID,
-		File:        file,
-		Extension:   fileFormat,
-		ContentType: contentType,
+		DatasetID:         datasetID,
+		UserID:            userID,
+		File:              file,
+		Extension:         fileFormat,
+		ContentType:       contentType,
+		TableNamespace:    dataset.TableNamespace,
+		TableName:         dataset.TableName,
+		TableFormat:       dataset.TableFormat,
+		CatalogProvider:   dataset.CatalogProvider,
+		ProcessingProfile: dataset.ProcessingProfile,
 	}
 
 	if err = h.uploadUseCase.UploadFile(ctx, upload); err != nil {
@@ -166,6 +190,30 @@ func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request
 	return rest.NewReponse(http.StatusCreated), nil
 }
 
+func requireDatasetUploadMetadata(dataset *model.Dataset) error {
+	log.Trace("requireDatasetUploadMetadata")
+
+	if dataset == nil {
+		return fmt.Errorf("dataset is required")
+	}
+	if strings.TrimSpace(dataset.TableNamespace) == "" {
+		return fmt.Errorf("table namespace is required")
+	}
+	if strings.TrimSpace(dataset.TableName) == "" {
+		return fmt.Errorf("table name is required")
+	}
+	if strings.TrimSpace(dataset.TableFormat) == "" {
+		return fmt.Errorf("table format is required")
+	}
+	if strings.TrimSpace(dataset.CatalogProvider) == "" {
+		return fmt.Errorf("catalog provider is required")
+	}
+	if strings.TrimSpace(dataset.ProcessingProfile) == "" {
+		return fmt.Errorf("processing profile is required")
+	}
+	return nil
+}
+
 // GetSupportedFileFormats returns the supported files format list.
 // The file content will be first validated against the given file extension if provided,
 // then against the other supported file formats.
@@ -174,5 +222,5 @@ func (h *DataUploadHandlers) GetSupportedFileFormats(fileName string) []string {
 	if formats, found := h.supportedFilesFormats[extension]; found {
 		return formats
 	}
-	return parquetPriorityFormats
+	return defaultPriorityFormats
 }

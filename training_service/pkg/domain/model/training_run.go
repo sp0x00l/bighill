@@ -78,6 +78,7 @@ type TrainingRunResult struct {
 	DatasetID         string
 	DatasetVersion    string
 	FeatureSnapshotID string
+	ModelID           string
 	ModelURI          string
 	ModelName         string
 	ModelVersion      string

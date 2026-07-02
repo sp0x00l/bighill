@@ -1,0 +1,45 @@
+# Dockerfile.build.musl - Build pdf_extractor_lib for Alpine/musl.
+# Used by Alpine-based service containers.
+
+FROM golang:alpine AS builder
+
+ARG TARGETARCH=arm64
+ARG BUILD_TYPE=Debug
+
+RUN apk add --no-cache \
+    build-base \
+    cmake \
+    coreutils \
+    gcc \
+    g++ \
+    libstdc++ \
+    libstdc++-dev \
+    linux-headers \
+    pkgconf \
+    poppler-cpp-dev
+
+WORKDIR /src
+
+COPY pdf_extractor_lib/ /src/pdf_extractor_lib/
+COPY shared_lib/ /src/shared_lib/
+
+ENV CPP_ROOT=/src/pdf_extractor_lib/cpp
+
+RUN rm -rf /src/pdf_extractor_lib/cpp/build/* && \
+    mkdir -p /src/pdf_extractor_lib/cpp/build/bin /build/bin
+
+WORKDIR /src/pdf_extractor_lib/cpp
+RUN cmake -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+    -DCPP_ROOT=$CPP_ROOT \
+    -DCMAKE_CXX_COMPILER=g++ \
+    -DCMAKE_C_COMPILER=gcc \
+    .
+RUN make -j$(nproc)
+
+RUN cp /src/pdf_extractor_lib/cpp/build/bin/libgo_pdf_extractor_lib.a /build/bin/
+RUN nm /build/bin/libgo_pdf_extractor_lib.a | grep -E "pdf_extract_text|pdf_free_result" \
+    || echo "Warning: Some symbols may be missing"
+
+FROM alpine:3.20
+COPY --from=builder /build/bin/libgo_pdf_extractor_lib.a /build/bin/
+

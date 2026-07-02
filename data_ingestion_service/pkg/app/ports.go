@@ -15,10 +15,10 @@ type BlobRepositoryAdapter interface {
 }
 
 type DatasetsRepositoryAdapter interface {
-	Save(context.Context, uuid.UUID, uuid.UUID) error
+	Upsert(context.Context, *model.Dataset) error
 	BlacklistDataset(context.Context, uuid.UUID, uuid.UUID) error
 	DeleteDataset(context.Context, uuid.UUID, uuid.UUID) error
-	IsValid(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+	ReadForUpload(context.Context, uuid.UUID, uuid.UUID) (*model.Dataset, error)
 }
 
 type EventPublisher interface {

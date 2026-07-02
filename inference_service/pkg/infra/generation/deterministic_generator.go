@@ -26,12 +26,24 @@ func (g *DeterministicGenerator) Generate(_ context.Context, request model.Gener
 		return "", fmt.Errorf("query is required")
 	}
 	if len(request.Contexts) == 0 {
-		return "No relevant context was found for the query.", nil
+		return "", fmt.Errorf("retrieved context is required")
 	}
 
 	best := strings.TrimSpace(request.Contexts[0].SourceText)
 	if best == "" {
-		return fmt.Sprintf("Retrieved %d context chunks, but the highest ranked chunk was empty.", len(request.Contexts)), nil
+		return "", fmt.Errorf("highest ranked retrieved context is empty")
 	}
 	return fmt.Sprintf("Based on the retrieved context: %s", best), nil
+}
+
+func (g *DeterministicGenerator) Provider() string {
+	log.Trace("DeterministicGenerator Provider")
+
+	return "deterministic"
+}
+
+func (g *DeterministicGenerator) Model() string {
+	log.Trace("DeterministicGenerator Model")
+
+	return "deterministic"
 }

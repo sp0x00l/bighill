@@ -125,10 +125,10 @@ func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetp
 	trainingRunID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("training:%s:%s:%d", datasetID, featureSnapshotID, payload.GetDatasetVersion())))
 	modelName := strings.TrimSpace(payload.GetTableName())
 	if modelName == "" {
-		modelName = "dataset_" + strings.ReplaceAll(datasetID.String(), "-", "_")
+		return model.TrainingRunRequest{}, false, fmt.Errorf("table name is required")
 	}
 	if strings.TrimSpace(baseModel) == "" {
-		baseModel = "local-dev-base-model"
+		return model.TrainingRunRequest{}, false, fmt.Errorf("base model is required")
 	}
 	return model.TrainingRunRequest{
 		TrainingRunID:     trainingRunID.String(),

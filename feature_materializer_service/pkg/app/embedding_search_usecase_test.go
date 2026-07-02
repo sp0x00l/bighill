@@ -100,7 +100,7 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		result, err := uc.SearchEmbeddings(context.Background(), activeSnapshot.DatasetID, "query", 5)
 
 		Expect(result).To(BeNil())
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(errors.Is(err, domain.ErrEmbeddingSearch)).To(BeTrue())
 	})
 })
 

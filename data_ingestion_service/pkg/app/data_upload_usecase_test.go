@@ -6,6 +6,7 @@ import (
 
 	usecase "data_ingestion_service/pkg/app"
 	"data_ingestion_service/pkg/domain/model"
+	datasetpb "lib/data_contracts_lib/dataset"
 	shared "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -70,10 +71,15 @@ var _ = Describe("DataUploadUseCase", func() {
 		publisher := &stubEventPublisher{}
 		uc := usecase.NewDataUploadUseCase(repo, usecase.WithUploadEventPublisher(publisher, "data_ingestion"))
 		upload := &model.DataFile{
-			DatasetID:   uuid.New(),
-			UserID:      uuid.New(),
-			ContentType: "text/csv",
-			Extension:   "csv",
+			DatasetID:         uuid.New(),
+			UserID:            uuid.New(),
+			ContentType:       "text/csv",
+			Extension:         "csv",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
 		}
 
 		Expect(uc.UploadFile(context.Background(), upload)).To(Succeed())
@@ -81,5 +87,12 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(publisher.topic).To(Equal("data_ingestion"))
 		Expect(publisher.message.ResourceKey).To(Equal(upload.DatasetID))
 		Expect(publisher.message.MsgType).To(Equal(shared.MsgTypeDatasetFileUploaded))
+		event, ok := publisher.payload.(*datasetpb.DatasetFileUploadedEvent)
+		Expect(ok).To(BeTrue())
+		Expect(event.TableNamespace).To(Equal("features"))
+		Expect(event.TableName).To(Equal("movies"))
+		Expect(event.TableFormat).To(Equal("PARQUET"))
+		Expect(event.CatalogProvider).To(Equal("LOCAL"))
+		Expect(event.ProcessingProfile).To(Equal("TEXT_RAG"))
 	})
 })

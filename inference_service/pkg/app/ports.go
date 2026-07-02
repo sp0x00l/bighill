@@ -18,11 +18,25 @@ type InferenceDatasetRepository interface {
 	ReadDataset(ctx context.Context, datasetID uuid.UUID) (*model.InferenceDataset, error)
 }
 
+type InferenceRequestRepository interface {
+	RecordInferenceRequest(ctx context.Context, request *model.InferenceRequest) error
+}
+
 type RetrievalClient interface {
-	SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int) ([]model.RetrievedContext, error)
+	SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error)
 	Close() error
+}
+
+type ContextPacker interface {
+	Pack(ctx context.Context, request model.ContextPackRequest) ([]model.RetrievedContext, error)
+}
+
+type PromptBuilder interface {
+	BuildPrompt(ctx context.Context, request model.PromptBuildRequest) (*model.PromptPackage, error)
 }
 
 type GenerationAdapter interface {
 	Generate(ctx context.Context, request model.GenerationRequest) (string, error)
+	Provider() string
+	Model() string
 }

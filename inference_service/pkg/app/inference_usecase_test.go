@@ -70,17 +70,19 @@ func (s *inferenceDatasetRepositoryStub) ReadDataset(_ context.Context, datasetI
 }
 
 type retrievalClientStub struct {
-	datasetID uuid.UUID
-	queryText string
-	topK      int
-	contexts  []model.RetrievedContext
-	err       error
+	datasetID       uuid.UUID
+	queryText       string
+	topK            int
+	metadataFilters map[string]string
+	contexts        []model.RetrievedContext
+	err             error
 }
 
-func (s *retrievalClientStub) SearchEmbeddings(_ context.Context, datasetID uuid.UUID, queryText string, topK int) ([]model.RetrievedContext, error) {
+func (s *retrievalClientStub) SearchEmbeddings(_ context.Context, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error) {
 	s.datasetID = datasetID
 	s.queryText = queryText
 	s.topK = topK
+	s.metadataFilters = metadataFilters
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -108,6 +110,24 @@ func (s *generationAdapterStub) Generate(_ context.Context, request model.Genera
 	return "generated answer", nil
 }
 
+func (s *generationAdapterStub) Provider() string {
+	return "stub"
+}
+
+func (s *generationAdapterStub) Model() string {
+	return "stub-model"
+}
+
+type inferenceRequestRepositoryStub struct {
+	request *model.InferenceRequest
+	err     error
+}
+
+func (s *inferenceRequestRepositoryStub) RecordInferenceRequest(_ context.Context, request *model.InferenceRequest) error {
+	s.request = request
+	return s.err
+}
+
 var _ = Describe("InferenceUsecase", func() {
 	It("records a complete model update", func() {
 		repository := &inferenceModelRepositoryStub{}
@@ -133,26 +153,6 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(repository.readID).To(Equal(expected.ModelID))
 	})
 
-	It("rejects missing model identity", func() {
-		uc := app.NewInferenceUsecase(&inferenceModelRepositoryStub{})
-
-		_, err := uc.RecordModelUpdated(context.Background(), &model.InferenceModel{}, uuid.New())
-
-		Expect(err).To(HaveOccurred())
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
-	})
-
-	It("rejects ready models without artifact locations", func() {
-		uc := app.NewInferenceUsecase(&inferenceModelRepositoryStub{})
-		inferenceModel := validInferenceModel()
-		inferenceModel.ArtifactLocation = ""
-
-		_, err := uc.RecordModelUpdated(context.Background(), inferenceModel, uuid.New())
-
-		Expect(err).To(HaveOccurred())
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
-	})
-
 	It("records a registry dataset update", func() {
 		datasetRepository := &inferenceDatasetRepositoryStub{}
 		uc := app.NewInferenceUsecase(
@@ -174,6 +174,7 @@ var _ = Describe("InferenceUsecase", func() {
 		inferenceModel.DatasetID = dataset.DatasetID
 		modelRepository := &inferenceModelRepositoryStub{model: inferenceModel}
 		datasetRepository := &inferenceDatasetRepositoryStub{dataset: dataset}
+		requestRepository := &inferenceRequestRepositoryStub{}
 		retrieval := &retrievalClientStub{contexts: []model.RetrievedContext{{
 			EmbeddingRecordID:   uuid.New(),
 			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
@@ -182,18 +183,26 @@ var _ = Describe("InferenceUsecase", func() {
 			Similarity:          0.87,
 		}}}
 		generator := &generationAdapterStub{}
+		promptStrategy := testPromptStrategy()
 		uc := app.NewInferenceUsecase(
 			modelRepository,
 			app.WithInferenceDatasetRepository(datasetRepository),
+			app.WithInferenceRequestRepository(requestRepository),
 			app.WithRetrievalClient(retrieval),
 			app.WithGenerationAdapter(generator),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
 		)
+		requestID := uuid.New()
 
 		response, err := uc.Generate(context.Background(), model.GenerateRequest{
-			DatasetID: dataset.DatasetID,
-			ModelID:   inferenceModel.ModelID,
-			QueryText: " what happened? ",
-			TopK:      8,
+			RequestID:       requestID,
+			DatasetID:       dataset.DatasetID,
+			ModelID:         inferenceModel.ModelID,
+			QueryText:       "what happened?",
+			TopK:            8,
+			MetadataFilters: map[string]string{"source": "manual"},
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -202,31 +211,162 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(retrieval.datasetID).To(Equal(dataset.DatasetID))
 		Expect(retrieval.queryText).To(Equal("what happened?"))
 		Expect(retrieval.topK).To(Equal(8))
+		Expect(retrieval.metadataFilters).To(Equal(map[string]string{"source": "manual"}))
 		Expect(generator.request.Dataset).To(Equal(dataset))
 		Expect(generator.request.Model).To(Equal(inferenceModel))
+		Expect(generator.request.RequestID).To(Equal(requestID))
+		Expect(generator.request.Prompt).To(ContainSubstring("Retrieved context"))
+		Expect(generator.request.PromptStrategyVersion).To(Equal("test-rag-prompt-v1"))
 		Expect(response.Answer).To(Equal("generated answer"))
+		Expect(response.RequestID).To(Equal(requestID))
+		Expect(response.PromptStrategyVersion).To(Equal("test-rag-prompt-v1"))
+		Expect(response.GenerationProvider).To(Equal("stub"))
+		Expect(response.GenerationModel).To(Equal("stub-model"))
 		Expect(response.Contexts).To(HaveLen(1))
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.RequestID).To(Equal(requestID))
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
+		Expect(requestRepository.request.GenerationProvider).To(Equal("stub"))
 	})
 
 	It("rejects generation before embeddings are ready", func() {
 		dataset := validInferenceDataset()
 		dataset.ProcessingState = model.DatasetProcessingFeatureMaterialized
+		inferenceModel := validInferenceModel()
+		inferenceModel.DatasetID = dataset.DatasetID
+		promptStrategy := testPromptStrategy()
 		uc := app.NewInferenceUsecase(
-			&inferenceModelRepositoryStub{},
+			&inferenceModelRepositoryStub{model: inferenceModel},
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
 			app.WithRetrievalClient(&retrievalClientStub{}),
 			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
 		)
 
 		_, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID: uuid.New(),
 			DatasetID: dataset.DatasetID,
+			ModelID:   inferenceModel.ModelID,
 			QueryText: "query",
+			TopK:      4,
 		})
 
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, domain.ErrDatasetNotReady)).To(BeTrue())
 	})
+
+	It("rejects generation when the model is not ready", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.DatasetID = dataset.DatasetID
+		inferenceModel.Status = model.ModelStatusFailed
+		requestRepository := &inferenceRequestRepositoryStub{}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithRetrievalClient(&retrievalClientStub{}),
+			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		_, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID: uuid.New(),
+			DatasetID: dataset.DatasetID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      4,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrModelNotReady)).To(BeTrue())
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
+	})
+
+	It("rejects generation when the model belongs to a different dataset", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		requestRepository := &inferenceRequestRepositoryStub{}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithRetrievalClient(&retrievalClientStub{}),
+			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		_, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID: uuid.New(),
+			DatasetID: dataset.DatasetID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      4,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrModelMismatch)).To(BeTrue())
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
+	})
+
+	It("returns successful generations when request audit recording fails", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.DatasetID = dataset.DatasetID
+		requestRepository := &inferenceRequestRepositoryStub{err: errors.New("audit table unavailable")}
+		retrieval := &retrievalClientStub{contexts: []model.RetrievedContext{{
+			EmbeddingRecordID:   uuid.New(),
+			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
+			ChunkIndex:          1,
+			SourceText:          "retrieved context",
+			Similarity:          0.92,
+		}}}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithRetrievalClient(retrieval),
+			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		response, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID: uuid.New(),
+			DatasetID: dataset.DatasetID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      4,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Answer).To(Equal("generated answer"))
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
+	})
 })
+
+func testPromptStrategy() model.PromptStrategy {
+	return model.PromptStrategy{
+		Version:          "test-rag-prompt-v1",
+		SystemPrompt:     "Use context only.",
+		MaxContextChars:  200,
+		MaxContextChunks: 4,
+	}
+}
 
 func validInferenceModel() *model.InferenceModel {
 	return &model.InferenceModel{

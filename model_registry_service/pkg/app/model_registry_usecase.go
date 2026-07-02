@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
@@ -45,10 +43,6 @@ func (u *modelRegistryUsecase) RegisterModel(ctx context.Context, registeredMode
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if err := validateModelRegistration(registeredModel); err != nil {
-		return nil, err
-	}
-	model.NormalizeModel(registeredModel)
 	out, err = u.repo.Create(ctx, registeredModel, idempotencyKey)
 	if err != nil {
 		return nil, err
@@ -64,9 +58,6 @@ func (u *modelRegistryUsecase) ReadModel(ctx context.Context, modelID uuid.UUID)
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if modelID == uuid.Nil {
-		return nil, fmt.Errorf("%w: model id is required", domain.ErrValidationFailed)
-	}
 	return u.repo.ReadByID(ctx, modelID)
 }
 
@@ -78,13 +69,7 @@ func (u *modelRegistryUsecase) MarkModelReady(ctx context.Context, modelID uuid.
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if modelID == uuid.Nil {
-		return nil, fmt.Errorf("%w: model id is required", domain.ErrValidationFailed)
-	}
-	if strings.TrimSpace(artifactLocation) == "" {
-		return nil, fmt.Errorf("%w: artifact location is required", domain.ErrValidationFailed)
-	}
-	out, err = u.repo.UpdateStatus(ctx, modelID, model.ModelStatusReady, strings.TrimSpace(artifactLocation), "")
+	out, err = u.repo.UpdateStatus(ctx, modelID, model.ModelStatusReady, artifactLocation, "")
 	if err != nil {
 		return nil, err
 	}
@@ -99,13 +84,7 @@ func (u *modelRegistryUsecase) MarkModelFailed(ctx context.Context, modelID uuid
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if modelID == uuid.Nil {
-		return nil, fmt.Errorf("%w: model id is required", domain.ErrValidationFailed)
-	}
-	if strings.TrimSpace(failureReason) == "" {
-		return nil, fmt.Errorf("%w: failure reason is required", domain.ErrValidationFailed)
-	}
-	out, err = u.repo.UpdateStatus(ctx, modelID, model.ModelStatusFailed, "", strings.TrimSpace(failureReason))
+	out, err = u.repo.UpdateStatus(ctx, modelID, model.ModelStatusFailed, "", failureReason)
 	if err != nil {
 		return nil, err
 	}
@@ -120,14 +99,7 @@ func (u *modelRegistryUsecase) RecordModelTrainingCompleted(ctx context.Context,
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if err := validateModelRegistration(trainedModel); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(trainedModel.ArtifactLocation) == "" {
-		return nil, fmt.Errorf("%w: artifact location is required", domain.ErrValidationFailed)
-	}
 	trainedModel.Status = model.ModelStatusReady
-	model.NormalizeModel(trainedModel)
 	out, err = u.repo.Create(ctx, trainedModel, idempotencyKey)
 	if err != nil {
 		if errors.Is(err, domain.ErrModelExists) {
@@ -146,14 +118,7 @@ func (u *modelRegistryUsecase) RecordModelTrainingFailed(ctx context.Context, fa
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if err := validateModelRegistration(failedModel); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(failedModel.FailureReason) == "" {
-		return nil, fmt.Errorf("%w: failure reason is required", domain.ErrValidationFailed)
-	}
 	failedModel.Status = model.ModelStatusFailed
-	model.NormalizeModel(failedModel)
 	out, err = u.repo.Create(ctx, failedModel, idempotencyKey)
 	if err != nil {
 		if errors.Is(err, domain.ErrModelExists) {
@@ -162,22 +127,4 @@ func (u *modelRegistryUsecase) RecordModelTrainingFailed(ctx context.Context, fa
 		return nil, err
 	}
 	return out, nil
-}
-
-func validateModelRegistration(registeredModel *model.Model) error {
-	log.Trace("validateModelRegistration")
-
-	if registeredModel == nil {
-		return fmt.Errorf("%w: model is required", domain.ErrValidationFailed)
-	}
-	if registeredModel.TrainingRunID == uuid.Nil {
-		return fmt.Errorf("%w: training run id is required", domain.ErrValidationFailed)
-	}
-	if registeredModel.DatasetID == uuid.Nil {
-		return fmt.Errorf("%w: dataset id is required", domain.ErrValidationFailed)
-	}
-	if strings.TrimSpace(registeredModel.BaseModel) == "" {
-		return fmt.Errorf("%w: base model is required", domain.ErrValidationFailed)
-	}
-	return nil
 }

@@ -7,15 +7,16 @@ message ModelTrainingCompletedEvent {
   string dataset_id = 2;
   string dataset_version = 3;
   string feature_snapshot_id = 4;
-  string model_name = 5;
-  string model_version = 6;
-  string base_model = 7;
-  string artifact_location = 8;
-  string artifact_format = 9;
-  string artifact_checksum = 10;
-  int64 artifact_size_bytes = 11;
-  string metrics_metadata = 12;
-  string report_location = 13;
+  string model_id = 5;
+  string model_name = 6;
+  string model_version = 7;
+  string base_model = 8;
+  string artifact_location = 9;
+  string artifact_format = 10;
+  string artifact_checksum = 11;
+  int64 artifact_size_bytes = 12;
+  string metrics_metadata = 13;
+  string report_location = 14;
 }
 
 message ModelTrainingFailedEvent {
@@ -23,8 +24,9 @@ message ModelTrainingFailedEvent {
   string dataset_id = 2;
   string dataset_version = 3;
   string feature_snapshot_id = 4;
-  string model_name = 5;
-  string model_version = 6;
-  string base_model = 7;
-  string failure_reason = 8;
+  string model_id = 5;
+  string model_name = 6;
+  string model_version = 7;
+  string base_model = 8;
+  string failure_reason = 9;
 }

@@ -59,6 +59,7 @@ message SearchEmbeddingsRequest {
   string dataset_id = 1;
   string query_text = 2;
   int32 top_k = 3;
+  map<string, string> metadata_filters = 4;
 }
 
 message SearchEmbeddingsResponse {

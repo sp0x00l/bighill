@@ -113,14 +113,19 @@ var _ = Describe("Data ingestion integration", Ordered, func() {
 	It("uploads a file to local object storage and records a Kafka dataset_file_uploaded event", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
-		Expect(datasets.AddDataset(ctx, datasetID, userID)).To(Succeed())
+		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID))).To(Succeed())
 
 		upload := &model.DataFile{
-			DatasetID:   datasetID,
-			UserID:      userID,
-			File:        memoryMultipartFile{Reader: bytes.NewReader([]byte("title,release_year\nMetropolis,1927\n"))},
-			Extension:   "csv",
-			ContentType: "text/csv",
+			DatasetID:         datasetID,
+			UserID:            userID,
+			File:              memoryMultipartFile{Reader: bytes.NewReader([]byte("title,release_year\nMetropolis,1927\n"))},
+			Extension:         "csv",
+			ContentType:       "text/csv",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
 		}
 		Expect(uploader.UploadFile(ctx, upload)).To(Succeed())
 
@@ -132,18 +137,27 @@ var _ = Describe("Data ingestion integration", Ordered, func() {
 		Expect(event.ContentType).To(Equal("text/csv"))
 		Expect(event.FileExtension).To(Equal("csv"))
 		Expect(event.StorageLocation).To(HavePrefix("s3://local-dev-bucket/raw/" + userID.String() + "/" + datasetID.String() + "/"))
+		Expect(event.TableNamespace).To(Equal("features"))
+		Expect(event.TableName).To(Equal("movies"))
+		Expect(event.TableFormat).To(Equal("PARQUET"))
+		Expect(event.CatalogProvider).To(Equal("LOCAL"))
+		Expect(event.ProcessingProfile).To(Equal("TEXT_RAG"))
 	})
 
 	It("does not upload or publish when the dataset is blacklisted", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
-		Expect(datasets.AddDataset(ctx, datasetID, userID)).To(Succeed())
+		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID))).To(Succeed())
 		Expect(datasets.BlacklistDataset(ctx, datasetID, userID)).To(Succeed())
 
 		detector := resthandler.NewDetector(map[string]resthandler.FormatValidatorFunc{
-			resthandler.FileTypeCSV:     resthandler.IsCSV,
-			resthandler.FileTypeJSON:    resthandler.IsJSON,
-			resthandler.FileTypeParquet: resthandler.IsParquet,
+			resthandler.FileTypeCSV:      resthandler.IsCSV,
+			resthandler.FileTypeJSON:     resthandler.IsJSON,
+			resthandler.FileTypeParquet:  resthandler.IsParquet,
+			resthandler.FileTypePDF:      resthandler.IsPDF,
+			resthandler.FileTypeHTML:     resthandler.IsHTML,
+			resthandler.FileTypeMarkdown: resthandler.IsMarkdown,
+			resthandler.FileTypeText:     resthandler.IsText,
 		})
 		handler := resthandler.NewDataUploadHandlers(uploader, datasets, detector, testAuthenticator{userID: userID}, 1024*1024)
 
@@ -170,6 +184,20 @@ func uploadRequest(datasetID uuid.UUID, filename string, content []byte) *http.R
 	req := httptest.NewRequest(http.MethodPost, "/v1/data/store/"+datasetID.String(), body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return mux.SetURLVars(req, map[string]string{"id": datasetID.String()})
+}
+
+func validIngestionDataset(datasetID, userID uuid.UUID) *model.Dataset {
+	return &model.Dataset{
+		DatasetID:         datasetID,
+		UserID:            userID,
+		TableNamespace:    "features",
+		TableName:         "movies",
+		TableFormat:       "PARQUET",
+		CatalogProvider:   "LOCAL",
+		ProcessingProfile: "TEXT_RAG",
+		SchemaVersion:     1,
+		SchemaMetadata:    "{}",
+	}
 }
 
 func consumeDatasetUploadedEvent(ctx context.Context, brokers, topic string, datasetID uuid.UUID) (messaging.Message, *datasetpb.DatasetFileUploadedEvent) {

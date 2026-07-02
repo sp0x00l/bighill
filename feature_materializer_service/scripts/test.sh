@@ -18,6 +18,10 @@ test()
 
     setup_cgo
 
+    if [ ! -f "$BIGHILL_ROOT/pdf_extractor_lib/cpp/build/bin/libgo_pdf_extractor_lib.a" ]; then
+        "$BIGHILL_ROOT/pdf_extractor_lib/scripts/build_cpp.sh"
+    fi
+
     rm -rf $BIGHILL_ROOT/test_results/feature_materializer_service
     mkdir -p $BIGHILL_ROOT/test_results/feature_materializer_service
 

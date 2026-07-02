@@ -53,15 +53,15 @@ func (a *TrainingActivities) RunTrainingJob(_ context.Context, prepared model.Pr
 	}
 	modelName := strings.TrimSpace(request.ModelName)
 	if modelName == "" {
-		modelName = "local-dev-model"
+		return nil, domain.ErrTrainModel.Extend("model name is required")
 	}
 	modelVersion := strings.TrimSpace(request.ModelVersion)
 	if modelVersion == "" {
-		modelVersion = "local-dev"
+		return nil, domain.ErrTrainModel.Extend("model version is required")
 	}
 	baseModel := strings.TrimSpace(request.BaseModel)
 	if baseModel == "" {
-		baseModel = "local-dev-base-model"
+		return nil, domain.ErrTrainModel.Extend("base model is required")
 	}
 	return &model.TrainedModelArtifact{
 		TrainingRunID:     request.TrainingRunID,

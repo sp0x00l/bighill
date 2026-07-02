@@ -1,0 +1,5 @@
+cpp/build/
+cpp/prebuilt/*
+!cpp/prebuilt/lib/
+!cpp/prebuilt/lib/.gitkeep
+

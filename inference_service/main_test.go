@@ -24,6 +24,13 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_API_GRPC_PORT")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_FEATURE_MATERIALIZER_GRPC_ADDRESS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_GROUP_ID")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_GENERATION_PROVIDER")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_GENERATION_ENDPOINT")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_GENERATION_MODEL")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_GENERATION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_PROMPT_STRATEGY_VERSION")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_PROMPT_MAX_CONTEXT_CHARS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_PROMPT_MAX_CONTEXT_CHUNKS")).To(Succeed())
 	})
 
 	It("uses local defaults", func() {
@@ -35,6 +42,12 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Topics.ModelRegistry).To(Equal("model_registry"))
 		Expect(cfg.Topics.DataRegistry).To(Equal("data_registry"))
 		Expect(cfg.FeatureMaterializer.Address).To(Equal("localhost:7072"))
+		Expect(cfg.Generation.Provider).To(Equal("deterministic"))
+		Expect(cfg.Generation.Endpoint).To(Equal("http://localhost:11434"))
+		Expect(cfg.Generation.Model).To(Equal("llama3.1:8b"))
+		Expect(cfg.Generation.PromptStrategy).To(Equal("rag-prompt-v1"))
+		Expect(cfg.Generation.MaxContextChars).To(Equal(12000))
+		Expect(cfg.Generation.MaxContextChunks).To(Equal(8))
 		Expect(cfg.GRPCPort).To(Equal(7073))
 		Expect(cfg.Health.HealthCheckPort).To(Equal(5059))
 	})
@@ -45,6 +58,44 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(connection).To(ContainSubstring("postgres://inference%20user:pa%3Ass%2Fword@localhost:5432/bighill_inference_db?"))
 		Expect(connection).To(ContainSubstring("pool_max_conns=7"))
 		Expect(connection).To(ContainSubstring("sslmode=disable"))
+	})
+})
+
+var _ = Describe("newGenerationAdapter", func() {
+	It("creates the deterministic local generator", func() {
+		generator, err := newGenerationAdapter(generationConfig{Provider: "deterministic"})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(generator.Provider()).To(Equal("deterministic"))
+	})
+
+	It("rejects unsupported providers", func() {
+		_, err := newGenerationAdapter(generationConfig{Provider: "unknown"})
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unsupported generation provider"))
+	})
+})
+
+var _ = Describe("promptStrategyFromConfig", func() {
+	It("builds an explicit prompt strategy from config", func() {
+		strategy, err := promptStrategyFromConfig(generationConfig{
+			PromptStrategy:   "rag-v1",
+			MaxContextChars:  1200,
+			MaxContextChunks: 6,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strategy.Version).To(Equal("rag-v1"))
+		Expect(strategy.SystemPrompt).NotTo(BeEmpty())
+		Expect(strategy.MaxContextChars).To(Equal(1200))
+		Expect(strategy.MaxContextChunks).To(Equal(6))
+	})
+
+	It("rejects missing prompt config", func() {
+		_, err := promptStrategyFromConfig(generationConfig{})
+
+		Expect(err).To(HaveOccurred())
 	})
 })
 

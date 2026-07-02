@@ -12,6 +12,10 @@ type EmbeddingSnapshot struct {
 	EmbeddingDimensions int
 	EmbeddingCount      int64
 	StrategyVersion     string
+	ExtractorName       string
+	ExtractorVersion    string
+	CleanerName         string
+	CleanerVersion      string
 	ChunkerName         string
 	ChunkerVersion      string
 	ChunkSize           int

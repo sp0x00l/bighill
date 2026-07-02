@@ -81,28 +81,38 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
 	}
+	orderedOutbox, ok := outboxWriter.(messagingConn.OrderedOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support transactional enqueue operations")
+	}
+	outboxSignal := make(chan struct{}, 1)
+	outboxWriter = messagingConn.NewSignaledOutbox(outboxWriter, outboxSignal)
+	cfg.OutboxRelay.Signal = outboxSignal
 	publisher, err := messagingConn.NewPublisher(cfg.Messaging.Brokers, messagingConn.WithOutbox(outboxWriter))
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the publisher")
 	}
-	defer publisher.Close()
 	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
 	if !ok {
 		log.Fatal("postgres outbox does not support relay operations")
-	}
-	orderedOutbox, ok := outboxWriter.(messagingConn.OrderedOutbox)
-	if !ok {
-		log.Fatal("postgres outbox does not support transactional enqueue operations")
 	}
 	relayPublisher, ok := publisher.(messagingConn.RelayPublisher)
 	if !ok {
 		log.Fatal("publisher does not support outbox relay publishing")
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
+	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
+	relayDone := make(chan struct{})
 	go func() {
-		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+		defer close(relayDone)
+		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
 			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
 		}
+	}()
+	defer func() {
+		stopOutboxRelay()
+		<-relayDone
+		publisher.Close()
 	}()
 
 	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
@@ -115,10 +125,12 @@ func main() {
 	}
 
 	sourceConnectorDB := db.NewSourceConnectorDB(database)
-	datasetDB := db.NewDatasetDB(database, db.WithTransactionalOutbox(orderedOutbox, cfg.Topic))
+	datasetDB := db.NewDatasetDB(database,
+		db.WithTransactionalOutbox(orderedOutbox, cfg.Topic),
+		db.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	)
 
-	datasetEventPublisher := registrymessaging.NewDatasetEventPublisher(publisher, cfg.Topic)
-	datasetUseCase := usecase.NewDatasetUseCase(datasetDB, usecase.WithDatasetEventPublisher(datasetEventPublisher))
+	datasetUseCase := usecase.NewDatasetUseCase(datasetDB)
 	encoder := serializers.NewJSONSerializer()
 
 	catalogClient := catalogclient.NewLocalCatalogClient()

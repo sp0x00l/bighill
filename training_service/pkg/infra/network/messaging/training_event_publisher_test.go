@@ -33,6 +33,7 @@ func (s *trainingPublishClientStub) Close() {}
 var _ = Describe("TrainingEventPublisher", func() {
 	It("publishes completed model training facts to the training topic", func() {
 		datasetID := uuid.New()
+		modelID := uuid.New()
 		client := &trainingPublishClientStub{}
 		publisher := trainingmessaging.NewTrainingEventPublisher(client, trainingmessaging.TrainingTopics{
 			Training: "training",
@@ -43,6 +44,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 			DatasetID:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotID: uuid.NewString(),
+			ModelID:           modelID.String(),
 			ModelURI:          "s3://local-dev-bucket/models/run",
 			ModelName:         "movie-ranker",
 			ModelVersion:      "4",
@@ -62,12 +64,14 @@ var _ = Describe("TrainingEventPublisher", func() {
 		event, ok := client.payload.(*trainingpb.ModelTrainingCompletedEvent)
 		Expect(ok).To(BeTrue())
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
+		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.ModelName).To(Equal("movie-ranker"))
 		Expect(event.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/run"))
 	})
 
 	It("publishes failed model training facts to the training topic", func() {
 		datasetID := uuid.New()
+		modelID := uuid.New()
 		client := &trainingPublishClientStub{}
 		publisher := trainingmessaging.NewTrainingEventPublisher(client, trainingmessaging.TrainingTopics{
 			Training: "training",
@@ -78,6 +82,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 			DatasetID:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotID: uuid.NewString(),
+			ModelID:           modelID.String(),
 			ModelName:         "movie-ranker",
 			ModelVersion:      "4",
 			BaseModel:         "mistral-7b",
@@ -92,6 +97,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		event, ok := client.payload.(*trainingpb.ModelTrainingFailedEvent)
 		Expect(ok).To(BeTrue())
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
+		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.ModelName).To(Equal("movie-ranker"))
 		Expect(event.FailureReason).To(Equal("model evaluation failed"))
 	})

@@ -23,8 +23,9 @@ import (
 
 type datasetDB struct {
 	coreDB.Database
-	outbox msgConn.OrderedOutbox
-	topic  string
+	outbox       msgConn.OrderedOutbox
+	topic        string
+	outboxSignal func()
 }
 
 type DatasetDBOption func(*datasetDB)
@@ -35,6 +36,14 @@ func WithTransactionalOutbox(outbox msgConn.OrderedOutbox, topic string) Dataset
 	return func(db *datasetDB) {
 		db.outbox = outbox
 		db.topic = topic
+	}
+}
+
+func WithOutboxSignal(signal func()) DatasetDBOption {
+	log.Trace("WithOutboxSignal")
+
+	return func(db *datasetDB) {
+		db.outboxSignal = signal
 	}
 }
 
@@ -55,6 +64,12 @@ func NewDatasetDB(db *coreDB.Database, opts ...DatasetDBOption) *datasetDB {
 func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) error {
 	log.Trace("DatasetDB Create")
 
+	tx, err := db.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin dataset create transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	datasetModel := Dataset{IdempotencyKey: pgtype.UUID{Bytes: idempotencyKey, Valid: true}}
 	datasetDAO := datasetModel.toDAO(dataset)
 
@@ -66,7 +81,7 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, @processing_state)
 		RETURNING id, user_id, origin, status, processing_state;`
 
-	err := db.Pool.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		sqlStatement,
 		datasetDAO,
 	).Scan(&id, &userID, &origin, &status, &processingState)
@@ -95,6 +110,19 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 	if err != nil {
 		log.WithContext(ctx).Errorf("Error converting processing state: %s", processingState)
 		return domainErrors.ErrValidationFailed.Extend("failed to convert processing state")
+	}
+	enqueued := false
+	if db.outbox != nil {
+		if err := db.outbox.EnqueueTx(ctx, tx, datasetCreatedMessage(db.topic, dataset)); err != nil {
+			return err
+		}
+		enqueued = true
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit dataset create transaction: %w", err)
+	}
+	if enqueued {
+		db.notifyOutbox()
 	}
 	return nil
 }
@@ -150,6 +178,12 @@ func (db *datasetDB) ReadByID(ctx context.Context, datasetID uuid.UUID, userID u
 func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*model.Dataset, error) {
 	log.Trace("DatasetDB Replace")
 
+	tx, err := db.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin dataset replace transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	datasetModel := Dataset{}
 	datasetDAO := datasetModel.toDAO(dataset)
 
@@ -164,7 +198,7 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
 		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model;`
-	row := db.Pool.QueryRow(ctx, sqlStatement, datasetDAO)
+	row := tx.QueryRow(ctx, sqlStatement, datasetDAO)
 
 	updatedDataset := DatasetDAO{
 		ID:     pgtype.UUID{Bytes: dataset.ID, Valid: true},
@@ -204,7 +238,24 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		log.WithContext(ctx).Warnf("No dataset found in database for ID: %s", dataset.ID.String())
 		return nil, domainErrors.ErrResourceNotFound
 	case nil:
-		return fromDAO(ctx, &updatedDataset)
+		updated, err := fromDAO(ctx, &updatedDataset)
+		if err != nil {
+			return nil, err
+		}
+		enqueued := false
+		if db.outbox != nil {
+			if err := db.outbox.EnqueueTx(ctx, tx, datasetUpdatedMessage(db.topic, updated)); err != nil {
+				return nil, err
+			}
+			enqueued = true
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit dataset replace transaction: %w", err)
+		}
+		if enqueued {
+			db.notifyOutbox()
+		}
+		return updated, nil
 	default:
 		log.WithContext(ctx).WithError(err).Errorf("database error. Failed to replace dataset %s", dataset.ID.String())
 		return nil, fmt.Errorf("database error. Failed to replace dataset: %w", err)
@@ -214,8 +265,14 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 func (db *datasetDB) Delete(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) error {
 	log.Trace("DatasetDB Delete")
 
+	tx, err := db.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin dataset delete transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	query := fmt.Sprintf(`UPDATE %s.datasets SET deleted = true WHERE id = @id AND user_id = @user_id AND deleted = false;`, db.Name)
-	cmdTag, err := db.Pool.Exec(ctx, query, pgx.NamedArgs{"id": datasetID, "user_id": userID})
+	cmdTag, err := tx.Exec(ctx, query, pgx.NamedArgs{"id": datasetID, "user_id": userID})
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Errorf("database error. Failed to delete dataset %s", datasetID.String())
 		wrappedErr := fmt.Errorf("database error. Failed to delete dataset: %w", err)
@@ -224,27 +281,79 @@ func (db *datasetDB) Delete(ctx context.Context, datasetID uuid.UUID, userID uui
 	if cmdTag.RowsAffected() == 0 {
 		return domainErrors.ErrResourceNotFound
 	}
+	enqueued := false
+	if db.outbox != nil {
+		if err := db.outbox.EnqueueTx(ctx, tx, datasetDeletedMessage(db.topic, datasetID, userID)); err != nil {
+			return err
+		}
+		enqueued = true
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit dataset delete transaction: %w", err)
+	}
+	if enqueued {
+		db.notifyOutbox()
+	}
 	return nil
 }
 
-func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, error) {
+func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, bool, error) {
 	log.Trace("DatasetDB UpdateProcessingState")
 
+	tx, err := db.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, false, fmt.Errorf("begin dataset processing state transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	requestedRank := processingStateRankSQL("@processing_state")
+	currentRank := processingStateRankSQL("processing_state")
 	query := `UPDATE ` + db.Name + `.datasets
 		SET processing_state = @processing_state,
 			dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
+			AND ` + requestedRank + ` > ` + currentRank + `
 		RETURNING id, user_id, title, description, origin, location, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
 		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model;`
 
-	return db.scanRow(ctx, db.Pool.QueryRow(ctx, query, pgx.NamedArgs{
+	updated, err := db.scanRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{
 		"id":               datasetID,
 		"user_id":          userID,
 		"processing_state": state.String(),
 	}))
+	if err == nil {
+		enqueued := false
+		if db.outbox != nil {
+			if err := db.outbox.EnqueueTx(ctx, tx, datasetUpdatedMessage(db.topic, updated)); err != nil {
+				return nil, false, err
+			}
+			enqueued = true
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, fmt.Errorf("commit dataset processing state transaction: %w", err)
+		}
+		if enqueued {
+			db.notifyOutbox()
+		}
+		return updated, true, nil
+	}
+	if !errors.Is(err, domainErrors.ErrResourceNotFound) {
+		return nil, false, err
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		return nil, false, fmt.Errorf("rollback unchanged dataset processing state transaction: %w", err)
+	}
+	current, err := db.ReadByID(ctx, datasetID, userID)
+	if err != nil {
+		return nil, false, err
+	}
+	if current.Status == model.Blacklisted {
+		return nil, false, domainErrors.ErrResourceNotFound
+	}
+	return current, false, nil
 }
 
 func (db *datasetDB) RecordMaterialization(ctx context.Context, materialized *model.Dataset, state model.ProcessingState) (*model.Dataset, error) {
@@ -261,15 +370,28 @@ func (db *datasetDB) RecordMaterialization(ctx context.Context, materialized *mo
 	if err != nil {
 		return nil, err
 	}
+	enqueued := false
 	if changed && db.outbox != nil {
 		if err := db.outbox.EnqueueTx(ctx, tx, datasetUpdatedMessage(db.topic, updated)); err != nil {
 			return nil, fmt.Errorf("enqueue dataset updated: %w", err)
 		}
+		enqueued = true
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit dataset materialization transaction: %w", err)
 	}
+	if enqueued {
+		db.notifyOutbox()
+	}
 	return updated, nil
+}
+
+func (db *datasetDB) notifyOutbox() {
+	log.Trace("DatasetDB notifyOutbox")
+
+	if db.outboxSignal != nil {
+		db.outboxSignal()
+	}
 }
 
 func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, materialized *model.Dataset, state model.ProcessingState) (*model.Dataset, bool, error) {
@@ -632,6 +754,52 @@ func datasetUpdatedMessage(topic string, dataset *model.Dataset) msgConn.Outboun
 			Payload:     payload,
 		},
 		DispatchKey: fmt.Sprintf("dataset_updated:%s:%d", dataset.ID, dataset.DatasetVersion),
+	}
+}
+
+func datasetCreatedMessage(topic string, dataset *model.Dataset) msgConn.OutboundMessage {
+	log.Trace("datasetCreatedMessage")
+
+	payload := mustMarshalDataset(&datasetpb.DatasetCreatedEvent{
+		DatasetId:         dataset.ID.String(),
+		UserId:            dataset.UserID.String(),
+		DatasetVersion:    int32(dataset.DatasetVersion),
+		ProcessingState:   dataset.ProcessingState.String(),
+		StorageLocation:   dataset.Location,
+		TableNamespace:    dataset.TableNamespace,
+		TableName:         dataset.TableName,
+		TableFormat:       dataset.TableFormat.String(),
+		CatalogProvider:   dataset.CatalogProvider.String(),
+		ProcessingProfile: dataset.ProcessingProfile.String(),
+		SchemaVersion:     int32(dataset.SchemaVersion),
+		SchemaMetadata:    dataset.SchemaMetadata,
+	})
+	return msgConn.OutboundMessage{
+		Topic: topic,
+		Message: msgConn.Message{
+			ResourceKey: dataset.ID,
+			MsgType:     msgConn.MsgTypeDatasetCreated,
+			Payload:     payload,
+		},
+		DispatchKey: fmt.Sprintf("dataset_created:%s:%d", dataset.ID, dataset.DatasetVersion),
+	}
+}
+
+func datasetDeletedMessage(topic string, datasetID uuid.UUID, userID uuid.UUID) msgConn.OutboundMessage {
+	log.Trace("datasetDeletedMessage")
+
+	payload := mustMarshalDataset(&datasetpb.DatasetDeletedEvent{
+		DatasetId: datasetID.String(),
+		UserId:    userID.String(),
+	})
+	return msgConn.OutboundMessage{
+		Topic: topic,
+		Message: msgConn.Message{
+			ResourceKey: datasetID,
+			MsgType:     msgConn.MsgTypeDatasetDeleted,
+			Payload:     payload,
+		},
+		DispatchKey: fmt.Sprintf("dataset_deleted:%s", datasetID),
 	}
 }
 

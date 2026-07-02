@@ -32,6 +32,8 @@ spec:
               value: {{ .Values.env.otelExporterEndpoint | quote }}
             - name: TRAINING_SERVICE_NAME
               value: {{ .Values.env.serviceName | quote }}
+            - name: TRAINING_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
             - name: TRAINING_SERVICE_TEMPORAL_ADDRESS
               value: {{ .Values.env.temporalAddress | quote }}
             - name: TRAINING_SERVICE_TEMPORAL_NAMESPACE

@@ -33,6 +33,12 @@ type ParquetArtifact struct {
 func NormalizeArtifactToParquet(ctx context.Context, data []byte, contentType, extension string) (*ParquetArtifact, error) {
 	log.Trace("NormalizeArtifactToParquet")
 
+	return NormalizeArtifactToParquetWithProcessors(ctx, data, contentType, extension, NewPDFDocumentExtractor(), NewBasicTextCleaner())
+}
+
+func NormalizeArtifactToParquetWithProcessors(ctx context.Context, data []byte, contentType, extension string, pdfExtractor DocumentExtractor, cleaner TextCleaner) (*ParquetArtifact, error) {
+	log.Trace("NormalizeArtifactToParquetWithProcessors")
+
 	if isParquet(data, contentType, extension) {
 		schemaMetadata, rows, err := parquetSchemaMetadata(ctx, data)
 		if err != nil {
@@ -46,11 +52,11 @@ func NormalizeArtifactToParquet(ctx context.Context, data []byte, contentType, e
 		}, nil
 	}
 
-	rows, fields, err := tabularRows(data, contentType, extension)
+	rows, fields, metadata, err := artifactRows(ctx, data, contentType, extension, pdfExtractor, cleaner)
 	if err != nil {
 		return nil, err
 	}
-	parquetBytes, schemaMetadata, err := writeStringTableParquet(fields, rows)
+	parquetBytes, schemaMetadata, err := writeStringTableParquetWithMetadata(fields, rows, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -109,19 +115,111 @@ func isParquet(data []byte, contentType, extension string) bool {
 		(len(data) >= 8 && string(data[:4]) == "PAR1" && string(data[len(data)-4:]) == "PAR1")
 }
 
-func tabularRows(data []byte, contentType, extension string) ([]map[string]string, []string, error) {
-	log.Trace("tabularRows")
+func artifactRows(ctx context.Context, data []byte, contentType, extension string, pdfExtractor DocumentExtractor, cleaner TextCleaner) ([]map[string]string, []string, map[string]any, error) {
+	log.Trace("artifactRows")
 
 	extension = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(extension)), ".")
 	contentType = strings.ToLower(strings.TrimSpace(contentType))
 	switch {
 	case extension == "csv" || strings.Contains(contentType, "csv"):
-		return csvRows(data)
+		rows, fields, err := csvRows(data)
+		return rows, fields, map[string]any{"source_format": "csv"}, err
 	case extension == "json" || strings.Contains(contentType, "json"):
-		return jsonRows(data)
+		rows, fields, err := jsonRows(data)
+		return rows, fields, map[string]any{"source_format": "json"}, err
+	case extension == "pdf" || contentType == "application/pdf":
+		return pdfRows(ctx, data, pdfExtractor, cleaner)
+	case strings.HasPrefix(contentType, "text/html") || extension == "html" || extension == "htm":
+		return htmlRows(ctx, data, NewHTMLDocumentExtractor(), cleaner)
+	case strings.HasPrefix(contentType, "text/markdown") || extension == "md" || extension == "markdown":
+		return textRows(ctx, data, cleaner, "markdown")
+	case strings.HasPrefix(contentType, "text/plain") || extension == "txt" || extension == "text":
+		return textRows(ctx, data, cleaner, "text")
 	default:
-		return nil, nil, domain.ErrValidationFailed.Extend("unsupported raw artifact format")
+		return nil, nil, nil, domain.ErrValidationFailed.Extend("unsupported raw artifact format")
 	}
+}
+
+func pdfRows(ctx context.Context, data []byte, extractor DocumentExtractor, cleaner TextCleaner) ([]map[string]string, []string, map[string]any, error) {
+	log.Trace("pdfRows")
+
+	if extractor == nil {
+		extractor = NewPDFDocumentExtractor()
+	}
+	if cleaner == nil {
+		cleaner = NewBasicTextCleaner()
+	}
+	extraction, err := extractor.ExtractText(ctx, data)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cleaned, err := cleaner.Clean(ctx, extraction.Text)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if cleaned == "" {
+		return nil, nil, nil, domain.ErrValidationFailed.Extend("pdf text is empty")
+	}
+	metadata := map[string]any{
+		"source_format":     "pdf",
+		"source_page_count": extraction.PageCount,
+		"extractor_name":    extractor.Name(),
+		"extractor_version": extractor.Version(),
+		"cleaner_name":      cleaner.Name(),
+		"cleaner_version":   cleaner.Version(),
+	}
+	return []map[string]string{{sourceTextField: cleaned}}, []string{sourceTextField}, metadata, nil
+}
+
+func htmlRows(ctx context.Context, data []byte, extractor DocumentExtractor, cleaner TextCleaner) ([]map[string]string, []string, map[string]any, error) {
+	log.Trace("htmlRows")
+
+	if extractor == nil {
+		extractor = NewHTMLDocumentExtractor()
+	}
+	if cleaner == nil {
+		cleaner = NewBasicTextCleaner()
+	}
+	extraction, err := extractor.ExtractText(ctx, data)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cleaned, err := cleaner.Clean(ctx, extraction.Text)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if cleaned == "" {
+		return nil, nil, nil, domain.ErrValidationFailed.Extend("html text is empty")
+	}
+	metadata := map[string]any{
+		"source_format":     "html",
+		"extractor_name":    extractor.Name(),
+		"extractor_version": extractor.Version(),
+		"cleaner_name":      cleaner.Name(),
+		"cleaner_version":   cleaner.Version(),
+	}
+	return []map[string]string{{sourceTextField: cleaned}}, []string{sourceTextField}, metadata, nil
+}
+
+func textRows(ctx context.Context, data []byte, cleaner TextCleaner, sourceFormat string) ([]map[string]string, []string, map[string]any, error) {
+	log.Trace("textRows")
+
+	if cleaner == nil {
+		cleaner = NewBasicTextCleaner()
+	}
+	cleaned, err := cleaner.Clean(ctx, string(data))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if cleaned == "" {
+		return nil, nil, nil, domain.ErrValidationFailed.Extend("text artifact is empty")
+	}
+	metadata := map[string]any{
+		"source_format":   sourceFormat,
+		"cleaner_name":    cleaner.Name(),
+		"cleaner_version": cleaner.Version(),
+	}
+	return []map[string]string{{sourceTextField: cleaned}}, []string{sourceTextField}, metadata, nil
 }
 
 func csvRows(data []byte) ([]map[string]string, []string, error) {
@@ -228,6 +326,12 @@ func stringifyJSONRow(row map[string]any) map[string]string {
 func writeStringTableParquet(fields []string, rows []map[string]string) ([]byte, string, error) {
 	log.Trace("writeStringTableParquet")
 
+	return writeStringTableParquetWithMetadata(fields, rows, nil)
+}
+
+func writeStringTableParquetWithMetadata(fields []string, rows []map[string]string, extraMetadata map[string]any) ([]byte, string, error) {
+	log.Trace("writeStringTableParquetWithMetadata")
+
 	if len(fields) == 0 {
 		return nil, "", domain.ErrValidationFailed.Extend("at least one column is required")
 	}
@@ -261,7 +365,7 @@ func writeStringTableParquet(fields []string, rows []map[string]string) ([]byte,
 		return nil, "", fmt.Errorf("%w: close parquet writer: %w", domain.ErrArtifactWrite, err)
 	}
 
-	schemaMetadata, err := schemaMetadataJSON(schema, int64(len(rows)))
+	schemaMetadata, err := schemaMetadataJSON(schema, int64(len(rows)), extraMetadata)
 	if err != nil {
 		return nil, "", err
 	}
@@ -276,11 +380,13 @@ func parquetSchemaMetadata(ctx context.Context, data []byte) (string, int64, err
 		return "", 0, fmt.Errorf("%w: read parquet schema: %w", domain.ErrArtifactRead, err)
 	}
 	defer table.Release()
-	schemaMetadata, err := schemaMetadataJSON(table.Schema(), table.NumRows())
+	schemaMetadata, err := schemaMetadataJSON(table.Schema(), table.NumRows(), nil)
 	return schemaMetadata, table.NumRows(), err
 }
 
-func schemaMetadataJSON(schema *arrow.Schema, rows int64) (string, error) {
+func schemaMetadataJSON(schema *arrow.Schema, rows int64, extraMetadata map[string]any) (string, error) {
+	log.Trace("schemaMetadataJSON")
+
 	fields := make([]map[string]string, schema.NumFields())
 	for i, field := range schema.Fields() {
 		fields[i] = map[string]string{
@@ -293,7 +399,47 @@ func schemaMetadataJSON(schema *arrow.Schema, rows int64) (string, error) {
 		"rows":   rows,
 		"fields": fields,
 	}
+	for key, value := range extraMetadata {
+		metadata[key] = value
+	}
 	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return "", fmt.Errorf("encode schema metadata: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func MergeSourceSchemaMetadata(schemaMetadata, sourceMetadata string) (string, error) {
+	log.Trace("MergeSourceSchemaMetadata")
+
+	sourceMetadata = strings.TrimSpace(sourceMetadata)
+	if sourceMetadata == "" || sourceMetadata == "{}" {
+		return schemaMetadata, nil
+	}
+
+	var target map[string]any
+	if err := json.Unmarshal([]byte(schemaMetadata), &target); err != nil {
+		return "", fmt.Errorf("%w: decode schema metadata: %w", domain.ErrArtifactRead, err)
+	}
+	var source map[string]any
+	if err := json.Unmarshal([]byte(sourceMetadata), &source); err != nil {
+		return "", fmt.Errorf("%w: decode source schema metadata: %w", domain.ErrArtifactRead, err)
+	}
+
+	for _, key := range []string{
+		"source_format",
+		"source_page_count",
+		"extractor_name",
+		"extractor_version",
+		"cleaner_name",
+		"cleaner_version",
+	} {
+		if value, ok := source[key]; ok {
+			target[key] = value
+		}
+	}
+
+	encoded, err := json.Marshal(target)
 	if err != nil {
 		return "", fmt.Errorf("encode schema metadata: %w", err)
 	}

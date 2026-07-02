@@ -130,18 +130,37 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
-	modelVersion := modelVersionFromEvent(payload.GetModelVersion(), payload.GetDatasetVersion())
+	modelID, err := msgConn.ParseUUID("model_id", payload.GetModelId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	modelVersion, err := modelVersionFromEvent(payload.GetModelVersion())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	modelName, err := requiredTrainingEventString("model name", payload.GetModelName())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	metricsMetadata, err := requiredTrainingEventString("metrics metadata", payload.GetMetricsMetadata())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	trainedModel := &model.Model{
+		ModelID:           modelID,
 		TrainingRunID:     trainingRunID,
 		DatasetID:         datasetID,
-		Name:              withDefault(payload.GetModelName(), "model_"+strings.ReplaceAll(datasetID.String(), "-", "_")),
+		Name:              modelName,
 		ModelVersion:      modelVersion,
 		BaseModel:         strings.TrimSpace(payload.GetBaseModel()),
 		ArtifactLocation:  strings.TrimSpace(payload.GetArtifactLocation()),
 		ArtifactFormat:    strings.TrimSpace(payload.GetArtifactFormat()),
 		ArtifactChecksum:  strings.TrimSpace(payload.GetArtifactChecksum()),
 		ArtifactSizeBytes: payload.GetArtifactSizeBytes(),
-		MetricsMetadata:   withDefault(payload.GetMetricsMetadata(), "{}"),
+		MetricsMetadata:   metricsMetadata,
+	}
+	if err := validateCompletedModelEvent(trainedModel); err != nil {
+		return nil, uuid.Nil, err
 	}
 	return trainedModel, trainingRunID, nil
 }
@@ -156,15 +175,74 @@ func failedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTraining
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	modelID, err := msgConn.ParseUUID("model_id", payload.GetModelId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	modelVersion, err := modelVersionFromEvent(payload.GetModelVersion())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	modelName, err := requiredTrainingEventString("model name", payload.GetModelName())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	failedModel := &model.Model{
-		TrainingRunID: trainingRunID,
-		DatasetID:     datasetID,
-		Name:          withDefault(payload.GetModelName(), "model_"+strings.ReplaceAll(datasetID.String(), "-", "_")),
-		ModelVersion:  modelVersionFromEvent(payload.GetModelVersion(), payload.GetDatasetVersion()),
-		BaseModel:     strings.TrimSpace(payload.GetBaseModel()),
-		FailureReason: strings.TrimSpace(payload.GetFailureReason()),
+		ModelID:         modelID,
+		TrainingRunID:   trainingRunID,
+		DatasetID:       datasetID,
+		Name:            modelName,
+		ModelVersion:    modelVersion,
+		BaseModel:       strings.TrimSpace(payload.GetBaseModel()),
+		MetricsMetadata: "{}",
+		FailureReason:   strings.TrimSpace(payload.GetFailureReason()),
+	}
+	if err := validateFailedModelEvent(failedModel); err != nil {
+		return nil, uuid.Nil, err
 	}
 	return failedModel, trainingRunID, nil
+}
+
+func validateCompletedModelEvent(trainedModel *model.Model) error {
+	log.Trace("validateCompletedModelEvent")
+
+	if strings.TrimSpace(trainedModel.BaseModel) == "" {
+		return fmt.Errorf("base model is required")
+	}
+	if strings.TrimSpace(trainedModel.Name) == "" {
+		return fmt.Errorf("model name is required")
+	}
+	if trainedModel.ModelVersion <= 0 {
+		return fmt.Errorf("model version is required")
+	}
+	if strings.TrimSpace(trainedModel.ArtifactLocation) == "" {
+		return fmt.Errorf("artifact location is required")
+	}
+	if strings.TrimSpace(trainedModel.ArtifactFormat) == "" {
+		return fmt.Errorf("artifact format is required")
+	}
+	if strings.TrimSpace(trainedModel.MetricsMetadata) == "" {
+		return fmt.Errorf("metrics metadata is required")
+	}
+	return nil
+}
+
+func validateFailedModelEvent(failedModel *model.Model) error {
+	log.Trace("validateFailedModelEvent")
+
+	if strings.TrimSpace(failedModel.BaseModel) == "" {
+		return fmt.Errorf("base model is required")
+	}
+	if strings.TrimSpace(failedModel.Name) == "" {
+		return fmt.Errorf("model name is required")
+	}
+	if failedModel.ModelVersion <= 0 {
+		return fmt.Errorf("model version is required")
+	}
+	if strings.TrimSpace(failedModel.FailureReason) == "" {
+		return fmt.Errorf("failure reason is required")
+	}
+	return nil
 }
 
 func parseTrainingEventIDs(resourceKey uuid.UUID, trainingRunIDRaw string, datasetIDRaw string) (uuid.UUID, uuid.UUID, error) {
@@ -187,30 +265,28 @@ func parseTrainingEventIDs(resourceKey uuid.UUID, trainingRunIDRaw string, datas
 	return trainingRunID, datasetID, nil
 }
 
-func modelVersionFromEvent(modelVersionRaw string, datasetVersionRaw string) int {
+func modelVersionFromEvent(modelVersionRaw string) (int, error) {
 	log.Trace("modelVersionFromEvent")
 
-	for _, candidate := range []string{modelVersionRaw, datasetVersionRaw} {
-		candidate = strings.TrimSpace(candidate)
-		candidate = strings.TrimPrefix(candidate, "dataset-v")
-		candidate = strings.TrimPrefix(candidate, "v")
-		if candidate == "" {
-			continue
-		}
-		value, err := strconv.Atoi(candidate)
-		if err == nil && value > 0 {
-			return value
-		}
+	candidate := strings.TrimSpace(modelVersionRaw)
+	candidate = strings.TrimPrefix(candidate, "dataset-v")
+	candidate = strings.TrimPrefix(candidate, "v")
+	if candidate == "" {
+		return 0, fmt.Errorf("model version is required")
 	}
-	return 1
+	value, err := strconv.Atoi(candidate)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("model version is invalid")
+	}
+	return value, nil
 }
 
-func withDefault(value, defaultValue string) string {
-	log.Trace("withDefault")
+func requiredTrainingEventString(fieldName string, value string) (string, error) {
+	log.Trace("requiredTrainingEventString")
 
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return defaultValue
+		return "", fmt.Errorf("%s is required", fieldName)
 	}
-	return value
+	return value, nil
 }

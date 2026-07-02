@@ -96,7 +96,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 
-	It("defaults optional display metadata", func() {
+	It("returns non-retryable errors for missing model metadata", func() {
 		modelID := uuid.New()
 		uc := &recordingInferenceUsecase{}
 		listener := inferencemessaging.NewModelUpdatedEventListener(uc)
@@ -105,13 +105,12 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 			ModelId:       modelID.String(),
 			TrainingRunId: uuid.NewString(),
 			DatasetId:     uuid.NewString(),
+			BaseModel:     "base-model",
 			Status:        "PENDING",
 		})
 
-		Expect(err).NotTo(HaveOccurred())
-		Expect(uc.model.Name).To(HavePrefix("model_"))
-		Expect(uc.model.ModelVersion).To(Equal(1))
-		Expect(uc.model.MetricsMetadata).To(Equal("{}"))
+		Expect(err).To(HaveOccurred())
+		Expect(sharedmessaging.IsNonRetryable(err)).To(BeTrue())
 	})
 
 	It("returns non-retryable errors for invalid wire payloads", func() {
@@ -189,7 +188,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 
-	It("defaults dataset version, schema version, and schema metadata", func() {
+	It("returns non-retryable errors for missing dataset metadata", func() {
 		datasetID := uuid.New()
 		uc := &recordingInferenceUsecase{}
 		listener := inferencemessaging.NewDatasetUpdatedEventListener(uc)
@@ -200,10 +199,8 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 			ProcessingState: "PENDING",
 		})
 
-		Expect(err).NotTo(HaveOccurred())
-		Expect(uc.dataset.DatasetVersion).To(Equal(1))
-		Expect(uc.dataset.SchemaVersion).To(Equal(1))
-		Expect(uc.dataset.SchemaMetadata).To(Equal("{}"))
+		Expect(err).To(HaveOccurred())
+		Expect(sharedmessaging.IsNonRetryable(err)).To(BeTrue())
 	})
 
 	It("returns non-retryable errors for invalid dataset payloads", func() {

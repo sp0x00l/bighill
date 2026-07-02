@@ -56,17 +56,21 @@ type artifactBucketConfig struct {
 }
 
 type embeddingConfig struct {
-	Provider        string
-	Endpoint        string
-	Model           string
-	Dimensions      int
-	MaxRows         int
-	StrategyVersion string
-	ChunkerName     string
-	ChunkerVersion  string
-	ChunkSize       int
-	ChunkOverlap    int
-	RequestTimeout  time.Duration
+	Provider         string
+	URL              string
+	Model            string
+	Dimensions       int
+	MaxRows          int
+	StrategyVersion  string
+	ExtractorName    string
+	ExtractorVersion string
+	CleanerName      string
+	CleanerVersion   string
+	ChunkerName      string
+	ChunkerVersion   string
+	ChunkSize        int
+	ChunkOverlap     int
+	RequestTimeout   time.Duration
 }
 
 type temporalConfig struct {
@@ -121,6 +125,9 @@ func main() {
 	if !ok {
 		log.Fatal("postgres outbox does not support ordered transactional enqueue")
 	}
+	outboxSignal := make(chan struct{}, 1)
+	outboxWriter = messagingConn.NewSignaledOutbox(outboxWriter, outboxSignal)
+	cfg.OutboxRelay.Signal = outboxSignal
 	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
 	if !ok {
 		log.Fatal("postgres outbox does not support relay operations")
@@ -129,16 +136,23 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create outbox relay publisher")
 	}
-	defer outboxPublisher.Close()
 	relayPublisher, ok := outboxPublisher.(messagingConn.RelayPublisher)
 	if !ok {
 		log.Fatal("publisher does not support outbox relay publishing")
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
+	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
+	relayDone := make(chan struct{})
 	go func() {
-		if relayErr := outboxRelay.Run(cancelCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+		defer close(relayDone)
+		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
 			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
 		}
+	}()
+	defer func() {
+		stopOutboxRelay()
+		<-relayDone
+		outboxPublisher.Close()
 	}()
 
 	subscriber, err := messagingFactory.Subscriber(cancelCtx)
@@ -155,7 +169,10 @@ func main() {
 	}
 	defer temporalClient.Close()
 
-	snapshotRepo := featuredb.NewSnapshotRepository(database, featuredb.WithTransactionalOutbox(orderedOutbox, cfg.PublishTopics.FeatureMaterializer))
+	snapshotRepo := featuredb.NewSnapshotRepository(database,
+		featuredb.WithTransactionalOutbox(orderedOutbox, cfg.PublishTopics.FeatureMaterializer),
+		featuredb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	)
 	artifactStore, err := materialization.NewObjectArtifactStore(cancelCtx, cfg.ArtifactBucket.Name, cfg.ArtifactBucket.Region, cfg.ArtifactBucket.UploadPartSize)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create artifact store")
@@ -264,17 +281,21 @@ func readMaterializerConfig() materializerConfig {
 			UploadPartSize: uploadPartSizeMB * 1024 * 1024,
 		},
 		Embedding: embeddingConfig{
-			Provider:        env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_PROVIDER", "ollama"),
-			Endpoint:        env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_ENDPOINT", "http://localhost:11434"),
-			Model:           env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_MODEL", model.DefaultEmbeddingModel),
-			Dimensions:      env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS", strconv.Itoa(model.DefaultEmbeddingDimensions)),
-			MaxRows:         env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS", "1000"),
-			StrategyVersion: env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_STRATEGY_VERSION", model.DefaultEmbeddingStrategyVersion),
-			ChunkerName:     env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_NAME", model.DefaultChunkerName),
-			ChunkerVersion:  env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_VERSION", model.DefaultChunkerVersion),
-			ChunkSize:       env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_CHUNK_SIZE", strconv.Itoa(model.DefaultChunkSize)),
-			ChunkOverlap:    env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_CHUNK_OVERLAP", strconv.Itoa(model.DefaultChunkOverlap)),
-			RequestTimeout:  secondsFromEnv("FEATURE_MATERIALIZER_EMBEDDING_REQUEST_TIMEOUT_SECONDS", "30"),
+			Provider:         env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_PROVIDER", model.DefaultEmbeddingProvider),
+			URL:              env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_URL", ""),
+			Model:            env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_MODEL", model.DefaultEmbeddingModel),
+			Dimensions:       env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS", strconv.Itoa(model.DefaultEmbeddingDimensions)),
+			MaxRows:          env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS", "1000"),
+			StrategyVersion:  env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_STRATEGY_VERSION", model.DefaultEmbeddingStrategyVersion),
+			ExtractorName:    env.WithDefaultString("FEATURE_MATERIALIZER_EXTRACTOR_NAME", model.DefaultExtractorName),
+			ExtractorVersion: env.WithDefaultString("FEATURE_MATERIALIZER_EXTRACTOR_VERSION", model.DefaultExtractorVersion),
+			CleanerName:      env.WithDefaultString("FEATURE_MATERIALIZER_CLEANER_NAME", model.DefaultCleanerName),
+			CleanerVersion:   env.WithDefaultString("FEATURE_MATERIALIZER_CLEANER_VERSION", model.DefaultCleanerVersion),
+			ChunkerName:      env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_NAME", model.DefaultChunkerName),
+			ChunkerVersion:   env.WithDefaultString("FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_VERSION", model.DefaultChunkerVersion),
+			ChunkSize:        env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_CHUNK_SIZE", strconv.Itoa(model.DefaultChunkSize)),
+			ChunkOverlap:     env.WithDefaultInt("FEATURE_MATERIALIZER_EMBEDDING_CHUNK_OVERLAP", strconv.Itoa(model.DefaultChunkOverlap)),
+			RequestTimeout:   secondsFromEnv("FEATURE_MATERIALIZER_EMBEDDING_REQUEST_TIMEOUT_SECONDS", "30"),
 		},
 		Temporal: temporalConfig{
 			Address:   env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
@@ -325,6 +346,10 @@ func embeddingStrategyFromConfig(cfg embeddingConfig) model.EmbeddingStrategy {
 
 	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
 		StrategyVersion:     cfg.StrategyVersion,
+		ExtractorName:       cfg.ExtractorName,
+		ExtractorVersion:    cfg.ExtractorVersion,
+		CleanerName:         cfg.CleanerName,
+		CleanerVersion:      cfg.CleanerVersion,
 		ChunkerName:         cfg.ChunkerName,
 		ChunkerVersion:      cfg.ChunkerVersion,
 		ChunkSize:           cfg.ChunkSize,
@@ -356,7 +381,7 @@ func newEmbeddingProvider(cfg embeddingConfig) (materialization.EmbeddingProvide
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	switch provider {
 	case "tei", "ollama":
-		return materialization.NewHTTPEmbeddingProvider(provider, cfg.Endpoint, cfg.Model, cfg.Dimensions, cfg.RequestTimeout), nil
+		return materialization.NewHTTPEmbeddingProvider(provider, cfg.URL, cfg.Model, cfg.Dimensions, cfg.RequestTimeout), nil
 	case "deterministic":
 		return materialization.NewDeterministicEmbeddingProvider(cfg.Dimensions), nil
 	default:

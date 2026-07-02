@@ -8,6 +8,8 @@ tmp
 .idea
 **/go.mod
 **/go.sum
+!pdf_extractor_lib/go.mod
+!pdf_extractor_lib/go.sum
 reports/
 sqlite:
 results/

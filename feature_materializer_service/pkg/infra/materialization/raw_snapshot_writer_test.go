@@ -88,6 +88,23 @@ func (p *recordingEmbeddingProcessor) MaterializeEmbeddings(_ context.Context, _
 	return &out, nil
 }
 
+type fakeDocumentExtractor struct{}
+
+func (e fakeDocumentExtractor) Name() string {
+	return "fake-pdf-extractor"
+}
+
+func (e fakeDocumentExtractor) Version() string {
+	return "test-v1"
+}
+
+func (e fakeDocumentExtractor) ExtractText(context.Context, []byte) (*materialization.DocumentExtraction, error) {
+	return &materialization.DocumentExtraction{
+		Text:      " Hello   PDF\n\ncontent ",
+		PageCount: 1,
+	}, nil
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -103,6 +120,51 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(artifact.SchemaVersion).To(Equal(1))
 		Expect(artifact.SchemaMetadata).To(ContainSubstring("title"))
 		Expect(artifact.RowCount).To(Equal(int64(1)))
+	})
+
+	It("normalizes PDF artifacts to source text Parquet with extractor metadata", func() {
+		ctx := context.Background()
+
+		artifact, err := materialization.NormalizeArtifactToParquetWithProcessors(ctx, []byte("%PDF-1.4"), "application/pdf", "pdf", fakeDocumentExtractor{}, materialization.NewBasicTextCleaner())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(artifact.Data).NotTo(BeEmpty())
+		Expect(artifact.SchemaMetadata).To(ContainSubstring("source_text"))
+		Expect(artifact.SchemaMetadata).To(ContainSubstring("fake-pdf-extractor"))
+		Expect(artifact.SchemaMetadata).To(ContainSubstring("go-basic-text-cleaner"))
+		Expect(artifact.RowCount).To(Equal(int64(1)))
+
+		rows, err := materialization.ExtractTextRowsFromParquet(ctx, artifact.Data, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rows).To(Equal([]string{"Hello PDF content"}))
+	})
+
+	It("normalizes HTML artifacts to source text Parquet with extractor metadata", func() {
+		ctx := context.Background()
+		html := []byte("<!doctype html><html><head><style>.hidden{}</style><script>alert('x')</script></head><body><main><h1>Guide</h1><p>Clean HTML content.</p></main></body></html>")
+
+		artifact, err := materialization.NormalizeArtifactToParquet(ctx, html, "text/html", "html")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(artifact.Data).NotTo(BeEmpty())
+		Expect(artifact.SchemaMetadata).To(ContainSubstring(`"source_format":"html"`))
+		Expect(artifact.SchemaMetadata).To(ContainSubstring("go-html-text-extractor"))
+		Expect(artifact.SchemaMetadata).To(ContainSubstring("go-basic-text-cleaner"))
+		rows, err := materialization.ExtractTextRowsFromParquet(ctx, artifact.Data, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rows).To(Equal([]string{"Guide Clean HTML content."}))
+	})
+
+	It("normalizes markdown artifacts with source metadata", func() {
+		ctx := context.Background()
+
+		artifact, err := materialization.NormalizeArtifactToParquet(ctx, []byte("# Guide\n\nA markdown document."), "text/markdown", "md")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(artifact.SchemaMetadata).To(ContainSubstring(`"source_format":"markdown"`))
+		rows, err := materialization.ExtractTextRowsFromParquet(ctx, artifact.Data, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rows).To(Equal([]string{"# Guide A markdown document."}))
 	})
 
 	It("reads and writes artifacts through the local object store boundary", func() {
@@ -147,6 +209,7 @@ var _ = Describe("Materialization adapters", func() {
 		rawSnapshot.StorageLocation = "s3://local/raw/snapshot.parquet"
 		rawArtifact, err := materialization.NormalizeArtifactToParquet(ctx, []byte("title,views\nIntro,10\n"), "text/csv", "csv")
 		Expect(err).NotTo(HaveOccurred())
+		rawSnapshot.SchemaMetadata = rawArtifact.SchemaMetadata
 		store.objects[rawSnapshot.StorageLocation] = rawArtifact.Data
 		builder := materialization.NewFeatureSnapshotBuilder(store)
 		featureSnapshot := validFeatureSnapshot(rawSnapshot)
@@ -156,6 +219,28 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal(model.SnapshotStatusReady))
 		Expect(result.StorageLocation).To(ContainSubstring("lakehouse/features/"))
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"source_format":"csv"`))
+	})
+
+	It("preserves source extraction metadata when building feature snapshots", func() {
+		ctx := context.Background()
+		store := newMemoryArtifactStore()
+		datasetFile := validDatasetFile()
+		rawSnapshot := validRawSnapshot(datasetFile)
+		rawSnapshot.StorageLocation = "s3://local/raw/pdf-snapshot.parquet"
+		rawArtifact, err := materialization.NormalizeArtifactToParquetWithProcessors(ctx, []byte("%PDF-1.4"), "application/pdf", "pdf", fakeDocumentExtractor{}, materialization.NewBasicTextCleaner())
+		Expect(err).NotTo(HaveOccurred())
+		rawSnapshot.SchemaMetadata = rawArtifact.SchemaMetadata
+		store.objects[rawSnapshot.StorageLocation] = rawArtifact.Data
+		builder := materialization.NewFeatureSnapshotBuilder(store)
+		featureSnapshot := validFeatureSnapshot(rawSnapshot)
+
+		result, err := builder.BuildFeatureSnapshot(ctx, rawSnapshot, featureSnapshot)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"source_format":"pdf"`))
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"source_page_count":1`))
+		Expect(result.SchemaMetadata).To(ContainSubstring("fake-pdf-extractor"))
 	})
 
 	It("materializes embeddings into the pgvector repository boundary", func() {

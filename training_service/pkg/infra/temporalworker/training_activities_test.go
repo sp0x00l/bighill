@@ -99,6 +99,7 @@ var _ = Describe("TrainingActivities", func() {
 		result := model.TrainingRunResult{
 			TrainingRunID: "training-run-1",
 			DatasetID:     uuid.NewString(),
+			ModelID:       uuid.NewString(),
 			Status:        model.TrainingRunStatusCompleted,
 		}
 
@@ -114,6 +115,7 @@ var _ = Describe("TrainingActivities", func() {
 		result := model.TrainingRunResult{
 			TrainingRunID: "training-run-1",
 			DatasetID:     uuid.NewString(),
+			ModelID:       uuid.NewString(),
 			Status:        model.TrainingRunStatusFailed,
 			FailureReason: "model evaluation failed",
 		}

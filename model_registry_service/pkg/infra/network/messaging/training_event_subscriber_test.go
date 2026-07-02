@@ -76,6 +76,7 @@ var _ = Describe("Training event listeners", func() {
 			DatasetId:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotId: uuid.NewString(),
+			ModelId:           uuid.NewString(),
 			ModelName:         "movie-ranker",
 			ModelVersion:      "4",
 			BaseModel:         "mistral-7b",
@@ -105,6 +106,7 @@ var _ = Describe("Training event listeners", func() {
 			TrainingRunId:  trainingRunID.String(),
 			DatasetId:      datasetID.String(),
 			DatasetVersion: "5",
+			ModelId:        uuid.NewString(),
 			ModelName:      "movie-ranker",
 			ModelVersion:   "dataset-v5",
 			BaseModel:      "mistral-7b",
@@ -116,6 +118,7 @@ var _ = Describe("Training event listeners", func() {
 		Expect(uc.failedModel.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.failedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.failedModel.ModelVersion).To(Equal(5))
+		Expect(uc.failedModel.MetricsMetadata).To(Equal("{}"))
 		Expect(uc.failedModel.FailureReason).To(Equal("training failed"))
 	})
 
@@ -126,6 +129,7 @@ var _ = Describe("Training event listeners", func() {
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId: uuid.NewString(),
 			DatasetId:     uuid.NewString(),
+			ModelId:       uuid.NewString(),
 			BaseModel:     "mistral-7b",
 		})
 
@@ -142,10 +146,13 @@ var _ = Describe("Training event listeners", func() {
 			TrainingRunId:    uuid.NewString(),
 			DatasetId:        datasetID.String(),
 			DatasetVersion:   "1",
+			ModelId:          uuid.NewString(),
 			ModelName:        "movie-ranker",
 			ModelVersion:     "1",
 			BaseModel:        "mistral-7b",
 			ArtifactLocation: "s3://local-dev-bucket/models/run",
+			ArtifactFormat:   "HF_PEFT_ADAPTER",
+			MetricsMetadata:  `{"eval_loss":0.12}`,
 		})
 
 		Expect(errors.Is(err, expectedErr)).To(BeTrue())

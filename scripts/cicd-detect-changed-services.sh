@@ -85,13 +85,30 @@ detect_changed_services() {
     return 1
   }
   local -a CHANGED_SERVICES=()
+  add_changed_service() {
+    local SERVICE="$1"
+    local EXISTING
+    for EXISTING in "${CHANGED_SERVICES[@]}"; do
+      if [ "$EXISTING" = "$SERVICE" ]; then
+        return
+      fi
+    done
+    CHANGED_SERVICES+=("$SERVICE")
+  }
+
+  for FILE in "${CHANGED_FILES[@]}"; do
+    if [[ "${FILE}" == pdf_extractor_lib/* ]] && ! is_excluded "feature_materializer_service"; then
+      add_changed_service "feature_materializer_service"
+      break
+    fi
+  done
 
   for SERVICE_DIR in $(discover_services "${PROJECT_ROOT}"); do
     if is_excluded "${SERVICE_DIR}"; then
       continue
     fi
     if [ "${INCLUDE_ALL}" = "true" ]; then
-      CHANGED_SERVICES+=("${SERVICE_DIR}")
+      add_changed_service "${SERVICE_DIR}"
       continue
     fi
     local SERVICE_NAME
@@ -100,7 +117,7 @@ detect_changed_services() {
 
     for FILE in "${CHANGED_FILES[@]}"; do
       if [[ "${FILE}" == "${SERVICE_DIR}/"* || "${FILE}" == "${DOCKERFILE}" ]]; then
-        CHANGED_SERVICES+=("${SERVICE_DIR}")
+        add_changed_service "${SERVICE_DIR}"
         break
       fi
     done

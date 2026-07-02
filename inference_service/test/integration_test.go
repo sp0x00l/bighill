@@ -60,11 +60,22 @@ var _ = Describe("Inference service integration", Ordered, func() {
 
 		models = repo.NewInferenceModelRepository(database)
 		datasets = repo.NewInferenceDatasetRepository(database)
+		requests := repo.NewInferenceRequestRepository(database)
+		promptStrategy := model.PromptStrategy{
+			Version:          "rag-prompt-v1",
+			SystemPrompt:     "Use context only.",
+			MaxContextChars:  12000,
+			MaxContextChunks: 8,
+		}
 		modelsUse = app.NewInferenceUsecase(
 			models,
 			app.WithInferenceDatasetRepository(datasets),
+			app.WithInferenceRequestRepository(requests),
 			app.WithRetrievalClient(&integrationRetrievalClient{}),
 			app.WithGenerationAdapter(generation.NewDeterministicGenerator()),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
 		)
 	})
 
@@ -175,7 +186,23 @@ var _ = Describe("Inference service integration", Ordered, func() {
 
 		datasetID := uuid.New()
 		userID := uuid.New()
+		modelID := uuid.New()
 		embeddingSnapshotID := uuid.New()
+		_, err = models.UpsertModel(ctx, &model.InferenceModel{
+			ModelID:           modelID,
+			TrainingRunID:     uuid.New(),
+			DatasetID:         datasetID,
+			Name:              "movie-ranker",
+			ModelVersion:      1,
+			BaseModel:         "mistral-7b",
+			ArtifactLocation:  "s3://local-dev-bucket/models/" + modelID.String(),
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactChecksum:  "sha256:abc",
+			ArtifactSizeBytes: 128,
+			MetricsMetadata:   `{"eval_loss":0.12}`,
+			Status:            model.ModelStatusReady,
+		}, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
 		Expect(publisher.Publish(runCtx, topics.DataRegistry, sharedmessaging.Message{
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeDatasetUpdated,
@@ -232,19 +259,23 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		client := inferencepb.NewInferenceServiceClient(conn)
 
 		response, err := client.Generate(ctx, &inferencepb.GenerateRequest{
+			RequestId: uuid.NewString(),
 			DatasetId: datasetID.String(),
+			ModelId:   modelID.String(),
 			QueryText: "what movie context is available?",
 			TopK:      3,
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(response.GetAnswer()).To(ContainSubstring("integration retrieved context"))
+		Expect(response.GetRequestId()).NotTo(BeEmpty())
+		Expect(response.GetGenerationProvider()).To(Equal("deterministic"))
 		Expect(response.GetContexts()).To(HaveLen(1))
 	})
 })
 
 type integrationRetrievalClient struct{}
 
-func (c *integrationRetrievalClient) SearchEmbeddings(context.Context, uuid.UUID, string, int) ([]model.RetrievedContext, error) {
+func (c *integrationRetrievalClient) SearchEmbeddings(context.Context, uuid.UUID, string, int, map[string]string) ([]model.RetrievedContext, error) {
 	return []model.RetrievedContext{{
 		EmbeddingRecordID:   uuid.New(),
 		EmbeddingSnapshotID: uuid.New(),
@@ -259,7 +290,7 @@ func (c *integrationRetrievalClient) Close() error {
 }
 
 func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"inference_models", "inference_datasets"} {
+	for _, table := range []string{"inference_requests", "inference_models", "inference_datasets"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}

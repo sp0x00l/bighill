@@ -22,6 +22,7 @@ run_install() {
 run_install "data_contracts"
 "${PROJECT_ROOT}/data_contracts/scripts/build.sh"
 run_install "shared_lib"
+run_install "pdf_extractor_lib"
 
 # All discovered *_service directories with config.sh.
 for SERVICE_DIR in $(discover_services "$PROJECT_ROOT"); do

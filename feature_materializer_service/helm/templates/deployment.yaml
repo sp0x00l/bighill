@@ -35,6 +35,8 @@ spec:
               value: {{ .Values.env.otelExporterEndpoint | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_NAME
               value: {{ .Values.env.serviceName | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID
@@ -67,8 +69,8 @@ spec:
               value: {{ .Values.env.artifactUploadPartSizeMb | quote }}
             - name: FEATURE_MATERIALIZER_EMBEDDING_PROVIDER
               value: {{ .Values.env.embeddingProvider | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_ENDPOINT
-              value: {{ .Values.env.embeddingEndpoint | quote }}
+            - name: FEATURE_MATERIALIZER_EMBEDDING_URL
+              value: {{ .Values.env.embeddingUrl | quote }}
             - name: FEATURE_MATERIALIZER_EMBEDDING_MODEL
               value: {{ .Values.env.embeddingModel | quote }}
             - name: FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS
@@ -77,6 +79,14 @@ spec:
               value: {{ .Values.env.embeddingMaxRows | quote }}
             - name: FEATURE_MATERIALIZER_EMBEDDING_STRATEGY_VERSION
               value: {{ .Values.env.embeddingStrategyVersion | quote }}
+            - name: FEATURE_MATERIALIZER_EXTRACTOR_NAME
+              value: {{ .Values.env.extractorName | quote }}
+            - name: FEATURE_MATERIALIZER_EXTRACTOR_VERSION
+              value: {{ .Values.env.extractorVersion | quote }}
+            - name: FEATURE_MATERIALIZER_CLEANER_NAME
+              value: {{ .Values.env.cleanerName | quote }}
+            - name: FEATURE_MATERIALIZER_CLEANER_VERSION
+              value: {{ .Values.env.cleanerVersion | quote }}
             - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_NAME
               value: {{ .Values.env.embeddingChunkerName | quote }}
             - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_VERSION

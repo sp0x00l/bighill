@@ -67,11 +67,16 @@ func (u *dataUploadUseCase) UploadFile(ctx context.Context, upload *model.DataFi
 	}
 
 	payload := &datasetpb.DatasetFileUploadedEvent{
-		DatasetId:       upload.DatasetID.String(),
-		UserId:          upload.UserID.String(),
-		StorageLocation: storageLocation,
-		ContentType:     upload.ContentType,
-		FileExtension:   upload.Extension,
+		DatasetId:         upload.DatasetID.String(),
+		UserId:            upload.UserID.String(),
+		StorageLocation:   storageLocation,
+		ContentType:       upload.ContentType,
+		FileExtension:     upload.Extension,
+		TableNamespace:    upload.TableNamespace,
+		TableName:         upload.TableName,
+		TableFormat:       upload.TableFormat,
+		CatalogProvider:   upload.CatalogProvider,
+		ProcessingProfile: upload.ProcessingProfile,
 	}
 	message := messaging.Message{
 		ResourceKey: upload.DatasetID,

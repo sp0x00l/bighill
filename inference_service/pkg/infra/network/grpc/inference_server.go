@@ -96,19 +96,30 @@ func (s *InferenceServer) Generate(ctx context.Context, req *inferencepb.Generat
 	if err != nil || datasetID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid dataset_id")
 	}
-	modelID := uuid.Nil
-	if strings.TrimSpace(req.GetModelId()) != "" {
-		modelID, err = uuid.Parse(req.GetModelId())
-		if err != nil || modelID == uuid.Nil {
-			return nil, status.Error(codes.InvalidArgument, "invalid model_id")
-		}
+	modelID, err := uuid.Parse(req.GetModelId())
+	if err != nil || modelID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid model_id")
+	}
+	requestID, err := uuid.Parse(req.GetRequestId())
+	if err != nil || requestID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid request_id")
+	}
+	queryText := strings.TrimSpace(req.GetQueryText())
+	if queryText == "" {
+		return nil, status.Error(codes.InvalidArgument, "query_text is required")
+	}
+	topK := int(req.GetTopK())
+	if topK <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "top_k must be greater than zero")
 	}
 
 	response, err := s.usecase.Generate(ctx, model.GenerateRequest{
-		DatasetID: datasetID,
-		ModelID:   modelID,
-		QueryText: req.GetQueryText(),
-		TopK:      int(req.GetTopK()),
+		RequestID:       requestID,
+		DatasetID:       datasetID,
+		ModelID:         modelID,
+		QueryText:       queryText,
+		TopK:            topK,
+		MetadataFilters: req.GetMetadataFilters(),
 	})
 	if err != nil {
 		return nil, inferenceStatusError(err)
@@ -119,9 +130,6 @@ func (s *InferenceServer) Generate(ctx context.Context, req *inferencepb.Generat
 func generateResponseToPB(response *model.GenerateResponse) *inferencepb.GenerateResponse {
 	log.Trace("generateResponseToPB")
 
-	if response == nil {
-		return &inferencepb.GenerateResponse{}
-	}
 	contexts := make([]*inferencepb.RetrievedContext, len(response.Contexts))
 	for i, ctx := range response.Contexts {
 		contexts[i] = &inferencepb.RetrievedContext{
@@ -133,16 +141,16 @@ func generateResponseToPB(response *model.GenerateResponse) *inferencepb.Generat
 			Similarity:          ctx.Similarity,
 		}
 	}
-	modelID := ""
-	if response.ModelID != uuid.Nil {
-		modelID = response.ModelID.String()
-	}
 	return &inferencepb.GenerateResponse{
-		DatasetId: response.DatasetID.String(),
-		ModelId:   modelID,
-		QueryText: response.QueryText,
-		Answer:    response.Answer,
-		Contexts:  contexts,
+		DatasetId:             response.DatasetID.String(),
+		ModelId:               response.ModelID.String(),
+		QueryText:             response.QueryText,
+		Answer:                response.Answer,
+		Contexts:              contexts,
+		RequestId:             response.RequestID.String(),
+		PromptStrategyVersion: response.PromptStrategyVersion,
+		GenerationProvider:    response.GenerationProvider,
+		GenerationModel:       response.GenerationModel,
 	}
 }
 
@@ -156,6 +164,8 @@ func inferenceStatusError(err error) error {
 		err,
 		rpcLib.GRPCCode(codes.NotFound, domain.ErrDatasetNotFound),
 		rpcLib.GRPCCode(codes.NotFound, domain.ErrModelNotFound),
+		rpcLib.GRPCCode(codes.FailedPrecondition, domain.ErrModelNotReady),
+		rpcLib.GRPCCode(codes.FailedPrecondition, domain.ErrModelMismatch),
 		rpcLib.GRPCCode(codes.InvalidArgument, domain.ErrValidationFailed),
 		rpcLib.GRPCCode(codes.FailedPrecondition, domain.ErrDatasetNotReady),
 		rpcLib.GRPCCode(codes.Unavailable, domain.ErrRetrievalFailed),

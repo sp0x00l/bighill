@@ -9,6 +9,10 @@ const (
 	FileTypeCSV         = "csv"
 	FileTypeJSON        = "json"
 	FileTypeParquet     = "parquet"
+	FileTypePDF         = "pdf"
+	FileTypeHTML        = "html"
+	FileTypeMarkdown    = "markdown"
+	FileTypeText        = "text"
 	FileTypeUnsupported = "unsupported"
 	DefaultContentType  = "application/octet-stream"
 )
@@ -47,6 +51,14 @@ func (d *Detector) GetContentType(fileType string) string {
 		return "application/json"
 	case FileTypeParquet:
 		return "application/vnd.apache.parquet"
+	case FileTypePDF:
+		return "application/pdf"
+	case FileTypeHTML:
+		return "text/html"
+	case FileTypeMarkdown:
+		return "text/markdown"
+	case FileTypeText:
+		return "text/plain"
 	default:
 		return DefaultContentType
 	}

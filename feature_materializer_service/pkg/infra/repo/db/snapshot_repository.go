@@ -22,8 +22,9 @@ import (
 
 type SnapshotRepository struct {
 	coreDB.Database
-	outbox msgConn.OrderedOutbox
-	topic  string
+	outbox       msgConn.OrderedOutbox
+	topic        string
+	outboxSignal func()
 }
 
 type SnapshotRepositoryOption func(*SnapshotRepository)
@@ -34,6 +35,14 @@ func WithTransactionalOutbox(outbox msgConn.OrderedOutbox, topic string) Snapsho
 	return func(r *SnapshotRepository) {
 		r.outbox = outbox
 		r.topic = topic
+	}
+}
+
+func WithOutboxSignal(signal func()) SnapshotRepositoryOption {
+	log.Trace("WithOutboxSignal")
+
+	return func(r *SnapshotRepository) {
+		r.outboxSignal = signal
 	}
 }
 
@@ -56,10 +65,10 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, dataset
 
 	query := `INSERT INTO ` + r.Name + `.raw_snapshots (
 		dataset_id, user_id, idempotency_key, source_storage_location, storage_location, content_type, file_extension,
-		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata, status
+		table_namespace, table_name, table_format, catalog_provider, processing_profile, status
 	) VALUES (
 		@dataset_id, @user_id, @idempotency_key, @source_storage_location, @storage_location, @content_type, @file_extension,
-		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, @status
+		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @status
 	)
 	ON CONFLICT (idempotency_key) DO NOTHING
 	RETURNING ` + rawSnapshotColumns()
@@ -77,8 +86,6 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, dataset
 		"table_format":            datasetFile.TableFormat,
 		"catalog_provider":        datasetFile.CatalogProvider,
 		"processing_profile":      datasetFile.ProcessingProfile.String(),
-		"schema_version":          1,
-		"schema_metadata":         "{}",
 		"status":                  model.SnapshotStatusPending.String(),
 	})
 	rawSnapshot, err := scanRawSnapshot(row)
@@ -111,8 +118,8 @@ func (r *SnapshotRepository) MarkRawReady(ctx context.Context, rawSnapshot *mode
 		"raw_snapshot_id":  pgtype.UUID{Bytes: rawSnapshot.RawSnapshotID, Valid: true},
 		"storage_location": rawSnapshot.StorageLocation,
 		"table_format":     rawSnapshot.TableFormat,
-		"schema_version":   schemaVersionOrDefault(rawSnapshot.SchemaVersion),
-		"schema_metadata":  schemaMetadataOrDefault(rawSnapshot.SchemaMetadata),
+		"schema_version":   rawSnapshot.SchemaVersion,
+		"schema_metadata":  rawSnapshot.SchemaMetadata,
 		"status":           model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
@@ -146,8 +153,8 @@ func (r *SnapshotRepository) markRawReadyTx(ctx context.Context, rawSnapshot *mo
 		"raw_snapshot_id":  pgtype.UUID{Bytes: rawSnapshot.RawSnapshotID, Valid: true},
 		"storage_location": rawSnapshot.StorageLocation,
 		"table_format":     rawSnapshot.TableFormat,
-		"schema_version":   schemaVersionOrDefault(rawSnapshot.SchemaVersion),
-		"schema_metadata":  schemaMetadataOrDefault(rawSnapshot.SchemaMetadata),
+		"schema_version":   rawSnapshot.SchemaVersion,
+		"schema_metadata":  rawSnapshot.SchemaMetadata,
 		"status":           model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
@@ -162,6 +169,7 @@ func (r *SnapshotRepository) markRawReadyTx(ctx context.Context, rawSnapshot *mo
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit raw snapshot ready transaction: %w", err)
 	}
+	r.notifyOutbox()
 	return nil
 }
 
@@ -246,8 +254,8 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, raw
 		"table_format":       rawSnapshot.TableFormat,
 		"catalog_provider":   rawSnapshot.CatalogProvider,
 		"processing_profile": rawSnapshot.ProcessingProfile.String(),
-		"schema_version":     schemaVersionOrDefault(rawSnapshot.SchemaVersion),
-		"schema_metadata":    schemaMetadataOrDefault(rawSnapshot.SchemaMetadata),
+		"schema_version":     rawSnapshot.SchemaVersion,
+		"schema_metadata":    rawSnapshot.SchemaMetadata,
 		"status":             model.SnapshotStatusPending.String(),
 	}))
 	if err != nil {
@@ -279,8 +287,8 @@ func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, featureSnapsh
 		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshot.FeatureSnapshotID, Valid: true},
 		"storage_location":    featureSnapshot.StorageLocation,
 		"table_format":        featureSnapshot.TableFormat,
-		"schema_version":      schemaVersionOrDefault(featureSnapshot.SchemaVersion),
-		"schema_metadata":     schemaMetadataOrDefault(featureSnapshot.SchemaMetadata),
+		"schema_version":      featureSnapshot.SchemaVersion,
+		"schema_metadata":     featureSnapshot.SchemaMetadata,
 		"status":              model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
@@ -314,8 +322,8 @@ func (r *SnapshotRepository) markFeatureReadyTx(ctx context.Context, featureSnap
 		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshot.FeatureSnapshotID, Valid: true},
 		"storage_location":    featureSnapshot.StorageLocation,
 		"table_format":        featureSnapshot.TableFormat,
-		"schema_version":      schemaVersionOrDefault(featureSnapshot.SchemaVersion),
-		"schema_metadata":     schemaMetadataOrDefault(featureSnapshot.SchemaMetadata),
+		"schema_version":      featureSnapshot.SchemaVersion,
+		"schema_metadata":     featureSnapshot.SchemaMetadata,
 		"status":              model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
@@ -330,6 +338,7 @@ func (r *SnapshotRepository) markFeatureReadyTx(ctx context.Context, featureSnap
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit feature snapshot ready transaction: %w", err)
 	}
+	r.notifyOutbox()
 	return nil
 }
 
@@ -399,10 +408,12 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, f
 
 	query := `INSERT INTO ` + r.Name + `.embedding_snapshots (
 		feature_snapshot_id, dataset_id, user_id, idempotency_key, strategy_version,
+		extractor_name, extractor_version, cleaner_name, cleaner_version,
 		chunker_name, chunker_version, chunk_size, chunk_overlap, embedding_provider, embedding_model,
 		embedding_dimensions, status
 	) VALUES (
 		@feature_snapshot_id, @dataset_id, @user_id, @idempotency_key, @strategy_version,
+		@extractor_name, @extractor_version, @cleaner_name, @cleaner_version,
 		@chunker_name, @chunker_version, @chunk_size, @chunk_overlap, @embedding_provider, @embedding_model,
 		@embedding_dimensions, @status
 	)
@@ -415,6 +426,10 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, f
 		"user_id":              pgtype.UUID{Bytes: featureSnapshot.UserID, Valid: true},
 		"idempotency_key":      pgtype.UUID{Bytes: idempotencyKey, Valid: true},
 		"strategy_version":     strategy.StrategyVersion,
+		"extractor_name":       strategy.ExtractorName,
+		"extractor_version":    strategy.ExtractorVersion,
+		"cleaner_name":         strategy.CleanerName,
+		"cleaner_version":      strategy.CleanerVersion,
 		"chunker_name":         strategy.ChunkerName,
 		"chunker_version":      strategy.ChunkerVersion,
 		"chunk_size":           strategy.ChunkSize,
@@ -498,7 +513,18 @@ func (r *SnapshotRepository) MarkEmbeddingReady(ctx context.Context, embeddingSn
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit embedding snapshot ready transaction: %w", err)
 	}
+	if r.outbox != nil {
+		r.notifyOutbox()
+	}
 	return nil
+}
+
+func (r *SnapshotRepository) notifyOutbox() {
+	log.Trace("SnapshotRepository notifyOutbox")
+
+	if r.outboxSignal != nil {
+		r.outboxSignal()
+	}
 }
 
 func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx, embeddingSnapshot *model.EmbeddingSnapshot) error {
@@ -523,6 +549,10 @@ func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx
 			embedding_dimensions = @embedding_dimensions,
 			embedding_count = @embedding_count,
 			strategy_version = @strategy_version,
+			extractor_name = @extractor_name,
+			extractor_version = @extractor_version,
+			cleaner_name = @cleaner_name,
+			cleaner_version = @cleaner_version,
 			chunker_name = @chunker_name,
 			chunker_version = @chunker_version,
 			chunk_size = @chunk_size,
@@ -538,6 +568,10 @@ func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx
 		"embedding_dimensions":  embeddingSnapshot.EmbeddingDimensions,
 		"embedding_count":       embeddingSnapshot.EmbeddingCount,
 		"strategy_version":      embeddingSnapshot.StrategyVersion,
+		"extractor_name":        embeddingSnapshot.ExtractorName,
+		"extractor_version":     embeddingSnapshot.ExtractorVersion,
+		"cleaner_name":          embeddingSnapshot.CleanerName,
+		"cleaner_version":       embeddingSnapshot.CleanerVersion,
 		"chunker_name":          embeddingSnapshot.ChunkerName,
 		"chunker_version":       embeddingSnapshot.ChunkerVersion,
 		"chunk_size":            embeddingSnapshot.ChunkSize,
@@ -622,9 +656,6 @@ func (r *SnapshotRepository) SearchEmbeddingRecords(ctx context.Context, embeddi
 
 	if embeddingSnapshot == nil {
 		return nil, domain.ErrEmbeddingSnapshotNotFound.Extend("active embedding snapshot is required")
-	}
-	if topK <= 0 {
-		topK = 5
 	}
 	if embeddingSnapshot.EmbeddingDimensions <= 0 {
 		return nil, domain.ErrValidationFailed.Extend("embedding dimensions are required")
@@ -793,6 +824,7 @@ func featureSnapshotColumns() string {
 func embeddingSnapshotColumns() string {
 	return `embedding_snapshot_id::text, feature_snapshot_id::text, dataset_id::text, user_id::text,
 		vector_store, collection_name, embedding_dimensions, embedding_count, strategy_version,
+		extractor_name, extractor_version, cleaner_name, cleaner_version,
 		chunker_name, chunker_version, chunk_size, chunk_overlap, embedding_provider, embedding_model,
 		active_for_retrieval, status::text, COALESCE(failure_reason, '')`
 }
@@ -886,6 +918,10 @@ func scanEmbeddingSnapshot(row pgx.Row) (*model.EmbeddingSnapshot, error) {
 		&embeddingSnapshot.EmbeddingDimensions,
 		&embeddingSnapshot.EmbeddingCount,
 		&embeddingSnapshot.StrategyVersion,
+		&embeddingSnapshot.ExtractorName,
+		&embeddingSnapshot.ExtractorVersion,
+		&embeddingSnapshot.CleanerName,
+		&embeddingSnapshot.CleanerVersion,
 		&embeddingSnapshot.ChunkerName,
 		&embeddingSnapshot.ChunkerVersion,
 		&embeddingSnapshot.ChunkSize,
@@ -930,20 +966,6 @@ func scanEmbeddingRecordSearchRow(row pgx.Row) (model.EmbeddingRecord, error) {
 	record.Distance = distance
 	record.Similarity = 1 - distance
 	return record, nil
-}
-
-func schemaVersionOrDefault(version int) int {
-	if version <= 0 {
-		return 1
-	}
-	return version
-}
-
-func schemaMetadataOrDefault(metadata string) string {
-	if metadata == "" {
-		return "{}"
-	}
-	return metadata
 }
 
 func vectorLiteral(vector []float32) string {

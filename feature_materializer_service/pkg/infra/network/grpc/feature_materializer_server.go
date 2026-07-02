@@ -92,8 +92,12 @@ func (s *FeatureMaterializerServer) SearchEmbeddings(ctx context.Context, req *f
 	if queryText == "" {
 		return nil, status.Error(codes.InvalidArgument, "query_text is required")
 	}
+	topK := int(req.GetTopK())
+	if topK <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "top_k must be greater than zero")
+	}
 
-	result, err := s.searchUsecase.SearchEmbeddings(ctx, datasetID, queryText, int(req.GetTopK()))
+	result, err := s.searchUsecase.SearchEmbeddings(ctx, datasetID, queryText, topK)
 	if err != nil {
 		return nil, embeddingSearchStatusError(err)
 	}

@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"inference_service/pkg/app"
+	"inference_service/pkg/domain/model"
 	"inference_service/pkg/infra/generation"
 	inferencegrpc "inference_service/pkg/infra/network/grpc"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
@@ -38,8 +40,19 @@ type inferenceConfig struct {
 	Messaging           messagingConn.MessengerConfig
 	Topics              inferencemessaging.InferenceTopics
 	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
+	Generation          generationConfig
 	GRPCPort            int
 	Health              healthConfig
+}
+
+type generationConfig struct {
+	Provider         string
+	Endpoint         string
+	Model            string
+	RequestTimeout   time.Duration
+	PromptStrategy   string
+	MaxContextChars  int
+	MaxContextChunks int
 }
 
 type healthConfig struct {
@@ -86,6 +99,7 @@ func main() {
 
 	modelRepository := inferencedb.NewInferenceModelRepository(database)
 	datasetRepository := inferencedb.NewInferenceDatasetRepository(database)
+	requestRepository := inferencedb.NewInferenceRequestRepository(database)
 	retrievalClient, err := inferencegrpc.NewFeatureMaterializerClient(cancelCtx, cfg.FeatureMaterializer)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create feature materializer client")
@@ -93,12 +107,23 @@ func main() {
 	defer func() {
 		_ = retrievalClient.Close()
 	}()
-	generator := generation.NewDeterministicGenerator()
+	generator, err := newGenerationAdapter(cfg.Generation)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create generation adapter")
+	}
+	promptStrategy, err := promptStrategyFromConfig(cfg.Generation)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("invalid prompt strategy configuration")
+	}
 	inferenceUsecase := app.NewInferenceUsecase(
 		modelRepository,
 		app.WithInferenceDatasetRepository(datasetRepository),
+		app.WithInferenceRequestRepository(requestRepository),
 		app.WithRetrievalClient(retrievalClient),
 		app.WithGenerationAdapter(generator),
+		app.WithPromptStrategy(promptStrategy),
+		app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+		app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
 	)
 	modelUpdatedSubscriber := inferencemessaging.NewModelUpdatedSubscriber(subscriber, inferenceUsecase, cfg.Topics)
 	grpcService := inferencegrpc.NewInferenceGrpcServer(inferenceUsecase)
@@ -171,6 +196,15 @@ func readInferenceConfig() inferenceConfig {
 			CallTimeoutMs: env.WithDefaultInt("INFERENCE_FEATURE_MATERIALIZER_GRPC_CALL_TIMEOUT_MS", "15000"),
 			RetryCount:    env.WithDefaultInt("INFERENCE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT", "3"),
 		},
+		Generation: generationConfig{
+			Provider:         env.WithDefaultString("INFERENCE_GENERATION_PROVIDER", "deterministic"),
+			Endpoint:         env.WithDefaultString("INFERENCE_GENERATION_ENDPOINT", "http://localhost:11434"),
+			Model:            env.WithDefaultString("INFERENCE_GENERATION_MODEL", "llama3.1:8b"),
+			RequestTimeout:   secondsFromEnv("INFERENCE_GENERATION_REQUEST_TIMEOUT_SECONDS", "60"),
+			PromptStrategy:   env.WithDefaultString("INFERENCE_PROMPT_STRATEGY_VERSION", "rag-prompt-v1"),
+			MaxContextChars:  env.WithDefaultInt("INFERENCE_PROMPT_MAX_CONTEXT_CHARS", "12000"),
+			MaxContextChunks: env.WithDefaultInt("INFERENCE_PROMPT_MAX_CONTEXT_CHUNKS", "8"),
+		},
 		GRPCPort: env.WithDefaultInt("INFERENCE_API_GRPC_PORT", "7073"),
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
@@ -183,6 +217,43 @@ func readInferenceConfig() inferenceConfig {
 			ServiceLatencyThreshold:       secondsFromEnv("INFERENCE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
 	}
+}
+
+func newGenerationAdapter(cfg generationConfig) (app.GenerationAdapter, error) {
+	log.Trace("newGenerationAdapter")
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "", "deterministic":
+		return generation.NewDeterministicGenerator(), nil
+	case "ollama":
+		return generation.NewHTTPGenerator("ollama", cfg.Endpoint, cfg.Model, cfg.RequestTimeout)
+	default:
+		return nil, fmt.Errorf("unsupported generation provider %q", cfg.Provider)
+	}
+}
+
+func promptStrategyFromConfig(cfg generationConfig) (model.PromptStrategy, error) {
+	log.Trace("promptStrategyFromConfig")
+
+	strategy := model.PromptStrategy{
+		Version:          strings.TrimSpace(cfg.PromptStrategy),
+		SystemPrompt:     "You answer using only the retrieved context. If the context does not contain the answer, say that the answer is not available in the retrieved context.",
+		MaxContextChars:  cfg.MaxContextChars,
+		MaxContextChunks: cfg.MaxContextChunks,
+	}
+	if strategy.Version == "" {
+		return model.PromptStrategy{}, fmt.Errorf("prompt strategy version is required")
+	}
+	if strategy.SystemPrompt == "" {
+		return model.PromptStrategy{}, fmt.Errorf("prompt system prompt is required")
+	}
+	if strategy.MaxContextChars <= 0 {
+		return model.PromptStrategy{}, fmt.Errorf("prompt max context chars must be greater than zero")
+	}
+	if strategy.MaxContextChunks <= 0 {
+		return model.PromptStrategy{}, fmt.Errorf("prompt max context chunks must be greater than zero")
+	}
+	return strategy, nil
 }
 
 func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {

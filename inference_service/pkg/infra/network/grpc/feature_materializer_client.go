@@ -32,15 +32,24 @@ func NewFeatureMaterializerClient(ctx context.Context, config FeatureMaterialize
 
 	address := config.Address
 	if address == "" {
-		address = "localhost:7072"
+		return nil, fmt.Errorf("feature materializer grpc address is required")
+	}
+	if config.DialTimeoutMs <= 0 {
+		return nil, fmt.Errorf("feature materializer grpc dial timeout must be greater than zero")
+	}
+	if config.CallTimeoutMs <= 0 {
+		return nil, fmt.Errorf("feature materializer grpc call timeout must be greater than zero")
+	}
+	if config.RetryCount <= 0 {
+		return nil, fmt.Errorf("feature materializer grpc retry count must be greater than zero")
 	}
 
 	conn, err := rpcLib.NewClient(ctx, rpcLib.Config{
 		Address:          address,
 		Insecure:         true,
-		DialTimeout:      time.Duration(defaultPositiveInt(config.DialTimeoutMs, 500)) * time.Millisecond,
-		PerCallTimeout:   time.Duration(defaultPositiveInt(config.CallTimeoutMs, 15000)) * time.Millisecond,
-		MaxRetryAttempts: defaultPositiveInt(config.RetryCount, 3),
+		DialTimeout:      time.Duration(config.DialTimeoutMs) * time.Millisecond,
+		PerCallTimeout:   time.Duration(config.CallTimeoutMs) * time.Millisecond,
+		MaxRetryAttempts: config.RetryCount,
 	}, opts...)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("feature materializer grpc connection instantiation failed")
@@ -62,13 +71,14 @@ func (c *featureMaterializerClient) Close() error {
 	return c.conn.Close()
 }
 
-func (c *featureMaterializerClient) SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int) ([]model.RetrievedContext, error) {
+func (c *featureMaterializerClient) SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error) {
 	log.Trace("featureMaterializerClient SearchEmbeddings")
 
 	resp, err := c.client.SearchEmbeddings(ctx, &featurepb.SearchEmbeddingsRequest{
-		DatasetId: datasetID.String(),
-		QueryText: queryText,
-		TopK:      int32(topK),
+		DatasetId:       datasetID.String(),
+		QueryText:       queryText,
+		TopK:            int32(topK),
+		MetadataFilters: metadataFilters,
 	})
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("feature materializer search embeddings failed")
@@ -107,13 +117,4 @@ func embeddingSearchMatchesToContexts(matches []*featurepb.EmbeddingSearchMatch)
 		})
 	}
 	return contexts, nil
-}
-
-func defaultPositiveInt(value, defaultValue int) int {
-	log.Trace("defaultPositiveInt")
-
-	if value <= 0 {
-		return defaultValue
-	}
-	return value
 }

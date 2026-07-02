@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"data_ingestion_service/pkg/domain/model"
 	ingestionmessaging "data_ingestion_service/pkg/infra/network/messaging"
 	datasetpb "lib/data_contracts_lib/dataset"
 	shared "lib/shared_lib/messaging"
@@ -19,16 +20,20 @@ func TestMessaging(t *testing.T) {
 }
 
 type datasetLifecycleUsecaseStub struct {
-	addDatasetID    uuid.UUID
-	addUserID       uuid.UUID
+	addDataset      *model.Dataset
+	updateDataset   *model.Dataset
 	deleteDatasetID uuid.UUID
 	deleteUserID    uuid.UUID
 	err             error
 }
 
-func (s *datasetLifecycleUsecaseStub) AddDataset(_ context.Context, datasetID uuid.UUID, userID uuid.UUID) error {
-	s.addDatasetID = datasetID
-	s.addUserID = userID
+func (s *datasetLifecycleUsecaseStub) AddDataset(_ context.Context, dataset *model.Dataset) error {
+	s.addDataset = dataset
+	return s.err
+}
+
+func (s *datasetLifecycleUsecaseStub) UpdateDataset(_ context.Context, dataset *model.Dataset) error {
+	s.updateDataset = dataset
 	return s.err
 }
 
@@ -46,14 +51,49 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 		listener := ingestionmessaging.NewDatasetCreatedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetCreatedEvent{
-			DatasetId: datasetID.String(),
-			UserId:    userID.String(),
+			DatasetId:         datasetID.String(),
+			UserId:            userID.String(),
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
+			SchemaVersion:     1,
+			SchemaMetadata:    "{}",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(uc.addDatasetID).To(Equal(datasetID))
-		Expect(uc.addUserID).To(Equal(userID))
+		Expect(uc.addDataset.DatasetID).To(Equal(datasetID))
+		Expect(uc.addDataset.UserID).To(Equal(userID))
+		Expect(uc.addDataset.TableNamespace).To(Equal("features"))
+		Expect(uc.addDataset.ProcessingProfile).To(Equal("TEXT_RAG"))
 		Expect(listener.MsgType()).To(Equal(shared.MsgTypeDatasetCreated))
+	})
+
+	It("updates datasets from dataset-updated events", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		uc := &datasetLifecycleUsecaseStub{}
+		listener := ingestionmessaging.NewDatasetUpdatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
+			DatasetId:         datasetID.String(),
+			UserId:            userID.String(),
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
+			SchemaVersion:     2,
+			SchemaMetadata:    `{"columns":["title"]}`,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.updateDataset.DatasetID).To(Equal(datasetID))
+		Expect(uc.updateDataset.UserID).To(Equal(userID))
+		Expect(uc.updateDataset.SchemaVersion).To(Equal(2))
+		Expect(uc.updateDataset.SchemaMetadata).To(Equal(`{"columns":["title"]}`))
+		Expect(listener.MsgType()).To(Equal(shared.MsgTypeDatasetUpdated))
 	})
 
 	It("deletes datasets from dataset-deleted events", func() {
@@ -77,7 +117,27 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 		listener := ingestionmessaging.NewDatasetCreatedEventListener(&datasetLifecycleUsecaseStub{})
 
 		err := listener.Handle(context.Background(), uuid.New(), &datasetpb.DatasetCreatedEvent{
-			DatasetId: uuid.NewString(),
+			DatasetId:         uuid.NewString(),
+			UserId:            uuid.NewString(),
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
+			SchemaVersion:     1,
+			SchemaMetadata:    "{}",
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(shared.IsNonRetryable(err)).To(BeTrue())
+	})
+
+	It("classifies missing materialization metadata as non-retryable", func() {
+		datasetID := uuid.New()
+		listener := ingestionmessaging.NewDatasetCreatedEventListener(&datasetLifecycleUsecaseStub{})
+
+		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetCreatedEvent{
+			DatasetId: datasetID.String(),
 			UserId:    uuid.NewString(),
 		})
 

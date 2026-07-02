@@ -58,16 +58,21 @@ func (s *featureMaterializerServiceClientStub) SearchEmbeddings(_ context.Contex
 
 var _ = Describe("InferenceServer", func() {
 	It("maps generate requests and responses", func() {
+		requestID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		recordID := uuid.New()
 		snapshotID := uuid.New()
 		uc := &inferenceUsecaseStub{
 			result: &model.GenerateResponse{
-				DatasetID: datasetID,
-				ModelID:   modelID,
-				QueryText: "what is relevant?",
-				Answer:    "generated answer",
+				RequestID:             requestID,
+				DatasetID:             datasetID,
+				ModelID:               modelID,
+				QueryText:             "what is relevant?",
+				Answer:                "generated answer",
+				PromptStrategyVersion: "rag-prompt-v1",
+				GenerationProvider:    "ollama",
+				GenerationModel:       "llama3.1:8b",
 				Contexts: []model.RetrievedContext{{
 					EmbeddingRecordID:   recordID,
 					EmbeddingSnapshotID: snapshotID,
@@ -81,17 +86,25 @@ var _ = Describe("InferenceServer", func() {
 		server := NewInferenceGrpcServer(uc)
 
 		response, err := server.Generate(context.Background(), &inferencepb.GenerateRequest{
-			DatasetId: datasetID.String(),
-			ModelId:   modelID.String(),
-			QueryText: "what is relevant?",
-			TopK:      4,
+			RequestId:       requestID.String(),
+			DatasetId:       datasetID.String(),
+			ModelId:         modelID.String(),
+			QueryText:       "what is relevant?",
+			TopK:            4,
+			MetadataFilters: map[string]string{"source": "manual"},
 		})
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.request.RequestID).To(Equal(requestID))
 		Expect(uc.request.DatasetID).To(Equal(datasetID))
 		Expect(uc.request.ModelID).To(Equal(modelID))
 		Expect(uc.request.TopK).To(Equal(4))
+		Expect(uc.request.MetadataFilters).To(Equal(map[string]string{"source": "manual"}))
 		Expect(response.GetAnswer()).To(Equal("generated answer"))
+		Expect(response.GetRequestId()).To(Equal(requestID.String()))
+		Expect(response.GetPromptStrategyVersion()).To(Equal("rag-prompt-v1"))
+		Expect(response.GetGenerationProvider()).To(Equal("ollama"))
+		Expect(response.GetGenerationModel()).To(Equal("llama3.1:8b"))
 		Expect(response.GetContexts()).To(HaveLen(1))
 		Expect(response.GetContexts()[0].GetEmbeddingRecordId()).To(Equal(recordID.String()))
 	})
@@ -104,6 +117,28 @@ var _ = Describe("InferenceServer", func() {
 			QueryText: "query",
 		})
 
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+	})
+
+	It("requires request identity and top-k at the boundary", func() {
+		server := NewInferenceGrpcServer(&inferenceUsecaseStub{})
+		datasetID := uuid.New()
+		modelID := uuid.New()
+
+		_, err := server.Generate(context.Background(), &inferencepb.GenerateRequest{
+			DatasetId: datasetID.String(),
+			ModelId:   modelID.String(),
+			QueryText: "query",
+			TopK:      4,
+		})
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+		_, err = server.Generate(context.Background(), &inferencepb.GenerateRequest{
+			RequestId: uuid.NewString(),
+			DatasetId: datasetID.String(),
+			ModelId:   modelID.String(),
+			QueryText: "query",
+		})
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
 })
@@ -128,12 +163,13 @@ var _ = Describe("FeatureMaterializerClient", func() {
 		}
 		client := &featureMaterializerClient{client: clientStub}
 
-		contexts, err := client.SearchEmbeddings(context.Background(), datasetID, "query", 6)
+		contexts, err := client.SearchEmbeddings(context.Background(), datasetID, "query", 6, map[string]string{"source": "manual"})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(clientStub.request.GetDatasetId()).To(Equal(datasetID.String()))
 		Expect(clientStub.request.GetQueryText()).To(Equal("query"))
 		Expect(clientStub.request.GetTopK()).To(Equal(int32(6)))
+		Expect(clientStub.request.GetMetadataFilters()).To(Equal(map[string]string{"source": "manual"}))
 		Expect(contexts).To(HaveLen(1))
 		Expect(contexts[0].EmbeddingRecordID).To(Equal(recordID))
 		Expect(contexts[0].EmbeddingSnapshotID).To(Equal(snapshotID))
@@ -150,7 +186,7 @@ var _ = Describe("FeatureMaterializerClient", func() {
 			},
 		}}
 
-		_, err := client.SearchEmbeddings(context.Background(), uuid.New(), "query", 5)
+		_, err := client.SearchEmbeddings(context.Background(), uuid.New(), "query", 5, nil)
 
 		Expect(err).To(HaveOccurred())
 	})

@@ -100,4 +100,15 @@ var _ = Describe("FeatureMaterializerServer", func() {
 
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
+
+	It("requires top-k at the boundary", func() {
+		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{})
+
+		_, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
+			DatasetId: uuid.NewString(),
+			QueryText: "query",
+		})
+
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+	})
 })

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"data_ingestion_service/pkg/domain"
+	"data_ingestion_service/pkg/domain/model"
 	datasetpb "lib/data_contracts_lib/dataset"
 	msgConn "lib/shared_lib/messaging"
 
@@ -14,7 +16,8 @@ import (
 )
 
 type DatasetLifecycleListener interface {
-	AddDataset(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) error
+	AddDataset(ctx context.Context, dataset *model.Dataset) error
+	UpdateDataset(ctx context.Context, dataset *model.Dataset) error
 	DeleteDataset(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) error
 }
 
@@ -38,6 +41,7 @@ func (s *DatasetLifecycleSubscriber) Start(ctx context.Context) error {
 	log.Trace("DatasetLifecycleSubscriber Start")
 
 	msgConn.AddListener(s.subscriber, NewDatasetCreatedEventListener(s.listener))
+	msgConn.AddListener(s.subscriber, NewDatasetUpdatedEventListener(s.listener))
 	msgConn.AddListener(s.subscriber, NewDatasetDeletedEventListener(s.listener))
 	return s.subscriber.Subscribe(ctx, s.topics)
 }
@@ -67,17 +71,43 @@ func (l *datasetCreatedEventListener) NewMessage() *datasetpb.DatasetCreatedEven
 func (l *datasetCreatedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, event *datasetpb.DatasetCreatedEvent) error {
 	log.Trace("datasetCreatedEventListener Handle")
 
-	datasetID, userID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId())
+	dataset, err := datasetFromCreatedEvent(resourceKey, event)
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
-	if err := l.listener.AddDataset(ctx, datasetID, userID); err != nil {
-		if errors.Is(err, domain.ErrResourceAlreadyExists) {
-			return msgConn.AlreadyProcessed(err)
-		}
-		return err
+	return l.listener.AddDataset(ctx, dataset)
+}
+
+type datasetUpdatedEventListener struct {
+	listener DatasetLifecycleListener
+}
+
+func NewDatasetUpdatedEventListener(listener DatasetLifecycleListener) *datasetUpdatedEventListener {
+	log.Trace("NewDatasetUpdatedEventListener")
+
+	return &datasetUpdatedEventListener{listener: listener}
+}
+
+func (l *datasetUpdatedEventListener) MsgType() msgConn.MsgType {
+	log.Trace("datasetUpdatedEventListener MsgType")
+
+	return msgConn.MsgTypeDatasetUpdated
+}
+
+func (l *datasetUpdatedEventListener) NewMessage() *datasetpb.DatasetUpdatedEvent {
+	log.Trace("datasetUpdatedEventListener NewMessage")
+
+	return &datasetpb.DatasetUpdatedEvent{}
+}
+
+func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, event *datasetpb.DatasetUpdatedEvent) error {
+	log.Trace("datasetUpdatedEventListener Handle")
+
+	dataset, err := datasetFromUpdatedEvent(resourceKey, event)
+	if err != nil {
+		return msgConn.NonRetryable(err)
 	}
-	return nil
+	return l.listener.UpdateDataset(ctx, dataset)
 }
 
 type datasetDeletedEventListener struct {
@@ -116,6 +146,116 @@ func (l *datasetDeletedEventListener) Handle(ctx context.Context, resourceKey uu
 		return err
 	}
 	return nil
+}
+
+func datasetFromCreatedEvent(resourceKey uuid.UUID, event *datasetpb.DatasetCreatedEvent) (*model.Dataset, error) {
+	log.Trace("datasetFromCreatedEvent")
+
+	if event == nil {
+		return nil, fmt.Errorf("dataset created payload is required")
+	}
+	datasetID, userID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	return datasetFromLifecycleFields(
+		datasetID,
+		userID,
+		event.GetStorageLocation(),
+		event.GetTableNamespace(),
+		event.GetTableName(),
+		event.GetTableFormat(),
+		event.GetCatalogProvider(),
+		event.GetProcessingProfile(),
+		int(event.GetSchemaVersion()),
+		event.GetSchemaMetadata(),
+	)
+}
+
+func datasetFromUpdatedEvent(resourceKey uuid.UUID, event *datasetpb.DatasetUpdatedEvent) (*model.Dataset, error) {
+	log.Trace("datasetFromUpdatedEvent")
+
+	if event == nil {
+		return nil, fmt.Errorf("dataset updated payload is required")
+	}
+	datasetID, userID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	return datasetFromLifecycleFields(
+		datasetID,
+		userID,
+		event.GetStorageLocation(),
+		event.GetTableNamespace(),
+		event.GetTableName(),
+		event.GetTableFormat(),
+		event.GetCatalogProvider(),
+		event.GetProcessingProfile(),
+		int(event.GetSchemaVersion()),
+		event.GetSchemaMetadata(),
+	)
+}
+
+func datasetFromLifecycleFields(
+	datasetID uuid.UUID,
+	userID uuid.UUID,
+	storageLocation string,
+	tableNamespace string,
+	tableName string,
+	tableFormat string,
+	catalogProvider string,
+	processingProfile string,
+	schemaVersion int,
+	schemaMetadata string,
+) (*model.Dataset, error) {
+	log.Trace("datasetFromLifecycleFields")
+
+	tableNamespace, err := requiredLifecycleString("table namespace", tableNamespace)
+	if err != nil {
+		return nil, err
+	}
+	tableName, err = requiredLifecycleString("table name", tableName)
+	if err != nil {
+		return nil, err
+	}
+	tableFormat, err = requiredLifecycleString("table format", tableFormat)
+	if err != nil {
+		return nil, err
+	}
+	catalogProvider, err = requiredLifecycleString("catalog provider", catalogProvider)
+	if err != nil {
+		return nil, err
+	}
+	processingProfile, err = requiredLifecycleString("processing profile", processingProfile)
+	if err != nil {
+		return nil, err
+	}
+	schemaMetadata = strings.TrimSpace(schemaMetadata)
+	if schemaMetadata == "" {
+		return nil, fmt.Errorf("schema metadata is required")
+	}
+	return &model.Dataset{
+		DatasetID:         datasetID,
+		UserID:            userID,
+		StorageLocation:   strings.TrimSpace(storageLocation),
+		TableNamespace:    tableNamespace,
+		TableName:         tableName,
+		TableFormat:       tableFormat,
+		CatalogProvider:   catalogProvider,
+		ProcessingProfile: processingProfile,
+		SchemaVersion:     schemaVersion,
+		SchemaMetadata:    schemaMetadata,
+	}, nil
+}
+
+func requiredLifecycleString(fieldName string, value string) (string, error) {
+	log.Trace("requiredLifecycleString")
+
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("%s is required", fieldName)
+	}
+	return value, nil
 }
 
 func datasetLifecycleIDs(resourceKey uuid.UUID, datasetIDRaw string, userIDRaw string) (uuid.UUID, uuid.UUID, error) {

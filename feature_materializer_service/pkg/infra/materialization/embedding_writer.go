@@ -114,6 +114,10 @@ func (w *EmbeddingWriter) MaterializeEmbeddings(ctx context.Context, featureSnap
 	if err != nil {
 		return nil, err
 	}
+	texts, err = cleanTextRows(ctx, NewBasicTextCleaner(), texts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: clean feature rows: %w", domain.ErrEmbeddingMaterialize, err)
+	}
 	chunks, err := w.chunker.Chunk(ctx, texts)
 	if err != nil {
 		return nil, fmt.Errorf("%w: chunk feature rows: %w", domain.ErrEmbeddingMaterialize, err)
@@ -152,6 +156,10 @@ func (w *EmbeddingWriter) MaterializeEmbeddings(ctx context.Context, featureSnap
 	out.CollectionName = featureSnapshot.TableName
 	out.EmbeddingDimensions = w.provider.Dimensions()
 	out.StrategyVersion = strategy.StrategyVersion
+	out.ExtractorName = strategy.ExtractorName
+	out.ExtractorVersion = strategy.ExtractorVersion
+	out.CleanerName = strategy.CleanerName
+	out.CleanerVersion = strategy.CleanerVersion
 	out.ChunkerName = strategy.ChunkerName
 	out.ChunkerVersion = strategy.ChunkerVersion
 	out.ChunkSize = strategy.ChunkSize

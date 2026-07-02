@@ -32,6 +32,8 @@ spec:
               value: {{ .Values.env.otelExporterEndpoint | quote }}
             - name: MODEL_REGISTRY_SERVICE_NAME
               value: {{ .Values.env.serviceName | quote }}
+            - name: MODEL_REGISTRY_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
             - name: MODEL_REGISTRY_DB_NAME
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:

@@ -110,11 +110,11 @@ func featureSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.Fea
 	}
 	schemaVersion := int(payload.GetSchemaVersion())
 	if schemaVersion <= 0 {
-		schemaVersion = 1
+		return nil, fmt.Errorf("schema version is required")
 	}
 	schemaMetadata := strings.TrimSpace(payload.GetSchemaMetadata())
 	if schemaMetadata == "" {
-		schemaMetadata = "{}"
+		return nil, fmt.Errorf("schema metadata is required")
 	}
 
 	return &model.Dataset{

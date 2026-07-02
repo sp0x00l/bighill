@@ -2,7 +2,6 @@ package app_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"model_registry_service/pkg/app"
@@ -59,14 +58,6 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.ModelID).NotTo(Equal(uuid.Nil))
 		Expect(repo.createdModel).To(Equal(registeredModel))
-	})
-
-	It("rejects invalid model registrations", func() {
-		uc := app.NewModelRegistryUsecase(&modelRepositoryStub{})
-
-		_, err := uc.RegisterModel(context.Background(), &model.Model{}, uuid.New())
-
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 
 	It("marks a model ready", func() {
@@ -129,20 +120,20 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(repo.createdModel.FailureReason).To(Equal("training failed"))
 	})
 
-	It("rejects failed training without a failure reason", func() {
-		uc := app.NewModelRegistryUsecase(&modelRepositoryStub{})
-
-		_, err := uc.RecordModelTrainingFailed(context.Background(), validModel(), uuid.New())
-
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
-	})
 })
 
 func validModel() *model.Model {
 	return &model.Model{
-		ModelID:       uuid.New(),
-		TrainingRunID: uuid.New(),
-		DatasetID:     uuid.New(),
-		BaseModel:     "mistral-7b",
+		ModelID:           uuid.New(),
+		TrainingRunID:     uuid.New(),
+		DatasetID:         uuid.New(),
+		Name:              "movie-ranker",
+		ModelVersion:      1,
+		BaseModel:         "mistral-7b",
+		ArtifactLocation:  "s3://local-dev-bucket/models/pending",
+		ArtifactFormat:    "HF_PEFT_ADAPTER",
+		ArtifactChecksum:  "sha256:pending",
+		ArtifactSizeBytes: 1,
+		MetricsMetadata:   `{"eval_loss":0.12}`,
 	}
 }

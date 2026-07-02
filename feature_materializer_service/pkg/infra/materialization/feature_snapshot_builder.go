@@ -39,6 +39,10 @@ func (b *FeatureSnapshotBuilder) BuildFeatureSnapshot(ctx context.Context, rawSn
 	if err != nil {
 		return nil, err
 	}
+	schemaMetadata, err := MergeSourceSchemaMetadata(artifact.SchemaMetadata, rawSnapshot.SchemaMetadata)
+	if err != nil {
+		return nil, err
+	}
 
 	key := fmt.Sprintf("lakehouse/features/%s/%s/data.parquet", featureSnapshot.DatasetID.String(), featureSnapshot.FeatureSnapshotID.String())
 	location, err := b.store.Write(ctx, key, parquetContentType, artifact.Data)
@@ -52,7 +56,7 @@ func (b *FeatureSnapshotBuilder) BuildFeatureSnapshot(ctx context.Context, rawSn
 	out.TableFormat = "PARQUET"
 	out.ProcessingProfile = rawSnapshot.ProcessingProfile
 	out.SchemaVersion = artifact.SchemaVersion
-	out.SchemaMetadata = artifact.SchemaMetadata
+	out.SchemaMetadata = schemaMetadata
 	out.Status = model.SnapshotStatusReady
 
 	return &out, nil

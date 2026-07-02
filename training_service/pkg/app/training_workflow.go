@@ -55,6 +55,7 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 		DatasetID:         request.DatasetID,
 		DatasetVersion:    request.DatasetVersion,
 		FeatureSnapshotID: request.FeatureSnapshotID,
+		ModelID:           request.TrainingRunID,
 		ModelURI:          artifact.ModelURI,
 		ModelName:         artifact.ModelName,
 		ModelVersion:      artifact.ModelVersion,

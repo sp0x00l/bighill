@@ -13,6 +13,8 @@ message GenerateRequest {
   string query_text = 2;
   int32 top_k = 3;
   string model_id = 4;
+  string request_id = 5;
+  map<string, string> metadata_filters = 6;
 }
 
 message GenerateResponse {
@@ -21,6 +23,10 @@ message GenerateResponse {
   string query_text = 3;
   string answer = 4;
   repeated RetrievedContext contexts = 5;
+  string request_id = 6;
+  string prompt_strategy_version = 7;
+  string generation_provider = 8;
+  string generation_model = 9;
 }
 
 message RetrievedContext {

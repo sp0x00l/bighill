@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	usecase "data_ingestion_service/pkg/app"
+	"data_ingestion_service/pkg/domain/model"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -12,14 +13,8 @@ import (
 )
 
 type stubDatasetRepository struct {
-	saveDatasetID uuid.UUID
-	saveUserID    uuid.UUID
-	saveErr       error
-
-	isValidDatasetID uuid.UUID
-	isValidUserID    uuid.UUID
-	isValidValue     bool
-	isValidErr       error
+	upsertDataset *model.Dataset
+	upsertErr     error
 
 	blacklistDatasetID uuid.UUID
 	blacklistUserID    uuid.UUID
@@ -28,12 +23,16 @@ type stubDatasetRepository struct {
 	deleteDatasetID uuid.UUID
 	deleteUserID    uuid.UUID
 	deleteErr       error
+
+	readForUploadDatasetID uuid.UUID
+	readForUploadUserID    uuid.UUID
+	readForUploadDataset   *model.Dataset
+	readForUploadErr       error
 }
 
-func (s *stubDatasetRepository) Save(_ context.Context, datasetID, userID uuid.UUID) error {
-	s.saveDatasetID = datasetID
-	s.saveUserID = userID
-	return s.saveErr
+func (s *stubDatasetRepository) Upsert(_ context.Context, dataset *model.Dataset) error {
+	s.upsertDataset = dataset
+	return s.upsertErr
 }
 
 func (s *stubDatasetRepository) BlacklistDataset(_ context.Context, datasetID, userID uuid.UUID) error {
@@ -48,10 +47,10 @@ func (s *stubDatasetRepository) DeleteDataset(_ context.Context, datasetID, user
 	return s.deleteErr
 }
 
-func (s *stubDatasetRepository) IsValid(_ context.Context, datasetID, userID uuid.UUID) (bool, error) {
-	s.isValidDatasetID = datasetID
-	s.isValidUserID = userID
-	return s.isValidValue, s.isValidErr
+func (s *stubDatasetRepository) ReadForUpload(_ context.Context, datasetID, userID uuid.UUID) (*model.Dataset, error) {
+	s.readForUploadDatasetID = datasetID
+	s.readForUploadUserID = userID
+	return s.readForUploadDataset, s.readForUploadErr
 }
 
 var _ = Describe("DatasetUsecase", func() {
@@ -71,28 +70,37 @@ var _ = Describe("DatasetUsecase", func() {
 		userID = uuid.New()
 	})
 
-	It("adds a dataset through the repository", func() {
-		Expect(uc.AddDataset(ctx, datasetID, userID)).To(Succeed())
-		Expect(repo.saveDatasetID).To(Equal(datasetID))
-		Expect(repo.saveUserID).To(Equal(userID))
+	It("adds a dataset by upserting the local projection", func() {
+		dataset := &model.Dataset{DatasetID: datasetID, UserID: userID}
+
+		Expect(uc.AddDataset(ctx, dataset)).To(Succeed())
+		Expect(repo.upsertDataset).To(Equal(dataset))
 	})
 
-	It("returns repository errors when adding a dataset fails", func() {
-		expectedErr := errors.New("save failed")
-		repo.saveErr = expectedErr
+	It("returns repository errors when adding a dataset projection fails", func() {
+		expectedErr := errors.New("upsert failed")
+		repo.upsertErr = expectedErr
 
-		Expect(uc.AddDataset(ctx, datasetID, userID)).To(MatchError(expectedErr))
+		Expect(uc.AddDataset(ctx, &model.Dataset{DatasetID: datasetID, UserID: userID})).To(MatchError(expectedErr))
 	})
 
-	It("checks whether a dataset can be uploaded", func() {
-		repo.isValidValue = true
+	It("updates a dataset through the repository", func() {
+		dataset := &model.Dataset{DatasetID: datasetID, UserID: userID}
 
-		valid, err := uc.IsValidForUpload(ctx, datasetID, userID)
+		Expect(uc.UpdateDataset(ctx, dataset)).To(Succeed())
+		Expect(repo.upsertDataset).To(Equal(dataset))
+	})
+
+	It("reads dataset metadata for upload", func() {
+		expected := &model.Dataset{DatasetID: datasetID, UserID: userID}
+		repo.readForUploadDataset = expected
+
+		got, err := uc.DatasetForUpload(ctx, datasetID, userID)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(valid).To(BeTrue())
-		Expect(repo.isValidDatasetID).To(Equal(datasetID))
-		Expect(repo.isValidUserID).To(Equal(userID))
+		Expect(got).To(Equal(expected))
+		Expect(repo.readForUploadDatasetID).To(Equal(datasetID))
+		Expect(repo.readForUploadUserID).To(Equal(userID))
 	})
 
 	It("blacklists a dataset through the repository", func() {

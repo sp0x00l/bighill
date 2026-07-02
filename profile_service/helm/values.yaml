@@ -71,6 +71,7 @@ env:
   authExpirationMinutes: "1440"
   emailValidationTtlMinutes: "60"
   oauthStateTtlMinutes: "10"
+  useStagingTestEmailToken: "true"
   healthcheckCpuThreshold: "95"
   healthcheckFreeMemThreshold: "15"
   healthcheckServiceLatencyThreshold: "5"

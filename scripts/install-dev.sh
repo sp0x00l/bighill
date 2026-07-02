@@ -87,6 +87,13 @@ install_pgadmin()
     fi
 }
 
+install_cpp_pdf_dependencies()
+{
+    install_brew_formula cmake
+    install_brew_formula pkg-config
+    install_brew_formula poppler
+}
+
 install_go_tools()
 {
     install go
@@ -198,6 +205,7 @@ install_postgres
 link_postgres_launch_agent
 install_pgvector
 install_pgadmin
+install_cpp_pdf_dependencies
 install_go_tools
 install_protobuf
 install_rust

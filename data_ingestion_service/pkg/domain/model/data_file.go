@@ -7,9 +7,14 @@ import (
 )
 
 type DataFile struct {
-	DatasetID   uuid.UUID
-	UserID      uuid.UUID
-	File        multipart.File
-	ContentType string
-	Extension   string
+	DatasetID         uuid.UUID
+	UserID            uuid.UUID
+	File              multipart.File
+	ContentType       string
+	Extension         string
+	TableNamespace    string
+	TableName         string
+	TableFormat       string
+	CatalogProvider   string
+	ProcessingProfile string
 }
