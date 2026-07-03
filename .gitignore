@@ -13,4 +13,4 @@ tmp
 reports/
 sqlite:
 results/
-query_engine/datafusion_query_engine/target/
+data_stream_service/internal/infra/queryengine/datafusion_query_engine/target/

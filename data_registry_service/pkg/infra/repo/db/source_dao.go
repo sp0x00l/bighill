@@ -18,6 +18,11 @@ type DatasetDAO struct {
 	Description              pgtype.Text
 	Origin                   pgtype.Text
 	Location                 pgtype.Text
+	SourceType               pgtype.Text
+	SourceConnectorID        pgtype.UUID
+	SourceQuery              pgtype.Text
+	SourceDatabase           pgtype.Text
+	SourceCollection         pgtype.Text
 	Status                   pgtype.Text
 	Category                 pgtype.Text
 	TableNamespace           pgtype.Text
@@ -53,18 +58,26 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 	log.Trace("DatasetDAO toDAO")
 
 	dao := pgx.NamedArgs{
-		"id":              pgtype.UUID{Bytes: dataset.ID, Valid: true},
-		"user_id":         pgtype.UUID{Bytes: dataset.UserID, Valid: true},
-		"title":           pgtype.Text{String: dataset.Title, Valid: true},
-		"description":     pgtype.Text{String: dataset.Description, Valid: dataset.Description != ""},
-		"origin":          pgtype.Text{String: dataset.Origin.String(), Valid: true},
-		"location":        pgtype.Text{String: dataset.Location, Valid: dataset.Location != ""},
-		"status":          pgtype.Text{String: dataset.Status.String(), Valid: true},
-		"category":        pgtype.Text{String: dataset.Category, Valid: dataset.Category != ""},
-		"idempotency_key": pgtype.UUID{Bytes: d.IdempotencyKey.Bytes, Valid: true},
-		"table_namespace": pgtype.Text{String: dataset.TableNamespace, Valid: true},
-		"table_name":      pgtype.Text{String: dataset.TableName, Valid: true},
-		"table_format":    pgtype.Text{String: dataset.TableFormat.String(), Valid: true},
+		"id":          pgtype.UUID{Bytes: dataset.ID, Valid: true},
+		"user_id":     pgtype.UUID{Bytes: dataset.UserID, Valid: true},
+		"title":       pgtype.Text{String: dataset.Title, Valid: true},
+		"description": pgtype.Text{String: dataset.Description, Valid: dataset.Description != ""},
+		"origin":      pgtype.Text{String: dataset.Origin.String(), Valid: true},
+		"location":    pgtype.Text{String: dataset.Location, Valid: dataset.Location != ""},
+		"source_type": pgtype.Text{String: dataset.SourceType.String(), Valid: dataset.SourceConnectorID != uuid.Nil},
+		"source_connector_id": pgtype.UUID{
+			Bytes: dataset.SourceConnectorID,
+			Valid: dataset.SourceConnectorID != uuid.Nil,
+		},
+		"source_query":      pgtype.Text{String: dataset.SourceQuery, Valid: true},
+		"source_database":   pgtype.Text{String: dataset.SourceDatabase, Valid: true},
+		"source_collection": pgtype.Text{String: dataset.SourceCollection, Valid: true},
+		"status":            pgtype.Text{String: dataset.Status.String(), Valid: true},
+		"category":          pgtype.Text{String: dataset.Category, Valid: dataset.Category != ""},
+		"idempotency_key":   pgtype.UUID{Bytes: d.IdempotencyKey.Bytes, Valid: true},
+		"table_namespace":   pgtype.Text{String: dataset.TableNamespace, Valid: true},
+		"table_name":        pgtype.Text{String: dataset.TableName, Valid: true},
+		"table_format":      pgtype.Text{String: dataset.TableFormat.String(), Valid: true},
 		"catalog_provider": pgtype.Text{
 			String: dataset.CatalogProvider.String(),
 			Valid:  true,
@@ -130,6 +143,14 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 		log.WithContext(ctx).WithError(err).Error("Failed to convert processing state")
 		return nil, domainErrors.ErrValidationFailed.Extend("failed to convert processing state")
 	}
+	var sourceType model.StorageType
+	if dao.SourceType.Valid && dao.SourceType.String != "" {
+		sourceType, err = model.ToStorageType(dao.SourceType.String)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("Failed to convert source type")
+			return nil, domainErrors.ErrValidationFailed.Extend("failed to convert source type")
+		}
+	}
 
 	return &model.Dataset{
 		ID:                       dao.ID.Bytes,
@@ -138,6 +159,11 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 		Description:              dao.Description.String,
 		Origin:                   origin,
 		Location:                 dao.Location.String,
+		SourceType:               sourceType,
+		SourceConnectorID:        dao.SourceConnectorID.Bytes,
+		SourceQuery:              dao.SourceQuery.String,
+		SourceDatabase:           dao.SourceDatabase.String,
+		SourceCollection:         dao.SourceCollection.String,
 		Status:                   status,
 		Category:                 dao.Category.String,
 		TableNamespace:           dao.TableNamespace.String,

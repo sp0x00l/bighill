@@ -3,10 +3,11 @@ package app_test
 import (
 	"context"
 	"errors"
+	"testing"
 
 	usecase "data_ingestion_service/pkg/app"
 	"data_ingestion_service/pkg/domain/model"
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_ingestion"
 	shared "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -14,6 +15,11 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestAppUseCases(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Data ingestion app unit test suite")
+}
 
 type stubBlobRepository struct {
 	receivedUpload *model.DataFile

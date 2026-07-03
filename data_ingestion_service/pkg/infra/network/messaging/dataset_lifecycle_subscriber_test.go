@@ -6,7 +6,7 @@ import (
 
 	"data_ingestion_service/pkg/domain/model"
 	ingestionmessaging "data_ingestion_service/pkg/infra/network/messaging"
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_registry"
 	shared "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"

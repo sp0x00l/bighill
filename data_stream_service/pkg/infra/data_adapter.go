@@ -1,8 +1,12 @@
 package infra
 
 type ServerConnectionConfig struct {
-	Hostname string
-	Port     int
+	Hostname          string
+	Port              int
+	TLSCertPath       string
+	TLSKeyPath        string
+	TLSClientCAPath   string
+	RequireClientCert bool
 }
 
 type QueryEngineConfig struct {

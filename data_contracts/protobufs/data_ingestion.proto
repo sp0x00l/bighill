@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package data_ingestion;
+
+option go_package = "lib/data_contracts_lib/data_ingestion";
+
+message DatasetFileUploadedEvent {
+  string dataset_id = 1;
+  string user_id = 2;
+  string storage_location = 3;
+  string content_type = 4;
+  string file_extension = 5;
+  string table_namespace = 6;
+  string table_name = 7;
+  string table_format = 8;
+  string catalog_provider = 9;
+  string processing_profile = 10;
+  string source_type = 11;
+  string source_connector_id = 12;
+  string source_query = 13;
+  string source_database = 14;
+  string source_collection = 15;
+}

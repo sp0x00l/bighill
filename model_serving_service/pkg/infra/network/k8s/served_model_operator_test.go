@@ -400,6 +400,7 @@ var _ = Describe("ServedModelController", func() {
 		statusRaw, _, _ := unstructured.NestedString(updated.Object, "status", "servingLoadStatus")
 		Expect(statusRaw).To(Equal("NOT_LOADED"))
 	})
+
 })
 
 func storeConfig() servingk8s.ServedModelStoreConfig {

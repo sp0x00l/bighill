@@ -6,7 +6,8 @@ import (
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	"testing"
 
-	datasetpb "lib/data_contracts_lib/dataset"
+	dataingestionpb "lib/data_contracts_lib/data_ingestion"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
 	sharedMessaging "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -36,7 +37,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(&recordingRawSnapshotUsecase{})
 
 		Expect(listener.MsgType()).To(Equal(sharedMessaging.MsgTypeDatasetFileUploaded))
-		Expect(listener.NewMessage()).To(Equal(&datasetpb.DatasetFileUploadedEvent{}))
+		Expect(listener.NewMessage()).To(Equal(&dataingestionpb.DatasetFileUploadedEvent{}))
 	})
 
 	It("maps the protobuf event into the materialization workflow starter", func() {
@@ -45,7 +46,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		uc := &recordingRawSnapshotUsecase{}
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(uc)
 
-		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetFileUploadedEvent{
+		err := listener.Handle(context.Background(), datasetID, &dataingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
@@ -72,7 +73,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		uc := &recordingRawSnapshotUsecase{}
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(uc)
 
-		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetFileUploadedEvent{
+		err := listener.Handle(context.Background(), datasetID, &dataingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
@@ -89,7 +90,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		datasetID := uuid.New()
 		first := &recordingRawSnapshotUsecase{}
 		second := &recordingRawSnapshotUsecase{}
-		event := &datasetpb.DatasetFileUploadedEvent{
+		event := &dataingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
@@ -112,7 +113,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		datasetID := uuid.New()
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(&recordingRawSnapshotUsecase{})
 
-		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetFileUploadedEvent{
+		err := listener.Handle(context.Background(), datasetID, &dataingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         uuid.NewString(),
 			UserId:            uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
@@ -133,12 +134,97 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		datasetID := uuid.New()
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(&recordingRawSnapshotUsecase{})
 
-		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetFileUploadedEvent{
+		err := listener.Handle(context.Background(), datasetID, &dataingestionpb.DatasetFileUploadedEvent{
 			DatasetId: datasetID.String(),
 			UserId:    uuid.NewString(),
 		})
 
 		Expect(err).To(HaveOccurred())
 		Expect(sharedMessaging.IsNonRetryable(err)).To(BeTrue())
+	})
+
+	It("maps connector-backed dataset created events into the materialization workflow starter", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		connectorID := uuid.New()
+		uc := &recordingRawSnapshotUsecase{}
+		listener := featuremessaging.NewDatasetCreatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), datasetID, &dataregistrypb.DatasetCreatedEvent{
+			DatasetId:         datasetID.String(),
+			UserId:            userID.String(),
+			DatasetVersion:    3,
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
+			SourceType:        "POSTGRES",
+			SourceConnectorId: connectorID.String(),
+			SourceQuery:       "SELECT title FROM movies",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listener.MsgType()).To(Equal(sharedMessaging.MsgTypeDatasetCreated))
+		Expect(listener.NewMessage()).To(Equal(&dataregistrypb.DatasetCreatedEvent{}))
+		Expect(uc.datasetFile.DatasetID).To(Equal(datasetID))
+		Expect(uc.datasetFile.UserID).To(Equal(userID))
+		Expect(uc.datasetFile.SourceConnectorID).To(Equal(connectorID))
+		Expect(uc.datasetFile.SourceType).To(Equal("postgres"))
+		Expect(uc.datasetFile.SourceQuery).To(Equal("SELECT title FROM movies"))
+		Expect(uc.datasetFile.ContentType).To(Equal("application/vnd.apache.parquet"))
+		Expect(uc.datasetFile.FileExtension).To(Equal("parquet"))
+		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
+	})
+
+	It("ignores uploaded-object dataset created events without a source connector", func() {
+		datasetID := uuid.New()
+		uc := &recordingRawSnapshotUsecase{}
+		listener := featuremessaging.NewDatasetCreatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), datasetID, &dataregistrypb.DatasetCreatedEvent{
+			DatasetId:         datasetID.String(),
+			UserId:            uuid.NewString(),
+			DatasetVersion:    1,
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.datasetFile).To(BeNil())
+		Expect(uc.idempotencyKey).To(Equal(uuid.Nil))
+	})
+
+	It("maps connector-backed dataset updated events into deterministic materialization starts", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		connectorID := uuid.New()
+		event := &dataregistrypb.DatasetUpdatedEvent{
+			DatasetId:         datasetID.String(),
+			UserId:            userID.String(),
+			DatasetVersion:    4,
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			ProcessingProfile: "TEXT_RAG",
+			SourceType:        "MONGO",
+			SourceConnectorId: connectorID.String(),
+			SourceDatabase:    "catalog",
+			SourceCollection:  "movies",
+		}
+		first := &recordingRawSnapshotUsecase{}
+		second := &recordingRawSnapshotUsecase{}
+
+		Expect(featuremessaging.NewDatasetUpdatedEventListener(first).Handle(context.Background(), datasetID, event)).To(Succeed())
+		Expect(featuremessaging.NewDatasetUpdatedEventListener(second).Handle(context.Background(), datasetID, event)).To(Succeed())
+
+		Expect(first.idempotencyKey).To(Equal(second.idempotencyKey))
+		Expect(first.datasetFile.SourceType).To(Equal("mongo"))
+		Expect(first.datasetFile.SourceDatabase).To(Equal("catalog"))
+		Expect(first.datasetFile.SourceCollection).To(Equal("movies"))
 	})
 })

@@ -40,15 +40,20 @@ func ToTrainingRunStatus(value string) (TrainingRunStatus, error) {
 }
 
 type TrainingRunRequest struct {
-	TrainingRunID     string
-	DatasetID         string
-	DatasetVersion    string
-	FeatureSnapshotID string
-	ModelName         string
-	ModelVersion      string
-	BaseModel         string
-	EvaluationProfile string
-	TrainingProfile   TrainingProfile
+	TrainingRunID        string
+	DatasetID            string
+	DatasetVersion       string
+	FeatureSnapshotID    string
+	PreferenceDatasetID  string
+	PreferenceDatasetURI string
+	ParentModelID        string
+	ParentModelVersion   string
+	ParentAdapterURI     string
+	ModelName            string
+	ModelVersion         string
+	BaseModel            string
+	EvaluationProfile    string
+	TrainingProfile      TrainingProfile
 }
 
 type TrainingProfile struct {
@@ -57,6 +62,7 @@ type TrainingProfile struct {
 	Adapter                   string
 	Quantization              string
 	PreferenceDatasetURI      string
+	DPOBeta                   float64
 	SequenceLength            int
 	SamplePacking             bool
 	LearningRate              float64
@@ -109,9 +115,13 @@ type EvaluationReport struct {
 type TrainingJobSpec struct {
 	TrainingRunID        string
 	DatasetURI           string
+	PreferenceDatasetID  string
 	ModelName            string
 	ModelVersion         string
 	BaseModel            string
+	ParentModelID        string
+	ParentModelVersion   string
+	ParentAdapterURI     string
 	TrainingProfile      TrainingProfile
 	ModelURI             string
 	AdapterURI           string

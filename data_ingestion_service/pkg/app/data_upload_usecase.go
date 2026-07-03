@@ -4,7 +4,7 @@ import (
 	"context"
 	"data_ingestion_service/pkg/domain/model"
 	"fmt"
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_ingestion"
 	messaging "lib/shared_lib/messaging"
 	usecasetrace "lib/shared_lib/usecasetrace"
 	"strings"

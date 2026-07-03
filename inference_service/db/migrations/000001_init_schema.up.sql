@@ -147,3 +147,67 @@ ON bighill_inference_db.preference_examples(dataset_id);
 
 CREATE INDEX IF NOT EXISTS index_preference_examples_model_id
 ON bighill_inference_db.preference_examples(model_id);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_dataset_snapshots (
+    preference_dataset_id uuid PRIMARY KEY,
+    dataset_id uuid NOT NULL,
+    model_id uuid NOT NULL,
+    parent_adapter_uri text NOT NULL,
+    parent_base_model text NOT NULL,
+    parent_model_version integer NOT NULL,
+    source_request_id uuid NOT NULL,
+    output_uri text NOT NULL,
+    evaluation_output_uri text NOT NULL DEFAULT '',
+    format text NOT NULL,
+    eligibility_policy text NOT NULL,
+    example_count integer NOT NULL,
+    min_examples integer NOT NULL,
+    limit_count integer NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS index_preference_dataset_snapshots_dataset_id
+ON bighill_inference_db.preference_dataset_snapshots(dataset_id, created_at);
+
+CREATE INDEX IF NOT EXISTS index_preference_dataset_snapshots_model_id
+ON bighill_inference_db.preference_dataset_snapshots(model_id, created_at);
+
+CREATE TRIGGER preference_dataset_snapshots_updated_at
+BEFORE UPDATE ON bighill_inference_db.preference_dataset_snapshots
+FOR EACH ROW
+EXECUTE FUNCTION updated_at_column();
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.outbox_messages (
+    outbox_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    dispatch_key text NOT NULL UNIQUE,
+    topic text NOT NULL,
+    event_type text NOT NULL,
+    resource_key uuid NOT NULL,
+    payload bytea NOT NULL,
+    headers jsonb NOT NULL DEFAULT '[]'::jsonb,
+    status text NOT NULL DEFAULT 'PENDING',
+    attempts integer NOT NULL DEFAULT 0,
+    processing_owner text NOT NULL DEFAULT '',
+    claim_token text NOT NULL DEFAULT '',
+    lease_expires_at timestamptz,
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    last_error text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT outbox_messages_status_check CHECK (status IN ('PENDING', 'PROCESSING', 'SENT'))
+);
+
+CREATE INDEX IF NOT EXISTS index_outbox_messages_pending
+ON bighill_inference_db.outbox_messages(status, next_attempt_at, created_at);
+
+CREATE INDEX IF NOT EXISTS index_outbox_messages_processing
+ON bighill_inference_db.outbox_messages(status, lease_expires_at, created_at);
+
+CREATE INDEX IF NOT EXISTS index_outbox_messages_resource_key
+ON bighill_inference_db.outbox_messages(resource_key, created_at);
+
+CREATE TRIGGER outbox_messages_updated_at
+BEFORE UPDATE ON bighill_inference_db.outbox_messages
+FOR EACH ROW
+EXECUTE FUNCTION updated_at_column();

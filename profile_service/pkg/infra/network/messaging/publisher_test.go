@@ -3,7 +3,7 @@ package messaging_test
 import (
 	"context"
 	"errors"
-	profileeventpb "lib/data_contracts_lib/profile_event"
+	profileeventpb "lib/data_contracts_lib/profile"
 	shared "lib/shared_lib/messaging"
 	"profile_service/pkg/domain"
 	"profile_service/pkg/infra/network/messaging"

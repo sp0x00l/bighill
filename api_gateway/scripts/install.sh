@@ -31,6 +31,10 @@ install_test()
     go mod init test
     go mod edit -replace lib/shared_lib=../../shared_lib
     go mod edit -replace lib/data_contracts_lib=../../data_contracts/build/protobufs
+    go mod edit -replace inference_service=../../inference_service
+    go mod edit -replace model_registry_service=../../model_registry_service
+    go mod edit -replace model_serving_service=../../model_serving_service
+    go mod edit -replace training_service=../../training_service
     go mod tidy
     go mod download
 

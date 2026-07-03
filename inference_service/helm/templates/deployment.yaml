@@ -101,6 +101,16 @@ spec:
               value: {{ .Values.env.modelRegistrySubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
+            - name: INFERENCE_SERVICE_PREFERENCE_DATASET_TOPIC
+              value: {{ .Values.env.preferenceDatasetTopic | quote }}
+            - name: INFERENCE_SERVICE_OUTBOX
+              value: {{ .Values.env.outbox | quote }}
+            - name: INFERENCE_SERVICE_OUTBOX_RELAY_POLL_MS
+              value: {{ .Values.env.outboxRelayPollMs | quote }}
+            - name: INFERENCE_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
+              value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: INFERENCE_SERVICE_OUTBOX_RELAY_BATCH_SIZE
+              value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: INFERENCE_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: INFERENCE_SERVICE_API_GRPC_PORT
@@ -131,6 +141,8 @@ spec:
               value: {{ .Values.env.rerankerRequestTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER
               value: {{ .Values.env.rerankerCandidateMultiplier | quote }}
+            - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER
+              value: {{ .Values.env.queryTransformerProvider | quote }}
             - name: INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED
               value: {{ .Values.env.preferenceDatasetExportEnabled | quote }}
             - name: INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE

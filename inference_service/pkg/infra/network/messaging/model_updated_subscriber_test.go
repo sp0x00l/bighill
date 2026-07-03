@@ -7,7 +7,7 @@ import (
 	"inference_service/pkg/domain/model"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
 
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_registry"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	sharedmessaging "lib/shared_lib/messaging"
 

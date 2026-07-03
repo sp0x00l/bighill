@@ -28,6 +28,19 @@ type GenerateResponse struct {
 	GenerationModel       string
 }
 
+type QueryTransformRequest struct {
+	RequestID       uuid.UUID
+	DatasetID       uuid.UUID
+	ModelID         uuid.UUID
+	QueryText       string
+	MetadataFilters map[string]string
+}
+
+type QueryTransformResult struct {
+	QueryText       string
+	MetadataFilters map[string]string
+}
+
 type RetrievedContext struct {
 	EmbeddingRecordID   uuid.UUID
 	EmbeddingSnapshotID uuid.UUID

@@ -8,6 +8,11 @@ type DatasetFile struct {
 	StorageLocation   string
 	ContentType       string
 	FileExtension     string
+	SourceType        string
+	SourceConnectorID uuid.UUID
+	SourceQuery       string
+	SourceDatabase    string
+	SourceCollection  string
 	TableNamespace    string
 	TableName         string
 	TableFormat       string

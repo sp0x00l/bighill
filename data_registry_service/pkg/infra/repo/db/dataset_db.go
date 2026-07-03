@@ -6,7 +6,7 @@ import (
 	"data_registry_service/pkg/domain/model"
 	"errors"
 	"fmt"
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_registry"
 	coreDB "lib/shared_lib/db"
 	msgConn "lib/shared_lib/messaging"
 	core "lib/shared_lib/transport"
@@ -75,9 +75,9 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 
 	var id, userID, origin, status, processingState string
 	var sqlStatement = `INSERT INTO ` + db.Name +
-		`.datasets (id, user_id, title, description, location, idempotency_key, category,
+		`.datasets (id, user_id, title, description, location, source_type, source_connector_id, source_query, source_database, source_collection, idempotency_key, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata, processing_state)
-		VALUES (@id, @user_id, @title, @description, @location, @idempotency_key, @category,
+		VALUES (@id, @user_id, @title, @description, @location, @source_type::storage_type_enum, @source_connector_id, @source_query, @source_database, @source_collection, @idempotency_key, @category,
 		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, @processing_state)
 		RETURNING id, user_id, origin, status, processing_state;`
 
@@ -188,12 +188,15 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 	datasetDAO := datasetModel.toDAO(dataset)
 
 	var sqlStatement = `UPDATE ` + db.Name + `.datasets SET title = @title, 
-		description = @description, origin = @origin, location = @location, category = @category,
+		description = @description, origin = @origin, location = @location,
+		source_type = @source_type::storage_type_enum, source_connector_id = @source_connector_id,
+		source_query = @source_query, source_database = @source_database, source_collection = @source_collection,
+		category = @category,
 		table_namespace = @table_namespace, table_name = @table_name, table_format = @table_format,
 		catalog_provider = @catalog_provider, processing_profile = @processing_profile, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb,
 		dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
-		RETURNING title, description, origin, location, status, category,
+		RETURNING title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
@@ -209,6 +212,11 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		&updatedDataset.Description,
 		&updatedDataset.Origin,
 		&updatedDataset.Location,
+		&updatedDataset.SourceType,
+		&updatedDataset.SourceConnectorID,
+		&updatedDataset.SourceQuery,
+		&updatedDataset.SourceDatabase,
+		&updatedDataset.SourceCollection,
 		&updatedDataset.Status,
 		&updatedDataset.Category,
 		&updatedDataset.TableNamespace,
@@ -313,7 +321,7 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.U
 			dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
 			AND ` + requestedRank + ` > ` + currentRank + `
-		RETURNING id, user_id, title, description, origin, location, status, category,
+		RETURNING id, user_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
@@ -460,7 +468,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 				OR d.embedding_provider IS DISTINCT FROM COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider)
 				OR d.embedding_model IS DISTINCT FROM COALESCE(NULLIF(@embedding_model, ''), d.embedding_model)
 			)
-		RETURNING d.id, d.user_id, d.title, d.description, d.origin, d.location, d.status, d.category,
+		RETURNING d.id, d.user_id, d.title, d.description, d.origin, d.location, d.source_type, d.source_connector_id, d.source_query, d.source_database, d.source_collection, d.status, d.category,
 			d.table_namespace, d.table_name, d.table_format, d.catalog_provider, d.processing_profile, d.schema_version, d.schema_metadata::text, d.processing_state::text,
 			d.dataset_version, d.raw_snapshot_id, d.feature_snapshot_id, d.embedding_snapshot_id, d.vector_store, d.collection_name,
 			d.embedding_dimensions, d.embedding_count, d.embedding_strategy_version, d.embedding_chunker_name, d.embedding_chunker_version,
@@ -613,7 +621,7 @@ func (db *datasetDB) getPaginatedSelectSQL(filter string, pagination core.Pagina
 }
 
 func (db *datasetDB) getSelectSQL(filter string) string {
-	return fmt.Sprintf(`SELECT id, user_id, title, description, origin, location, status, category,
+	return fmt.Sprintf(`SELECT id, user_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 	table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 	dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 	embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
@@ -634,6 +642,11 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 			&dataset.Description,
 			&dataset.Origin,
 			&dataset.Location,
+			&dataset.SourceType,
+			&dataset.SourceConnectorID,
+			&dataset.SourceQuery,
+			&dataset.SourceDatabase,
+			&dataset.SourceCollection,
 			&dataset.Status,
 			&dataset.Category,
 			&dataset.TableNamespace,
@@ -680,7 +693,8 @@ func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, 
 
 	var dataset DatasetDAO
 	err := row.Scan(&dataset.ID, &dataset.UserID, &dataset.Title, &dataset.Description, &dataset.Origin,
-		&dataset.Location, &dataset.Status, &dataset.Category, &dataset.TableNamespace, &dataset.TableName,
+		&dataset.Location, &dataset.SourceType, &dataset.SourceConnectorID, &dataset.SourceQuery, &dataset.SourceDatabase, &dataset.SourceCollection,
+		&dataset.Status, &dataset.Category, &dataset.TableNamespace, &dataset.TableName,
 		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.ProcessingProfile, &dataset.SchemaVersion, &dataset.SchemaMetadata, &dataset.ProcessingState,
 		&dataset.DatasetVersion, &dataset.RawSnapshotID, &dataset.FeatureSnapshotID, &dataset.EmbeddingSnapshotID,
 		&dataset.VectorStore, &dataset.CollectionName, &dataset.EmbeddingDimensions, &dataset.EmbeddingCount,
@@ -745,6 +759,11 @@ func datasetUpdatedMessage(topic string, dataset *model.Dataset) msgConn.Outboun
 		EmbeddingChunkOverlap:    int32(dataset.EmbeddingChunkOverlap),
 		EmbeddingProvider:        dataset.EmbeddingProvider,
 		EmbeddingModel:           dataset.EmbeddingModel,
+		SourceType:               datasetSourceType(dataset),
+		SourceConnectorId:        uuidToString(dataset.SourceConnectorID),
+		SourceQuery:              dataset.SourceQuery,
+		SourceDatabase:           dataset.SourceDatabase,
+		SourceCollection:         dataset.SourceCollection,
 	})
 	return msgConn.OutboundMessage{
 		Topic: topic,
@@ -773,6 +792,11 @@ func datasetCreatedMessage(topic string, dataset *model.Dataset) msgConn.Outboun
 		ProcessingProfile: dataset.ProcessingProfile.String(),
 		SchemaVersion:     int32(dataset.SchemaVersion),
 		SchemaMetadata:    dataset.SchemaMetadata,
+		SourceType:        datasetSourceType(dataset),
+		SourceConnectorId: uuidToString(dataset.SourceConnectorID),
+		SourceQuery:       dataset.SourceQuery,
+		SourceDatabase:    dataset.SourceDatabase,
+		SourceCollection:  dataset.SourceCollection,
 	})
 	return msgConn.OutboundMessage{
 		Topic: topic,
@@ -810,6 +834,15 @@ func uuidToString(id uuid.UUID) string {
 		return ""
 	}
 	return id.String()
+}
+
+func datasetSourceType(dataset *model.Dataset) string {
+	log.Trace("datasetSourceType")
+
+	if dataset == nil || dataset.SourceConnectorID == uuid.Nil {
+		return ""
+	}
+	return dataset.SourceType.String()
 }
 
 func mustMarshalDataset(payload proto.Message) []byte {

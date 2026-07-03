@@ -155,6 +155,8 @@ type inferenceFeedbackRepositoryStub struct {
 	idempotencyKey    uuid.UUID
 	preferenceRequest model.PreferenceDatasetExportRequest
 	preferenceDataset *model.PreferenceDataset
+	recordedSnapshot  *model.PreferenceDataset
+	snapshotRequest   model.PreferenceDatasetExportRequest
 	err               error
 }
 
@@ -172,6 +174,12 @@ func (s *inferenceFeedbackRepositoryStub) ReadPreferenceDataset(_ context.Contex
 	return &model.PreferenceDataset{RequestID: request.RequestID, DatasetID: request.DatasetID, ModelID: request.ModelID}, s.err
 }
 
+func (s *inferenceFeedbackRepositoryStub) RecordPreferenceDatasetSnapshot(_ context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+	s.recordedSnapshot = dataset
+	s.snapshotRequest = request
+	return dataset, s.err
+}
+
 type preferenceDatasetWriterStub struct {
 	dataset *model.PreferenceDataset
 	err     error
@@ -184,6 +192,17 @@ func (s *preferenceDatasetWriterStub) WritePreferenceDataset(_ context.Context, 
 	}
 	dataset.Exported = true
 	return dataset, nil
+}
+
+type queryTransformerStub struct {
+	request model.QueryTransformRequest
+	result  *model.QueryTransformResult
+	err     error
+}
+
+func (s *queryTransformerStub) TransformQuery(_ context.Context, request model.QueryTransformRequest) (*model.QueryTransformResult, error) {
+	s.request = request
+	return s.result, s.err
 }
 
 var _ = Describe("InferenceUsecase", func() {
@@ -250,14 +269,45 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(feedbackRepository.idempotencyKey).To(Equal(idempotencyKey))
 	})
 
-	It("exports a preference dataset when feedback creates enough complete pairs", func() {
+	It("does not export a preference dataset while recording feedback", func() {
+		requestID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID: requestID,
+			DatasetID: uuid.New(),
+			ModelID:   uuid.New(),
+			Examples:  []model.PreferenceExample{},
+		}}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithPreferenceDatasetWriter(writer),
+		)
+
+		_, err := uc.RecordFeedback(context.Background(), &model.InferenceFeedback{
+			FeedbackID: uuid.New(),
+			RequestID:  requestID,
+			UserID:     uuid.New(),
+			Accepted:   true,
+			Rating:     1,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Consistently(func() *model.PreferenceDataset { return writer.dataset }).Should(BeNil())
+		Expect(feedbackRepository.preferenceRequest.RequestID).To(Equal(uuid.Nil))
+	})
+
+	It("exports a preference dataset when explicitly requested with enough complete pairs", func() {
 		requestID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
-			RequestID: requestID,
-			DatasetID: datasetID,
-			ModelID:   modelID,
+			RequestID:          requestID,
+			DatasetID:          datasetID,
+			ModelID:            modelID,
+			ParentAdapterURI:   "s3://models/parent",
+			ParentBaseModel:    "mistral-7b",
+			ParentModelVersion: 7,
 			Examples: []model.PreferenceExample{{
 				PreferenceExampleID: uuid.New(),
 				RequestID:           requestID,
@@ -273,27 +323,70 @@ var _ = Describe("InferenceUsecase", func() {
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
 			app.WithPreferenceDatasetWriter(writer),
-			app.WithPreferenceDatasetAutoExport("s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl", 1, 100),
 		)
-		feedback := &model.InferenceFeedback{
-			FeedbackID: uuid.New(),
-			RequestID:  requestID,
-			UserID:     uuid.New(),
-			Accepted:   false,
-			Rating:     -1,
-			Comment:    "not grounded",
-		}
-
-		recorded, err := uc.RecordFeedback(context.Background(), feedback, uuid.New())
+		dataset, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
+			RequestID:   requestID,
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(recorded).To(Equal(feedback))
+		Expect(dataset.Exported).To(BeTrue())
 		Expect(feedbackRepository.preferenceRequest.RequestID).To(Equal(requestID))
 		Expect(feedbackRepository.preferenceRequest.MinExamples).To(Equal(1))
 		Expect(feedbackRepository.preferenceRequest.Limit).To(Equal(100))
 		Expect(writer.dataset).NotTo(BeNil())
-		Expect(writer.dataset.OutputURI).To(Equal("s3://local-dev-bucket/preferences/" + datasetID.String() + "/preference_dataset.jsonl"))
+		Expect(writer.dataset.OutputURI).To(ContainSubstring("s3://local-dev-bucket/preferences/" + datasetID.String() + "/preference_dataset-"))
+		Expect(writer.dataset.OutputURI).To(HaveSuffix(".jsonl"))
 		Expect(writer.dataset.Exported).To(BeTrue())
+	})
+
+	It("records a preference dataset snapshot after export succeeds", func() {
+		requestID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID:          requestID,
+			DatasetID:          datasetID,
+			ModelID:            modelID,
+			ParentAdapterURI:   "s3://models/parent",
+			ParentBaseModel:    "mistral-7b",
+			ParentModelVersion: 7,
+			Examples: []model.PreferenceExample{{
+				PreferenceExampleID: uuid.New(),
+				RequestID:           requestID,
+				DatasetID:           datasetID,
+				ModelID:             modelID,
+				PromptText:          "prompt",
+				AcceptedAnswer:      "chosen",
+				RejectedAnswer:      "rejected",
+			}},
+		}}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithPreferenceDatasetWriter(writer),
+		)
+
+		_, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
+			RequestID:   requestID,
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/{request_id}.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(feedbackRepository.recordedSnapshot).NotTo(BeNil())
+		Expect(feedbackRepository.recordedSnapshot.PreferenceDatasetID).NotTo(Equal(uuid.Nil))
+		Expect(feedbackRepository.recordedSnapshot.OutputURI).To(ContainSubstring("s3://local-dev-bucket/preferences/" + datasetID.String() + "/" + requestID.String() + "-"))
+		Expect(feedbackRepository.recordedSnapshot.OutputURI).To(HaveSuffix(".jsonl"))
+		Expect(feedbackRepository.recordedSnapshot.EvaluationOutputURI).To(ContainSubstring("-eval.jsonl"))
+		Expect(feedbackRepository.recordedSnapshot.Format).To(Equal("DPO_JSONL"))
+		Expect(feedbackRepository.recordedSnapshot.EligibilityPolicy).To(Equal("complete_rejected_pairs_train_eval_split_v1"))
+		Expect(feedbackRepository.snapshotRequest.MinExamples).To(Equal(1))
+		Expect(feedbackRepository.snapshotRequest.Limit).To(Equal(100))
 	})
 
 	It("does not write a preference dataset before the configured threshold is met", func() {
@@ -309,19 +402,61 @@ var _ = Describe("InferenceUsecase", func() {
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
 			app.WithPreferenceDatasetWriter(writer),
-			app.WithPreferenceDatasetAutoExport("s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl", 1, 100),
 		)
 
-		_, err := uc.RecordFeedback(context.Background(), &model.InferenceFeedback{
-			FeedbackID: uuid.New(),
-			RequestID:  requestID,
-			UserID:     uuid.New(),
-			Accepted:   true,
-			Rating:     1,
-		}, uuid.New())
+		dataset, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
+			RequestID:   requestID,
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.ExampleCount()).To(Equal(0))
 		Expect(writer.dataset).To(BeNil())
+	})
+
+	It("uses total eligible examples for the preference export threshold", func() {
+		requestID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID:          requestID,
+			DatasetID:          datasetID,
+			ModelID:            modelID,
+			ParentAdapterURI:   "s3://models/parent",
+			ParentBaseModel:    "mistral-7b",
+			ParentModelVersion: 7,
+			Examples: []model.PreferenceExample{{
+				PreferenceExampleID: uuid.New(),
+				RequestID:           requestID,
+				DatasetID:           datasetID,
+				ModelID:             modelID,
+				Split:               "EVAL",
+				PromptText:          "prompt",
+				AcceptedAnswer:      "chosen",
+				RejectedAnswer:      "rejected",
+			}},
+		}}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithPreferenceDatasetWriter(writer),
+		)
+
+		dataset, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
+			RequestID:   requestID,
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.ExampleCount()).To(Equal(1))
+		Expect(dataset.TrainingExampleCount()).To(Equal(0))
+		Expect(writer.dataset).NotTo(BeNil())
+		Expect(writer.dataset.ExampleCount()).To(Equal(1))
 	})
 
 	It("generates from retrieved RAG contexts", func() {
@@ -392,6 +527,91 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(auditedContexts).To(HaveLen(1))
 		Expect(auditedContexts[0].SourceText).To(Equal("retrieved context"))
 		Expect(auditedContexts[0].EmbeddingSnapshotID).To(Equal(dataset.EmbeddingSnapshotID.String()))
+	})
+
+	It("uses query transformer output for retrieval without changing the generated question", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.DatasetID = dataset.DatasetID
+		retrieval := &retrievalClientStub{contexts: []model.RetrievedContext{{
+			EmbeddingRecordID:   uuid.New(),
+			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
+			ChunkIndex:          1,
+			SourceText:          "retrieved context",
+			Similarity:          0.91,
+		}}}
+		transformer := &queryTransformerStub{result: &model.QueryTransformResult{
+			QueryText:       "semantic query",
+			MetadataFilters: map[string]string{"section": "risk", "source": "generated"},
+		}}
+		generator := &generationAdapterStub{}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithRetrievalClient(retrieval),
+			app.WithQueryTransformer(transformer),
+			app.WithGenerationAdapter(generator),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		response, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID:       uuid.New(),
+			DatasetID:       dataset.DatasetID,
+			ModelID:         inferenceModel.ModelID,
+			QueryText:       "original question",
+			TopK:            3,
+			MetadataFilters: map[string]string{"source": "manual"},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(transformer.request.QueryText).To(Equal("original question"))
+		Expect(retrieval.queryText).To(Equal("semantic query"))
+		Expect(retrieval.metadataFilters).To(Equal(map[string]string{"section": "risk", "source": "generated"}))
+		Expect(generator.request.Query).To(Equal("original question"))
+		Expect(response.QueryText).To(Equal("original question"))
+	})
+
+	It("falls back to raw retrieval when query transformation fails", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.DatasetID = dataset.DatasetID
+		retrieval := &retrievalClientStub{contexts: []model.RetrievedContext{{
+			EmbeddingRecordID:   uuid.New(),
+			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
+			ChunkIndex:          1,
+			SourceText:          "retrieved context",
+			Similarity:          0.91,
+		}}}
+		transformer := &queryTransformerStub{err: errors.New("planner unavailable")}
+		generator := &generationAdapterStub{}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithRetrievalClient(retrieval),
+			app.WithQueryTransformer(transformer),
+			app.WithGenerationAdapter(generator),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		response, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID: uuid.New(),
+			DatasetID: dataset.DatasetID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "original question",
+			TopK:      3,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retrieval.queryText).To(Equal("original question"))
+		Expect(response.QueryText).To(Equal("original question"))
 	})
 
 	DescribeTable("reranking",

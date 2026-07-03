@@ -10,5 +10,5 @@ env:
   environment: "staging"
   backend: "kubernetes"
   vllmImage: "vllm/vllm-openai:latest"
-  vllmMultiTenantEnabled: "false"
+  vllmMultiTenantEnabled: "true"
   vllmRequestTimeoutMs: "5000"

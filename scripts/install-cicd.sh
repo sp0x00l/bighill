@@ -280,7 +280,7 @@ build_datafusion_query_engine() {
     REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
     echo "Building DataFusion query engine..."
-    make -C "$REPO_ROOT/query_engine" build
+    make -C "$REPO_ROOT/data_stream_service/internal/infra/queryengine" build
 }
 
 configure_path() {

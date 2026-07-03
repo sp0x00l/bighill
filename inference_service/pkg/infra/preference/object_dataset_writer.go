@@ -44,32 +44,47 @@ func NewS3ObjectDatasetWriter(ctx context.Context, region string, uploadPartSize
 func (w *ObjectDatasetWriter) WritePreferenceDataset(ctx context.Context, dataset *model.PreferenceDataset) (*model.PreferenceDataset, error) {
 	log.Trace("ObjectDatasetWriter WritePreferenceDataset")
 
-	payload, err := preferenceDatasetJSONL(dataset)
-	if err != nil {
+	if err := w.writePreferenceDataset(ctx, dataset.OutputURI, dataset.TrainingExamples()); err != nil {
 		return nil, err
 	}
-	bucketName, key, err := parseS3URI(dataset.OutputURI)
-	if err != nil {
-		return nil, err
-	}
-	if err := w.bucket.Upload(ctx, bucketName, key, "application/x-ndjson", bytes.NewReader(payload)); err != nil {
-		return nil, fmt.Errorf("write preference dataset: %w", err)
+	if strings.TrimSpace(dataset.EvaluationOutputURI) != "" && dataset.EvaluationExampleCount() > 0 {
+		if err := w.writePreferenceDataset(ctx, dataset.EvaluationOutputURI, dataset.EvaluationExamples()); err != nil {
+			return nil, err
+		}
 	}
 	dataset.Exported = true
 	return dataset, nil
 }
 
-func preferenceDatasetJSONL(dataset *model.PreferenceDataset) ([]byte, error) {
+func (w *ObjectDatasetWriter) writePreferenceDataset(ctx context.Context, outputURI string, examples []model.PreferenceExample) error {
+	log.Trace("ObjectDatasetWriter writePreferenceDataset")
+
+	payload, err := preferenceDatasetJSONL(examples)
+	if err != nil {
+		return err
+	}
+	bucketName, key, err := parseS3URI(outputURI)
+	if err != nil {
+		return err
+	}
+	if err := w.bucket.Upload(ctx, bucketName, key, "application/x-ndjson", bytes.NewReader(payload)); err != nil {
+		return fmt.Errorf("write preference dataset: %w", err)
+	}
+	return nil
+}
+
+func preferenceDatasetJSONL(examples []model.PreferenceExample) ([]byte, error) {
 	log.Trace("preferenceDatasetJSONL")
 
 	var out bytes.Buffer
-	for _, example := range dataset.Examples {
+	for _, example := range examples {
 		row := map[string]any{
 			"dataset_id":            example.DatasetID.String(),
 			"model_id":              example.ModelID.String(),
 			"request_id":            example.RequestID.String(),
 			"feedback_id":           example.FeedbackID.String(),
 			"preference_example_id": example.PreferenceExampleID.String(),
+			"split":                 example.Split,
 			"prompt":                example.PromptText,
 			"chosen":                example.AcceptedAnswer,
 			"rejected":              example.RejectedAnswer,

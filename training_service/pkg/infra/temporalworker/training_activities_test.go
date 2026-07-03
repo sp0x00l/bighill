@@ -3,6 +3,7 @@ package temporalworker_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"training_service/pkg/domain"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"gopkg.in/yaml.v3"
 )
 
 func TestTemporalWorker(t *testing.T) {
@@ -72,6 +74,22 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(prepared.DatasetURI).To(Equal("s3://local-dev-bucket/features/feature-snapshot-1.parquet"))
 	})
 
+	It("prepares DPO dataset metadata from a preference dataset artifact", func() {
+		activities := temporalworker.NewTrainingActivities(nil)
+
+		prepared, err := activities.PrepareTrainingDataset(context.Background(), model.TrainingRunRequest{
+			TrainingRunID:        "training-run-1",
+			PreferenceDatasetID:  uuid.NewString(),
+			PreferenceDatasetURI: "s3://local-dev-bucket/preferences/dpo.jsonl",
+			TrainingProfile: model.TrainingProfile{
+				Trainer: "dpo",
+			},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(prepared.DatasetURI).To(Equal("s3://local-dev-bucket/preferences/dpo.jsonl"))
+	})
+
 	It("rejects invalid preparation requests", func() {
 		activities := temporalworker.NewTrainingActivities(nil)
 
@@ -126,8 +144,9 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(executor.trainingSpec.AxolotlCommand).To(Equal("axolotl train"))
 		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("base_model: mistral-7b"))
 		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("training_profile: profile-v1"))
-		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("trainer: dpo"))
-		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("preference_dataset: s3://local-dev-bucket/preferences/profile-v1.jsonl"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("trainer: sft"))
+		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("rl: dpo"))
+		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("preference_dataset"))
 		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("adapter: qlora"))
 		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("load_in_4bit: true"))
 		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("learning_rate: 0.0002"))
@@ -145,6 +164,55 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(artifact.ServingTarget).To(Equal("vllm-local"))
 		Expect(artifact.ServingModel).To(Equal("movie-ranker-v1"))
 		Expect(artifact.ServingLoadStatus).To(Equal("LOADED"))
+	})
+
+	It("builds a real DPO recipe from the parent adapter and preference dataset", func() {
+		executor := &recordingTrainingExecutor{artifact: &model.TrainedModelArtifact{
+			TrainingRunID:     "training-run-dpo",
+			ModelURI:          "s3://models/training-run-dpo",
+			ModelName:         "dpo-parent-model",
+			ModelVersion:      "8",
+			BaseModel:         "mistral-7b",
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactChecksum:  "sha256:dpo",
+			ArtifactSizeBytes: 128,
+		}}
+		activities := temporalworker.NewTrainingActivities(nil, temporalworker.WithExecutor(executor), temporalworker.WithModelURIPrefix("s3://models"))
+
+		_, err := activities.RunTrainingJob(context.Background(), model.PreparedTrainingDataset{
+			TrainingRunID: "training-run-dpo",
+			DatasetURI:    "s3://local-dev-bucket/preferences/snapshot.jsonl",
+		}, model.TrainingRunRequest{
+			TrainingRunID:        "training-run-dpo",
+			DatasetID:            uuid.NewString(),
+			DatasetVersion:       "8",
+			PreferenceDatasetID:  uuid.NewString(),
+			PreferenceDatasetURI: "s3://local-dev-bucket/preferences/snapshot.jsonl",
+			ParentModelID:        uuid.NewString(),
+			ParentModelVersion:   "7",
+			ParentAdapterURI:     "s3://models/parent-adapter",
+			ModelName:            "dpo-parent-model",
+			ModelVersion:         "8",
+			BaseModel:            "mistral-7b",
+			TrainingProfile:      dpoTrainingProfile(),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(executor.trainingSpec.DatasetURI).To(Equal("s3://local-dev-bucket/preferences/snapshot.jsonl"))
+		Expect(executor.trainingSpec.ParentAdapterURI).To(Equal("s3://models/parent-adapter"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("trainer: dpo"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("rl: dpo"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("dpo_beta: 0.1"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("rl_beta: 0.1"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("preference_dataset_id: "))
+		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("reference_model:"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("lora_model_dir: s3://models/parent-adapter"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("path: s3://local-dev-bucket/preferences/snapshot.jsonl"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("field_chosen: chosen"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("field_rejected: rejected"))
+		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("\t"))
+		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("sample_packing:"))
+		expectValidYAML(executor.trainingSpec.RecipeYAML)
 	})
 
 	It("builds an evaluation job spec and delegates execution", func() {
@@ -231,10 +299,9 @@ var _ = Describe("TrainingActivities", func() {
 func trainingProfile() model.TrainingProfile {
 	return model.TrainingProfile{
 		Name:                      "profile-v1",
-		Trainer:                   "dpo",
+		Trainer:                   "sft",
 		Adapter:                   "qlora",
 		Quantization:              "4bit",
-		PreferenceDatasetURI:      "s3://local-dev-bucket/preferences/profile-v1.jsonl",
 		SequenceLength:            2048,
 		SamplePacking:             true,
 		LearningRate:              0.0002,
@@ -244,4 +311,18 @@ func trainingProfile() model.TrainingProfile {
 		LoRAR:                     16,
 		LoRAAlpha:                 32,
 	}
+}
+
+func expectValidYAML(raw string) {
+	var parsed map[string]any
+	ExpectWithOffset(1, strings.TrimSpace(raw)).NotTo(BeEmpty())
+	ExpectWithOffset(1, yaml.Unmarshal([]byte(raw), &parsed)).To(Succeed())
+}
+
+func dpoTrainingProfile() model.TrainingProfile {
+	profile := trainingProfile()
+	profile.Trainer = "dpo"
+	profile.PreferenceDatasetURI = "s3://local-dev-bucket/preferences/snapshot.jsonl"
+	profile.DPOBeta = 0.1
+	return profile
 }

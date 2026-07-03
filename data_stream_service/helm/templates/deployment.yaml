@@ -41,6 +41,18 @@ spec:
               value: "0.0.0.0"
             - name: DATA_STREAM_SERVICE_API_GRPC_PORT
               value: {{ .Values.service.grpcPort | quote }}
+            - name: DATA_STREAM_SERVICE_FLIGHT_AUTH_TOKEN
+              value: {{ .Values.env.flightAuthToken | quote }}
+            - name: DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS
+              value: {{ .Values.env.flightAllowAnonymous | quote }}
+            - name: DATA_STREAM_SERVICE_FLIGHT_TLS_CERT_PATH
+              value: {{ .Values.env.flightTlsCertPath | quote }}
+            - name: DATA_STREAM_SERVICE_FLIGHT_TLS_KEY_PATH
+              value: {{ .Values.env.flightTlsKeyPath | quote }}
+            - name: DATA_STREAM_SERVICE_FLIGHT_TLS_CLIENT_CA_CERT_PATH
+              value: {{ .Values.env.flightTlsClientCaCertPath | quote }}
+            - name: DATA_STREAM_SERVICE_FLIGHT_TLS_REQUIRE_CLIENT_CERT
+              value: {{ .Values.env.flightTlsRequireClientCert | quote }}
             - name: DATA_STREAM_SERVICE_QUERY_ENGINE_MODE
               value: {{ .Values.env.queryEngineMode | quote }}
             - name: DATA_STREAM_SERVICE_QUERY_ENGINE_DATA_ROOT

@@ -17,7 +17,7 @@ import (
 
 	usecase "data_registry_service/pkg/app"
 	domainErrors "data_registry_service/pkg/domain"
-	dataregistrypb "lib/data_contracts_lib/data_registry_service"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
 	rpcLib "lib/shared_lib/rpc"
 
 	log "github.com/sirupsen/logrus"

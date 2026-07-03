@@ -16,7 +16,7 @@ import (
 	restsupport "data_ingestion_service/pkg/infra/network/restsupport"
 	"data_ingestion_service/pkg/infra/repo/bucket"
 	repo "data_ingestion_service/pkg/infra/repo/db"
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_ingestion"
 	corebucket "lib/shared_lib/bucket"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"

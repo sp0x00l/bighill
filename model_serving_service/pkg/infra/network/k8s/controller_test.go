@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
@@ -54,6 +55,41 @@ var _ = Describe("ServedModelController serialization", func() {
 		go func() {
 			defer wg.Done()
 			_, err := controller.ProcessSnapshot(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+		}()
+		wg.Wait()
+
+		Expect(reconciler.maxActive).To(Equal(1))
+		Expect(reconciler.calls).To(Equal(2))
+	})
+
+	It("serializes concurrent reconciles for different resources on the same shared runtime", func() {
+		first := controllerServedModel("served-model-first", "s3://models/first")
+		second := controllerServedModel("served-model-second", "s3://models/second")
+		second.ModelID = uuid.New()
+		second.ModelVersion = first.ModelVersion + 1
+		second.BaseModel = first.BaseModel
+		store := &controllerStoreStub{
+			namespace: "default",
+			listed:    []*model.ServedModel{first, second},
+			latest: map[string]*model.ServedModel{
+				first.ResourceName:  first,
+				second.ResourceName: second,
+			},
+		}
+		reconciler := &controllerReconcilerStub{delay: 20 * time.Millisecond}
+		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond, servingk8s.WithSharedRuntimeSerialization(true))
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			err := controller.ProcessWatchEvent(context.Background(), watch.Event{Type: watch.Modified, Object: controllerServedModelObject(first)})
+			Expect(err).NotTo(HaveOccurred())
+		}()
+		go func() {
+			defer wg.Done()
+			err := controller.ProcessWatchEvent(context.Background(), watch.Event{Type: watch.Modified, Object: controllerServedModelObject(second)})
 			Expect(err).NotTo(HaveOccurred())
 		}()
 		wg.Wait()
@@ -129,4 +165,25 @@ func controllerServedModel(resourceName string, adapterURI string) *model.Served
 		BaseModel:    "mistral",
 		AdapterURI:   adapterURI,
 	}
+}
+
+func controllerServedModelObject(servedModel *model.ServedModel) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "serving.bighill.io/v1alpha1",
+		"kind":       "ServedModel",
+		"metadata": map[string]any{
+			"name":       servedModel.ResourceName,
+			"namespace":  servedModel.Namespace,
+			"generation": int64(servedModel.Generation),
+		},
+		"spec": map[string]any{
+			"modelID":      servedModel.ModelID.String(),
+			"modelVersion": int64(servedModel.ModelVersion),
+			"name":         servedModel.Name,
+			"baseModel":    servedModel.BaseModel,
+			"adapterURI":   servedModel.AdapterURI,
+		},
+	}}
+	obj.SetGeneration(servedModel.Generation)
+	return obj
 }

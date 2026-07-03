@@ -17,7 +17,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const defaultDataFusionBinaryPath = "../query_engine/datafusion_query_engine/target/release/datafusion_query_engine"
+const defaultDataFusionBinaryPath = "internal/infra/queryengine/datafusion_query_engine/target/release/datafusion_query_engine"
 
 type dataFusionQueryEngine struct {
 	allocator  memory.Allocator

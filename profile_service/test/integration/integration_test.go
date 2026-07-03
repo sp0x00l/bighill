@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	profileeventpb "lib/data_contracts_lib/profile_event"
+	profileeventpb "lib/data_contracts_lib/profile"
 	auth "lib/shared_lib/auth"
 	sharedclock "lib/shared_lib/clock"
 	kms "lib/shared_lib/key_management"

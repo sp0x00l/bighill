@@ -44,7 +44,7 @@ var _ = Describe("Flight query gateway", func() {
 	)
 
 	BeforeEach(func() {
-		server = &data.FlightServerAuth{}
+		server = data.NewFlightServerAuth("", true)
 		gateway = data.NewFlightServer(server, infra.DataConfig{
 			Server: infra.ServerConnectionConfig{Hostname: "localhost", Port: 0},
 			QueryEngine: infra.QueryEngineConfig{
@@ -83,5 +83,28 @@ var _ = Describe("Flight query gateway", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(stream.messages).NotTo(BeEmpty())
 		Expect(stream.messages[0].DataHeader).NotTo(BeEmpty())
+	})
+})
+
+var _ = Describe("Flight auth", func() {
+	It("allows anonymous auth only when explicitly enabled", func() {
+		handler := data.NewFlightServerAuth("", true)
+
+		identity, err := handler.IsValid("")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(identity).To(Equal("anonymous-local"))
+	})
+
+	It("requires the configured token when anonymous auth is disabled", func() {
+		handler := data.NewFlightServerAuth("secret-token", false)
+
+		identity, err := handler.IsValid("secret-token")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(identity).To(Equal("data-stream-client"))
+
+		_, err = handler.IsValid("wrong-token")
+		Expect(err).To(HaveOccurred())
 	})
 })

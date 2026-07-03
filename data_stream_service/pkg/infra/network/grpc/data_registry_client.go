@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 
-	dataregistrypb "lib/data_contracts_lib/data_registry_service"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
 	rpcLib "lib/shared_lib/rpc"
 
 	log "github.com/sirupsen/logrus"

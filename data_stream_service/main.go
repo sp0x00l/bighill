@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,10 +22,16 @@ import (
 var Version string
 
 type streamConfig struct {
-	ServiceName string
-	GRPCHost    string
-	GRPCPort    int
-	Health      healthConfig
+	ServiceName          string
+	GRPCHost             string
+	GRPCPort             int
+	FlightAuthToken      string
+	FlightAllowAnonymous bool
+	TLSCertPath          string
+	TLSKeyPath           string
+	TLSClientCAPath      string
+	RequireClientCert    bool
+	Health               healthConfig
 }
 
 type healthConfig struct {
@@ -56,13 +63,17 @@ func main() {
 
 	streamCfg := infra.DataConfig{
 		Server: infra.ServerConnectionConfig{
-			Hostname: cfg.GRPCHost,
-			Port:     cfg.GRPCPort,
+			Hostname:          cfg.GRPCHost,
+			Port:              cfg.GRPCPort,
+			TLSCertPath:       cfg.TLSCertPath,
+			TLSKeyPath:        cfg.TLSKeyPath,
+			TLSClientCAPath:   cfg.TLSClientCAPath,
+			RequireClientCert: cfg.RequireClientCert,
 		},
 		QueryEngine: infra.QueryEngineConfig{
 			Mode:               env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_MODE", "registry"),
 			DataRoot:           env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_DATA_ROOT", "tmp/local_s3_storage"),
-			BinaryPath:         env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_BINARY_PATH", "../query_engine/datafusion_query_engine/target/release/datafusion_query_engine"),
+			BinaryPath:         env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_BINARY_PATH", "internal/infra/queryengine/datafusion_query_engine/target/release/datafusion_query_engine"),
 			TimeoutSec:         env.WithDefaultInt("DATA_STREAM_SERVICE_QUERY_ENGINE_TIMEOUT_SECONDS", "30"),
 			RegistryAddress:    env.WithDefaultString("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_ADDRESS", "localhost:7071"),
 			RegistryDialMs:     env.WithDefaultInt("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_DIAL_TIMEOUT_MS", "500"),
@@ -74,7 +85,13 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to initialize query engine")
 	}
-	dataServer := data.NewFlightServer(&data.FlightServerAuth{}, streamCfg, queryEngine)
+	if !cfg.FlightAllowAnonymous && strings.TrimSpace(cfg.FlightAuthToken) == "" {
+		log.WithContext(cancelCtx).Fatal("DATA_STREAM_SERVICE_FLIGHT_AUTH_TOKEN is required when anonymous Flight access is disabled")
+	}
+	if !cfg.FlightAllowAnonymous && (strings.TrimSpace(cfg.TLSCertPath) == "" || strings.TrimSpace(cfg.TLSKeyPath) == "" || strings.TrimSpace(cfg.TLSClientCAPath) == "" || !cfg.RequireClientCert) {
+		log.WithContext(cancelCtx).Fatal("data stream Flight requires mTLS when anonymous access is disabled")
+	}
+	dataServer := data.NewFlightServer(data.NewFlightServerAuth(cfg.FlightAuthToken, cfg.FlightAllowAnonymous), streamCfg, queryEngine)
 	dataShutdown := dataServer.Connect()
 
 	quit := make(chan os.Signal, 1)
@@ -101,9 +118,15 @@ func main() {
 func readStreamConfig() streamConfig {
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	return streamConfig{
-		ServiceName: env.WithDefaultString("DATA_STREAM_SERVICE_NAME", "data-stream-service"),
-		GRPCHost:    env.WithDefaultString("DATA_STREAM_SERVICE_API_GRPC_HOST", "localhost"),
-		GRPCPort:    env.WithDefaultInt("DATA_STREAM_SERVICE_API_GRPC_PORT", "7070"),
+		ServiceName:          env.WithDefaultString("DATA_STREAM_SERVICE_NAME", "data-stream-service"),
+		GRPCHost:             env.WithDefaultString("DATA_STREAM_SERVICE_API_GRPC_HOST", "localhost"),
+		GRPCPort:             env.WithDefaultInt("DATA_STREAM_SERVICE_API_GRPC_PORT", "7070"),
+		FlightAuthToken:      env.WithDefaultString("DATA_STREAM_SERVICE_FLIGHT_AUTH_TOKEN", ""),
+		FlightAllowAnonymous: env.WithDefaultBool("DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS", false),
+		TLSCertPath:          env.WithDefaultString("DATA_STREAM_SERVICE_FLIGHT_TLS_CERT_PATH", ""),
+		TLSKeyPath:           env.WithDefaultString("DATA_STREAM_SERVICE_FLIGHT_TLS_KEY_PATH", ""),
+		TLSClientCAPath:      env.WithDefaultString("DATA_STREAM_SERVICE_FLIGHT_TLS_CLIENT_CA_CERT_PATH", ""),
+		RequireClientCert:    env.WithDefaultBool("DATA_STREAM_SERVICE_FLIGHT_TLS_REQUIRE_CLIENT_CERT", false),
 		Health: healthConfig{
 			CpuThresholdPercentage:        env.WithDefaultInt("DATA_STREAM_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_STREAM_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),

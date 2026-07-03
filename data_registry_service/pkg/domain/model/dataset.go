@@ -63,6 +63,11 @@ type Dataset struct {
 	Description              string
 	Origin                   OriginType
 	Location                 string
+	SourceType               StorageType
+	SourceConnectorID        uuid.UUID
+	SourceQuery              string
+	SourceDatabase           string
+	SourceCollection         string
 	Status                   StatusType
 	Category                 string
 	TableNamespace           string

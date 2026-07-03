@@ -23,6 +23,11 @@ type DatasetDTO struct {
 	Origin            string                 `json:"origin,omitempty"`
 	Location          string                 `json:"location,omitempty"          validate:"max=250"`
 	StorageLocation   string                 `json:"storageLocation,omitempty"   validate:"max=1024"`
+	SourceType        string                 `json:"sourceType,omitempty"`
+	SourceConnectorID string                 `json:"sourceConnectorId,omitempty"`
+	SourceQuery       string                 `json:"sourceQuery,omitempty"`
+	SourceDatabase    string                 `json:"sourceDatabase,omitempty"`
+	SourceCollection  string                 `json:"sourceCollection,omitempty"`
 	Status            string                 `json:"status"`
 	Category          string                 `json:"category,omitempty"          validate:"max=250"`
 	TableNamespace    string                 `json:"tableNamespace,omitempty"    validate:"max=250"`
@@ -157,6 +162,27 @@ func (a *dtoAdapter) fromDTO(ctx context.Context, datasetDTO *DatasetDTO) (*mode
 		}
 	}
 
+	var sourceType model.StorageType
+	if datasetDTO.SourceType != "" {
+		sourceType, err = model.ToStorageType(datasetDTO.SourceType)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("dataset source type is invalid")
+			return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
+		}
+	}
+
+	var sourceConnectorID uuid.UUID
+	if datasetDTO.SourceConnectorID != "" {
+		if datasetDTO.SourceType == "" {
+			return nil, domainErrors.ErrValidationFailed.Extend("dataset source type is required when source connector id is set")
+		}
+		sourceConnectorID, err = uuid.Parse(datasetDTO.SourceConnectorID)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("dataset source connector ID is invalid")
+			return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
+		}
+	}
+
 	processingProfile, err := model.ToProcessingProfile(datasetDTO.ProcessingProfile)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("dataset processing profile is invalid")
@@ -176,6 +202,11 @@ func (a *dtoAdapter) fromDTO(ctx context.Context, datasetDTO *DatasetDTO) (*mode
 		Description:       datasetDTO.Description,
 		Origin:            origin,
 		Location:          location,
+		SourceType:        sourceType,
+		SourceConnectorID: sourceConnectorID,
+		SourceQuery:       datasetDTO.SourceQuery,
+		SourceDatabase:    datasetDTO.SourceDatabase,
+		SourceCollection:  datasetDTO.SourceCollection,
 		Status:            status,
 		Category:          datasetDTO.Category,
 		TableNamespace:    datasetDTO.TableNamespace,
@@ -206,6 +237,11 @@ func (a *dtoAdapter) toDTO(datasetModel *model.Dataset, baseURL string) *Dataset
 		Origin:            datasetModel.Origin.String(),
 		Location:          datasetModel.Location,
 		StorageLocation:   datasetModel.Location,
+		SourceType:        datasetSourceType(datasetModel),
+		SourceConnectorID: uuidToString(datasetModel.SourceConnectorID),
+		SourceQuery:       datasetModel.SourceQuery,
+		SourceDatabase:    datasetModel.SourceDatabase,
+		SourceCollection:  datasetModel.SourceCollection,
 		Status:            datasetModel.Status.String(),
 		Category:          datasetModel.Category,
 		TableNamespace:    datasetModel.TableNamespace,
@@ -223,4 +259,22 @@ func (a *dtoAdapter) toDTO(datasetModel *model.Dataset, baseURL string) *Dataset
 		},
 	}
 	return &dtoDataset
+}
+
+func datasetSourceType(dataset *model.Dataset) string {
+	log.Trace("datasetSourceType")
+
+	if dataset == nil || dataset.SourceConnectorID == uuid.Nil {
+		return ""
+	}
+	return dataset.SourceType.String()
+}
+
+func uuidToString(id uuid.UUID) string {
+	log.Trace("uuidToString")
+
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }

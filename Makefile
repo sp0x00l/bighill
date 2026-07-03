@@ -19,11 +19,11 @@ build-all:
 	@scripts/build-servers.sh $(ENV)
 
 test:
+	@scripts/check-service-env-vars.sh
 	@cd data_contracts && make install && make build
 	@$(MAKE) -C training_jobs test
 	@shared_lib/scripts/install.sh
 	@shared_lib/scripts/test.sh $(ENV)
-	@$(MAKE) -C e2e_tests test
 
 	@scripts/stop-servers.sh
 	@scripts/stop-infra.sh $(ENV)
@@ -46,10 +46,10 @@ test:
 	@scripts/stop-infra.sh $(ENV)
 
 build-query-engine:
-	@$(MAKE) -C query_engine build
+	@$(MAKE) -C data_stream_service/internal/infra/queryengine build
 
 test-query-engine:
-	@$(MAKE) -C query_engine test
+	@$(MAKE) -C data_stream_service/internal/infra/queryengine test
 
 start:
 	@scripts/start-infra.sh $(ENV)

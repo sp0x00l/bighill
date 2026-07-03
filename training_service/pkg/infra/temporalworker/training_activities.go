@@ -108,6 +108,20 @@ func (a *TrainingActivities) PrepareTrainingDataset(_ context.Context, request m
 	if strings.TrimSpace(request.TrainingRunID) == "" {
 		return nil, domain.ErrValidationFailed.Extend("training run id is required")
 	}
+	if strings.EqualFold(strings.TrimSpace(request.TrainingProfile.Trainer), "dpo") {
+		preferenceDatasetURI := strings.TrimSpace(request.PreferenceDatasetURI)
+		if preferenceDatasetURI == "" {
+			preferenceDatasetURI = strings.TrimSpace(request.TrainingProfile.PreferenceDatasetURI)
+		}
+		if preferenceDatasetURI == "" {
+			return nil, domain.ErrValidationFailed.Extend("preference dataset uri is required")
+		}
+		return &model.PreparedTrainingDataset{
+			TrainingRunID:     request.TrainingRunID,
+			FeatureSnapshotID: strings.TrimSpace(request.FeatureSnapshotID),
+			DatasetURI:        preferenceDatasetURI,
+		}, nil
+	}
 	if strings.TrimSpace(request.FeatureSnapshotID) == "" {
 		return nil, domain.ErrValidationFailed.Extend("feature snapshot id is required")
 	}
@@ -168,32 +182,61 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 	if baseModel == "" {
 		return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("base model is required")
 	}
+	trainingProfile := request.TrainingProfile
+	if strings.EqualFold(strings.TrimSpace(trainingProfile.Trainer), "dpo") && strings.TrimSpace(trainingProfile.PreferenceDatasetURI) == "" {
+		trainingProfile.PreferenceDatasetURI = strings.TrimSpace(request.PreferenceDatasetURI)
+	}
+	if strings.EqualFold(strings.TrimSpace(trainingProfile.Trainer), "dpo") {
+		if strings.TrimSpace(request.PreferenceDatasetID) == "" {
+			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("preference dataset id is required")
+		}
+		if strings.TrimSpace(request.ParentModelID) == "" {
+			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("parent model id is required")
+		}
+		if strings.TrimSpace(request.ParentModelVersion) == "" {
+			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("parent model version is required")
+		}
+		if strings.TrimSpace(request.ParentAdapterURI) == "" {
+			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("parent adapter uri is required")
+		}
+		if trainingProfile.DPOBeta <= 0 {
+			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("dpo beta must be greater than zero")
+		}
+	}
 	modelURI := a.modelURIPrefix + "/" + trainingRunID
 	servingModel := a.servingModel
 	if servingModel == "" {
 		servingModel = modelName
 	}
 	recipe := axolotlRecipeYAML(model.TrainingJobSpec{
-		TrainingRunID:   trainingRunID,
-		DatasetURI:      datasetURI,
-		ModelName:       modelName,
-		ModelVersion:    modelVersion,
-		BaseModel:       baseModel,
-		TrainingProfile: request.TrainingProfile,
-		ModelURI:        modelURI,
-		AdapterURI:      modelURI,
-		ServingTarget:   a.servingTarget,
-		ServingModel:    servingModel,
+		TrainingRunID:       trainingRunID,
+		DatasetURI:          datasetURI,
+		PreferenceDatasetID: strings.TrimSpace(request.PreferenceDatasetID),
+		ModelName:           modelName,
+		ModelVersion:        modelVersion,
+		BaseModel:           baseModel,
+		ParentModelID:       strings.TrimSpace(request.ParentModelID),
+		ParentModelVersion:  strings.TrimSpace(request.ParentModelVersion),
+		ParentAdapterURI:    strings.TrimSpace(request.ParentAdapterURI),
+		TrainingProfile:     trainingProfile,
+		ModelURI:            modelURI,
+		AdapterURI:          modelURI,
+		ServingTarget:       a.servingTarget,
+		ServingModel:        servingModel,
 	})
 	hash := sha256.Sum256([]byte(recipe))
 	recipeHash := hex.EncodeToString(hash[:])
 	return model.TrainingJobSpec{
 		TrainingRunID:        trainingRunID,
 		DatasetURI:           datasetURI,
+		PreferenceDatasetID:  strings.TrimSpace(request.PreferenceDatasetID),
 		ModelName:            modelName,
 		ModelVersion:         modelVersion,
 		BaseModel:            baseModel,
-		TrainingProfile:      request.TrainingProfile,
+		ParentModelID:        strings.TrimSpace(request.ParentModelID),
+		ParentModelVersion:   strings.TrimSpace(request.ParentModelVersion),
+		ParentAdapterURI:     strings.TrimSpace(request.ParentAdapterURI),
+		TrainingProfile:      trainingProfile,
 		ModelURI:             modelURI,
 		AdapterURI:           modelURI,
 		ServingTarget:        a.servingTarget,
@@ -254,6 +297,17 @@ func axolotlRecipeYAML(spec model.TrainingJobSpec) string {
 	log.Trace("axolotlRecipeYAML")
 
 	profile := spec.TrainingProfile
+	trainer := strings.ToLower(strings.TrimSpace(profile.Trainer))
+	if trainer == "dpo" {
+		return axolotlDPORecipeYAML(spec)
+	}
+	return axolotlSFTRecipeYAML(spec)
+}
+
+func axolotlSFTRecipeYAML(spec model.TrainingJobSpec) string {
+	log.Trace("axolotlSFTRecipeYAML")
+
+	profile := spec.TrainingProfile
 	quantization := ""
 	switch strings.ToLower(strings.TrimSpace(profile.Quantization)) {
 	case "4bit":
@@ -265,10 +319,6 @@ func axolotlRecipeYAML(spec model.TrainingJobSpec) string {
 	if trainer == "" {
 		trainer = "sft"
 	}
-	preferenceDataset := ""
-	if strings.TrimSpace(profile.PreferenceDatasetURI) != "" {
-		preferenceDataset = fmt.Sprintf("preference_dataset: %s\n", strings.TrimSpace(profile.PreferenceDatasetURI))
-	}
 	return fmt.Sprintf(`base_model: %s
 model_name: %s
 model_version: %s
@@ -276,7 +326,6 @@ training_profile: %s
 trainer: %s
 datasets:
   - path: %s
-%s
 output_dir: %s
 adapter: %s
 %ssequence_len: %d
@@ -287,7 +336,53 @@ micro_batch_size: %d
 gradient_accumulation_steps: %d
 lora_r: %d
 lora_alpha: %d
-`, spec.BaseModel, spec.ModelName, spec.ModelVersion, profile.Name, trainer, spec.DatasetURI, preferenceDataset, spec.ModelURI, profile.Adapter, quantization, profile.SequenceLength, profile.SamplePacking, profile.LearningRate, profile.Epochs, profile.MicroBatchSize, profile.GradientAccumulationSteps, profile.LoRAR, profile.LoRAAlpha)
+`, spec.BaseModel, spec.ModelName, spec.ModelVersion, profile.Name, trainer, spec.DatasetURI, spec.ModelURI, profile.Adapter, quantization, profile.SequenceLength, profile.SamplePacking, profile.LearningRate, profile.Epochs, profile.MicroBatchSize, profile.GradientAccumulationSteps, profile.LoRAR, profile.LoRAAlpha)
+}
+
+func axolotlDPORecipeYAML(spec model.TrainingJobSpec) string {
+	log.Trace("axolotlDPORecipeYAML")
+
+	profile := spec.TrainingProfile
+	parentAdapterURI := strings.TrimSpace(spec.ParentAdapterURI)
+	preferenceDatasetURI := strings.TrimSpace(profile.PreferenceDatasetURI)
+	if preferenceDatasetURI == "" {
+		preferenceDatasetURI = strings.TrimSpace(spec.DatasetURI)
+	}
+	quantization := ""
+	switch strings.ToLower(strings.TrimSpace(profile.Quantization)) {
+	case "4bit":
+		quantization = "load_in_4bit: true\n"
+	case "8bit":
+		quantization = "load_in_8bit: true\n"
+	}
+	return fmt.Sprintf(`base_model: %s
+model_name: %s
+model_version: %s
+training_profile: %s
+trainer: dpo
+rl: dpo
+dpo_beta: %.8g
+rl_beta: %.8g
+parent_model_id: %s
+parent_model_version: %s
+preference_dataset_id: %s
+lora_model_dir: %s
+datasets:
+  - path: %s
+    type: chat_template.default
+    field_messages: prompt
+    field_chosen: chosen
+    field_rejected: rejected
+output_dir: %s
+adapter: %s
+%ssequence_len: %d
+learning_rate: %.8g
+num_epochs: %.8g
+micro_batch_size: %d
+gradient_accumulation_steps: %d
+lora_r: %d
+lora_alpha: %d
+`, spec.BaseModel, spec.ModelName, spec.ModelVersion, profile.Name, profile.DPOBeta, profile.DPOBeta, spec.ParentModelID, spec.ParentModelVersion, spec.PreferenceDatasetID, parentAdapterURI, preferenceDatasetURI, spec.ModelURI, profile.Adapter, quantization, profile.SequenceLength, profile.LearningRate, profile.Epochs, profile.MicroBatchSize, profile.GradientAccumulationSteps, profile.LoRAR, profile.LoRAAlpha)
 }
 
 func deterministicSubmissionID(prefix, trainingRunID, hash string) string {

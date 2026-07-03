@@ -75,7 +75,7 @@ func main() {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create serving backend")
 	}
 	reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
-	controller := servingk8s.NewServedModelController(store, reconciler, cfg.PollEvery)
+	controller := servingk8s.NewServedModelController(store, reconciler, cfg.PollEvery, servingk8s.WithSharedRuntimeSerialization(cfg.Runtime.MultiTenant))
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

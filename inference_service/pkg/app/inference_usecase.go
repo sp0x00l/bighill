@@ -30,14 +30,12 @@ type inferenceUsecase struct {
 	requestRepository         InferenceRequestRepository
 	feedbackRepository        InferenceFeedbackRepository
 	retrievalClient           RetrievalClient
+	queryTransformer          QueryTransformer
 	contextPacker             ContextPacker
 	reranker                  Reranker
 	promptBuilder             PromptBuilder
 	generator                 GenerationAdapter
 	preferenceDatasetWriter   PreferenceDatasetWriter
-	preferenceDatasetTemplate string
-	preferenceDatasetMin      int
-	preferenceDatasetLimit    int
 	promptStrategy            model.PromptStrategy
 	rerankCandidateMultiplier int
 }
@@ -57,6 +55,14 @@ func WithRetrievalClient(client RetrievalClient) InferenceOption {
 
 	return func(u *inferenceUsecase) {
 		u.retrievalClient = client
+	}
+}
+
+func WithQueryTransformer(transformer QueryTransformer) InferenceOption {
+	log.Trace("WithQueryTransformer")
+
+	return func(u *inferenceUsecase) {
+		u.queryTransformer = transformer
 	}
 }
 
@@ -81,16 +87,6 @@ func WithPreferenceDatasetWriter(writer PreferenceDatasetWriter) InferenceOption
 
 	return func(u *inferenceUsecase) {
 		u.preferenceDatasetWriter = writer
-	}
-}
-
-func WithPreferenceDatasetAutoExport(uriTemplate string, minExamples int, limit int) InferenceOption {
-	log.Trace("WithPreferenceDatasetAutoExport")
-
-	return func(u *inferenceUsecase) {
-		u.preferenceDatasetTemplate = strings.TrimSpace(uriTemplate)
-		u.preferenceDatasetMin = minExamples
-		u.preferenceDatasetLimit = limit
 	}
 }
 
@@ -181,16 +177,6 @@ func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.I
 	if err != nil {
 		return nil, err
 	}
-	if u.preferenceDatasetWriter != nil && strings.TrimSpace(u.preferenceDatasetTemplate) != "" {
-		if _, err := u.ExportPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
-			RequestID:   record.RequestID,
-			OutputURI:   u.preferenceDatasetTemplate,
-			MinExamples: u.preferenceDatasetMin,
-			Limit:       u.preferenceDatasetLimit,
-		}); err != nil {
-			return nil, err
-		}
-	}
 	return record, nil
 }
 
@@ -202,7 +188,9 @@ func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request 
 		return nil, err
 	}
 	if request.OutputURI != "" {
+		dataset.PreferenceDatasetID = preferenceDatasetID(dataset)
 		dataset.OutputURI = preferenceDatasetOutputURI(request.OutputURI, dataset)
+		dataset.EvaluationOutputURI = preferenceDatasetEvaluationOutputURI(request.OutputURI, dataset)
 	}
 	if dataset.ExampleCount() < request.MinExamples {
 		return dataset, nil
@@ -210,7 +198,19 @@ func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request 
 	if u.preferenceDatasetWriter == nil {
 		return dataset, nil
 	}
-	return u.preferenceDatasetWriter.WritePreferenceDataset(ctx, dataset)
+	written, err := u.preferenceDatasetWriter.WritePreferenceDataset(ctx, dataset)
+	if err != nil {
+		return nil, err
+	}
+	if written != nil && written.Exported {
+		written.PreferenceDatasetID = preferenceDatasetID(written)
+		written.Format = preferenceDatasetFormat(written.Format)
+		written.EligibilityPolicy = preferenceDatasetEligibilityPolicy(written.EligibilityPolicy)
+		written.MinExamples = request.MinExamples
+		written.Limit = request.Limit
+		return u.feedbackRepository.RecordPreferenceDatasetSnapshot(ctx, written, request)
+	}
+	return written, nil
 }
 
 func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateRequest) (response *model.GenerateResponse, err error) {
@@ -251,25 +251,47 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 
+	retrievalQuery := request.QueryText
+	retrievalFilters := copyMetadataFilters(request.MetadataFilters)
+	if u.queryTransformer != nil {
+		transformCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		transformed, transformErr := u.queryTransformer.TransformQuery(transformCtx, model.QueryTransformRequest{
+			RequestID:       request.RequestID,
+			DatasetID:       request.DatasetID,
+			ModelID:         request.ModelID,
+			QueryText:       request.QueryText,
+			MetadataFilters: copyMetadataFilters(request.MetadataFilters),
+		})
+		cancel()
+		if transformErr != nil {
+			log.WithContext(ctx).WithError(transformErr).Warn("query transform failed; falling back to raw query")
+		} else if transformed != nil {
+			if strings.TrimSpace(transformed.QueryText) != "" {
+				retrievalQuery = strings.TrimSpace(transformed.QueryText)
+			}
+			retrievalFilters = mergeMetadataFilters(request.MetadataFilters, transformed.MetadataFilters)
+		}
+	}
+
 	candidateK := request.TopK
 	if u.reranker != nil && u.rerankCandidateMultiplier > 1 {
 		candidateK = request.TopK * u.rerankCandidateMultiplier
 	}
 
-	contexts, err = u.retrievalClient.SearchEmbeddings(ctx, request.DatasetID, request.QueryText, candidateK, request.MetadataFilters)
+	contexts, err = u.retrievalClient.SearchEmbeddings(ctx, request.DatasetID, retrievalQuery, candidateK, retrievalFilters)
 	if err != nil {
 		err = fmt.Errorf("%w: %w", domain.ErrRetrievalFailed, err)
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	if u.reranker != nil {
-		contexts, err = u.reranker.Rerank(ctx, request.QueryText, contexts, request.TopK)
+		contexts, err = u.reranker.Rerank(ctx, retrievalQuery, contexts, request.TopK)
 		if err != nil {
 			err = fmt.Errorf("%w: %w", domain.ErrRerankFailed, err)
 			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 		}
 	}
 	contexts, err = u.contextPacker.Pack(ctx, model.ContextPackRequest{
-		Query:    request.QueryText,
+		Query:    retrievalQuery,
 		Contexts: contexts,
 	})
 	if err != nil {
@@ -320,11 +342,109 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 func preferenceDatasetOutputURI(uriTemplate string, dataset *model.PreferenceDataset) string {
 	log.Trace("preferenceDatasetOutputURI")
 
+	outputURI := renderPreferenceDatasetOutputURI(uriTemplate, dataset)
+	if strings.Contains(uriTemplate, "{preference_dataset_id}") {
+		return outputURI
+	}
+	return suffixPreferenceDatasetOutputURI(outputURI, dataset.PreferenceDatasetID.String())
+}
+
+func preferenceDatasetEvaluationOutputURI(uriTemplate string, dataset *model.PreferenceDataset) string {
+	log.Trace("preferenceDatasetEvaluationOutputURI")
+
+	outputURI := renderPreferenceDatasetOutputURI(uriTemplate, dataset)
+	evalSuffix := dataset.PreferenceDatasetID.String() + "-eval"
+	if strings.Contains(uriTemplate, "{preference_dataset_id}") {
+		return strings.ReplaceAll(outputURI, dataset.PreferenceDatasetID.String(), evalSuffix)
+	}
+	return suffixPreferenceDatasetOutputURI(outputURI, evalSuffix)
+}
+
+func renderPreferenceDatasetOutputURI(uriTemplate string, dataset *model.PreferenceDataset) string {
+	log.Trace("renderPreferenceDatasetOutputURI")
+
 	outputURI := strings.TrimSpace(uriTemplate)
 	outputURI = strings.ReplaceAll(outputURI, "{request_id}", dataset.RequestID.String())
 	outputURI = strings.ReplaceAll(outputURI, "{dataset_id}", dataset.DatasetID.String())
 	outputURI = strings.ReplaceAll(outputURI, "{model_id}", dataset.ModelID.String())
+	outputURI = strings.ReplaceAll(outputURI, "{preference_dataset_id}", dataset.PreferenceDatasetID.String())
+	outputURI = strings.ReplaceAll(outputURI, "{parent_model_version}", fmt.Sprintf("%d", dataset.ParentModelVersion))
 	return outputURI
+}
+
+func suffixPreferenceDatasetOutputURI(outputURI string, suffix string) string {
+	log.Trace("suffixPreferenceDatasetOutputURI")
+
+	if strings.HasSuffix(outputURI, ".jsonl") {
+		return strings.TrimSuffix(outputURI, ".jsonl") + "-" + suffix + ".jsonl"
+	}
+	return strings.TrimRight(outputURI, "/") + "/" + suffix + ".jsonl"
+}
+
+func preferenceDatasetID(dataset *model.PreferenceDataset) uuid.UUID {
+	log.Trace("preferenceDatasetID")
+
+	if dataset.PreferenceDatasetID != uuid.Nil {
+		return dataset.PreferenceDatasetID
+	}
+	parts := []string{
+		"preference-dataset",
+		dataset.DatasetID.String(),
+		dataset.ModelID.String(),
+		strings.TrimSpace(dataset.ParentAdapterURI),
+		strings.TrimSpace(dataset.ParentBaseModel),
+		fmt.Sprintf("%d", dataset.ParentModelVersion),
+	}
+	for _, example := range dataset.Examples {
+		parts = append(parts, example.PreferenceExampleID.String())
+		parts = append(parts, example.Split)
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join(parts, ":")))
+}
+
+func preferenceDatasetFormat(format string) string {
+	log.Trace("preferenceDatasetFormat")
+
+	format = strings.TrimSpace(format)
+	if format != "" {
+		return format
+	}
+	return "DPO_JSONL"
+}
+
+func preferenceDatasetEligibilityPolicy(policy string) string {
+	log.Trace("preferenceDatasetEligibilityPolicy")
+
+	policy = strings.TrimSpace(policy)
+	if policy != "" {
+		return policy
+	}
+	return "complete_rejected_pairs_train_eval_split_v1"
+}
+
+func copyMetadataFilters(filters map[string]string) map[string]string {
+	if len(filters) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(filters))
+	for k, v := range filters {
+		out[k] = v
+	}
+	return out
+}
+
+func mergeMetadataFilters(base map[string]string, overrides map[string]string) map[string]string {
+	out := copyMetadataFilters(base)
+	if len(overrides) == 0 {
+		return out
+	}
+	if out == nil {
+		out = make(map[string]string, len(overrides))
+	}
+	for k, v := range overrides {
+		out[k] = v
+	}
+	return out
 }
 
 func (u *inferenceUsecase) recordInferenceRequest(ctx context.Context, request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, promptText string, answerText string, startedAt time.Time, generationProvider string, generationModel string, status model.InferenceRequestStatus, errorMessage string) error {

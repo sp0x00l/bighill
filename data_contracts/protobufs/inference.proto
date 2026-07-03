@@ -72,3 +72,19 @@ message ExportPreferenceDatasetResponse {
   int32 example_count = 5;
   bool exported = 6;
 }
+
+message PreferenceDatasetReadyEvent {
+  string preference_dataset_id = 1;
+  string dataset_id = 2;
+  string model_id = 3;
+  string source_request_id = 4;
+  string output_uri = 5;
+  int32 example_count = 6;
+  string format = 7;
+  int32 min_examples = 8;
+  int32 limit = 9;
+  string parent_adapter_uri = 10;
+  string parent_base_model = 11;
+  int32 parent_model_version = 12;
+  string evaluation_output_uri = 13;
+}

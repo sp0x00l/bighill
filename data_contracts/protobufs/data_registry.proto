@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package data_registry;
+
+option go_package = "lib/data_contracts_lib/data_registry";
+
+service DataRegistryService {
+  rpc ReadSourceConnector(ReadSourceConnectorRequest) returns (ReadSourceConnectorResponse);
+}
+
+message Dataset {
+  string dataset_id = 1;
+  string user_id = 2;
+}
+
+message DatasetCreatedEvent {
+  string dataset_id = 1;
+  string user_id = 2;
+  int32 dataset_version = 3;
+  string processing_state = 4;
+  string storage_location = 5;
+  string table_namespace = 6;
+  string table_name = 7;
+  string table_format = 8;
+  string catalog_provider = 9;
+  int32 schema_version = 10;
+  string schema_metadata = 11;
+  string processing_profile = 12;
+  string source_type = 13;
+  string source_connector_id = 14;
+  string source_query = 15;
+  string source_database = 16;
+  string source_collection = 17;
+}
+
+message DatasetDeletedEvent {
+  string dataset_id = 1;
+  string user_id = 2;
+}
+
+message DatasetUpdatedEvent {
+  string dataset_id = 1;
+  string user_id = 2;
+  int32 dataset_version = 3;
+  string processing_state = 4;
+  string storage_location = 5;
+  string table_namespace = 6;
+  string table_name = 7;
+  string table_format = 8;
+  string catalog_provider = 9;
+  int32 schema_version = 10;
+  string schema_metadata = 11;
+  string raw_snapshot_id = 12;
+  string feature_snapshot_id = 13;
+  string embedding_snapshot_id = 14;
+  string vector_store = 15;
+  string collection_name = 16;
+  int32 embedding_dimensions = 17;
+  int64 embedding_count = 18;
+  string processing_profile = 19;
+  string embedding_strategy_version = 20;
+  string embedding_chunker_name = 21;
+  string embedding_chunker_version = 22;
+  int32 embedding_chunk_size = 23;
+  int32 embedding_chunk_overlap = 24;
+  string embedding_provider = 25;
+  string embedding_model = 26;
+  string source_type = 27;
+  string source_connector_id = 28;
+  string source_query = 29;
+  string source_database = 30;
+  string source_collection = 31;
+}
+
+message ReadSourceConnectorRequest {
+  string connector_id = 1;
+  string user_id = 2;
+  string source_type = 3;
+}
+
+message ReadSourceConnectorResponse {
+  SourceConnector connector = 1;
+}
+
+message SourceConnector {
+  string id = 1;
+  string user_id = 2;
+  string catalog_id = 3;
+  string source_type = 4;
+  bytes config_json = 5;
+  PostgresSourceConfig postgres_config = 6;
+  MySQLSourceConfig mysql_config = 7;
+  MongoSourceConfig mongo_config = 8;
+  OracleSourceConfig oracle_config = 9;
+  ClickHouseSourceConfig clickhouse_config = 10;
+}
+
+message PostgresSourceConfig {
+  string hostname = 1;
+  int32 port = 2;
+  string database_name = 3;
+  string username = 4;
+  string password = 5;
+  string secret_resource_url = 6;
+  string authentication_type = 7;
+}
+
+message MySQLSourceConfig {
+  string hostname = 1;
+  int32 port = 2;
+  string database_name = 3;
+  string username = 4;
+  string password = 5;
+  string authentication_type = 6;
+}
+
+message MongoSourceConfig {
+  repeated MongoHost hosts = 1;
+  string auth_database = 2;
+  string username = 3;
+  string password = 4;
+  string authentication_type = 5;
+}
+
+message MongoHost {
+  string hostname = 1;
+  int32 port = 2;
+}
+
+message OracleSourceConfig {
+  string hostname = 1;
+  int32 port = 2;
+  string instance = 3;
+  string username = 4;
+  string password = 5;
+  string secret_resource_url = 6;
+  string authentication_type = 7;
+}
+
+message ClickHouseSourceConfig {
+  string hostname = 1;
+  int32 port = 2;
+  string database_name = 3;
+  string username = 4;
+  string password = 5;
+  string authentication_type = 6;
+}

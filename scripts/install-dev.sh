@@ -194,7 +194,7 @@ install_data_infra_dependencies()
 build_datafusion_query_engine()
 {
     local QUERY_ENGINE_DIR
-    QUERY_ENGINE_DIR="$ROOT_DIR/query_engine"
+    QUERY_ENGINE_DIR="$ROOT_DIR/data_stream_service/internal/infra/queryengine"
 
     echo "building DataFusion query engine"
     make -C "$QUERY_ENGINE_DIR" build

@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
     description TEXT,
     origin origin_enum NOT NULL DEFAULT 'standard',
     location VARCHAR(255),
+    source_type storage_type_enum,
+    source_connector_id uuid,
+    source_query TEXT NOT NULL DEFAULT '',
+    source_database TEXT NOT NULL DEFAULT '',
+    source_collection TEXT NOT NULL DEFAULT '',
     status status_enum NOT NULL DEFAULT 'draft',
     category VARCHAR(255),
     table_namespace VARCHAR(255) NOT NULL DEFAULT 'default',
@@ -75,6 +80,7 @@ CREATE INDEX index_dataset_table_ref ON bighill_data_registry_db.datasets(catalo
 CREATE INDEX index_dataset_raw_snapshot_id ON bighill_data_registry_db.datasets(raw_snapshot_id);
 CREATE INDEX index_dataset_feature_snapshot_id ON bighill_data_registry_db.datasets(feature_snapshot_id);
 CREATE INDEX index_dataset_embedding_snapshot_id ON bighill_data_registry_db.datasets(embedding_snapshot_id);
+CREATE INDEX index_dataset_source_connector_id ON bighill_data_registry_db.datasets(source_connector_id);
 CREATE INDEX index_dataset_id_connectors ON bighill_data_registry_db.connectors(user_id);
 CREATE INDEX index_dataset_id_metadata ON bighill_data_registry_db.metadata(dataset_id);
 

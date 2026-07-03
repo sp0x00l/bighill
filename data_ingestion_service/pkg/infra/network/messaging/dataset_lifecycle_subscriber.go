@@ -8,7 +8,7 @@ import (
 
 	"data_ingestion_service/pkg/domain"
 	"data_ingestion_service/pkg/domain/model"
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_registry"
 	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"

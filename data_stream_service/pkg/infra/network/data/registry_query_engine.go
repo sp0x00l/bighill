@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	dataregistrypb "lib/data_contracts_lib/data_registry_service"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
 
 	log "github.com/sirupsen/logrus"
 )

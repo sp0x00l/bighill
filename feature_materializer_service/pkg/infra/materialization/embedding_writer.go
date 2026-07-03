@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
@@ -73,7 +74,14 @@ func NewEmbeddingWriter(store ArtifactStore, repository EmbeddingRecordRepositor
 
 	strategy = model.NormalizeEmbeddingStrategy(strategy)
 	if chunker == nil {
-		chunker = NewTokenWindowChunker(strategy)
+		switch strings.ToLower(strategy.ChunkerName) {
+		case "go-token-window":
+			chunker = NewTokenWindowChunker(strategy)
+		case "go-structure-aware-token-window":
+			chunker = NewStructureAwareTokenWindowChunker(strategy)
+		default:
+			chunker = unsupportedChunker{name: strategy.ChunkerName}
+		}
 	}
 	if vectorStore == "" {
 		vectorStore = "pgvector"

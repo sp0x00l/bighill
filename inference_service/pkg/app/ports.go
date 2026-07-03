@@ -25,6 +25,7 @@ type InferenceRequestRepository interface {
 type InferenceFeedbackRepository interface {
 	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
 	ReadPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
+	RecordPreferenceDatasetSnapshot(ctx context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
 }
 
 type PreferenceDatasetWriter interface {
@@ -34,6 +35,10 @@ type PreferenceDatasetWriter interface {
 type RetrievalClient interface {
 	SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error)
 	Close() error
+}
+
+type QueryTransformer interface {
+	TransformQuery(ctx context.Context, request model.QueryTransformRequest) (*model.QueryTransformResult, error)
 }
 
 type ContextPacker interface {

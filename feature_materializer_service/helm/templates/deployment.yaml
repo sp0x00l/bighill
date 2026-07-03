@@ -45,6 +45,8 @@ spec:
               value: {{ .Values.env.topic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataIngestionSubscriberTopic | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX
@@ -97,6 +99,22 @@ spec:
               value: {{ .Values.env.embeddingChunkOverlap | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.embeddingRequestTimeoutSeconds | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_GRPC_ADDRESS
+              value: {{ .Values.env.dataStreamGrpcAddress | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.env.dataStreamRequestTimeoutSeconds | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_AUTH_TOKEN
+              value: {{ .Values.env.dataStreamAuthToken | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_INSECURE
+              value: {{ .Values.env.dataStreamInsecure | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_SERVER_NAME
+              value: {{ .Values.env.dataStreamTlsServerName | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CA_CERT_PATH
+              value: {{ .Values.env.dataStreamTlsCaCertPath | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CLIENT_CERT_PATH
+              value: {{ .Values.env.dataStreamTlsClientCertPath | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CLIENT_KEY_PATH
+              value: {{ .Values.env.dataStreamTlsClientKeyPath | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DB_HOST
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:

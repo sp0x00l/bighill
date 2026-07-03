@@ -50,12 +50,16 @@ spec:
               value: {{ .Values.env.topic | quote }}
             - name: TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
+            - name: TRAINING_SERVICE_INFERENCE_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.inferenceSubscriberTopic | quote }}
             - name: TRAINING_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: TRAINING_SERVICE_BASE_MODEL
               value: {{ .Values.env.baseModel | quote }}
             - name: TRAINING_SERVICE_EVALUATION_PROFILE
               value: {{ .Values.env.evaluationProfile | quote }}
+            - name: TRAINING_SERVICE_DPO_EVALUATION_PROFILE
+              value: {{ .Values.env.dpoEvaluationProfile | quote }}
             - name: TRAINING_SERVICE_TRAINING_PROFILE_NAME
               value: {{ .Values.env.trainingProfileName | quote }}
             - name: TRAINING_SERVICE_TRAINING_PROFILE_TRAINER
@@ -66,6 +70,8 @@ spec:
               value: {{ .Values.env.trainingProfileQuantization | quote }}
             - name: TRAINING_SERVICE_TRAINING_PROFILE_PREFERENCE_DATASET_URI
               value: {{ .Values.env.trainingProfilePreferenceDatasetUri | quote }}
+            - name: TRAINING_SERVICE_TRAINING_PROFILE_DPO_BETA
+              value: {{ .Values.env.trainingProfileDpoBeta | quote }}
             - name: TRAINING_SERVICE_TRAINING_PROFILE_SEQUENCE_LENGTH
               value: {{ .Values.env.trainingProfileSequenceLength | quote }}
             - name: TRAINING_SERVICE_TRAINING_PROFILE_SAMPLE_PACKING

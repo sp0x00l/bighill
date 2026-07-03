@@ -17,7 +17,7 @@ import (
 	_ "github.com/sijms/go-ora/v2"
 	log "github.com/sirupsen/logrus"
 
-	dataregistrypb "lib/data_contracts_lib/data_registry_service"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
 )
 
 func (e *registryQueryEngine) executeMySQL(ctx context.Context, cfg *dataregistrypb.MySQLSourceConfig, query string) (*QueryResult, error) {

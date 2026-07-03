@@ -1,4 +1,4 @@
-package e2e_tests
+package test
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"sync"
-	"testing"
 	"time"
 
 	inferenceapp "inference_service/pkg/app"
@@ -32,6 +31,8 @@ import (
 	sharedmessaging "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 	"google.golang.org/protobuf/proto"
@@ -55,173 +56,131 @@ var (
 	deploymentGVR  = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 )
 
-func TestFullMLLoopTrainingServingInference(t *testing.T) {
-	ctx := context.Background()
-
-	datasetID := uuid.New()
-	trainingRunID := uuid.New()
-	featureSnapshotID := uuid.New()
-	embeddingSnapshotID := uuid.New()
-	userID := uuid.New()
-	servingModel := "rag-adapter-v1"
-
-	trainingEvent := runTrainingWorkflow(t, trainingRunID, datasetID, featureSnapshotID, servingModel)
-
-	k8sClient := newE2EK8sClient()
-	registryRepo := newRegistryMemoryRepository()
-	servedModelAdapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), k8sClient)
-	if err != nil {
-		t.Fatalf("create registry served model adapter: %v", err)
-	}
-	registryUsecase := registryapp.NewModelRegistryUsecase(
-		registryRepo,
-		registryapp.WithModelServingDeployer(servedModelAdapter),
-	)
-
-	trainingListener := registrymessaging.NewModelTrainingCompletedEventListener(registryUsecase)
-	if err := trainingListener.Handle(ctx, datasetID, trainingEvent); err != nil {
-		t.Fatalf("record model training completed: %v", err)
-	}
-
-	modelID := trainingRunID
-	registeredModel, err := registryRepo.ReadByID(ctx, modelID)
-	if err != nil {
-		t.Fatalf("read registered model: %v", err)
-	}
-	if registeredModel.Status != registrymodel.ModelStatusEvaluated {
-		t.Fatalf("model should wait for serving load, got status %s", registeredModel.Status)
-	}
-	if registeredModel.ServingLoadStatus != registrymodel.ModelLoadStatusNotLoaded {
-		t.Fatalf("model should start not loaded, got %s", registeredModel.ServingLoadStatus)
-	}
-
-	vllmTarget := "http://served-model.local"
-	vllmHTTP := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Method != http.MethodGet || req.URL.String() != vllmTarget+"/v1/models" {
-			return nil, fmt.Errorf("unexpected vllm request %s %s", req.Method, req.URL.String())
-		}
-		return httpJSON(http.StatusOK, map[string]any{
-			"data": []map[string]string{{"id": servingModel}},
-		}), nil
-	})}
-	store, err := servingk8s.NewServedModelStore(servingk8s.ServedModelStoreConfig{
-		Namespace: e2eNamespace,
-		Group:     servedModelGVR.Group,
-		Version:   servedModelGVR.Version,
-		Resource:  servedModelGVR.Resource,
-	}, k8sClient)
-	if err != nil {
-		t.Fatalf("create served model store: %v", err)
-	}
-	runtime, err := servingk8s.NewVLLMRuntime(servingk8s.VLLMRuntimeConfig{
-		Namespace:  e2eNamespace,
-		Image:      "vllm:test",
-		Replicas:   1,
-		Port:       8000,
-		HTTPClient: vllmHTTP,
-	}, k8sClient)
-	if err != nil {
-		t.Fatalf("create vllm runtime: %v", err)
-	}
-	controller := servingk8s.NewServedModelController(
-		store,
-		servingapp.NewServedModelReconciler(runtime, store),
-		time.Second,
-	)
-
-	if err := controller.ProcessOnce(ctx); err != nil {
-		t.Fatalf("first serving reconcile: %v", err)
-	}
-	servedModels, err := store.List(ctx)
-	if err != nil {
-		t.Fatalf("list served models: %v", err)
-	}
-	if len(servedModels) != 1 {
-		t.Fatalf("expected one served model, got %d", len(servedModels))
-	}
-	workloadName := servingk8s.WorkloadName(servedModels[0])
-	markDeploymentReady(t, ctx, k8sClient, workloadName)
-
-	if err := controller.ProcessOnce(ctx); err != nil {
-		t.Fatalf("second serving reconcile: %v", err)
-	}
-	assertServedModelStatus(t, ctx, k8sClient, registrymodel.ModelLoadStatusLoaded.String(), servingModel)
-
-	statusObserver, err := registryk8s.NewServedModelStatusObserver(servedModelAdapter, registryUsecase, time.Second)
-	if err != nil {
-		t.Fatalf("create registry serving status observer: %v", err)
-	}
-	if err := statusObserver.ProcessOnce(ctx); err != nil {
-		t.Fatalf("observe served model status: %v", err)
-	}
-	readyModel, err := registryRepo.ReadByID(ctx, modelID)
-	if err != nil {
-		t.Fatalf("read ready model: %v", err)
-	}
-	if readyModel.Status != registrymodel.ModelStatusReady {
-		t.Fatalf("model should be ready after observed loaded status, got %s", readyModel.Status)
-	}
-	if readyModel.ServingLoadStatus != registrymodel.ModelLoadStatusLoaded {
-		t.Fatalf("model should be loaded after serving reconciliation, got %s", readyModel.ServingLoadStatus)
-	}
-	if readyModel.ServingModel != servingModel {
-		t.Fatalf("ready model serving model mismatch: %s", readyModel.ServingModel)
-	}
-
-	inferenceUsecase, inferenceRequests, feedbacks := newInferenceUsecase(datasetID, userID, embeddingSnapshotID)
-	modelEvent := modelUpdatedEvent(readyModel)
-	modelListener := inferencemessaging.NewModelUpdatedEventListener(inferenceUsecase)
-	if err := modelListener.Handle(ctx, readyModel.ModelID, modelEvent); err != nil {
-		t.Fatalf("record inference model update: %v", err)
-	}
-
-	requestID := uuid.New()
-	response, err := inferenceUsecase.Generate(ctx, inferencemodel.GenerateRequest{
-		RequestID: requestID,
-		DatasetID: datasetID,
-		ModelID:   readyModel.ModelID,
-		QueryText: "What changed in the dataset?",
-		TopK:      2,
-		MetadataFilters: map[string]string{
-			"source": "e2e",
-		},
-	})
-	if err != nil {
-		t.Fatalf("generate inference response: %v", err)
-	}
-	if response.ModelID != readyModel.ModelID {
-		t.Fatalf("response model mismatch: %s", response.ModelID)
-	}
-	if response.Answer != "generated from "+servingModel {
-		t.Fatalf("unexpected answer %q", response.Answer)
-	}
-	if len(response.Contexts) != 2 {
-		t.Fatalf("expected packed top 2 contexts, got %d", len(response.Contexts))
-	}
-	if len(inferenceRequests.records) != 1 {
-		t.Fatalf("expected one inference audit record, got %d", len(inferenceRequests.records))
-	}
-	if inferenceRequests.records[0].Status != inferencemodel.InferenceRequestStatusCompleted {
-		t.Fatalf("inference audit should be completed, got %s", inferenceRequests.records[0].Status)
-	}
-
-	feedbackID := uuid.New()
-	if _, err := inferenceUsecase.RecordFeedback(ctx, &inferencemodel.InferenceFeedback{
-		FeedbackID: feedbackID,
-		RequestID:  requestID,
-		UserID:     userID,
-		Accepted:   true,
-		Rating:     5,
-		Comment:    "good context",
-	}, feedbackID); err != nil {
-		t.Fatalf("record inference feedback: %v", err)
-	}
-	if len(feedbacks.records) != 1 {
-		t.Fatalf("expected one feedback record, got %d", len(feedbacks.records))
-	}
+type testFailureReporter interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
 }
 
-func runTrainingWorkflow(t *testing.T, trainingRunID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
+var _ = Describe("Full ML loop", func() {
+	It("runs training, serving reconciliation, inference, and feedback through service seams", func() {
+		t := GinkgoT()
+		ctx := context.Background()
+
+		datasetID := uuid.New()
+		trainingRunID := uuid.New()
+		featureSnapshotID := uuid.New()
+		embeddingSnapshotID := uuid.New()
+		userID := uuid.New()
+		servingModel := "rag-adapter-v1"
+
+		trainingEvent := runTrainingWorkflow(t, trainingRunID, datasetID, featureSnapshotID, servingModel)
+
+		k8sClient := newE2EK8sClient()
+		registryRepo := newRegistryMemoryRepository()
+		servedModelAdapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), k8sClient)
+		Expect(err).NotTo(HaveOccurred())
+		registryUsecase := registryapp.NewModelRegistryUsecase(
+			registryRepo,
+			registryapp.WithModelServingDeployer(servedModelAdapter),
+		)
+
+		trainingListener := registrymessaging.NewModelTrainingCompletedEventListener(registryUsecase)
+		Expect(trainingListener.Handle(ctx, datasetID, trainingEvent)).To(Succeed())
+
+		modelID := trainingRunID
+		registeredModel, err := registryRepo.ReadByID(ctx, modelID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(registeredModel.Status).To(Equal(registrymodel.ModelStatusEvaluated))
+		Expect(registeredModel.ServingLoadStatus).To(Equal(registrymodel.ModelLoadStatusNotLoaded))
+
+		vllmTarget := "http://served-model.local"
+		vllmHTTP := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || req.URL.String() != vllmTarget+"/v1/models" {
+				return nil, fmt.Errorf("unexpected vllm request %s %s", req.Method, req.URL.String())
+			}
+			return httpJSON(http.StatusOK, map[string]any{
+				"data": []map[string]string{{"id": servingModel}},
+			}), nil
+		})}
+		store, err := servingk8s.NewServedModelStore(servingk8s.ServedModelStoreConfig{
+			Namespace: e2eNamespace,
+			Group:     servedModelGVR.Group,
+			Version:   servedModelGVR.Version,
+			Resource:  servedModelGVR.Resource,
+		}, k8sClient)
+		Expect(err).NotTo(HaveOccurred())
+		runtime, err := servingk8s.NewVLLMRuntime(servingk8s.VLLMRuntimeConfig{
+			Namespace:  e2eNamespace,
+			Image:      "vllm:test",
+			Replicas:   1,
+			Port:       8000,
+			HTTPClient: vllmHTTP,
+		}, k8sClient)
+		Expect(err).NotTo(HaveOccurred())
+		controller := servingk8s.NewServedModelController(
+			store,
+			servingapp.NewServedModelReconciler(runtime, store),
+			time.Second,
+		)
+
+		Expect(controller.ProcessOnce(ctx)).To(Succeed())
+		servedModels, err := store.List(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(servedModels).To(HaveLen(1))
+		workloadName := servingk8s.WorkloadName(servedModels[0])
+		markDeploymentReady(t, ctx, k8sClient, workloadName)
+
+		Expect(controller.ProcessOnce(ctx)).To(Succeed())
+		assertServedModelStatus(t, ctx, k8sClient, registrymodel.ModelLoadStatusLoaded.String(), servingModel)
+
+		statusObserver, err := registryk8s.NewServedModelStatusObserver(servedModelAdapter, registryUsecase, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(statusObserver.ProcessOnce(ctx)).To(Succeed())
+		readyModel, err := registryRepo.ReadByID(ctx, modelID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readyModel.Status).To(Equal(registrymodel.ModelStatusReady))
+		Expect(readyModel.ServingLoadStatus).To(Equal(registrymodel.ModelLoadStatusLoaded))
+		Expect(readyModel.ServingModel).To(Equal(servingModel))
+
+		inferenceUsecase, inferenceRequests, feedbacks := newInferenceUsecase(datasetID, userID, embeddingSnapshotID)
+		modelEvent := modelUpdatedEvent(readyModel)
+		modelListener := inferencemessaging.NewModelUpdatedEventListener(inferenceUsecase)
+		Expect(modelListener.Handle(ctx, readyModel.ModelID, modelEvent)).To(Succeed())
+
+		requestID := uuid.New()
+		response, err := inferenceUsecase.Generate(ctx, inferencemodel.GenerateRequest{
+			RequestID: requestID,
+			DatasetID: datasetID,
+			ModelID:   readyModel.ModelID,
+			QueryText: "What changed in the dataset?",
+			TopK:      2,
+			MetadataFilters: map[string]string{
+				"source": "e2e",
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.ModelID).To(Equal(readyModel.ModelID))
+		Expect(response.Answer).To(Equal("generated from " + servingModel))
+		Expect(response.Contexts).To(HaveLen(2))
+		Expect(inferenceRequests.records).To(HaveLen(1))
+		Expect(inferenceRequests.records[0].Status).To(Equal(inferencemodel.InferenceRequestStatusCompleted))
+
+		feedbackID := uuid.New()
+		_, err = inferenceUsecase.RecordFeedback(ctx, &inferencemodel.InferenceFeedback{
+			FeedbackID: feedbackID,
+			RequestID:  requestID,
+			UserID:     userID,
+			Accepted:   true,
+			Rating:     5,
+			Comment:    "good context",
+		}, feedbackID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(feedbacks.records).To(HaveLen(1))
+	})
+})
+
+func runTrainingWorkflow(t testFailureReporter, trainingRunID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
 	t.Helper()
 
 	var suite testsuite.WorkflowTestSuite
@@ -378,7 +337,7 @@ func servedModelConfig() registryk8s.ServedModelConfig {
 	}
 }
 
-func markDeploymentReady(t *testing.T, ctx context.Context, client dynamic.Interface, workloadName string) {
+func markDeploymentReady(t testFailureReporter, ctx context.Context, client dynamic.Interface, workloadName string) {
 	t.Helper()
 
 	resource := client.Resource(deploymentGVR).Namespace(e2eNamespace)
@@ -394,7 +353,7 @@ func markDeploymentReady(t *testing.T, ctx context.Context, client dynamic.Inter
 	}
 }
 
-func assertServedModelStatus(t *testing.T, ctx context.Context, client dynamic.Interface, loadStatus string, servingModel string) {
+func assertServedModelStatus(t testFailureReporter, ctx context.Context, client dynamic.Interface, loadStatus string, servingModel string) {
 	t.Helper()
 
 	items, err := client.Resource(servedModelGVR).Namespace(e2eNamespace).List(ctx, metav1.ListOptions{})
@@ -641,7 +600,8 @@ func (r *inferenceRequestMemoryRepository) RecordInferenceRequest(_ context.Cont
 }
 
 type inferenceFeedbackMemoryRepository struct {
-	records []*inferencemodel.InferenceFeedback
+	records   []*inferencemodel.InferenceFeedback
+	snapshots []*inferencemodel.PreferenceDataset
 }
 
 func (r *inferenceFeedbackMemoryRepository) RecordFeedback(_ context.Context, feedback *inferencemodel.InferenceFeedback, _ uuid.UUID) (*inferencemodel.InferenceFeedback, error) {
@@ -657,6 +617,12 @@ func (r *inferenceFeedbackMemoryRepository) ReadPreferenceDataset(_ context.Cont
 		ModelID:   request.ModelID,
 		OutputURI: request.OutputURI,
 	}, nil
+}
+
+func (r *inferenceFeedbackMemoryRepository) RecordPreferenceDatasetSnapshot(_ context.Context, dataset *inferencemodel.PreferenceDataset, _ inferencemodel.PreferenceDatasetExportRequest) (*inferencemodel.PreferenceDataset, error) {
+	record := *dataset
+	r.snapshots = append(r.snapshots, &record)
+	return &record, nil
 }
 
 type fakeRetrievalClient struct {

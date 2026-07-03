@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	profileeventpb "lib/data_contracts_lib/profile_event"
+	profileeventpb "lib/data_contracts_lib/profile"
 )
 
 // ParseUUID parses a required string UUID field from a deserialized event

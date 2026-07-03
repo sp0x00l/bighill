@@ -18,7 +18,7 @@ import (
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
 	repo "inference_service/pkg/infra/repo/db"
 
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_registry"
 	inferencepb "lib/data_contracts_lib/inference"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	dbconn "lib/shared_lib/db"

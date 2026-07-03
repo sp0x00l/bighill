@@ -15,7 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 
-	dataregistrypb "lib/data_contracts_lib/data_registry_service"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
 
 	log "github.com/sirupsen/logrus"
 )

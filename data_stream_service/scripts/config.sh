@@ -6,12 +6,15 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export DATA_STREAM_SERVICE_DLQ=http://localhost:4566/data-stream-dev-env-queue/
     export DATA_STREAM_SERVICE_OUTBOX=postgres
+    export DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS=${DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS:-true}
 elif [ "$1" = "staging" ]; then
     export DATA_STREAM_SERVICE_DLQ=http://localhost:4566/data-stream-dev-env-queue/ # TODO
     export DATA_STREAM_SERVICE_OUTBOX=postgres
+    export DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS=${DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS:-false}
 elif [ "$1" = "prod" ]; then
     export DATA_STREAM_SERVICE_DLQ="" # TODO
     export DATA_STREAM_SERVICE_OUTBOX=postgres
+    export DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS=${DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS:-false}
 else
     echo "Error: Invalid environment provided to data_stream_service config"
     echo "Usage: './config.sh [local-dev|cicd|staging|prod]'"
@@ -22,9 +25,15 @@ fi
 export DATA_STREAM_SERVICE_API_GRPC_HOST=localhost
 export DATA_STREAM_SERVICE_API_GRPC_PORT=7070
 export DATA_STREAM_SERVICE_NAME=data-stream-service
+export DATA_STREAM_SERVICE_FLIGHT_AUTH_TOKEN=${DATA_STREAM_SERVICE_FLIGHT_AUTH_TOKEN:-}
+export DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS=${DATA_STREAM_SERVICE_FLIGHT_ALLOW_ANONYMOUS:-false}
+export DATA_STREAM_SERVICE_FLIGHT_TLS_CERT_PATH=${DATA_STREAM_SERVICE_FLIGHT_TLS_CERT_PATH:-}
+export DATA_STREAM_SERVICE_FLIGHT_TLS_KEY_PATH=${DATA_STREAM_SERVICE_FLIGHT_TLS_KEY_PATH:-}
+export DATA_STREAM_SERVICE_FLIGHT_TLS_CLIENT_CA_CERT_PATH=${DATA_STREAM_SERVICE_FLIGHT_TLS_CLIENT_CA_CERT_PATH:-}
+export DATA_STREAM_SERVICE_FLIGHT_TLS_REQUIRE_CLIENT_CERT=${DATA_STREAM_SERVICE_FLIGHT_TLS_REQUIRE_CLIENT_CERT:-false}
 export DATA_STREAM_SERVICE_QUERY_ENGINE_MODE=registry
 export DATA_STREAM_SERVICE_QUERY_ENGINE_DATA_ROOT=tmp/local_s3_storage
-export DATA_STREAM_SERVICE_QUERY_ENGINE_BINARY_PATH=../query_engine/datafusion_query_engine/target/release/datafusion_query_engine
+export DATA_STREAM_SERVICE_QUERY_ENGINE_BINARY_PATH=internal/infra/queryengine/datafusion_query_engine/target/release/datafusion_query_engine
 export DATA_STREAM_SERVICE_QUERY_ENGINE_TIMEOUT_SECONDS=30
 export DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_ADDRESS=localhost:7071
 export DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_DIAL_TIMEOUT_MS=500

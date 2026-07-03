@@ -18,6 +18,7 @@ type PreferenceExample struct {
 	RequestID           uuid.UUID
 	DatasetID           uuid.UUID
 	ModelID             uuid.UUID
+	Split               string
 	PromptText          string
 	AcceptedAnswer      string
 	RejectedAnswer      string
@@ -35,14 +36,51 @@ type PreferenceDatasetExportRequest struct {
 }
 
 type PreferenceDataset struct {
-	RequestID uuid.UUID
-	DatasetID uuid.UUID
-	ModelID   uuid.UUID
-	OutputURI string
-	Examples  []PreferenceExample
-	Exported  bool
+	PreferenceDatasetID uuid.UUID
+	RequestID           uuid.UUID
+	DatasetID           uuid.UUID
+	ModelID             uuid.UUID
+	ParentAdapterURI    string
+	ParentBaseModel     string
+	ParentModelVersion  int
+	OutputURI           string
+	EvaluationOutputURI string
+	Format              string
+	EligibilityPolicy   string
+	MinExamples         int
+	Limit               int
+	Examples            []PreferenceExample
+	Exported            bool
 }
 
 func (d PreferenceDataset) ExampleCount() int {
 	return len(d.Examples)
+}
+
+func (d PreferenceDataset) TrainingExamples() []PreferenceExample {
+	out := make([]PreferenceExample, 0, len(d.Examples))
+	for _, example := range d.Examples {
+		if example.Split == "" || example.Split == "TRAIN" {
+			out = append(out, example)
+		}
+	}
+	return out
+}
+
+func (d PreferenceDataset) EvaluationExamples() []PreferenceExample {
+	out := make([]PreferenceExample, 0, len(d.Examples))
+	for _, example := range d.Examples {
+		if example.Split == "EVAL" {
+			out = append(out, example)
+		}
+	}
+	return out
+}
+
+func (d PreferenceDataset) TrainingExampleCount() int {
+	return len(d.TrainingExamples())
+}
+
+func (d PreferenceDataset) EvaluationExampleCount() int {
+	return len(d.EvaluationExamples())
 }

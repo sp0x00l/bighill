@@ -25,25 +25,42 @@ type ServedModelRepository interface {
 }
 
 type ServedModelController struct {
-	store        ServedModelRepository
-	reconciler   app.ServedModelReconciler
-	pollInterval time.Duration
-	mu           sync.Mutex
-	pending      map[string]struct{}
-	retries      map[string]int
-	locks        sync.Map
+	store                  ServedModelRepository
+	reconciler             app.ServedModelReconciler
+	pollInterval           time.Duration
+	serializeSharedRuntime bool
+	mu                     sync.Mutex
+	pending                map[string]struct{}
+	retries                map[string]int
+	locks                  sync.Map
 }
 
-func NewServedModelController(store ServedModelRepository, reconciler app.ServedModelReconciler, pollInterval time.Duration) *ServedModelController {
+type ServedModelControllerOption func(*ServedModelController)
+
+func WithSharedRuntimeSerialization(enabled bool) ServedModelControllerOption {
+	log.Trace("WithSharedRuntimeSerialization")
+
+	return func(c *ServedModelController) {
+		c.serializeSharedRuntime = enabled
+	}
+}
+
+func NewServedModelController(store ServedModelRepository, reconciler app.ServedModelReconciler, pollInterval time.Duration, opts ...ServedModelControllerOption) *ServedModelController {
 	log.Trace("NewServedModelController")
 
-	return &ServedModelController{
+	controller := &ServedModelController{
 		store:        store,
 		reconciler:   reconciler,
 		pollInterval: pollInterval,
 		pending:      map[string]struct{}{},
 		retries:      map[string]int{},
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(controller)
+		}
+	}
+	return controller
 }
 
 func (c *ServedModelController) Start(ctx context.Context) error {
@@ -172,6 +189,13 @@ func (c *ServedModelController) processResource(ctx context.Context, resourceNam
 		c.scheduleRequeue(ctx, resourceName)
 		return
 	}
+	var runtimeLock *sync.Mutex
+	if c.serializeSharedRuntime {
+		runtimeLock = c.resourceLock(sharedRuntimeLockKey(servedModel))
+		runtimeLock.Lock()
+		defer runtimeLock.Unlock()
+	}
+
 	status, err := c.reconciler.Reconcile(ctx, servedModel)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).WithField("served_model", servedModel.ResourceName).Error("served model reconcile failed")
@@ -231,6 +255,12 @@ func (c *ServedModelController) resourceLock(key string) *sync.Mutex {
 
 	value, _ := c.locks.LoadOrStore(key, &sync.Mutex{})
 	return value.(*sync.Mutex)
+}
+
+func sharedRuntimeLockKey(servedModel *model.ServedModel) string {
+	log.Trace("sharedRuntimeLockKey")
+
+	return "shared-runtime:" + SharedRuntimeWorkloadName(servedModel)
 }
 
 func reconnectDelay(base time.Duration) time.Duration {

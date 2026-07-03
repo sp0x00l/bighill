@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	profileeventpb "lib/data_contracts_lib/profile_event"
+	profileeventpb "lib/data_contracts_lib/profile"
 	shared "lib/shared_lib/messaging"
 	"profile_service/pkg/domain"
 

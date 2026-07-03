@@ -19,7 +19,7 @@ import (
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	repo "feature_materializer_service/pkg/infra/repo/db"
 	featuretemporal "feature_materializer_service/pkg/infra/temporalworker"
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_ingestion"
 	corebucket "lib/shared_lib/bucket"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"

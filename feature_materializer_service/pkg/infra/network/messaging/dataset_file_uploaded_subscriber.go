@@ -6,12 +6,15 @@ import (
 	"strings"
 
 	"feature_materializer_service/pkg/domain/model"
-	datasetpb "lib/data_contracts_lib/dataset"
+	dataingestionpb "lib/data_contracts_lib/data_ingestion"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
 	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
+
+const parquetContentType = "application/vnd.apache.parquet"
 
 type DatasetFileUploadedListener interface {
 	StartMaterializationWorkflow(ctx context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) error
@@ -42,6 +45,8 @@ func (s *datasetFileUploadedSubscriber) Start(ctx context.Context) error {
 	log.Trace("DatasetFileUploadedSubscriber Start")
 
 	msgConn.AddListener(s.subscriber, &datasetFileUploadedEventListener{listener: s.listener})
+	msgConn.AddListener(s.subscriber, &datasetCreatedEventListener{listener: s.listener})
+	msgConn.AddListener(s.subscriber, &datasetUpdatedEventListener{listener: s.listener})
 	return s.subscriber.Subscribe(ctx, s.topics)
 }
 
@@ -63,13 +68,13 @@ func (l *datasetFileUploadedEventListener) MsgType() msgConn.MsgType {
 	return msgConn.MsgTypeDatasetFileUploaded
 }
 
-func (l *datasetFileUploadedEventListener) NewMessage() *datasetpb.DatasetFileUploadedEvent {
+func (l *datasetFileUploadedEventListener) NewMessage() *dataingestionpb.DatasetFileUploadedEvent {
 	log.Trace("datasetFileUploadedEventListener NewMessage")
 
-	return &datasetpb.DatasetFileUploadedEvent{}
+	return &dataingestionpb.DatasetFileUploadedEvent{}
 }
 
-func (l *datasetFileUploadedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *datasetpb.DatasetFileUploadedEvent) error {
+func (l *datasetFileUploadedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *dataingestionpb.DatasetFileUploadedEvent) error {
 	log.Trace("datasetFileUploadedEventListener Handle")
 
 	if l.listener == nil {
@@ -82,7 +87,7 @@ func (l *datasetFileUploadedEventListener) Handle(ctx context.Context, resourceK
 	return l.listener.StartMaterializationWorkflow(ctx, datasetFile, idempotencyKey)
 }
 
-func eventToDatasetFile(resourceKey uuid.UUID, payload *datasetpb.DatasetFileUploadedEvent) (*model.DatasetFile, uuid.UUID, error) {
+func eventToDatasetFile(resourceKey uuid.UUID, payload *dataingestionpb.DatasetFileUploadedEvent) (*model.DatasetFile, uuid.UUID, error) {
 	log.Trace("eventToDatasetFile")
 
 	if resourceKey == uuid.Nil {
@@ -152,6 +157,225 @@ func eventToDatasetFile(resourceKey uuid.UUID, payload *datasetpb.DatasetFileUpl
 	}
 	idempotencyKey := uuid.NewSHA1(uuid.NameSpaceURL, []byte(datasetID.String()+":"+storageLocation))
 	return datasetFile, idempotencyKey, nil
+}
+
+type datasetCreatedEventListener struct {
+	listener DatasetFileUploadedListener
+}
+
+func NewDatasetCreatedEventListener(listener DatasetFileUploadedListener) *datasetCreatedEventListener {
+	log.Trace("NewDatasetCreatedEventListener")
+
+	return &datasetCreatedEventListener{listener: listener}
+}
+
+func (l *datasetCreatedEventListener) MsgType() msgConn.MsgType {
+	log.Trace("datasetCreatedEventListener MsgType")
+
+	return msgConn.MsgTypeDatasetCreated
+}
+
+func (l *datasetCreatedEventListener) NewMessage() *dataregistrypb.DatasetCreatedEvent {
+	log.Trace("datasetCreatedEventListener NewMessage")
+
+	return &dataregistrypb.DatasetCreatedEvent{}
+}
+
+func (l *datasetCreatedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *dataregistrypb.DatasetCreatedEvent) error {
+	log.Trace("datasetCreatedEventListener Handle")
+
+	if l.listener == nil {
+		return msgConn.NonRetryable(fmt.Errorf("dataset created listener is nil"))
+	}
+	datasetFile, idempotencyKey, ok, err := datasetCreatedToSourceDatasetFile(resourceKey, payload)
+	if err != nil {
+		return msgConn.NonRetryable(err)
+	}
+	if !ok {
+		return nil
+	}
+	return l.listener.StartMaterializationWorkflow(ctx, datasetFile, idempotencyKey)
+}
+
+type datasetUpdatedEventListener struct {
+	listener DatasetFileUploadedListener
+}
+
+func NewDatasetUpdatedEventListener(listener DatasetFileUploadedListener) *datasetUpdatedEventListener {
+	log.Trace("NewDatasetUpdatedEventListener")
+
+	return &datasetUpdatedEventListener{listener: listener}
+}
+
+func (l *datasetUpdatedEventListener) MsgType() msgConn.MsgType {
+	log.Trace("datasetUpdatedEventListener MsgType")
+
+	return msgConn.MsgTypeDatasetUpdated
+}
+
+func (l *datasetUpdatedEventListener) NewMessage() *dataregistrypb.DatasetUpdatedEvent {
+	log.Trace("datasetUpdatedEventListener NewMessage")
+
+	return &dataregistrypb.DatasetUpdatedEvent{}
+}
+
+func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *dataregistrypb.DatasetUpdatedEvent) error {
+	log.Trace("datasetUpdatedEventListener Handle")
+
+	if l.listener == nil {
+		return msgConn.NonRetryable(fmt.Errorf("dataset updated listener is nil"))
+	}
+	datasetFile, idempotencyKey, ok, err := datasetUpdatedToSourceDatasetFile(resourceKey, payload)
+	if err != nil {
+		return msgConn.NonRetryable(err)
+	}
+	if !ok {
+		return nil
+	}
+	return l.listener.StartMaterializationWorkflow(ctx, datasetFile, idempotencyKey)
+}
+
+func datasetCreatedToSourceDatasetFile(resourceKey uuid.UUID, payload *dataregistrypb.DatasetCreatedEvent) (*model.DatasetFile, uuid.UUID, bool, error) {
+	log.Trace("datasetCreatedToSourceDatasetFile")
+
+	if payload == nil {
+		return nil, uuid.Nil, false, fmt.Errorf("dataset created payload is required")
+	}
+	return sourceDatasetFileFromRegistryEvent(sourceDatasetRegistryEvent{
+		ResourceKey:       resourceKey,
+		DatasetID:         payload.GetDatasetId(),
+		UserID:            payload.GetUserId(),
+		DatasetVersion:    payload.GetDatasetVersion(),
+		SourceType:        payload.GetSourceType(),
+		SourceConnectorID: payload.GetSourceConnectorId(),
+		SourceQuery:       payload.GetSourceQuery(),
+		SourceDatabase:    payload.GetSourceDatabase(),
+		SourceCollection:  payload.GetSourceCollection(),
+		TableNamespace:    payload.GetTableNamespace(),
+		TableName:         payload.GetTableName(),
+		TableFormat:       payload.GetTableFormat(),
+		CatalogProvider:   payload.GetCatalogProvider(),
+		ProcessingProfile: payload.GetProcessingProfile(),
+	})
+}
+
+func datasetUpdatedToSourceDatasetFile(resourceKey uuid.UUID, payload *dataregistrypb.DatasetUpdatedEvent) (*model.DatasetFile, uuid.UUID, bool, error) {
+	log.Trace("datasetUpdatedToSourceDatasetFile")
+
+	if payload == nil {
+		return nil, uuid.Nil, false, fmt.Errorf("dataset updated payload is required")
+	}
+	return sourceDatasetFileFromRegistryEvent(sourceDatasetRegistryEvent{
+		ResourceKey:       resourceKey,
+		DatasetID:         payload.GetDatasetId(),
+		UserID:            payload.GetUserId(),
+		DatasetVersion:    payload.GetDatasetVersion(),
+		SourceType:        payload.GetSourceType(),
+		SourceConnectorID: payload.GetSourceConnectorId(),
+		SourceQuery:       payload.GetSourceQuery(),
+		SourceDatabase:    payload.GetSourceDatabase(),
+		SourceCollection:  payload.GetSourceCollection(),
+		TableNamespace:    payload.GetTableNamespace(),
+		TableName:         payload.GetTableName(),
+		TableFormat:       payload.GetTableFormat(),
+		CatalogProvider:   payload.GetCatalogProvider(),
+		ProcessingProfile: payload.GetProcessingProfile(),
+	})
+}
+
+type sourceDatasetRegistryEvent struct {
+	ResourceKey       uuid.UUID
+	DatasetID         string
+	UserID            string
+	DatasetVersion    int32
+	SourceType        string
+	SourceConnectorID string
+	SourceQuery       string
+	SourceDatabase    string
+	SourceCollection  string
+	TableNamespace    string
+	TableName         string
+	TableFormat       string
+	CatalogProvider   string
+	ProcessingProfile string
+}
+
+func sourceDatasetFileFromRegistryEvent(event sourceDatasetRegistryEvent) (*model.DatasetFile, uuid.UUID, bool, error) {
+	log.Trace("sourceDatasetFileFromRegistryEvent")
+
+	sourceConnectorID := strings.TrimSpace(event.SourceConnectorID)
+	if sourceConnectorID == "" {
+		return nil, uuid.Nil, false, nil
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(event.SourceType))
+	if sourceType == "" {
+		return nil, uuid.Nil, false, fmt.Errorf("source type is required")
+	}
+	if event.ResourceKey == uuid.Nil {
+		return nil, uuid.Nil, false, fmt.Errorf("resource key is required")
+	}
+	datasetID, err := msgConn.ParseUUID("dataset_id", event.DatasetID)
+	if err != nil {
+		return nil, uuid.Nil, false, err
+	}
+	if datasetID != event.ResourceKey {
+		return nil, uuid.Nil, false, fmt.Errorf("dataset id %s does not match resource key %s", datasetID, event.ResourceKey)
+	}
+	userID, err := msgConn.ParseUUID("user_id", event.UserID)
+	if err != nil {
+		return nil, uuid.Nil, false, err
+	}
+	connectorID, err := msgConn.ParseUUID("source_connector_id", sourceConnectorID)
+	if err != nil {
+		return nil, uuid.Nil, false, err
+	}
+	tableNamespace, err := requiredDatasetFileUploadedString("table namespace", event.TableNamespace)
+	if err != nil {
+		return nil, uuid.Nil, false, err
+	}
+	tableName, err := requiredDatasetFileUploadedString("table name", event.TableName)
+	if err != nil {
+		return nil, uuid.Nil, false, err
+	}
+	tableFormat, err := requiredDatasetFileUploadedString("table format", event.TableFormat)
+	if err != nil {
+		return nil, uuid.Nil, false, err
+	}
+	catalogProvider, err := requiredDatasetFileUploadedString("catalog provider", event.CatalogProvider)
+	if err != nil {
+		return nil, uuid.Nil, false, err
+	}
+	processingProfile, err := model.ToProcessingProfile(event.ProcessingProfile)
+	if err != nil {
+		return nil, uuid.Nil, false, fmt.Errorf("processing profile is invalid: %w", err)
+	}
+
+	datasetFile := &model.DatasetFile{
+		DatasetID:         datasetID,
+		UserID:            userID,
+		SourceType:        sourceType,
+		SourceConnectorID: connectorID,
+		SourceQuery:       strings.TrimSpace(event.SourceQuery),
+		SourceDatabase:    strings.TrimSpace(event.SourceDatabase),
+		SourceCollection:  strings.TrimSpace(event.SourceCollection),
+		ContentType:       parquetContentType,
+		FileExtension:     "parquet",
+		TableNamespace:    tableNamespace,
+		TableName:         tableName,
+		TableFormat:       tableFormat,
+		CatalogProvider:   catalogProvider,
+		ProcessingProfile: processingProfile,
+	}
+	idempotencyKey := uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
+		datasetID.String(),
+		fmt.Sprintf("%d", event.DatasetVersion),
+		sourceConnectorID,
+		datasetFile.SourceType,
+		datasetFile.SourceQuery,
+		datasetFile.SourceDatabase,
+		datasetFile.SourceCollection,
+	}, ":")))
+	return datasetFile, idempotencyKey, true, nil
 }
 
 func requiredDatasetFileUploadedString(fieldName string, value string) (string, error) {

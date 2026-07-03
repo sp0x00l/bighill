@@ -40,10 +40,13 @@ type inferenceConfig struct {
 	DBName              string
 	DBConnectionString  string
 	Messaging           messagingConn.MessengerConfig
+	OutboxBackend       string
+	OutboxRelay         messagingConn.OutboxRelayConfig
 	Topics              inferencemessaging.InferenceTopics
 	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
 	Generation          generationConfig
 	Reranker            rerankerConfig
+	QueryTransformer    queryTransformerConfig
 	PreferenceDataset   preferenceDatasetConfig
 	GRPCPort            int
 	Health              healthConfig
@@ -65,6 +68,10 @@ type rerankerConfig struct {
 	Model               string
 	RequestTimeout      time.Duration
 	CandidateMultiplier int
+}
+
+type queryTransformerConfig struct {
+	Provider string
 }
 
 type preferenceDatasetConfig struct {
@@ -109,6 +116,44 @@ func main() {
 	}
 	defer database.Close()
 
+	outboxWriter, err := newPostgresOutbox(database, cfg.OutboxBackend)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
+	}
+	orderedOutbox, ok := outboxWriter.(messagingConn.OrderedOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support ordered transactional enqueue")
+	}
+	outboxSignal := make(chan struct{}, 1)
+	outboxWriter = messagingConn.NewSignaledOutbox(outboxWriter, outboxSignal)
+	cfg.OutboxRelay.Signal = outboxSignal
+	relayOutbox, ok := outboxWriter.(messagingConn.RelayOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support relay operations")
+	}
+	outboxPublisher, err := messagingConn.NewPublisher(cfg.Messaging.Brokers)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create outbox relay publisher")
+	}
+	relayPublisher, ok := outboxPublisher.(messagingConn.RelayPublisher)
+	if !ok {
+		log.Fatal("publisher does not support outbox relay publishing")
+	}
+	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
+	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
+	relayDone := make(chan struct{})
+	go func() {
+		defer close(relayDone)
+		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
+			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
+		}
+	}()
+	defer func() {
+		stopOutboxRelay()
+		<-relayDone
+		outboxPublisher.Close()
+	}()
+
 	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
 	defer func() {
 		_ = messagingFactory.Close(cancelCtx)
@@ -121,7 +166,10 @@ func main() {
 	modelRepository := inferencedb.NewInferenceModelRepository(database)
 	datasetRepository := inferencedb.NewInferenceDatasetRepository(database)
 	requestRepository := inferencedb.NewInferenceRequestRepository(database)
-	feedbackRepository := inferencedb.NewInferenceFeedbackRepository(database)
+	feedbackRepository := inferencedb.NewInferenceFeedbackRepository(database,
+		inferencedb.WithPreferenceDatasetOutbox(orderedOutbox, cfg.Topics.PreferenceDataset),
+		inferencedb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	)
 	retrievalClient, err := inferencegrpc.NewFeatureMaterializerClient(cancelCtx, cfg.FeatureMaterializer)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create feature materializer client")
@@ -136,6 +184,10 @@ func main() {
 	reranker, err := newRerankerAdapter(cfg.Reranker)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create reranker adapter")
+	}
+	queryTransformer, err := newQueryTransformer(cfg.QueryTransformer, generator)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create query transformer")
 	}
 	promptStrategy, err := promptStrategyFromConfig(cfg.Generation)
 	if err != nil {
@@ -157,16 +209,14 @@ func main() {
 			app.WithRerankCandidateMultiplier(cfg.Reranker.CandidateMultiplier),
 		)
 	}
+	if queryTransformer != nil {
+		inferenceOptions = append(inferenceOptions, app.WithQueryTransformer(queryTransformer))
+	}
 	preferenceDatasetWriter := inferencepreference.NewS3ObjectDatasetWriter(cancelCtx, cfg.PreferenceDataset.BucketRegion, cfg.PreferenceDataset.UploadPartSizeMB*1024*1024)
 	if preferenceDatasetWriter == nil {
 		log.WithContext(cancelCtx).Fatal("unable to create preference dataset writer")
 	}
 	inferenceOptions = append(inferenceOptions, app.WithPreferenceDatasetWriter(preferenceDatasetWriter))
-	if cfg.PreferenceDataset.ExportEnabled {
-		inferenceOptions = append(inferenceOptions,
-			app.WithPreferenceDatasetAutoExport(cfg.PreferenceDataset.URITemplate, cfg.PreferenceDataset.MinExamples, cfg.PreferenceDataset.Limit),
-		)
-	}
 	inferenceUsecase := app.NewInferenceUsecase(
 		modelRepository,
 		inferenceOptions...,
@@ -232,9 +282,16 @@ func readInferenceConfig() inferenceConfig {
 			GroupID: env.WithDefaultString("INFERENCE_SERVICE_KAFKA_GROUP_ID", "inference-group"),
 			Brokers: brokers,
 		},
+		OutboxBackend: env.WithDefaultString("INFERENCE_SERVICE_OUTBOX", "postgres"),
+		OutboxRelay: messagingConn.OutboxRelayConfig{
+			PollInterval:   time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_OUTBOX_RELAY_POLL_MS", "250")) * time.Millisecond,
+			FailureBackoff: time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
+			BatchSize:      int32(env.WithDefaultInt("INFERENCE_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
+		},
 		Topics: inferencemessaging.InferenceTopics{
-			ModelRegistry: env.WithDefaultString("INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry"),
-			DataRegistry:  env.WithDefaultString("INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
+			ModelRegistry:     env.WithDefaultString("INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry"),
+			DataRegistry:      env.WithDefaultString("INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
+			PreferenceDataset: env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_TOPIC", "inference"),
 		},
 		FeatureMaterializer: inferencegrpc.FeatureMaterializerClientConfig{
 			Address:       env.WithDefaultString("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS", "localhost:7072"),
@@ -258,9 +315,12 @@ func readInferenceConfig() inferenceConfig {
 			RequestTimeout:      secondsFromEnv("INFERENCE_SERVICE_RERANKER_REQUEST_TIMEOUT_SECONDS", "30"),
 			CandidateMultiplier: env.WithDefaultInt("INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER", "5"),
 		},
+		QueryTransformer: queryTransformerConfig{
+			Provider: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", "disabled"),
+		},
 		PreferenceDataset: preferenceDatasetConfig{
 			ExportEnabled:    env.WithDefaultBool("INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED", false),
-			URITemplate:      env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE", "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl"),
+			URITemplate:      env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE", "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl"),
 			MinExamples:      env.WithDefaultInt("INFERENCE_SERVICE_PREFERENCE_DATASET_MIN_EXAMPLES", "1"),
 			Limit:            env.WithDefaultInt("INFERENCE_SERVICE_PREFERENCE_DATASET_LIMIT", "1000"),
 			BucketRegion:     env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION", "local-dev"),
@@ -290,6 +350,19 @@ func newGenerationAdapter(cfg generationConfig) (app.GenerationAdapter, error) {
 		return generation.NewHTTPGenerator(strings.ToLower(strings.TrimSpace(cfg.Provider)), cfg.Endpoint, cfg.Model, cfg.RequestTimeout)
 	default:
 		return nil, fmt.Errorf("unsupported generation provider %q", cfg.Provider)
+	}
+}
+
+func newQueryTransformer(cfg queryTransformerConfig, generator app.GenerationAdapter) (app.QueryTransformer, error) {
+	log.Trace("newQueryTransformer")
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "", "disabled", "none":
+		return nil, nil
+	case "self_query":
+		return retrieval.NewSelfQueryTransformer(generator), nil
+	default:
+		return nil, fmt.Errorf("unsupported query transformer provider %q", cfg.Provider)
 	}
 }
 
@@ -352,6 +425,15 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 
 func secondsFromEnv(key, defaultValue string) time.Duration {
 	return time.Duration(env.WithDefaultInt(key, defaultValue)) * time.Second
+}
+
+func newPostgresOutbox(database *coreDB.Database, backend string) (messagingConn.OutboxWriter, error) {
+	log.Trace("newPostgresOutbox")
+
+	if backend != "postgres" {
+		return nil, fmt.Errorf("unsupported outbox backend %q", backend)
+	}
+	return messagingConn.NewPostgresOutbox(database.Pool, database.Name, "")
 }
 
 func postgresConnectionString(user, password, host, port, dbName, sslMode string, maxConnections int) string {

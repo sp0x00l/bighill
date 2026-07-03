@@ -42,9 +42,11 @@ type materializerConfig struct {
 	OutboxRelay          messagingConn.OutboxRelayConfig
 	ArtifactBucket       artifactBucketConfig
 	Embedding            embeddingConfig
+	DataStream           dataStreamConfig
 	Temporal             temporalConfig
 	GRPCPort             int
 	DatasetUploadedTopic string
+	DataRegistryTopic    string
 	PublishTopics        featuremessaging.MaterializationTopics
 	Health               healthConfig
 }
@@ -71,6 +73,17 @@ type embeddingConfig struct {
 	ChunkSize        int
 	ChunkOverlap     int
 	RequestTimeout   time.Duration
+}
+
+type dataStreamConfig struct {
+	Address        string
+	RequestTimeout time.Duration
+	AuthToken      string
+	Insecure       bool
+	ServerName     string
+	CACertPath     string
+	ClientCertPath string
+	ClientKeyPath  string
 }
 
 type temporalConfig struct {
@@ -179,6 +192,17 @@ func main() {
 	}
 
 	rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
+	dataStreamReader := materialization.NewFlightDataStreamReaderWithConfig(materialization.FlightDataStreamReaderConfig{
+		Address:        cfg.DataStream.Address,
+		Timeout:        cfg.DataStream.RequestTimeout,
+		AuthToken:      cfg.DataStream.AuthToken,
+		Insecure:       cfg.DataStream.Insecure,
+		ServerName:     cfg.DataStream.ServerName,
+		CACertPath:     cfg.DataStream.CACertPath,
+		ClientCertPath: cfg.DataStream.ClientCertPath,
+		ClientKeyPath:  cfg.DataStream.ClientKeyPath,
+	})
+	dataStreamRawWriter := materialization.NewDataStreamRawSnapshotWriter(artifactStore, dataStreamReader)
 	featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
 	embeddingStrategy := embeddingStrategyFromConfig(cfg.Embedding)
 	embeddingProvider, err := newEmbeddingProvider(cfg.Embedding)
@@ -187,7 +211,7 @@ func main() {
 	}
 	embeddingChunker := materialization.NewTokenWindowChunker(embeddingStrategy)
 	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepo, embeddingProvider, embeddingChunker, embeddingStrategy, "pgvector", cfg.Embedding.MaxRows)
-	rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(rawWriter)
+	rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(dataStreamRawWriter, rawWriter)
 	featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 	embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
 
@@ -206,7 +230,7 @@ func main() {
 	materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
 		subscriber,
 		workflowStarter,
-		[]string{cfg.DatasetUploadedTopic},
+		[]string{cfg.DatasetUploadedTopic, cfg.DataRegistryTopic},
 	)
 
 	grpcService := featuregrpc.NewFeatureMaterializerGrpcServer(embeddingSearchUsecase)
@@ -297,6 +321,16 @@ func readMaterializerConfig() materializerConfig {
 			ChunkOverlap:     env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_CHUNK_OVERLAP", strconv.Itoa(model.DefaultChunkOverlap)),
 			RequestTimeout:   secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_REQUEST_TIMEOUT_SECONDS", "30"),
 		},
+		DataStream: dataStreamConfig{
+			Address:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_GRPC_ADDRESS", "localhost:7070"),
+			RequestTimeout: secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_REQUEST_TIMEOUT_SECONDS", "60"),
+			AuthToken:      env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_AUTH_TOKEN", ""),
+			Insecure:       env.WithDefaultBool("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_INSECURE", false),
+			ServerName:     env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_SERVER_NAME", ""),
+			CACertPath:     env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CA_CERT_PATH", ""),
+			ClientCertPath: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CLIENT_CERT_PATH", ""),
+			ClientKeyPath:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CLIENT_KEY_PATH", ""),
+		},
 		Temporal: temporalConfig{
 			Address:   env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
 			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
@@ -304,6 +338,7 @@ func readMaterializerConfig() materializerConfig {
 		},
 		GRPCPort:             env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_API_GRPC_PORT", "7072"),
 		DatasetUploadedTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC", "data_ingestion"),
+		DataRegistryTopic:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 		PublishTopics: featuremessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
 		},

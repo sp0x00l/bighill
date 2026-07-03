@@ -1,6 +1,6 @@
 # Query Engine
 
-This directory contains the Rust/DataFusion execution component for the data stream query gateway.
+This directory contains the Rust/DataFusion execution component for the data stream query gateway. It is internal infrastructure owned by `data_stream_service`.
 
 Current shape:
 
@@ -12,8 +12,8 @@ Current shape:
 Local runner:
 
 ```sh
-cd query_engine/datafusion_query_engine
-DATAFUSION_PARQUET_PATH=../../tmp/local_s3_storage cargo run -- --sql "SELECT * FROM dataset LIMIT 10" > result.arrow
+cd data_stream_service/internal/infra/queryengine/datafusion_query_engine
+DATAFUSION_PARQUET_PATH=../../../../../tmp/local_s3_storage cargo run -- --sql "SELECT * FROM dataset LIMIT 10" > result.arrow
 ```
 
 Build and test:

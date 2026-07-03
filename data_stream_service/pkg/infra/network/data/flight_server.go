@@ -2,9 +2,13 @@ package data
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	domainErrors "data_stream_service/pkg/domain"
 	"data_stream_service/pkg/infra"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow/flight"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
@@ -12,6 +16,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -46,7 +51,11 @@ func NewFlightServer(authHandler flight.ServerAuthHandler, config infra.DataConf
 		interceptor,
 	}
 	fs.SetAuthHandler(authHandler)
-	server := flight.NewServerWithMiddleware(mw)
+	opts, err := serverOptions(config.Server)
+	if err != nil {
+		log.WithError(err).Fatal("unable to create data stream flight server options")
+	}
+	server := flight.NewServerWithMiddleware(mw, opts...)
 	fs.flightServer = server
 	return fs
 }
@@ -69,6 +78,43 @@ func (fs *flightServer) Connect() func() {
 			}
 		}
 	}
+}
+
+func serverOptions(config infra.ServerConnectionConfig) ([]grpc.ServerOption, error) {
+	log.Trace("serverOptions")
+
+	certPath := strings.TrimSpace(config.TLSCertPath)
+	keyPath := strings.TrimSpace(config.TLSKeyPath)
+	if certPath == "" && keyPath == "" {
+		return nil, nil
+	}
+	if certPath == "" || keyPath == "" {
+		return nil, fmt.Errorf("data stream TLS cert and key must be configured together")
+	}
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load data stream TLS certificate: %w", err)
+	}
+	tlsConfig := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{cert},
+	}
+	if strings.TrimSpace(config.TLSClientCAPath) != "" || config.RequireClientCert {
+		if strings.TrimSpace(config.TLSClientCAPath) == "" {
+			return nil, fmt.Errorf("data stream client CA cert is required when client certificates are required")
+		}
+		clientCA, err := os.ReadFile(strings.TrimSpace(config.TLSClientCAPath))
+		if err != nil {
+			return nil, fmt.Errorf("read data stream client CA cert: %w", err)
+		}
+		clientCAPool := x509.NewCertPool()
+		if ok := clientCAPool.AppendCertsFromPEM(clientCA); !ok {
+			return nil, fmt.Errorf("data stream client CA cert contains no PEM certificates")
+		}
+		tlsConfig.ClientCAs = clientCAPool
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsConfig))}, nil
 }
 
 func (fs *flightServer) GetSchema(ctx context.Context, descriptor *flight.FlightDescriptor) (*flight.SchemaResult, error) {

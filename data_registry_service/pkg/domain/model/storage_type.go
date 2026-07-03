@@ -19,6 +19,9 @@ const (
 )
 
 func (s StorageType) String() string {
+	if s < S3 || s > ClickHouse {
+		return ""
+	}
 	return [...]string{"S3", "AZURE_STORAGE", "GCS", "POSTGRES", "MYSQL", "ORACLE", "MONGO", "CLICKHOUSE"}[s]
 }
 

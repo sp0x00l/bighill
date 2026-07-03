@@ -7,6 +7,7 @@ import (
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
 
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -23,7 +24,7 @@ func NewRawSnapshotWriter(store ArtifactStore) *RawSnapshotWriter {
 func (w *RawSnapshotWriter) SupportsRawSnapshot(datasetFile *model.DatasetFile) bool {
 	log.Trace("RawSnapshotWriter SupportsRawSnapshot")
 
-	return datasetFile != nil
+	return datasetFile != nil && datasetFile.SourceConnectorID == uuid.Nil
 }
 
 func (w *RawSnapshotWriter) WriteRawSnapshot(ctx context.Context, datasetFile *model.DatasetFile, rawSnapshot *model.RawSnapshot) (*model.RawSnapshot, error) {

@@ -52,4 +52,35 @@ var _ = Describe("DatasetDTOAdapter", func() {
 		Expect(json.Unmarshal(payload, &dto)).To(Succeed())
 		Expect(dto.ProcessingProfile).To(Equal(model.TextRAGProfile.String()))
 	})
+
+	It("maps connector-backed dataset source metadata", func() {
+		connectorID := uuid.New()
+
+		dataset, err := adapter.FromDTO(context.Background(), []byte(`{
+			"title":"Warehouse movies",
+			"processingProfile":"TEXT_RAG",
+			"sourceType":"POSTGRES",
+			"sourceConnectorId":"`+connectorID.String()+`",
+			"sourceQuery":"SELECT title FROM movies",
+			"tableNamespace":"features",
+			"tableName":"movies"
+		}`))
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.SourceType).To(Equal(model.Postgres))
+		Expect(dataset.SourceConnectorID).To(Equal(connectorID))
+		Expect(dataset.SourceQuery).To(Equal("SELECT title FROM movies"))
+		Expect(dataset.TableNamespace).To(Equal("features"))
+		Expect(dataset.TableName).To(Equal("movies"))
+	})
+
+	It("requires source type when a source connector id is set", func() {
+		_, err := adapter.FromDTO(context.Background(), []byte(`{
+			"title":"Warehouse movies",
+			"sourceConnectorId":"`+uuid.NewString()+`",
+			"sourceQuery":"SELECT title FROM movies"
+		}`))
+
+		Expect(err).To(HaveOccurred())
+	})
 })

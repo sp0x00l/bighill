@@ -38,6 +38,7 @@ type trainingConfig struct {
 	Topics                 trainingmessaging.TrainingTopics
 	BaseModel              string
 	EvaluationProfile      string
+	DPOEvaluationProfile   string
 	Profile                model.TrainingProfile
 	Executor               trainingExecutorConfig
 	Health                 healthConfig
@@ -169,7 +170,7 @@ func main() {
 
 	if cfg.TrainingTriggerEnabled {
 		workflowStarter := temporalworker.NewTrainingWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
-		datasetUpdatedSubscriber := trainingmessaging.NewDatasetUpdatedSubscriber(subscriber, workflowStarter, cfg.Topics, cfg.BaseModel, cfg.Profile, cfg.EvaluationProfile)
+		datasetUpdatedSubscriber := trainingmessaging.NewDatasetUpdatedSubscriber(subscriber, workflowStarter, cfg.Topics, cfg.BaseModel, cfg.Profile, cfg.EvaluationProfile, cfg.DPOEvaluationProfile)
 		go func() {
 			if err := datasetUpdatedSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
 				log.WithContext(cancelCtx).WithError(err).Error("dataset updated subscriber stopped unexpectedly")
@@ -211,16 +212,22 @@ func readTrainingConfig() trainingConfig {
 		},
 		Topics: trainingmessaging.TrainingTopics{
 			DataRegistry: env.WithDefaultString("TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
+			Inference:    env.WithDefaultString("TRAINING_SERVICE_INFERENCE_SUBSCRIBER_TOPIC", "inference"),
 			Training:     env.WithDefaultString("TRAINING_SERVICE_TOPIC", "training"),
 		},
 		BaseModel:         env.WithDefaultString("TRAINING_SERVICE_BASE_MODEL", "local-dev-base-model"),
 		EvaluationProfile: env.WithDefaultString("TRAINING_SERVICE_EVALUATION_PROFILE", "smoke"),
+		DPOEvaluationProfile: env.WithDefaultString(
+			"TRAINING_SERVICE_DPO_EVALUATION_PROFILE",
+			`{"metric_suite":"preference","evaluator_name":"pairwise-judge","evaluator_version":"v1"}`,
+		),
 		Profile: model.TrainingProfile{
 			Name:                      env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_NAME", "local-dev-qlora"),
 			Trainer:                   env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_TRAINER", "sft"),
 			Adapter:                   env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_ADAPTER", "qlora"),
 			Quantization:              env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_QUANTIZATION", "4bit"),
 			PreferenceDatasetURI:      env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_PREFERENCE_DATASET_URI", ""),
+			DPOBeta:                   floatFromEnv("TRAINING_SERVICE_TRAINING_PROFILE_DPO_BETA", "0.1"),
 			SequenceLength:            env.WithDefaultInt("TRAINING_SERVICE_TRAINING_PROFILE_SEQUENCE_LENGTH", "2048"),
 			SamplePacking:             env.WithDefaultBool("TRAINING_SERVICE_TRAINING_PROFILE_SAMPLE_PACKING", true),
 			LearningRate:              floatFromEnv("TRAINING_SERVICE_TRAINING_PROFILE_LEARNING_RATE", "0.0002"),

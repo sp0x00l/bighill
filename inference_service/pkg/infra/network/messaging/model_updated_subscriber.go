@@ -9,7 +9,7 @@ import (
 	usecase "inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
 
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_registry"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	msgConn "lib/shared_lib/messaging"
 
@@ -18,8 +18,9 @@ import (
 )
 
 type InferenceTopics struct {
-	ModelRegistry string
-	DataRegistry  string
+	ModelRegistry     string
+	DataRegistry      string
+	PreferenceDataset string
 }
 
 func (t InferenceTopics) List() []string {

@@ -4,28 +4,60 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
+	inferencepb "lib/data_contracts_lib/inference"
 	coreDB "lib/shared_lib/db"
+	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
 )
 
 type InferenceFeedbackRepository struct {
 	coreDB.Database
-	unitOfWork *coreDB.UnitOfWork
+	unitOfWork   *coreDB.UnitOfWork
+	outbox       msgConn.OrderedOutbox
+	topic        string
+	outboxSignal func()
 }
 
-func NewInferenceFeedbackRepository(db *coreDB.Database) *InferenceFeedbackRepository {
+type InferenceFeedbackRepositoryOption func(*InferenceFeedbackRepository)
+
+func WithPreferenceDatasetOutbox(outbox msgConn.OrderedOutbox, topic string) InferenceFeedbackRepositoryOption {
+	log.Trace("WithPreferenceDatasetOutbox")
+
+	return func(r *InferenceFeedbackRepository) {
+		r.outbox = outbox
+		r.topic = topic
+	}
+}
+
+func WithOutboxSignal(signal func()) InferenceFeedbackRepositoryOption {
+	log.Trace("WithOutboxSignal")
+
+	return func(r *InferenceFeedbackRepository) {
+		r.outboxSignal = signal
+	}
+}
+
+func NewInferenceFeedbackRepository(db *coreDB.Database, opts ...InferenceFeedbackRepositoryOption) *InferenceFeedbackRepository {
 	log.Trace("NewInferenceFeedbackRepository")
 
-	return &InferenceFeedbackRepository{
+	repository := &InferenceFeedbackRepository{
 		Database:   *db,
 		unitOfWork: coreDB.NewUnitOfWork(db.Pool),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(repository)
+		}
+	}
+	return repository
 }
 
 func (r *InferenceFeedbackRepository) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
@@ -95,22 +127,31 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 	datasetID := ""
 	modelID := ""
 	query := `WITH request_scope AS (
-		SELECT request_id, dataset_id, model_id
-		FROM ` + r.Name + `.inference_requests
-		WHERE request_id = @request_id
-		  AND (@dataset_id::uuid IS NULL OR dataset_id = @dataset_id)
-		  AND (@model_id::uuid IS NULL OR model_id = @model_id)
-		  AND model_id IS NOT NULL
-	), limited_examples AS (
 		SELECT
+			req.request_id,
+			req.dataset_id,
+			req.model_id,
+			m.adapter_uri,
+			m.base_model,
+			m.model_version
+		FROM ` + r.Name + `.inference_requests req
+		JOIN ` + r.Name + `.inference_models m ON m.model_id = req.model_id
+		WHERE req.request_id = @request_id
+		  AND (@dataset_id::uuid IS NULL OR req.dataset_id = @dataset_id)
+		  AND (@model_id::uuid IS NULL OR req.model_id = @model_id)
+		  AND req.model_id IS NOT NULL
+		  AND m.adapter_uri <> ''
+	), eligible_examples AS (
+		SELECT DISTINCT ON (p.prompt_text, p.accepted_answer, p.rejected_answer)
 			p.preference_example_id::text,
 			p.feedback_id::text,
 			p.request_id::text,
-			p.dataset_id::text,
-			p.model_id::text,
-			p.prompt_text,
-			p.accepted_answer,
-			p.rejected_answer,
+				p.dataset_id::text,
+				p.model_id::text,
+				CASE WHEN substr(md5(p.preference_example_id::text), 1, 1) IN ('0', '1', '2') THEN 'EVAL' ELSE 'TRAIN' END AS split,
+				p.prompt_text,
+				p.accepted_answer,
+				p.rejected_answer,
 			p.rating,
 			p.feedback_label,
 			p.created_at
@@ -118,30 +159,45 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 		JOIN request_scope s ON s.dataset_id = p.dataset_id AND s.model_id = p.model_id
 		WHERE p.accepted_answer <> ''
 		  AND p.rejected_answer <> ''
-		ORDER BY p.created_at DESC
-		LIMIT @limit
-	)
+			  AND p.feedback_label = 'REJECTED'
+			  AND p.rating < 0
+			ORDER BY p.prompt_text, p.accepted_answer, p.rejected_answer, p.created_at DESC, p.preference_example_id DESC
+		), limited_examples AS (
+			SELECT
+				preference_example_id, feedback_id, request_id, dataset_id, model_id,
+				split, prompt_text, accepted_answer, rejected_answer, rating, feedback_label, created_at
+			FROM eligible_examples
+			ORDER BY created_at DESC, preference_example_id DESC
+			LIMIT @limit
+		)
 	SELECT
 		s.dataset_id::text,
 		s.model_id::text,
+		s.adapter_uri,
+		s.base_model,
+		s.model_version,
 		COALESCE((
 			SELECT jsonb_agg(jsonb_build_object(
 				'preference_example_id', e.preference_example_id,
 				'feedback_id', e.feedback_id,
-				'request_id', e.request_id,
-				'dataset_id', e.dataset_id,
-				'model_id', e.model_id,
-				'prompt_text', e.prompt_text,
-				'accepted_answer', e.accepted_answer,
-				'rejected_answer', e.rejected_answer,
+					'request_id', e.request_id,
+					'dataset_id', e.dataset_id,
+					'model_id', e.model_id,
+					'split', e.split,
+					'prompt_text', e.prompt_text,
+					'accepted_answer', e.accepted_answer,
+					'rejected_answer', e.rejected_answer,
 				'rating', e.rating,
 				'feedback_label', e.feedback_label
-			) ORDER BY e.created_at)
-			FROM limited_examples e
-		), '[]'::jsonb)::text
+				) ORDER BY e.created_at, e.preference_example_id)
+				FROM limited_examples e
+			), '[]'::jsonb)::text
 	FROM request_scope s`
 	row := r.Pool.QueryRow(ctx, query, preferenceDatasetArgs(request))
-	if err := row.Scan(&datasetID, &modelID, &raw); err != nil {
+	parentAdapterURI := ""
+	parentBaseModel := ""
+	parentModelVersion := 0
+	if err := row.Scan(&datasetID, &modelID, &parentAdapterURI, &parentBaseModel, &parentModelVersion, &raw); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, domain.ErrValidationFailed.Extend("preference dataset request does not match an inference request with a model")
 		}
@@ -151,13 +207,54 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	examples = ensurePreferenceTrainingSplit(examples)
 	return &model.PreferenceDataset{
-		RequestID: request.RequestID,
-		DatasetID: uuid.MustParse(datasetID),
-		ModelID:   uuid.MustParse(modelID),
-		OutputURI: request.OutputURI,
-		Examples:  examples,
+		RequestID:          request.RequestID,
+		DatasetID:          uuid.MustParse(datasetID),
+		ModelID:            uuid.MustParse(modelID),
+		ParentAdapterURI:   parentAdapterURI,
+		ParentBaseModel:    parentBaseModel,
+		ParentModelVersion: parentModelVersion,
+		OutputURI:          request.OutputURI,
+		Format:             "DPO_JSONL",
+		EligibilityPolicy:  "complete_rejected_pairs_by_source_model_v1",
+		MinExamples:        request.MinExamples,
+		Limit:              request.Limit,
+		Examples:           examples,
 	}, nil
+}
+
+func (r *InferenceFeedbackRepository) RecordPreferenceDatasetSnapshot(ctx context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+	log.Trace("InferenceFeedbackRepository RecordPreferenceDatasetSnapshot")
+
+	err := r.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		query := `INSERT INTO ` + r.Name + `.preference_dataset_snapshots (
+				preference_dataset_id, dataset_id, model_id, parent_adapter_uri, parent_base_model,
+				parent_model_version, source_request_id, output_uri, evaluation_output_uri,
+				format, eligibility_policy, example_count, min_examples, limit_count
+			) VALUES (
+				@preference_dataset_id, @dataset_id, @model_id, @parent_adapter_uri, @parent_base_model,
+				@parent_model_version, @source_request_id, @output_uri, @evaluation_output_uri,
+				@format, @eligibility_policy, @example_count, @min_examples, @limit_count
+			)
+		ON CONFLICT (preference_dataset_id) DO NOTHING`
+		if _, err := tx.Exec(ctx, query, preferenceDatasetSnapshotArgs(dataset, request)); err != nil {
+			return fmt.Errorf("record preference dataset snapshot: %w", err)
+		}
+		if r.outbox != nil {
+			if err := r.outbox.EnqueueTx(ctx, tx, preferenceDatasetReadyMessage(r.topic, dataset, request)); err != nil {
+				return fmt.Errorf("enqueue preference dataset ready: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if r.outbox != nil && r.outboxSignal != nil {
+		r.outboxSignal()
+	}
+	return dataset, nil
 }
 
 func feedbackArgs(feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) pgx.NamedArgs {
@@ -191,6 +288,83 @@ func preferenceDatasetArgs(request model.PreferenceDatasetExportRequest) pgx.Nam
 	}
 }
 
+func preferenceDatasetSnapshotArgs(dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) pgx.NamedArgs {
+	log.Trace("preferenceDatasetSnapshotArgs")
+
+	return pgx.NamedArgs{
+		"preference_dataset_id": nullableUUID(dataset.PreferenceDatasetID),
+		"dataset_id":            nullableUUID(dataset.DatasetID),
+		"model_id":              nullableUUID(dataset.ModelID),
+		"parent_adapter_uri":    strings.TrimSpace(dataset.ParentAdapterURI),
+		"parent_base_model":     strings.TrimSpace(dataset.ParentBaseModel),
+		"parent_model_version":  dataset.ParentModelVersion,
+		"source_request_id":     nullableUUID(dataset.RequestID),
+		"output_uri":            strings.TrimSpace(dataset.OutputURI),
+		"evaluation_output_uri": strings.TrimSpace(dataset.EvaluationOutputURI),
+		"format":                strings.TrimSpace(dataset.Format),
+		"eligibility_policy":    strings.TrimSpace(dataset.EligibilityPolicy),
+		"example_count":         dataset.ExampleCount(),
+		"min_examples":          request.MinExamples,
+		"limit_count":           request.Limit,
+	}
+}
+
+func preferenceDatasetReadyMessage(topic string, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) msgConn.OutboundMessage {
+	log.Trace("preferenceDatasetReadyMessage")
+
+	payload := mustMarshal(&inferencepb.PreferenceDatasetReadyEvent{
+		PreferenceDatasetId: dataset.PreferenceDatasetID.String(),
+		DatasetId:           dataset.DatasetID.String(),
+		ModelId:             dataset.ModelID.String(),
+		SourceRequestId:     dataset.RequestID.String(),
+		OutputUri:           strings.TrimSpace(dataset.OutputURI),
+		EvaluationOutputUri: strings.TrimSpace(dataset.EvaluationOutputURI),
+		ExampleCount:        int32(dataset.ExampleCount()),
+		Format:              strings.TrimSpace(dataset.Format),
+		MinExamples:         int32(request.MinExamples),
+		Limit:               int32(request.Limit),
+		ParentAdapterUri:    strings.TrimSpace(dataset.ParentAdapterURI),
+		ParentBaseModel:     strings.TrimSpace(dataset.ParentBaseModel),
+		ParentModelVersion:  int32(dataset.ParentModelVersion),
+	})
+	return msgConn.OutboundMessage{
+		Topic: topic,
+		Message: msgConn.Message{
+			ResourceKey: dataset.DatasetID,
+			MsgType:     msgConn.MsgTypePreferenceDatasetReady,
+			Payload:     payload,
+		},
+		DispatchKey: "preference_dataset_ready:" + dataset.PreferenceDatasetID.String(),
+	}
+}
+
+func ensurePreferenceTrainingSplit(examples []model.PreferenceExample) []model.PreferenceExample {
+	log.Trace("ensurePreferenceTrainingSplit")
+
+	if len(examples) == 0 {
+		return examples
+	}
+	for _, example := range examples {
+		if example.Split == "" || example.Split == "TRAIN" {
+			return examples
+		}
+	}
+	out := make([]model.PreferenceExample, len(examples))
+	copy(out, examples)
+	out[0].Split = "TRAIN"
+	return out
+}
+
+func mustMarshal(payload proto.Message) []byte {
+	log.Trace("mustMarshal")
+
+	out, err := proto.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
 func scanInferenceFeedback(row pgx.Row) (*model.InferenceFeedback, error) {
 	log.Trace("scanInferenceFeedback")
 
@@ -222,6 +396,7 @@ func decodePreferenceExamples(raw string) ([]model.PreferenceExample, error) {
 		RequestID           string `json:"request_id"`
 		DatasetID           string `json:"dataset_id"`
 		ModelID             string `json:"model_id"`
+		Split               string `json:"split"`
 		PromptText          string `json:"prompt_text"`
 		AcceptedAnswer      string `json:"accepted_answer"`
 		RejectedAnswer      string `json:"rejected_answer"`
@@ -239,6 +414,7 @@ func decodePreferenceExamples(raw string) ([]model.PreferenceExample, error) {
 			RequestID:           uuid.MustParse(row.RequestID),
 			DatasetID:           uuid.MustParse(row.DatasetID),
 			ModelID:             uuid.MustParse(row.ModelID),
+			Split:               strings.TrimSpace(row.Split),
 			PromptText:          row.PromptText,
 			AcceptedAnswer:      row.AcceptedAnswer,
 			RejectedAnswer:      row.RejectedAnswer,

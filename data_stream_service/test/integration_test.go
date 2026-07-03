@@ -20,7 +20,7 @@ import (
 
 	"data_stream_service/pkg/infra"
 	"data_stream_service/pkg/infra/network/data"
-	dataregistrypb "lib/data_contracts_lib/data_registry_service"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
 )
 
 func TestDataStreamIntegration(t *testing.T) {

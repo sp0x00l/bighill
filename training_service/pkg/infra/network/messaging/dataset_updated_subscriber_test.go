@@ -7,7 +7,8 @@ import (
 	"training_service/pkg/domain/model"
 	trainingmessaging "training_service/pkg/infra/network/messaging"
 
-	datasetpb "lib/data_contracts_lib/dataset"
+	datasetpb "lib/data_contracts_lib/data_registry"
+	inferencepb "lib/data_contracts_lib/inference"
 	shared "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -99,12 +100,106 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 	})
 })
 
+var _ = Describe("PreferenceDatasetReadyEventListener", func() {
+	It("starts DPO training from a preference dataset artifact", func() {
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		preferenceDatasetID := uuid.New()
+		sourceRequestID := uuid.New()
+		starter := &recordingTrainingWorkflowStarter{}
+		profile := trainingProfile()
+		listener := trainingmessaging.NewPreferenceDatasetReadyEventListener(starter, "mistral-7b", profile, "ragas")
+
+		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
+			PreferenceDatasetId: preferenceDatasetID.String(),
+			DatasetId:           datasetID.String(),
+			ModelId:             modelID.String(),
+			SourceRequestId:     sourceRequestID.String(),
+			OutputUri:           "s3://local-dev-bucket/preferences/dpo.jsonl",
+			EvaluationOutputUri: "s3://local-dev-bucket/preferences/dpo-eval.jsonl",
+			ExampleCount:        12,
+			Format:              "DPO_JSONL",
+			MinExamples:         10,
+			Limit:               1000,
+			ParentAdapterUri:    "s3://models/parent-adapter",
+			ParentBaseModel:     "mistral-7b",
+			ParentModelVersion:  7,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(starter.calls).To(Equal(1))
+		Expect(starter.request.DatasetID).To(Equal(datasetID.String()))
+		Expect(starter.request.DatasetVersion).To(Equal(""))
+		Expect(starter.request.FeatureSnapshotID).To(Equal(""))
+		Expect(starter.request.PreferenceDatasetID).To(Equal(preferenceDatasetID.String()))
+		Expect(starter.request.PreferenceDatasetURI).To(Equal("s3://local-dev-bucket/preferences/dpo.jsonl"))
+		Expect(starter.request.ParentModelID).To(Equal(modelID.String()))
+		Expect(starter.request.ParentModelVersion).To(Equal("7"))
+		Expect(starter.request.ParentAdapterURI).To(Equal("s3://models/parent-adapter"))
+		Expect(starter.request.ModelVersion).To(Equal("8"))
+		Expect(starter.request.BaseModel).To(Equal("mistral-7b"))
+		Expect(starter.request.EvaluationProfile).To(Equal(`{"dataset_mode":"heldout_preference","dataset_uri":"s3://local-dev-bucket/preferences/dpo-eval.jsonl","evaluator_name":"ragas","evaluator_version":"v1","metric_suite":"preference"}`))
+		Expect(starter.request.TrainingProfile.Trainer).To(Equal("dpo"))
+		Expect(starter.request.TrainingProfile.PreferenceDatasetURI).To(Equal("s3://local-dev-bucket/preferences/dpo.jsonl"))
+	})
+
+	It("does not start DPO training below the minimum example threshold", func() {
+		datasetID := uuid.New()
+		starter := &recordingTrainingWorkflowStarter{}
+		listener := trainingmessaging.NewPreferenceDatasetReadyEventListener(starter, "mistral-7b", trainingProfile(), "ragas")
+
+		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
+			PreferenceDatasetId: uuid.NewString(),
+			DatasetId:           datasetID.String(),
+			ModelId:             uuid.NewString(),
+			SourceRequestId:     uuid.NewString(),
+			OutputUri:           "s3://local-dev-bucket/preferences/dpo.jsonl",
+			EvaluationOutputUri: "s3://local-dev-bucket/preferences/dpo-eval.jsonl",
+			ExampleCount:        3,
+			Format:              "DPO_JSONL",
+			MinExamples:         10,
+			Limit:               1000,
+			ParentAdapterUri:    "s3://models/parent-adapter",
+			ParentBaseModel:     "mistral-7b",
+			ParentModelVersion:  7,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(starter.calls).To(Equal(0))
+	})
+
+	It("treats missing parent metadata as retryable", func() {
+		datasetID := uuid.New()
+		starter := &recordingTrainingWorkflowStarter{}
+		listener := trainingmessaging.NewPreferenceDatasetReadyEventListener(starter, "mistral-7b", trainingProfile(), "ragas")
+
+		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
+			PreferenceDatasetId: uuid.NewString(),
+			DatasetId:           datasetID.String(),
+			ModelId:             uuid.NewString(),
+			SourceRequestId:     uuid.NewString(),
+			OutputUri:           "s3://local-dev-bucket/preferences/dpo.jsonl",
+			ExampleCount:        12,
+			Format:              "DPO_JSONL",
+			MinExamples:         10,
+			Limit:               1000,
+			ParentBaseModel:     "mistral-7b",
+			ParentModelVersion:  7,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(shared.IsNonRetryable(err)).To(BeFalse())
+		Expect(starter.calls).To(Equal(0))
+	})
+})
+
 func trainingProfile() model.TrainingProfile {
 	return model.TrainingProfile{
 		Name:                      "profile-v1",
 		Trainer:                   "sft",
 		Adapter:                   "qlora",
 		Quantization:              "4bit",
+		DPOBeta:                   0.1,
 		SequenceLength:            2048,
 		SamplePacking:             true,
 		LearningRate:              0.0002,

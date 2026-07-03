@@ -88,6 +88,16 @@ func (p *recordingEmbeddingProcessor) MaterializeEmbeddings(_ context.Context, _
 	return &out, nil
 }
 
+type recordingDataStreamReader struct {
+	request  materialization.DataStreamReadRequest
+	artifact *materialization.ParquetArtifact
+}
+
+func (r *recordingDataStreamReader) ReadParquet(_ context.Context, request materialization.DataStreamReadRequest) (*materialization.ParquetArtifact, error) {
+	r.request = request
+	return r.artifact, nil
+}
+
 type fakeDocumentExtractor struct{}
 
 func (e fakeDocumentExtractor) Name() string {
@@ -201,6 +211,44 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(store.writes[result.StorageLocation]).NotTo(BeEmpty())
 	})
 
+	It("writes a ready raw snapshot from a data stream connector dataset", func() {
+		ctx := context.Background()
+		store := newMemoryArtifactStore()
+		datasetFile := validDatasetFile()
+		datasetFile.StorageLocation = ""
+		datasetFile.SourceType = "postgres"
+		datasetFile.SourceConnectorID = uuid.New()
+		datasetFile.SourceQuery = "SELECT title FROM movies"
+		rawSnapshot := validRawSnapshot(datasetFile)
+		reader := &recordingDataStreamReader{
+			artifact: &materialization.ParquetArtifact{
+				Data:           []byte("PAR1fakePAR1"),
+				SchemaVersion:  1,
+				SchemaMetadata: `{"format":"arrow","rows":2,"source_format":"data_stream","source_type":"postgres","source_connector_id":"connector-1","source_query":"SELECT title FROM movies","source_read_at":"2026-07-03T00:00:00Z"}`,
+				RowCount:       2,
+			},
+		}
+		writer := materialization.NewDataStreamRawSnapshotWriter(store, reader)
+
+		result, err := writer.WriteRawSnapshot(ctx, datasetFile, rawSnapshot)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(writer.SupportsRawSnapshot(datasetFile)).To(BeTrue())
+		Expect(result.Status).To(Equal(model.SnapshotStatusReady))
+		Expect(result.StorageLocation).To(ContainSubstring("lakehouse/raw/"))
+		Expect(result.ContentType).To(Equal("application/vnd.apache.parquet"))
+		Expect(result.FileExtension).To(Equal("parquet"))
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"rows":2`))
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"source_format":"data_stream"`))
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"source_type":"postgres"`))
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"source_query":"SELECT title FROM movies"`))
+		Expect(store.writes[result.StorageLocation]).To(Equal([]byte("PAR1fakePAR1")))
+		Expect(reader.request.UserID).To(Equal(datasetFile.UserID.String()))
+		Expect(reader.request.SourceType).To(Equal("postgres"))
+		Expect(reader.request.SourceConnectorID).To(Equal(datasetFile.SourceConnectorID.String()))
+		Expect(reader.request.SQL).To(Equal("SELECT title FROM movies"))
+	})
+
 	It("builds a feature snapshot artifact", func() {
 		ctx := context.Background()
 		store := newMemoryArtifactStore()
@@ -292,6 +340,18 @@ var _ = Describe("Materialization adapters", func() {
 			{ChunkIndex: 0, Text: "one two three"},
 			{ChunkIndex: 1, Text: "three four five"},
 		}))
+	})
+
+	It("chunks structured rows with heading context", func() {
+		strategy := model.EmbeddingStrategy{ChunkerName: "go-structure-aware-token-window", ChunkSize: 16, ChunkOverlap: 0}
+		chunker := materialization.NewStructureAwareTokenWindowChunker(strategy)
+
+		chunks, err := chunker.Chunk(context.Background(), []string{"# Risks\nMarket risk increased"})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(chunks).To(HaveLen(1))
+		Expect(chunks[0].Text).To(ContainSubstring("Section: Risks"))
+		Expect(chunks[0].Text).To(ContainSubstring("Market risk increased"))
 	})
 
 	It("embeds through a TEI-compatible HTTP service", func() {
