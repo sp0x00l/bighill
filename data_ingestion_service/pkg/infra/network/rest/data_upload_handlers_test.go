@@ -3,6 +3,7 @@ package rest_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -19,13 +20,45 @@ import (
 )
 
 type stubUploadUseCase struct {
-	receivedUpload *model.DataFile
-	err            error
+	receivedUpload          *model.DataFile
+	receivedInitiateRequest model.InitiateUploadSessionRequest
+	receivedCompleteRequest model.CompleteUploadSessionRequest
+	initiateResult          *model.InitiatedUploadSession
+	completeResult          *model.UploadSession
+	err                     error
 }
 
 func (s *stubUploadUseCase) UploadFile(_ context.Context, upload *model.DataFile) error {
 	s.receivedUpload = upload
 	return s.err
+}
+
+func (s *stubUploadUseCase) InitiateUploadSession(_ context.Context, request model.InitiateUploadSessionRequest) (*model.InitiatedUploadSession, error) {
+	s.receivedInitiateRequest = request
+	if s.initiateResult == nil {
+		s.initiateResult = &model.InitiatedUploadSession{
+			UploadID: request.DatasetID,
+			URL:      "local-s3://local-dev-bucket",
+			Fields:   map[string]string{"key": "staging/file.csv"},
+		}
+	}
+	return s.initiateResult, s.err
+}
+
+func (s *stubUploadUseCase) CompleteUploadSession(_ context.Context, request model.CompleteUploadSessionRequest) (*model.UploadSession, error) {
+	s.receivedCompleteRequest = request
+	if s.completeResult == nil {
+		s.completeResult = &model.UploadSession{
+			UploadID:        request.UploadID,
+			DatasetID:       uuid.New(),
+			UserID:          request.UserID,
+			StorageLocation: "s3://local-dev-bucket/raw/file.csv",
+			Status:          model.UploadSessionPromoted,
+			Checksum:        "checksum",
+			ActualSizeBytes: 12,
+		}
+	}
+	return s.completeResult, s.err
 }
 
 type stubDatasetUsecase struct {
@@ -127,6 +160,42 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(uploadUseCase.receivedUpload.ProcessingProfile).To(Equal("TEXT_RAG"))
 	})
 
+	It("initiates a presigned upload session after validating ownership", func() {
+		req := newInitiateRequest(datasetID, []byte(`{"file_name":"dataset.csv","declared_format":"csv","content_type":"text/csv","declared_size_bytes":512,"client_nonce":"retry-1"}`))
+
+		response, err := handler.InitiateUploadSession(context.Background(), req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.StatusCode()).To(Equal(http.StatusCreated))
+		Expect(authenticator.called).To(BeTrue())
+		Expect(datasetUseCase.receivedDatasetID).To(Equal(datasetID))
+		Expect(uploadUseCase.receivedInitiateRequest.DatasetID).To(Equal(datasetID))
+		Expect(uploadUseCase.receivedInitiateRequest.UserID).To(Equal(userID))
+		Expect(uploadUseCase.receivedInitiateRequest.DeclaredFormat).To(Equal("csv"))
+		Expect(uploadUseCase.receivedInitiateRequest.DeclaredContentType).To(Equal("text/csv"))
+		Expect(uploadUseCase.receivedInitiateRequest.ClientNonce).To(Equal("retry-1"))
+		var body map[string]any
+		Expect(json.Unmarshal(response.Payload(), &body)).To(Succeed())
+		Expect(body).To(HaveKeyWithValue("url", "local-s3://local-dev-bucket"))
+	})
+
+	It("completes an upload session for the authenticated user", func() {
+		uploadID := uuid.New()
+		req := httptest.NewRequest(http.MethodPost, "/v1/data/uploads/"+uploadID.String()+"/complete", nil)
+		req = mux.SetURLVars(req, map[string]string{"id": uploadID.String()})
+
+		response, err := handler.CompleteUploadSession(context.Background(), req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.StatusCode()).To(Equal(http.StatusCreated))
+		Expect(uploadUseCase.receivedCompleteRequest.UploadID).To(Equal(uploadID))
+		Expect(uploadUseCase.receivedCompleteRequest.UserID).To(Equal(userID))
+		var body map[string]any
+		Expect(json.Unmarshal(response.Payload(), &body)).To(Succeed())
+		Expect(body).To(HaveKeyWithValue("storage_location", "s3://local-dev-bucket/raw/file.csv"))
+		Expect(body).To(HaveKeyWithValue("status", string(model.UploadSessionPromoted)))
+	})
+
 	It("accepts PDF uploads at the REST boundary", func() {
 		detector.fileType = serviceRest.FileTypePDF
 		detector.contentType = "application/pdf"
@@ -212,5 +281,11 @@ func newUploadRequest(datasetID uuid.UUID, filename string, content []byte) *htt
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/data/store/"+datasetID.String(), body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return mux.SetURLVars(req, map[string]string{"id": datasetID.String()})
+}
+
+func newInitiateRequest(datasetID uuid.UUID, content []byte) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/v1/data/uploads/"+datasetID.String(), bytes.NewReader(content))
+	req.Header.Set("Content-Type", "application/json")
 	return mux.SetURLVars(req, map[string]string{"id": datasetID.String()})
 }

@@ -118,6 +118,7 @@ var _ = Describe("NewRouter", func() {
 		client.responses = []*http.Response{
 			responseWithBody(http.StatusOK, `{"datasets":[]}`),
 			responseWithBody(http.StatusAccepted, `{"upload":"accepted"}`),
+			responseWithBody(http.StatusCreated, `{"upload_id":"session-1"}`),
 		}
 		handler := testRouter(client)
 
@@ -138,10 +139,21 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ingestionResp.StatusCode).To(Equal(http.StatusAccepted))
 
-		Expect(client.requests).To(HaveLen(2))
+		sessionResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodPost,
+			Path:       "/v1/data/uploads/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			Body:       `{"file_name":"dataset.csv"}`,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessionResp.StatusCode).To(Equal(http.StatusCreated))
+
+		Expect(client.requests).To(HaveLen(3))
 		Expect(client.requests[0].url).To(Equal("http://data-registry.service/v1/data/registry"))
 		Expect(client.requests[1].url).To(Equal("http://data-ingestion.service/v1/data/store/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
 		Expect(client.requests[1].body).To(Equal("file-bytes"))
+		Expect(client.requests[2].url).To(Equal("http://data-ingestion.service/v1/data/uploads/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[2].body).To(Equal(`{"file_name":"dataset.csv"}`))
 	})
 
 	It("forwards authenticated user and session context to profile logout", func() {

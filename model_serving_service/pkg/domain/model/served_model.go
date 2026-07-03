@@ -18,6 +18,7 @@ type ServedModel struct {
 	AdapterURI       string
 	ServingTarget    string
 	ServingModel     string
+	Status           *ServedModelStatus
 }
 
 type ServingRuntimeState struct {

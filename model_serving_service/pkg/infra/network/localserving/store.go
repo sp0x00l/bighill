@@ -101,6 +101,10 @@ func recordToServedModel(record localstore.Record) (*model.ServedModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid local dataset id: %w", domain.ErrValidationFailed, err)
 	}
+	status, err := recordStatusToServedModelStatus(record.Status)
+	if err != nil {
+		return nil, err
+	}
 	return &model.ServedModel{
 		ResourceName:     record.Name,
 		Namespace:        record.Namespace,
@@ -117,6 +121,27 @@ func recordToServedModel(record localstore.Record) (*model.ServedModel, error) {
 		AdapterURI:       record.Spec.AdapterURI,
 		ServingTarget:    record.Spec.ServingTarget,
 		ServingModel:     record.Spec.ServingModel,
+		Status:           status,
+	}, nil
+}
+
+func recordStatusToServedModelStatus(status localstore.Status) (*model.ServedModelStatus, error) {
+	log.Trace("recordStatusToServedModelStatus")
+
+	if status.ServingLoadStatus == "" {
+		return nil, nil
+	}
+	loadStatus, err := model.ToModelLoadStatus(status.ServingLoadStatus)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid local served model load status: %w", domain.ErrValidationFailed, err)
+	}
+	return &model.ServedModelStatus{
+		ServingLoadStatus:  loadStatus,
+		ServingTarget:      status.ServingTarget,
+		ServingModel:       status.ServingModel,
+		FailureReason:      status.FailureReason,
+		ObservedGeneration: status.ObservedGeneration,
+		ReadyReplicas:      status.ReadyReplicas,
 	}, nil
 }
 

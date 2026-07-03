@@ -60,7 +60,7 @@ var _ = Describe("dlq infrastructure", func() {
 
 	BeforeEach(func() {
 		mockSQS = NewMockSQSClient()
-		dlqURL = "https://sqs.us-east-1.amazonaws.com/123456789012/exchange-dlq"
+		dlqURL = "https://sqs.us-east-1.amazonaws.com/123456789012/bighill-dlq"
 		dlq = messaging.Dlq{
 			SQS:    mockSQS,
 			DlqURL: dlqURL,

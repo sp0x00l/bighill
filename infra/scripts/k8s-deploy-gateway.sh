@@ -120,14 +120,14 @@ update_lambda_code() {
 
   local API_FUNCTION_NAME=$(aws cloudformation describe-stack-resources \
     --stack-name "$STACK_NAME" \
-    --logical-resource-id ExchangeApiFunction \
+    --logical-resource-id BighillApiFunction \
     --query 'StackResources[0].PhysicalResourceId' \
     --output text \
     --region "$REGION_ARG")
 
   local AUTH_FUNCTION_NAME=$(aws cloudformation describe-stack-resources \
     --stack-name "$STACK_NAME" \
-    --logical-resource-id ExchangeAuthFunction \
+    --logical-resource-id BighillAuthFunction \
     --query 'StackResources[0].PhysicalResourceId' \
     --output text \
     --region "$REGION_ARG")

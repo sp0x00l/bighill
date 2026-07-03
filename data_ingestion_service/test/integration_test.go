@@ -53,15 +53,18 @@ func (a testAuthenticator) Authenticate(context.Context, *http.Request) (resthan
 
 var _ = Describe("Data ingestion integration", Ordered, func() {
 	var (
-		ctx        context.Context
-		cancel     context.CancelFunc
-		database   *dbconn.Database
-		datasetDB  *repo.DatasetDB
-		datasets   *usecase.DatasetUsecase
-		uploader   resthandler.DataUploadUseCase
-		topic      string
-		brokers    string
-		msgFactory messaging.Messenger
+		ctx          context.Context
+		cancel       context.CancelFunc
+		database     *dbconn.Database
+		datasetDB    *repo.DatasetDB
+		datasets     *usecase.DatasetUsecase
+		uploader     resthandler.DataUploadUseCase
+		objectBucket *corebucket.S3Bucket
+		topic        string
+		brokers      string
+		msgFactory   messaging.Messenger
+		relayCancel  context.CancelFunc
+		relayDone    chan struct{}
 	)
 
 	BeforeAll(func() {
@@ -85,13 +88,56 @@ var _ = Describe("Data ingestion integration", Ordered, func() {
 			Brokers: brokers,
 			GroupID: "data-ingestion-integration-" + uuid.NewString(),
 		}, cancel)
-		publisher, err := msgFactory.Publisher(ctx)
+		relayPublisher, err := msgFactory.Publisher(ctx)
 		Expect(err).NotTo(HaveOccurred())
 
 		datasetDB = repo.NewDatasetDB(database)
 		datasets = usecase.NewDatasetUseCase(datasetDB)
-		uploadBucket := bucket.NewDataBucket("local-dev-bucket", corebucket.NewBucket(ctx, corebucket.LocalDevS3Region, 10*1024*1024))
-		uploader = usecase.NewDataUploadUseCase(uploadBucket, usecase.WithUploadEventPublisher(publisher, topic))
+		objectBucket = corebucket.NewBucket(ctx, corebucket.LocalDevS3Region, 10*1024*1024)
+		uploadBucket := bucket.NewDataBucket("local-dev-bucket", objectBucket)
+		outboxWriter, err := messaging.NewPostgresOutbox(database.Pool, database.Name, "")
+		Expect(err).NotTo(HaveOccurred())
+		orderedOutbox, ok := outboxWriter.(messaging.OrderedOutbox)
+		Expect(ok).To(BeTrue())
+		outboxSignal := make(chan struct{}, 1)
+		signaledOutbox := messaging.NewSignaledOutbox(outboxWriter, outboxSignal)
+		relayOutbox, ok := signaledOutbox.(messaging.RelayOutbox)
+		Expect(ok).To(BeTrue())
+		relayPublisherForOutbox, ok := relayPublisher.(messaging.RelayPublisher)
+		Expect(ok).To(BeTrue())
+		relayCtx, stopRelay := context.WithCancel(ctx)
+		relayCancel = stopRelay
+		relayDone = make(chan struct{})
+		relay := messaging.NewOutboxRelay(relayOutbox, relayPublisherForOutbox, messaging.OutboxRelayConfig{
+			PollInterval:   100 * time.Millisecond,
+			FailureBackoff: 100 * time.Millisecond,
+			BatchSize:      10,
+			Signal:         outboxSignal,
+		})
+		go func() {
+			defer close(relayDone)
+			_ = relay.Run(relayCtx)
+		}()
+		uploadSessionRepo := repo.NewUploadSessionDB(
+			database,
+			repo.WithUploadSessionOutbox(orderedOutbox, topic),
+			repo.WithUploadSessionOutboxSignal(func() { messaging.NotifyOutboxSignal(outboxSignal) }),
+		)
+		detector := resthandler.NewDetector(map[string]resthandler.FormatValidatorFunc{
+			resthandler.FileTypeCSV:      resthandler.IsCSV,
+			resthandler.FileTypeJSON:     resthandler.IsJSON,
+			resthandler.FileTypeParquet:  resthandler.IsParquet,
+			resthandler.FileTypePDF:      resthandler.IsPDF,
+			resthandler.FileTypeHTML:     resthandler.IsHTML,
+			resthandler.FileTypeMarkdown: resthandler.IsMarkdown,
+			resthandler.FileTypeText:     resthandler.IsText,
+		})
+		uploader = usecase.NewDataUploadUseCase(uploadBucket,
+			usecase.WithUploadSessionRepository(uploadSessionRepo),
+			usecase.WithUploadDatasetRepository(datasetDB),
+			usecase.WithUploadFileDetector(detector),
+			usecase.WithUploadPolicy(20*1000*1000, 15*time.Minute, 5*1000*1000),
+		)
 	})
 
 	BeforeEach(func() {
@@ -99,6 +145,12 @@ var _ = Describe("Data ingestion integration", Ordered, func() {
 	})
 
 	AfterAll(func() {
+		if relayCancel != nil {
+			relayCancel()
+		}
+		if relayDone != nil {
+			<-relayDone
+		}
 		if msgFactory != nil {
 			_ = msgFactory.Close(ctx)
 		}
@@ -170,7 +222,60 @@ var _ = Describe("Data ingestion integration", Ordered, func() {
 		Expect(errors.As(err, &httpErr)).To(BeTrue())
 		Expect(noDatasetUploadedEvent(ctx, brokers, topic, datasetID, 1500*time.Millisecond)).To(BeTrue())
 	})
+
+	It("promotes a large presigned parquet upload and records a Kafka dataset_file_uploaded event", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID))).To(Succeed())
+
+		parquet := largeParquetObject(6*1000*1000 + 8)
+		initiated, err := uploader.InitiateUploadSession(ctx, model.InitiateUploadSessionRequest{
+			DatasetID:           datasetID,
+			UserID:              userID,
+			ClientNonce:         "large-parquet-" + datasetID.String(),
+			FileName:            "large report.parquet",
+			DeclaredFormat:      resthandler.FileTypeParquet,
+			DeclaredContentType: "application/vnd.apache.parquet",
+			DeclaredSizeBytes:   int64(len(parquet)),
+			TableNamespace:      "features",
+			TableName:           "large_parquet",
+			TableFormat:         "PARQUET",
+			CatalogProvider:     "LOCAL",
+			ProcessingProfile:   "TEXT_RAG",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		stagingKey := initiated.Fields["key"]
+		Expect(stagingKey).To(ContainSubstring("large report.parquet"))
+
+		Expect(objectBucket.Upload(ctx, "local-dev-bucket", stagingKey, "application/vnd.apache.parquet", bytes.NewReader(parquet))).To(Succeed())
+
+		completed, err := uploader.CompleteUploadSession(ctx, model.CompleteUploadSessionRequest{
+			UploadID: initiated.UploadID,
+			UserID:   userID,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(completed.Status).To(Equal(model.UploadSessionPromoted))
+		Expect(completed.ActualSizeBytes).To(Equal(int64(len(parquet))))
+		Expect(completed.StorageLocation).To(HavePrefix("s3://local-dev-bucket/raw/" + datasetID.String() + "/" + initiated.UploadID.String() + "/"))
+
+		envelope, event := consumeDatasetUploadedEvent(ctx, brokers, topic, datasetID)
+		Expect(envelope.ResourceKey).To(Equal(datasetID))
+		Expect(event.FileExtension).To(Equal(resthandler.FileTypeParquet))
+		Expect(event.ContentType).To(Equal("application/vnd.apache.parquet"))
+		Expect(event.StorageLocation).To(Equal(completed.StorageLocation))
+		Expect(event.TableName).To(Equal("large_parquet"))
+	})
 })
+
+func largeParquetObject(size int) []byte {
+	if size < 8 {
+		size = 8
+	}
+	data := make([]byte, size)
+	copy(data[:4], []byte("PAR1"))
+	copy(data[len(data)-4:], []byte("PAR1"))
+	return data
+}
 
 func uploadRequest(datasetID uuid.UUID, filename string, content []byte) *http.Request {
 	body := &bytes.Buffer{}

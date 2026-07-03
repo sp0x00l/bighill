@@ -1,0 +1,18 @@
+provider: aws
+policy: sync
+registry: txt
+txtOwnerId: ${txt_owner_id}
+domainFilters:
+  - ${domain_filter}
+sources:
+  - ingress
+  - service
+serviceAccount:
+  create: true
+  name: ${service_account}
+  annotations:
+    eks.amazonaws.com/role-arn: ${service_account_arn}
+aws:
+  zoneType: private
+  preferCNAME: true
+  # Optional: set batch size / rate limits if needed

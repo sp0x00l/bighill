@@ -2,7 +2,7 @@ package data
 
 import (
 	"context"
-	domainErrors "data_stream_service/pkg/domain"
+	streamdomain "data_stream_service/pkg/domain"
 	"data_stream_service/pkg/infra"
 	registrygrpc "data_stream_service/pkg/infra/network/grpc"
 	"fmt"
@@ -82,7 +82,7 @@ func (e *registryQueryEngine) Execute(ctx context.Context, ticket *flight.Ticket
 
 	command := ticketCommand(ticket)
 	if strings.TrimSpace(command) == "" {
-		return nil, domainErrors.ErrValidationFailed.Extend("flight ticket requires query command")
+		return nil, streamdomain.ErrValidationFailed.Extend("flight ticket requires query command")
 	}
 	return e.executeCommand(ctx, command)
 }
@@ -97,11 +97,11 @@ func (e *registryQueryEngine) executeCommand(ctx context.Context, command string
 
 	connectorID, err := uuid.Parse(query.SourceConnectorID)
 	if err != nil || connectorID == uuid.Nil {
-		return nil, domainErrors.ErrValidationFailed.Extend("registry query command has invalid sourceConnectorId")
+		return nil, streamdomain.ErrValidationFailed.Extend("registry query command has invalid sourceConnectorId")
 	}
 	userID, err := uuid.Parse(query.UserID)
 	if err != nil || userID == uuid.Nil {
-		return nil, domainErrors.ErrValidationFailed.Extend("registry query command has invalid userId")
+		return nil, streamdomain.ErrValidationFailed.Extend("registry query command has invalid userId")
 	}
 
 	runCtx := ctx
@@ -111,24 +111,24 @@ func (e *registryQueryEngine) executeCommand(ctx context.Context, command string
 	}
 	defer cancel()
 
-	connector, err := e.registryClient.ReadSourceConnector(runCtx, connectorID, userID, query.SourceType)
+	connector, err := e.registryClient.ReadSourceConnector(runCtx, connectorID, userID, query.SourceType.String())
 	if err != nil {
 		return nil, err
 	}
 
 	switch query.SourceType {
-	case "postgres":
+	case streamdomain.SourceTypePostgres:
 		return e.executePostgres(runCtx, connector.GetPostgresConfig(), query.SQL)
-	case "mysql":
+	case streamdomain.SourceTypeMySQL:
 		return e.executeMySQL(runCtx, connector.GetMysqlConfig(), query.SQL)
-	case "clickhouse":
+	case streamdomain.SourceTypeClickHouse:
 		return e.executeClickHouse(runCtx, connector.GetClickhouseConfig(), query.SQL)
-	case "mongo":
+	case streamdomain.SourceTypeMongoDB:
 		return e.executeMongo(runCtx, connector.GetMongoConfig(), query)
-	case "oracle":
+	case streamdomain.SourceTypeOracle:
 		return e.executeOracle(runCtx, connector.GetOracleConfig(), query.SQL)
 	default:
-		return nil, domainErrors.ErrValidationFailed.Extend(fmt.Sprintf("unsupported source type %q", query.SourceType))
+		return nil, streamdomain.ErrValidationFailed.Extend(fmt.Sprintf("unsupported source type %q", query.SourceType.String()))
 	}
 }
 
@@ -136,7 +136,7 @@ func (e *registryQueryEngine) executePostgres(ctx context.Context, cfg *dataregi
 	log.Trace("registryQueryEngine executePostgres")
 
 	if cfg == nil {
-		return nil, domainErrors.ErrValidationFailed.Extend("source connector does not include postgres config")
+		return nil, streamdomain.ErrValidationFailed.Extend("source connector does not include postgres config")
 	}
 	connConfig, err := pgx.ParseConfig(postgresConnectionString(cfg))
 	if err != nil {

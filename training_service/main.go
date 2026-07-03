@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -51,12 +50,15 @@ type temporalConfig struct {
 }
 
 type healthConfig struct {
-	CpuThresholdPercentage        int
-	MemFreeThresholdPercent       int
-	HealthCheckPort               int
-	MessageBrokerConnectionString string
-	ServiceLatencyThreshold       time.Duration
-	MessageBrokerLatencyThreshold time.Duration
+	CpuThresholdPercentage                    int
+	MemFreeThresholdPercent                   int
+	HealthCheckPort                           int
+	MessageBrokerConnectionString             string
+	ServiceLatencyThreshold                   time.Duration
+	MessageBrokerLatencyThreshold             time.Duration
+	MessageBrokerSubscriberMaxPollSilence     time.Duration
+	MessageBrokerSubscriberMaxProgressSilence time.Duration
+	MessageBrokerSubscriberMaxLag             int64
 }
 
 type trainingExecutorConfig struct {
@@ -111,21 +113,20 @@ func main() {
 	}
 	defer temporalClient.Close()
 
-	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
+	publisherFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
 	defer func() {
-		_ = messagingFactory.Close(cancelCtx)
+		_ = publisherFactory.Close(cancelCtx)
 	}()
-	publisher, err := messagingFactory.Publisher(cancelCtx)
+	publisher, err := publisherFactory.Publisher(cancelCtx)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training publisher")
 	}
-	var subscriber messagingConn.Subscriber
-	if cfg.TrainingTriggerEnabled {
-		subscriber, err = messagingFactory.Subscriber(cancelCtx)
-		if err != nil {
-			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training subscriber")
+	subscriberFactories := []messagingConn.Messenger{}
+	defer func() {
+		for _, factory := range subscriberFactories {
+			_ = factory.Close(cancelCtx)
 		}
-	}
+	}()
 
 	trainingEventPublisher := trainingmessaging.NewTrainingEventPublisher(publisher, cfg.Topics)
 	activityOptions := []temporalworker.TrainingActivitiesOption{
@@ -159,6 +160,35 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
+		factory, monitor, err := messagingConn.StartStreamSubscriber(cancelCtx, messagingConn.StreamSubscriberConfig{
+			Brokers:          cfg.Messaging.Brokers,
+			DLQURL:           cfg.Messaging.DlqURL,
+			BaseGroupID:      cfg.Messaging.GroupID,
+			AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
+			Cancel:           cancelFtn,
+			Monitor:          healthCheck,
+			OnUnexpectedStop: func() { quit <- syscall.SIGTERM },
+		}, name, topics, configure)
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatalf("unable to create %s subscriber", name)
+		}
+		healthCheck = monitor
+		subscriberFactories = append(subscriberFactories, factory)
+	}
+
+	if cfg.TrainingTriggerEnabled {
+		workflowStarter := temporalworker.NewTrainingWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
+		startSubscriber("dataset-updated", []string{cfg.Topics.DataRegistry}, func(subscriber messagingConn.Subscriber) {
+			messagingConn.AddListener(subscriber, trainingmessaging.NewDatasetUpdatedEventListener(workflowStarter, cfg.BaseModel, cfg.Profile, cfg.EvaluationProfile))
+		})
+		startSubscriber("preference-dataset-ready", []string{cfg.Topics.Inference}, func(subscriber messagingConn.Subscriber) {
+			messagingConn.AddListener(subscriber, trainingmessaging.NewPreferenceDatasetReadyEventListener(workflowStarter, cfg.BaseModel, cfg.Profile, cfg.DPOEvaluationProfile))
+		})
+	} else {
+		log.WithContext(cancelCtx).Info("training trigger disabled; dataset materialization events will not start training workflows")
+	}
+
 	go func() {
 		if err := healthCheck.Connect(cancelCtx); err != nil {
 			if err != http.ErrServerClosed {
@@ -167,19 +197,6 @@ func main() {
 			quit <- syscall.SIGTERM
 		}
 	}()
-
-	if cfg.TrainingTriggerEnabled {
-		workflowStarter := temporalworker.NewTrainingWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
-		datasetUpdatedSubscriber := trainingmessaging.NewDatasetUpdatedSubscriber(subscriber, workflowStarter, cfg.Topics, cfg.BaseModel, cfg.Profile, cfg.EvaluationProfile, cfg.DPOEvaluationProfile)
-		go func() {
-			if err := datasetUpdatedSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
-				log.WithContext(cancelCtx).WithError(err).Error("dataset updated subscriber stopped unexpectedly")
-				quit <- syscall.SIGTERM
-			}
-		}()
-	} else {
-		log.WithContext(cancelCtx).Info("training trigger disabled; dataset materialization events will not start training workflows")
-	}
 
 	log.WithContext(cancelCtx).WithFields(log.Fields{
 		"temporal_address":    cfg.Temporal.Address,
@@ -206,9 +223,10 @@ func readTrainingConfig() trainingConfig {
 			TaskQueue: env.WithDefaultString("TRAINING_SERVICE_TEMPORAL_TASK_QUEUE", app.DefaultTrainingWorkflowTaskQueue),
 		},
 		Messaging: messagingConn.MessengerConfig{
-			DlqURL:  env.WithDefaultString("TRAINING_SERVICE_DLQ", "http://localhost:4566/training-dev-env-queue/"),
-			GroupID: env.WithDefaultString("TRAINING_SERVICE_KAFKA_GROUP_ID", "training-group"),
-			Brokers: brokers,
+			DlqURL:          env.WithDefaultString("TRAINING_SERVICE_DLQ", "http://localhost:4566/training-dev-env-queue/"),
+			GroupID:         env.WithDefaultString("TRAINING_SERVICE_KAFKA_BASE_GROUP_ID", "training"),
+			Brokers:         brokers,
+			AutoOffsetReset: env.WithDefaultString("TRAINING_SERVICE_KAFKA_AUTO_OFFSET_RESET", "earliest"),
 		},
 		Topics: trainingmessaging.TrainingTopics{
 			DataRegistry: env.WithDefaultString("TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
@@ -264,12 +282,15 @@ func readTrainingConfig() trainingConfig {
 			ServingLoadStatus:       env.WithDefaultString("TRAINING_SERVICE_SERVING_LOAD_STATUS", "NOT_LOADED"),
 		},
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercent:       env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_PORT", "5058"),
-			MessageBrokerConnectionString: brokers,
-			ServiceLatencyThreshold:       secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
-			MessageBrokerLatencyThreshold: secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			CpuThresholdPercentage:                    env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercent:                   env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:                           env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_PORT", "5058"),
+			MessageBrokerConnectionString:             brokers,
+			ServiceLatencyThreshold:                   secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold:             secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerSubscriberMaxPollSilence:     secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS", "30"),
+			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
+			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
 		},
 	}
 }
@@ -325,9 +346,9 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 		MessageBrokerLatencyThresholdSec:             cfg.MessageBrokerLatencyThreshold,
 		ServiceLatencyThresholdSec:                   cfg.ServiceLatencyThreshold,
 		HttpCheckTargets:                             map[string]string{},
-		MessageBrokerSubscriberMaxPollSilenceSec:     0,
-		MessageBrokerSubscriberMaxProgressSilenceSec: 0,
-		MessageBrokerSubscriberMaxLag:                0,
+		MessageBrokerSubscriberMaxPollSilenceSec:     cfg.MessageBrokerSubscriberMaxPollSilence,
+		MessageBrokerSubscriberMaxProgressSilenceSec: cfg.MessageBrokerSubscriberMaxProgressSilence,
+		MessageBrokerSubscriberMaxLag:                cfg.MessageBrokerSubscriberMaxLag,
 	}
 }
 

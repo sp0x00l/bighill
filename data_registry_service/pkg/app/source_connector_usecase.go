@@ -33,6 +33,7 @@ func NewSourceUsecase(sourceRepository SourceRepositoryAdapter, catalogClient Ca
 
 func (u *sourceUsecase) CreateSourceConnector(ctx context.Context, sourceConnector *model.SourceConnector, idempotencyKey uuid.UUID) (err error) {
 	log.Trace("SourceUsecase CreateSourceConnector")
+
 	attrs := []attribute.KeyValue{attribute.String("idempotency_key", idempotencyKey.String())}
 	if sourceConnector != nil {
 		attrs = append(attrs, attribute.String("user_id", sourceConnector.UserID.String()))
@@ -63,6 +64,7 @@ func (u *sourceUsecase) CreateSourceConnector(ctx context.Context, sourceConnect
 
 func (u *sourceUsecase) ReadSourceConnector(ctx context.Context, connectorID, userID uuid.UUID) (sourceConnector *model.SourceConnector, err error) {
 	log.Trace("SourceUsecase ReadSourceConnector")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "source_connector.read_source_connector",
 		attribute.String("connector_id", connectorID.String()),
 		attribute.String("user_id", userID.String()),
@@ -74,6 +76,7 @@ func (u *sourceUsecase) ReadSourceConnector(ctx context.Context, connectorID, us
 
 func (u *sourceUsecase) ReplaceSourceConnector(ctx context.Context, sourceConnector *model.SourceConnector) (err error) {
 	log.Trace("SourceUsecase ReplaceSourceConnector")
+
 	var attrs []attribute.KeyValue
 	if sourceConnector != nil {
 		attrs = append(attrs,
@@ -113,6 +116,7 @@ func (u *sourceUsecase) ReplaceSourceConnector(ctx context.Context, sourceConnec
 
 func (u *sourceUsecase) DeleteSourceConnector(ctx context.Context, connectorID, userID uuid.UUID) (err error) {
 	log.Trace("SourceUsecase DeleteSourceConnector")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "source_connector.delete_source_connector",
 		attribute.String("connector_id", connectorID.String()),
 		attribute.String("user_id", userID.String()),

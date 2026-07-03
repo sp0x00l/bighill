@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -56,15 +58,8 @@ var (
 	deploymentGVR  = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 )
 
-type testFailureReporter interface {
-	Helper()
-	Fatal(args ...any)
-	Fatalf(format string, args ...any)
-}
-
 var _ = Describe("Full ML loop", func() {
 	It("runs training, serving reconciliation, inference, and feedback through service seams", func() {
-		t := GinkgoT()
 		ctx := context.Background()
 
 		datasetID := uuid.New()
@@ -74,7 +69,7 @@ var _ = Describe("Full ML loop", func() {
 		userID := uuid.New()
 		servingModel := "rag-adapter-v1"
 
-		trainingEvent := runTrainingWorkflow(t, trainingRunID, datasetID, featureSnapshotID, servingModel)
+		trainingEvent := runTrainingWorkflow(trainingRunID, datasetID, featureSnapshotID, servingModel)
 
 		k8sClient := newE2EK8sClient()
 		registryRepo := newRegistryMemoryRepository()
@@ -129,10 +124,10 @@ var _ = Describe("Full ML loop", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(servedModels).To(HaveLen(1))
 		workloadName := servingk8s.WorkloadName(servedModels[0])
-		markDeploymentReady(t, ctx, k8sClient, workloadName)
+		markDeploymentReady(ctx, k8sClient, workloadName)
 
 		Expect(controller.ProcessOnce(ctx)).To(Succeed())
-		assertServedModelStatus(t, ctx, k8sClient, registrymodel.ModelLoadStatusLoaded.String(), servingModel)
+		assertServedModelStatus(ctx, k8sClient, registrymodel.ModelLoadStatusLoaded.String(), servingModel)
 
 		statusObserver, err := registryk8s.NewServedModelStatusObserver(servedModelAdapter, registryUsecase, time.Second)
 		Expect(err).NotTo(HaveOccurred())
@@ -177,11 +172,16 @@ var _ = Describe("Full ML loop", func() {
 		}, feedbackID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(feedbacks.records).To(HaveLen(1))
+
+		preferenceDatasetID := uuid.New()
+		dpoEvent := runDPOTrainingWorkflow(uuid.New(), datasetID, featureSnapshotID, readyModel, preferenceDatasetID, servingModel)
+		Expect(dpoEvent.GetModelId()).NotTo(BeEmpty())
+		Expect(dpoEvent.GetAdapterUri()).To(ContainSubstring("s3://models/"))
 	})
 })
 
-func runTrainingWorkflow(t testFailureReporter, trainingRunID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
-	t.Helper()
+func runTrainingWorkflow(trainingRunID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
+	GinkgoHelper()
 
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -224,38 +224,87 @@ func runTrainingWorkflow(t testFailureReporter, trainingRunID uuid.UUID, dataset
 		},
 	}
 	env.ExecuteWorkflow(trainingapp.TrainModelWorkflow, request)
-	if !env.IsWorkflowCompleted() {
-		t.Fatal("training workflow did not complete")
-	}
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatalf("training workflow failed: %v", err)
-	}
+	Expect(env.IsWorkflowCompleted()).To(BeTrue(), "training workflow did not complete")
+	Expect(env.GetWorkflowError()).NotTo(HaveOccurred())
 	var result trainingmodel.TrainingRunResult
-	if err := env.GetWorkflowResult(&result); err != nil {
-		t.Fatalf("read training workflow result: %v", err)
-	}
-	if result.Status != trainingmodel.TrainingRunStatusCompleted {
-		t.Fatalf("training workflow status = %s", result.Status)
-	}
-	if len(publisher.messages) != 1 {
-		t.Fatalf("expected one training fact, got %d", len(publisher.messages))
-	}
-	if publisher.messages[0].message.MsgType != sharedmessaging.MsgTypeModelTrainingCompleted {
-		t.Fatalf("expected model_training_completed, got %s", publisher.messages[0].message.MsgType)
-	}
+	Expect(env.GetWorkflowResult(&result)).To(Succeed())
+	Expect(result.Status).To(Equal(trainingmodel.TrainingRunStatusCompleted))
+	Expect(publisher.messages).To(HaveLen(1))
+	Expect(publisher.messages[0].message.MsgType).To(Equal(sharedmessaging.MsgTypeModelTrainingCompleted))
 	completed, ok := publisher.messages[0].payload.(*trainingpb.ModelTrainingCompletedEvent)
-	if !ok {
-		t.Fatalf("unexpected training payload type %T", publisher.messages[0].payload)
+	Expect(ok).To(BeTrue(), "unexpected training payload type %T", publisher.messages[0].payload)
+	Expect(completed.GetServingLoadStatus()).To(Equal(registrymodel.ModelLoadStatusNotLoaded.String()))
+	return completed
+}
+
+func runDPOTrainingWorkflow(trainingRunID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, parent *registrymodel.Model, preferenceDatasetID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
+	GinkgoHelper()
+
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	publisher := &capturingPublisher{}
+	activities := temporalworker.NewTrainingActivities(
+		trainingmessaging.NewTrainingEventPublisher(publisher, trainingmessaging.TrainingTopics{Training: "training"}),
+		temporalworker.WithExecutor(&fakeTrainingExecutor{}),
+		temporalworker.WithModelURIPrefix("s3://models"),
+		temporalworker.WithEvaluationURIPrefix("s3://evaluations"),
+		temporalworker.WithServingConfig("http://served-model.local", servingModel, registrymodel.ModelLoadStatusNotLoaded.String()),
+	)
+	env.RegisterActivityWithOptions(activities.PrepareTrainingDataset, activity.RegisterOptions{Name: trainingapp.PrepareTrainingDatasetActivity})
+	env.RegisterActivityWithOptions(activities.RunTrainingJob, activity.RegisterOptions{Name: trainingapp.RunTrainingJobActivity})
+	env.RegisterActivityWithOptions(activities.EvaluateTrainedModel, activity.RegisterOptions{Name: trainingapp.EvaluateTrainedModelActivity})
+	env.RegisterActivityWithOptions(activities.PublishModelTrainingCompleted, activity.RegisterOptions{Name: trainingapp.PublishModelTrainingCompletedActivity})
+	env.RegisterActivityWithOptions(activities.PublishModelTrainingFailed, activity.RegisterOptions{Name: trainingapp.PublishModelTrainingFailedActivity})
+
+	preferenceDatasetURI := "s3://local-dev-bucket/preferences/" + preferenceDatasetID.String() + ".jsonl"
+	request := trainingmodel.TrainingRunRequest{
+		TrainingRunID:        trainingRunID.String(),
+		DatasetID:            datasetID.String(),
+		DatasetVersion:       "2",
+		FeatureSnapshotID:    featureSnapshotID.String(),
+		ModelName:            "rag-adapter-dpo",
+		ModelVersion:         fmt.Sprintf("%d", parent.ModelVersion+1),
+		BaseModel:            parent.BaseModel,
+		ParentModelID:        parent.ModelID.String(),
+		ParentModelVersion:   fmt.Sprintf("%d", parent.ModelVersion),
+		ParentAdapterURI:     parent.AdapterURI,
+		PreferenceDatasetID:  preferenceDatasetID.String(),
+		PreferenceDatasetURI: preferenceDatasetURI,
+		EvaluationProfile:    "dpo-smoke",
+		TrainingProfile: trainingmodel.TrainingProfile{
+			Name:                      "dpo-smoke",
+			Trainer:                   "dpo",
+			Adapter:                   "qlora",
+			Quantization:              "4bit",
+			PreferenceDatasetURI:      preferenceDatasetURI,
+			DPOBeta:                   0.1,
+			SequenceLength:            2048,
+			LearningRate:              0.00001,
+			Epochs:                    1,
+			MicroBatchSize:            1,
+			GradientAccumulationSteps: 4,
+			LoRAR:                     16,
+			LoRAAlpha:                 32,
+		},
 	}
-	if completed.GetServingLoadStatus() != registrymodel.ModelLoadStatusNotLoaded.String() {
-		t.Fatalf("training fact should not assert loaded status, got %s", completed.GetServingLoadStatus())
-	}
+	env.ExecuteWorkflow(trainingapp.TrainModelWorkflow, request)
+	Expect(env.IsWorkflowCompleted()).To(BeTrue(), "dpo training workflow did not complete")
+	Expect(env.GetWorkflowError()).NotTo(HaveOccurred())
+	var result trainingmodel.TrainingRunResult
+	Expect(env.GetWorkflowResult(&result)).To(Succeed())
+	Expect(result.Status).To(Equal(trainingmodel.TrainingRunStatusCompleted))
+	Expect(publisher.messages).To(HaveLen(1))
+	completed, ok := publisher.messages[0].payload.(*trainingpb.ModelTrainingCompletedEvent)
+	Expect(ok).To(BeTrue(), "unexpected dpo training payload type %T", publisher.messages[0].payload)
 	return completed
 }
 
 type fakeTrainingExecutor struct{}
 
 func (e *fakeTrainingExecutor) RunTrainingJob(_ context.Context, spec trainingmodel.TrainingJobSpec) (*trainingmodel.TrainedModelArtifact, error) {
+	if err := validateTrainingRecipe(spec); err != nil {
+		return nil, err
+	}
 	return &trainingmodel.TrainedModelArtifact{
 		TrainingRunID:     spec.TrainingRunID,
 		ModelURI:          spec.ModelURI,
@@ -271,6 +320,62 @@ func (e *fakeTrainingExecutor) RunTrainingJob(_ context.Context, spec trainingmo
 		ServingLoadStatus: spec.ServingLoadStatus,
 		RecipeHash:        spec.RecipeHash,
 	}, nil
+}
+
+func validateTrainingRecipe(spec trainingmodel.TrainingJobSpec) error {
+	if strings.Contains(spec.RecipeYAML, "\t") {
+		return fmt.Errorf("training recipe contains literal tab indentation")
+	}
+	var recipe map[string]any
+	if err := yaml.Unmarshal([]byte(spec.RecipeYAML), &recipe); err != nil {
+		return fmt.Errorf("parse training recipe yaml: %w", err)
+	}
+	trainer := strings.ToLower(strings.TrimSpace(fmt.Sprint(recipe["trainer"])))
+	if strings.EqualFold(spec.TrainingProfile.Trainer, "dpo") || trainer == "dpo" {
+		return validateDPORecipe(spec, recipe)
+	}
+	if trainer == "" {
+		return fmt.Errorf("training recipe missing trainer")
+	}
+	return nil
+}
+
+func validateDPORecipe(spec trainingmodel.TrainingJobSpec, recipe map[string]any) error {
+	if strings.ToLower(strings.TrimSpace(fmt.Sprint(recipe["rl"]))) != "dpo" {
+		return fmt.Errorf("dpo recipe missing rl: dpo")
+	}
+	if _, ok := recipe["reference_model"]; ok {
+		return fmt.Errorf("dpo recipe must not set reference_model to a PEFT adapter")
+	}
+	if _, ok := recipe["sample_packing"]; ok {
+		return fmt.Errorf("dpo recipe must not include sample_packing")
+	}
+	if strings.TrimSpace(fmt.Sprint(recipe["lora_model_dir"])) != spec.ParentAdapterURI {
+		return fmt.Errorf("dpo recipe lora_model_dir should be parent adapter uri")
+	}
+	if strings.TrimSpace(fmt.Sprint(recipe["preference_dataset_id"])) != spec.PreferenceDatasetID {
+		return fmt.Errorf("dpo recipe preference_dataset_id mismatch")
+	}
+	if recipe["dpo_beta"] == nil || recipe["rl_beta"] == nil {
+		return fmt.Errorf("dpo recipe missing beta keys")
+	}
+	datasets, ok := recipe["datasets"].([]any)
+	if !ok || len(datasets) != 1 {
+		return fmt.Errorf("dpo recipe should contain one preference dataset")
+	}
+	first, ok := datasets[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("dpo recipe dataset entry has unexpected type")
+	}
+	if strings.TrimSpace(fmt.Sprint(first["path"])) != spec.TrainingProfile.PreferenceDatasetURI {
+		return fmt.Errorf("dpo recipe should train from preference dataset uri")
+	}
+	for _, key := range []string{"field_messages", "field_chosen", "field_rejected"} {
+		if strings.TrimSpace(fmt.Sprint(first[key])) == "" {
+			return fmt.Errorf("dpo recipe dataset missing %s", key)
+		}
+	}
+	return nil
 }
 
 func (e *fakeTrainingExecutor) EvaluateModel(_ context.Context, spec trainingmodel.EvaluationJobSpec) (*trainingmodel.EvaluationReport, error) {
@@ -337,40 +442,28 @@ func servedModelConfig() registryk8s.ServedModelConfig {
 	}
 }
 
-func markDeploymentReady(t testFailureReporter, ctx context.Context, client dynamic.Interface, workloadName string) {
-	t.Helper()
+func markDeploymentReady(ctx context.Context, client dynamic.Interface, workloadName string) {
+	GinkgoHelper()
 
 	resource := client.Resource(deploymentGVR).Namespace(e2eNamespace)
 	deployment, err := resource.Get(ctx, workloadName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("read vllm deployment: %v", err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	_ = unstructured.SetNestedField(deployment.Object, int64(1), "status", "readyReplicas")
 	_ = unstructured.SetNestedField(deployment.Object, deployment.GetGeneration(), "status", "observedGeneration")
 	_, err = resource.Update(ctx, deployment, metav1.UpdateOptions{})
-	if err != nil {
-		t.Fatalf("mark deployment ready: %v", err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 }
 
-func assertServedModelStatus(t testFailureReporter, ctx context.Context, client dynamic.Interface, loadStatus string, servingModel string) {
-	t.Helper()
+func assertServedModelStatus(ctx context.Context, client dynamic.Interface, loadStatus string, servingModel string) {
+	GinkgoHelper()
 
 	items, err := client.Resource(servedModelGVR).Namespace(e2eNamespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		t.Fatalf("list served model CRs: %v", err)
-	}
-	if len(items.Items) != 1 {
-		t.Fatalf("expected one served model CR, got %d", len(items.Items))
-	}
+	Expect(err).NotTo(HaveOccurred())
+	Expect(items.Items).To(HaveLen(1))
 	gotStatus, _, _ := unstructured.NestedString(items.Items[0].Object, "status", "servingLoadStatus")
 	gotServingModel, _, _ := unstructured.NestedString(items.Items[0].Object, "status", "servingModel")
-	if gotStatus != loadStatus {
-		t.Fatalf("served model load status = %s", gotStatus)
-	}
-	if gotServingModel != servingModel {
-		t.Fatalf("served model name = %s", gotServingModel)
-	}
+	Expect(gotStatus).To(Equal(loadStatus))
+	Expect(gotServingModel).To(Equal(servingModel))
 }
 
 type registryMemoryRepository struct {

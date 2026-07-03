@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func (f *registryFixture) ReadSourceConnector(_ context.Context, req *dataregist
 	if req.GetUserId() != connector.GetUserId() {
 		return nil, grpcstatus.Error(codes.NotFound, "source connector not found")
 	}
-	if req.GetSourceType() != "" && req.GetSourceType() != connector.GetSourceType() {
+	if req.GetSourceType() != "" && !strings.EqualFold(req.GetSourceType(), connector.GetSourceType()) {
 		return nil, grpcstatus.Error(codes.FailedPrecondition, "source connector type mismatch")
 	}
 	return &dataregistrypb.ReadSourceConnectorResponse{Connector: connector}, nil
@@ -138,9 +139,12 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 		}()
 
 		queryEngine, err = data.NewQueryEngine(infra.QueryEngineConfig{
-			Mode:            "registry",
-			RegistryAddress: listener.Addr().String(),
-			TimeoutSec:      20,
+			Mode:               "registry",
+			RegistryAddress:    listener.Addr().String(),
+			RegistryDialMs:     1000,
+			RegistryCallMs:     5000,
+			RegistryRetryCount: 1,
+			TimeoutSec:         20,
 		})
 		Expect(err).NotTo(HaveOccurred())
 	})

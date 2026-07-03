@@ -77,6 +77,18 @@ var _ = Describe("InferenceDatasetRepository", func() {
 			Expect(namedArgs(pool.args[1])).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: staleDataset.DatasetID, Valid: true}))
 		})
 
+		It("defaults empty schema metadata to an empty JSON object", func() {
+			dataset := validInferenceDataset()
+			dataset.SchemaMetadata = ""
+			idempotencyKey := uuid.New()
+			pool.nextRows = []pgx.Row{inferenceDatasetRow(dataset)}
+
+			_, err := repository.UpsertDataset(ctx, dataset, idempotencyKey)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("schema_metadata", "{}"))
+		})
+
 		It("wraps database failures from the upsert", func() {
 			pool.nextRows = []pgx.Row{&repositoryRow{err: errors.New("insert failed")}}
 

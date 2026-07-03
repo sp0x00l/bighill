@@ -1,6 +1,6 @@
 # Metrics Package
 
-Unified observability metrics for the Exchange platform using OpenTelemetry.
+Unified observability metrics for the BigHill platform using OpenTelemetry.
 
 ## Overview
 
@@ -256,10 +256,10 @@ type fundsMetrics struct {
 }
 
 func newFundsMetrics() fundsMetrics {
-    meter := otel.Meter("exchange.account-service")
+    meter := otel.Meter("bighill.account-service")
     return fundsMetrics{
         depositsCreated: metrics.MustCounter(meter, "account_deposits_created_total", 
-            "Total deposits created", "exchange.account-service-fallback"),
+            "Total deposits created", "bighill.account-service-fallback"),
     }
 }
 

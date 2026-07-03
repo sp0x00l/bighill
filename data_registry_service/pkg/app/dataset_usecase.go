@@ -40,6 +40,7 @@ func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter) *datasetUseC
 
 func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) (err error) {
 	log.Trace("DatasetUsecase CreateDataset")
+
 	attrs := []attribute.KeyValue{attribute.String("idempotency_key", idempotencyKey.String())}
 	if dataset != nil {
 		attrs = append(attrs,
@@ -57,6 +58,7 @@ func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Datas
 
 func (u *datasetUseCase) ReadPublishedDatasets(ctx context.Context, pagination corePagination.Pagination, filters []model.Filter) (datasets []*model.Dataset, total int, err error) {
 	log.Trace("DatasetUseCase ReadPublishedDatasets")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_published_datasets",
 		attribute.Int("filter_count", len(filters)),
 	)
@@ -67,6 +69,7 @@ func (u *datasetUseCase) ReadPublishedDatasets(ctx context.Context, pagination c
 
 func (u *datasetUseCase) ReadPublishedDatasetByID(ctx context.Context, datasetID uuid.UUID) (dataset *model.Dataset, err error) {
 	log.Trace("DatasetUsecase ReadPublishedDatasetByID")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_published_dataset_by_id",
 		attribute.String("dataset_id", datasetID.String()),
 	)
@@ -77,6 +80,7 @@ func (u *datasetUseCase) ReadPublishedDatasetByID(ctx context.Context, datasetID
 
 func (u *datasetUseCase) ReadPublishedDatasetsByUserID(ctx context.Context, userID uuid.UUID, pagination corePagination.Pagination, filters []model.Filter) (datasets []*model.Dataset, total int, err error) {
 	log.Trace("DatasetUseCase ReadPublishedDatasetsByUserID")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_published_datasets_by_user_id",
 		attribute.String("user_id", userID.String()),
 		attribute.Int("filter_count", len(filters)),
@@ -88,6 +92,7 @@ func (u *datasetUseCase) ReadPublishedDatasetsByUserID(ctx context.Context, user
 
 func (u *datasetUseCase) ReadDatasetsForUser(ctx context.Context, userID uuid.UUID, pagination corePagination.Pagination, filters []model.Filter) (datasets []*model.Dataset, total int, err error) {
 	log.Trace("DatasetUseCase ReadDatasetsForUser")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_datasets_for_user",
 		attribute.String("user_id", userID.String()),
 		attribute.Int("filter_count", len(filters)),
@@ -99,6 +104,7 @@ func (u *datasetUseCase) ReadDatasetsForUser(ctx context.Context, userID uuid.UU
 
 func (u *datasetUseCase) ReadDatasetForUser(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) (dataset *model.Dataset, err error) {
 	log.Trace("DatasetUsecase ReadDatasetForUser")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_dataset_for_user",
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("user_id", userID.String()),
@@ -110,6 +116,7 @@ func (u *datasetUseCase) ReadDatasetForUser(ctx context.Context, datasetID uuid.
 
 func (u *datasetUseCase) DeleteDataset(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) (err error) {
 	log.Trace("DatasetUsecase DeleteDataset")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.delete_dataset",
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("user_id", userID.String()),
@@ -121,6 +128,7 @@ func (u *datasetUseCase) DeleteDataset(ctx context.Context, datasetID uuid.UUID,
 
 func (u *datasetUseCase) PublishDataset(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) (err error) {
 	log.Trace("DatasetUsecase PublishDataset")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.publish_dataset",
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("user_id", userID.String()),
@@ -132,6 +140,7 @@ func (u *datasetUseCase) PublishDataset(ctx context.Context, datasetID uuid.UUID
 
 func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Dataset) (updated *model.Dataset, err error) {
 	log.Trace("DatasetUsecase ReplaceDataset")
+
 	var attrs []attribute.KeyValue
 	if dataset != nil {
 		attrs = append(attrs,
@@ -149,6 +158,7 @@ func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Data
 
 func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (updated *model.Dataset, err error) {
 	log.Trace("DatasetUsecase AdvanceDatasetProcessingState")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.advance_processing_state",
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("user_id", userID.String()),
@@ -165,6 +175,7 @@ func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, data
 
 func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, materialized *model.Dataset, state model.ProcessingState) (updated *model.Dataset, err error) {
 	log.Trace("DatasetUsecase RecordDatasetMaterialization")
+
 	var attrs []attribute.KeyValue
 	if materialized != nil {
 		attrs = append(attrs,

@@ -35,7 +35,8 @@ env:
   pgPort: "5432"
   pgSslMode: "require"
   kafkaBroker: "kafka:9092"
-  kafkaGroupId: "inference-group"
+  kafkaBaseGroupId: "inference"
+  kafkaAutoOffsetReset: "earliest"
   modelRegistrySubscriberTopic: "model_registry"
   dataRegistrySubscriberTopic: "data_registry"
   preferenceDatasetTopic: "inference"
@@ -72,6 +73,9 @@ env:
   healthcheckDbLatencyThreshold: "5"
   healthcheckServiceLatencyThreshold: "5"
   healthcheckMessageBrokerLatencyThreshold: "5"
+  healthcheckMessageBrokerSubscriberMaxPollSilence: "30"
+  healthcheckMessageBrokerSubscriberMaxProgressSilence: "90"
+  healthcheckMessageBrokerSubscriberMaxLag: "100000"
 resources:
   requests:
     memory: "128Mi"

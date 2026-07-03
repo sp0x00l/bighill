@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	db "lib/shared_lib/db"
-	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -161,10 +160,6 @@ func (tx *testTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 }
 func (tx *testTx) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
 	return nil, nil
-}
-
-func TestInfraDatabaseInit(t *testing.T) {
-	RegisterFailHandler(Fail)
 }
 
 var _ = Describe("database intialization", func() {

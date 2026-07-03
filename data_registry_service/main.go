@@ -3,13 +3,11 @@ package main
 import (
 	"context"
 	usecase "data_registry_service/pkg/app"
-	serializers "data_registry_service/pkg/common/serializer"
 	"data_registry_service/pkg/infra/network/adapter"
 	catalogclient "data_registry_service/pkg/infra/network/client"
 	registrygrpc "data_registry_service/pkg/infra/network/grpc"
 	registrymessaging "data_registry_service/pkg/infra/network/messaging"
 	"data_registry_service/pkg/infra/network/rest"
-	coreRest "data_registry_service/pkg/infra/network/restsupport"
 	"data_registry_service/pkg/infra/repo/db"
 	"errors"
 	"fmt"
@@ -18,6 +16,7 @@ import (
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
+	serializers "lib/shared_lib/serializer"
 	"lib/shared_lib/trace"
 	"net"
 	"net/http"
@@ -48,14 +47,17 @@ type registryConfig struct {
 }
 
 type healthConfig struct {
-	CpuThresholdPercentage        int
-	MemFreeThresholdPercentage    int
-	HealthCheckPort               int
-	DBConnectionString            string
-	MessageBrokerConnectionString string
-	DbLatencyThreshold            time.Duration
-	MessageBrokerLatencyThreshold time.Duration
-	ServiceLatencyThreshold       time.Duration
+	CpuThresholdPercentage                    int
+	MemFreeThresholdPercentage                int
+	HealthCheckPort                           int
+	DBConnectionString                        string
+	MessageBrokerConnectionString             string
+	DbLatencyThreshold                        time.Duration
+	MessageBrokerLatencyThreshold             time.Duration
+	ServiceLatencyThreshold                   time.Duration
+	MessageBrokerSubscriberMaxPollSilence     time.Duration
+	MessageBrokerSubscriberMaxProgressSilence time.Duration
+	MessageBrokerSubscriberMaxLag             int64
 }
 
 func init() {
@@ -115,14 +117,12 @@ func main() {
 		publisher.Close()
 	}()
 
-	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
+	subscriberFactories := []messagingConn.Messenger{}
 	defer func() {
-		_ = messagingFactory.Close(cancelCtx)
+		for _, factory := range subscriberFactories {
+			_ = factory.Close(cancelCtx)
+		}
 	}()
-	subscriber, err := messagingFactory.Subscriber(cancelCtx)
-	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
-	}
 
 	sourceConnectorDB := db.NewSourceConnectorDB(database)
 	datasetDB := db.NewDatasetDB(database,
@@ -144,15 +144,31 @@ func main() {
 	log.Infof("%s API HTTP port: %d", serviceName, cfg.HTTPPort)
 	log.Infof("%s API gRPC port: %d", serviceName, cfg.GRPCPort)
 
-	restService := coreRest.NewService(routes, cfg.HTTPPort, serviceName)
+	restService := rest.NewService(routes, cfg.HTTPPort, serviceName)
 	grpcService := registrygrpc.NewDataRegistryGrpcServer(sourceConnectorUseCase)
-	materializationSubscriber := registrymessaging.NewMaterializationSubscriber(subscriber, datasetUseCase, cfg.MaterializationTopics)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
+		factory, monitor, err := messagingConn.StartStreamSubscriber(cancelCtx, messagingConn.StreamSubscriberConfig{
+			Brokers:          cfg.Messaging.Brokers,
+			DLQURL:           cfg.Messaging.DlqURL,
+			BaseGroupID:      cfg.Messaging.GroupID,
+			AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
+			Cancel:           cancelFtn,
+			Monitor:          healthCheck,
+			OnUnexpectedStop: func() { quit <- syscall.SIGTERM },
+		}, name, topics, configure)
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatalf("unable to create %s subscriber", name)
+		}
+		healthCheck = monitor
+		subscriberFactories = append(subscriberFactories, factory)
+	}
 
 	go func() {
 		if err := restService.Connect(); err != nil {
@@ -170,12 +186,19 @@ func main() {
 		}
 	}()
 
-	go func() {
-		if err := materializationSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
-			log.WithContext(cancelCtx).WithError(err).Error("materialization subscriber stopped unexpectedly")
-			quit <- syscall.SIGTERM
-		}
-	}()
+	materializationTopics := cfg.MaterializationTopics.List()
+	startSubscriber("raw-snapshot-ready", materializationTopics, func(subscriber messagingConn.Subscriber) {
+		registrymessaging.ConfigureSubscriberErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, registrymessaging.NewRawSnapshotReadyEventListener(datasetUseCase))
+	})
+	startSubscriber("feature-snapshot-ready", materializationTopics, func(subscriber messagingConn.Subscriber) {
+		registrymessaging.ConfigureSubscriberErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, registrymessaging.NewFeatureSnapshotReadyEventListener(datasetUseCase))
+	})
+	startSubscriber("embedding-snapshot-ready", materializationTopics, func(subscriber messagingConn.Subscriber) {
+		registrymessaging.ConfigureSubscriberErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, registrymessaging.NewEmbeddingSnapshotReadyEventListener(datasetUseCase))
+	})
 
 	go func() {
 		if err := healthCheck.Connect(ctx); err != nil {
@@ -217,9 +240,10 @@ func readRegistryConfig() registryConfig {
 		DBName:             dbName,
 		DBConnectionString: dbConnectionString,
 		Messaging: messagingConn.MessengerConfig{
-			DlqURL:  env.WithDefaultString("DATA_REGISTRY_SERVICE_DLQ", "http://localhost:4566/data-registry-dev-env-queue/"),
-			GroupID: env.WithDefaultString("DATA_REGISTRY_SERVICE_KAFKA_GROUP_ID", "data-registry-group"),
-			Brokers: brokers,
+			DlqURL:          env.WithDefaultString("DATA_REGISTRY_SERVICE_DLQ", "http://localhost:4566/data-registry-dev-env-queue/"),
+			GroupID:         env.WithDefaultString("DATA_REGISTRY_SERVICE_KAFKA_BASE_GROUP_ID", "data-registry"),
+			Brokers:         brokers,
+			AutoOffsetReset: env.WithDefaultString("DATA_REGISTRY_SERVICE_KAFKA_AUTO_OFFSET_RESET", "earliest"),
 		},
 		OutboxBackend: env.WithDefaultString("DATA_REGISTRY_SERVICE_OUTBOX", "postgres"),
 		OutboxRelay: messagingConn.OutboxRelayConfig{
@@ -232,14 +256,17 @@ func readRegistryConfig() registryConfig {
 			FeatureMaterializer: env.WithDefaultString("DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC", "feature_materializer"),
 		},
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_PORT", "5051"),
-			DBConnectionString:            dbConnectionString,
-			MessageBrokerConnectionString: brokers,
-			DbLatencyThreshold:            secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
-			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
-			ServiceLatencyThreshold:       secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			CpuThresholdPercentage:                    env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercentage:                env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:                           env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_PORT", "5051"),
+			DBConnectionString:                        dbConnectionString,
+			MessageBrokerConnectionString:             brokers,
+			DbLatencyThreshold:                        secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold:             secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:                   secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerSubscriberMaxPollSilence:     secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS", "30"),
+			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
+			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
 		},
 	}
 }
@@ -255,9 +282,9 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 		MessageBrokerLatencyThresholdSec:             cfg.MessageBrokerLatencyThreshold,
 		ServiceLatencyThresholdSec:                   cfg.ServiceLatencyThreshold,
 		HttpCheckTargets:                             map[string]string{},
-		MessageBrokerSubscriberMaxPollSilenceSec:     0,
-		MessageBrokerSubscriberMaxProgressSilenceSec: 0,
-		MessageBrokerSubscriberMaxLag:                0,
+		MessageBrokerSubscriberMaxPollSilenceSec:     cfg.MessageBrokerSubscriberMaxPollSilence,
+		MessageBrokerSubscriberMaxProgressSilenceSec: cfg.MessageBrokerSubscriberMaxProgressSilence,
+		MessageBrokerSubscriberMaxLag:                cfg.MessageBrokerSubscriberMaxLag,
 	}
 }
 

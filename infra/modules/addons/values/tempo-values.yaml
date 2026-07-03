@@ -1,0 +1,38 @@
+# Tempo distributed tracing backend values
+tempo:
+  retention: 24h
+  # The chart default is 1024 MB. On staging this left too little headroom
+  # under a 2Gi limit and tempo-0 repeatedly OOMKilled before becoming ready.
+  memBallastSizeMbs: 256
+  
+  # TraceQL metrics queries such as `{ } | rate()` need an active
+  # metrics-generator ring and the local-blocks processor in Tempo 2.9.
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: "http://kube-prometheus-stack-prometheus.observability.svc.cluster.local:9090/api/v1/write"
+  overrides:
+    defaults:
+      metrics_generator:
+        processors:
+          - local-blocks
+  
+  # Resources for Tempo - needs adequate memory for trace processing
+  resources:
+    requests:
+      cpu: 100m
+      memory: 1Gi
+    limits:
+      cpu: 500m
+      memory: 3Gi
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClassName: ebs-sc
+
+traces:
+  otlp:
+    http:
+      enabled: true
+    grpc:
+      enabled: true

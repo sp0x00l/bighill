@@ -186,7 +186,7 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 		emailSuccessful string
 	)
 
-	Describe("exchange profile end-points", func() {
+	Describe("bighill profile end-points", func() {
 		BeforeAll(func() {
 			kafkaPublisherTopic = env.WithDefaultString("PROFILE_SERVICE_KAFKA_PUBLISHER_TOPIC", "profile")
 

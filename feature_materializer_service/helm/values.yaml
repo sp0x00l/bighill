@@ -16,7 +16,8 @@ env:
   serviceName: "feature-materializer-service"
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   kafkaBroker: "kafka:9092"
-  kafkaGroupId: "feature-materializer-group"
+  kafkaBaseGroupId: "feature-materializer"
+  kafkaAutoOffsetReset: "earliest"
   topic: "feature_materializer"
   dataIngestionSubscriberTopic: "data_ingestion"
   dataRegistrySubscriberTopic: "data_registry"
@@ -88,6 +89,9 @@ env:
   healthcheckServiceLatencyThreshold: "5"
   healthcheckDbLatencyThreshold: "5"
   healthcheckMessageBrokerLatencyThreshold: "5"
+  healthcheckMessageBrokerSubscriberMaxPollSilence: "30"
+  healthcheckMessageBrokerSubscriberMaxProgressSilence: "90"
+  healthcheckMessageBrokerSubscriberMaxLag: "100000"
 resources:
   requests:
     memory: "256Mi"

@@ -131,7 +131,7 @@ func datasetArgs(dataset *model.InferenceDataset, idempotencyKey uuid.UUID) pgx.
 		"catalog_provider":           dataset.CatalogProvider,
 		"processing_profile":         dataset.ProcessingProfile,
 		"schema_version":             dataset.SchemaVersion,
-		"schema_metadata":            dataset.SchemaMetadata,
+		"schema_metadata":            jsonObjectOrDefault(dataset.SchemaMetadata),
 		"raw_snapshot_id":            nullableUUID(dataset.RawSnapshotID),
 		"feature_snapshot_id":        nullableUUID(dataset.FeatureSnapshotID),
 		"embedding_snapshot_id":      nullableUUID(dataset.EmbeddingSnapshotID),
@@ -219,4 +219,13 @@ func parseOptionalUUID(value string) uuid.UUID {
 		return uuid.Nil
 	}
 	return uuid.MustParse(value)
+}
+
+func jsonObjectOrDefault(value string) string {
+	log.Trace("jsonObjectOrDefault")
+
+	if strings.TrimSpace(value) == "" {
+		return "{}"
+	}
+	return value
 }

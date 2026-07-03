@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -82,7 +83,10 @@ func NewRayExecutorWithClient(config RayExecutorConfig, manifestReader ManifestR
 		return nil, domain.ErrValidationFailed.Extend("artifact manifest reader is required")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: config.RequestTimeout}
+		client = &http.Client{
+			Timeout:   config.RequestTimeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}
 	}
 	return &RayExecutor{
 		url:                  rayURL,
@@ -386,7 +390,9 @@ func NewObjectManifestReader(ctx context.Context, region string, client *http.Cl
 		return nil, domain.ErrValidationFailed.Extend("artifact bucket region is required")
 	}
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}
 	}
 	reader := &ObjectManifestReader{
 		region: region,

@@ -93,14 +93,17 @@ type temporalConfig struct {
 }
 
 type healthConfig struct {
-	CpuThresholdPercentage        int
-	MemFreeThresholdPercentage    int
-	HealthCheckPort               int
-	DBConnectionString            string
-	MessageBrokerConnectionString string
-	DbLatencyThreshold            time.Duration
-	MessageBrokerLatencyThreshold time.Duration
-	ServiceLatencyThreshold       time.Duration
+	CpuThresholdPercentage                    int
+	MemFreeThresholdPercentage                int
+	HealthCheckPort                           int
+	DBConnectionString                        string
+	MessageBrokerConnectionString             string
+	DbLatencyThreshold                        time.Duration
+	MessageBrokerLatencyThreshold             time.Duration
+	ServiceLatencyThreshold                   time.Duration
+	MessageBrokerSubscriberMaxPollSilence     time.Duration
+	MessageBrokerSubscriberMaxProgressSilence time.Duration
+	MessageBrokerSubscriberMaxLag             int64
 }
 
 func init() {
@@ -125,9 +128,11 @@ func main() {
 	}
 	defer database.Close()
 
-	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
+	subscriberFactories := []messagingConn.Messenger{}
 	defer func() {
-		_ = messagingFactory.Close(cancelCtx)
+		for _, factory := range subscriberFactories {
+			_ = factory.Close(cancelCtx)
+		}
 	}()
 
 	outboxWriter, err := newPostgresOutbox(database, cfg.OutboxBackend)
@@ -167,11 +172,6 @@ func main() {
 		<-relayDone
 		outboxPublisher.Close()
 	}()
-
-	subscriber, err := messagingFactory.Subscriber(cancelCtx)
-	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
-	}
 
 	temporalClient, err := client.Dial(client.Options{
 		HostPort:  cfg.Temporal.Address,
@@ -227,11 +227,6 @@ func main() {
 	defer materializationWorker.Stop()
 
 	workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue, embeddingStrategy)
-	materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
-		subscriber,
-		workflowStarter,
-		[]string{cfg.DatasetUploadedTopic, cfg.DataRegistryTopic},
-	)
 
 	grpcService := featuregrpc.NewFeatureMaterializerGrpcServer(embeddingSearchUsecase)
 	defer grpcService.Close()
@@ -242,11 +237,35 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		if err := materializationSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
-			log.WithContext(cancelCtx).WithError(err).Fatal("materialization subscriber stopped unexpectedly")
+	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
+		factory, monitor, err := messagingConn.StartStreamSubscriber(cancelCtx, messagingConn.StreamSubscriberConfig{
+			Brokers:          cfg.Messaging.Brokers,
+			DLQURL:           cfg.Messaging.DlqURL,
+			BaseGroupID:      cfg.Messaging.GroupID,
+			AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
+			Cancel:           cancelFtn,
+			Monitor:          healthCheck,
+			OnUnexpectedStop: func() { quit <- syscall.SIGTERM },
+		}, name, topics, configure)
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatalf("unable to create %s subscriber", name)
 		}
-	}()
+		healthCheck = monitor
+		subscriberFactories = append(subscriberFactories, factory)
+	}
+
+	startSubscriber("dataset-file-uploaded", []string{cfg.DatasetUploadedTopic}, func(subscriber messagingConn.Subscriber) {
+		featuremessaging.ConfigureSubscriberErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, featuremessaging.NewDatasetFileUploadedEventListener(workflowStarter))
+	})
+	startSubscriber("dataset-created", []string{cfg.DataRegistryTopic}, func(subscriber messagingConn.Subscriber) {
+		featuremessaging.ConfigureSubscriberErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, featuremessaging.NewDatasetCreatedEventListener(workflowStarter))
+	})
+	startSubscriber("dataset-updated", []string{cfg.DataRegistryTopic}, func(subscriber messagingConn.Subscriber) {
+		featuremessaging.ConfigureSubscriberErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, featuremessaging.NewDatasetUpdatedEventListener(workflowStarter))
+	})
 
 	go func() {
 		if err := grpcService.Connect(cfg.GRPCPort); err != nil {
@@ -289,9 +308,10 @@ func readMaterializerConfig() materializerConfig {
 		DBName:             dbName,
 		DBConnectionString: dbConnectionString,
 		Messaging: messagingConn.MessengerConfig{
-			DlqURL:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DLQ", "http://localhost:4566/feature-materializer-dev-env-queue/"),
-			GroupID: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID", "feature-materializer-group"),
-			Brokers: brokers,
+			DlqURL:          env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DLQ", "http://localhost:4566/feature-materializer-dev-env-queue/"),
+			GroupID:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_KAFKA_BASE_GROUP_ID", "feature-materializer"),
+			Brokers:         brokers,
+			AutoOffsetReset: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_KAFKA_AUTO_OFFSET_RESET", "earliest"),
 		},
 		OutboxBackend: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_OUTBOX", "postgres"),
 		OutboxRelay: messagingConn.OutboxRelayConfig{
@@ -343,14 +363,17 @@ func readMaterializerConfig() materializerConfig {
 			FeatureMaterializer: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
 		},
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercentage:    env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_PORT", "5057"),
-			DBConnectionString:            dbConnectionString,
-			MessageBrokerConnectionString: brokers,
-			DbLatencyThreshold:            secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
-			MessageBrokerLatencyThreshold: secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
-			ServiceLatencyThreshold:       secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			CpuThresholdPercentage:                    env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercentage:                env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:                           env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_PORT", "5057"),
+			DBConnectionString:                        dbConnectionString,
+			MessageBrokerConnectionString:             brokers,
+			DbLatencyThreshold:                        secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold:             secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:                   secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerSubscriberMaxPollSilence:     secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS", "30"),
+			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
+			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
 		},
 	}
 }
@@ -366,9 +389,9 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 		MessageBrokerLatencyThresholdSec:             cfg.MessageBrokerLatencyThreshold,
 		ServiceLatencyThresholdSec:                   cfg.ServiceLatencyThreshold,
 		HttpCheckTargets:                             map[string]string{},
-		MessageBrokerSubscriberMaxPollSilenceSec:     0,
-		MessageBrokerSubscriberMaxProgressSilenceSec: 0,
-		MessageBrokerSubscriberMaxLag:                0,
+		MessageBrokerSubscriberMaxPollSilenceSec:     cfg.MessageBrokerSubscriberMaxPollSilence,
+		MessageBrokerSubscriberMaxProgressSilenceSec: cfg.MessageBrokerSubscriberMaxProgressSilence,
+		MessageBrokerSubscriberMaxLag:                cfg.MessageBrokerSubscriberMaxLag,
 	}
 }
 

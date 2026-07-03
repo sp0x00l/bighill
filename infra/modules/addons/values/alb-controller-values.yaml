@@ -1,0 +1,15 @@
+clusterName: ${cluster_name}
+region: ${region}
+vpcId: ${vpc_id}
+podDisruptionBudget:
+  maxUnavailable: 1
+
+serviceAccount:
+  create: true
+  name: ${service_account}
+  annotations:
+    eks.amazonaws.com/role-arn: ${service_account_arn}
+
+enableShield: false
+enableWaf: false
+enableWafv2: false

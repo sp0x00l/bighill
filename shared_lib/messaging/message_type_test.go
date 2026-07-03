@@ -1,55 +1,54 @@
 package messaging
 
-import "testing"
+import (
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
 
-func TestMsgTypeOrdinalsMatchMLContract(t *testing.T) {
-	expect := map[MsgType]int{
-		MsgTypeUnknown:                    0,
-		MsgTypeUserCreated:                1,
-		MsgTypeUserUpdated:                2,
-		MsgTypeUserDeleted:                3,
-		MsgTypeEmailVerificationRequested: 4,
-		MsgTypeDatasetFileUploaded:        5,
-		MsgTypeRawSnapshotReady:           6,
-		MsgTypeFeatureSnapshotReady:       8,
-		MsgTypeEmbeddingSnapshotReady:     10,
-		MsgTypeDatasetCreated:             11,
-		MsgTypeDatasetDeleted:             12,
-		MsgTypeDatasetUpdated:             13,
-		MsgTypeModelTrainingCompleted:     14,
-		MsgTypeModelTrainingFailed:        15,
-		MsgTypeModelUpdated:               16,
-	}
+var _ = Describe("MsgType", func() {
+	It("matches the ML contract ordinals", func() {
+		expect := map[MsgType]int{
+			MsgTypeUnknown:                    0,
+			MsgTypeUserCreated:                1,
+			MsgTypeUserUpdated:                2,
+			MsgTypeUserDeleted:                3,
+			MsgTypeEmailVerificationRequested: 4,
+			MsgTypeDatasetFileUploaded:        5,
+			MsgTypeRawSnapshotReady:           6,
+			MsgTypeFeatureSnapshotReady:       8,
+			MsgTypeEmbeddingSnapshotReady:     10,
+			MsgTypeDatasetCreated:             11,
+			MsgTypeDatasetDeleted:             12,
+			MsgTypeDatasetUpdated:             13,
+			MsgTypeModelTrainingCompleted:     14,
+			MsgTypeModelTrainingFailed:        15,
+			MsgTypeModelUpdated:               16,
+		}
 
-	for msgType, ordinal := range expect {
-		if got := int(msgType); got != ordinal {
-			t.Fatalf("%s ordinal changed: got %d want %d", msgType.String(), got, ordinal)
+		for msgType, ordinal := range expect {
+			Expect(int(msgType)).To(Equal(ordinal), "%s ordinal changed", msgType.String())
 		}
-	}
-}
+	})
 
-func TestMsgTypeStringMappingsRoundTrip(t *testing.T) {
-	for _, msgType := range []MsgType{
-		MsgTypeUserCreated,
-		MsgTypeUserUpdated,
-		MsgTypeUserDeleted,
-		MsgTypeEmailVerificationRequested,
-		MsgTypeDatasetFileUploaded,
-		MsgTypeRawSnapshotReady,
-		MsgTypeFeatureSnapshotReady,
-		MsgTypeEmbeddingSnapshotReady,
-		MsgTypeDatasetCreated,
-		MsgTypeDatasetDeleted,
-		MsgTypeDatasetUpdated,
-		MsgTypeModelTrainingCompleted,
-		MsgTypeModelTrainingFailed,
-		MsgTypeModelUpdated,
-	} {
-		if msgType.String() == "" {
-			t.Fatalf("missing string mapping for msg type ordinal %d", msgType)
+	It("round-trips string mappings", func() {
+		for _, msgType := range []MsgType{
+			MsgTypeUserCreated,
+			MsgTypeUserUpdated,
+			MsgTypeUserDeleted,
+			MsgTypeEmailVerificationRequested,
+			MsgTypeDatasetFileUploaded,
+			MsgTypeRawSnapshotReady,
+			MsgTypeFeatureSnapshotReady,
+			MsgTypeEmbeddingSnapshotReady,
+			MsgTypeDatasetCreated,
+			MsgTypeDatasetDeleted,
+			MsgTypeDatasetUpdated,
+			MsgTypeModelTrainingCompleted,
+			MsgTypeModelTrainingFailed,
+			MsgTypeModelUpdated,
+		} {
+			Expect(msgType.String()).NotTo(BeEmpty(), "missing string mapping for msg type ordinal %d", msgType)
+			Expect(MsgTypeFromString(msgType.String())).To(Equal(msgType))
 		}
-		if MsgTypeFromString(msgType.String()) != msgType {
-			t.Fatalf("msg type %s does not round-trip from string", msgType.String())
-		}
-	}
-}
+	})
+})

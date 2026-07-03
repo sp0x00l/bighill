@@ -44,8 +44,10 @@ spec:
               value: {{ .Values.env.trainingTriggerEnabled | quote }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
-            - name: TRAINING_SERVICE_KAFKA_GROUP_ID
-              value: {{ .Values.env.kafkaGroupId | quote }}
+            - name: TRAINING_SERVICE_KAFKA_BASE_GROUP_ID
+              value: {{ .Values.env.kafkaBaseGroupId | quote }}
+            - name: TRAINING_SERVICE_KAFKA_AUTO_OFFSET_RESET
+              value: {{ .Values.env.kafkaAutoOffsetReset | quote }}
             - name: TRAINING_SERVICE_TOPIC
               value: {{ .Values.env.topic | quote }}
             - name: TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
@@ -146,6 +148,12 @@ spec:
               value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
             - name: TRAINING_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
+            - name: TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxPollSilence | quote }}
+            - name: TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxProgressSilence | quote }}
+            - name: TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxLag | quote }}
           resources:
             requests:
               memory: {{ .Values.resources.requests.memory | quote }}

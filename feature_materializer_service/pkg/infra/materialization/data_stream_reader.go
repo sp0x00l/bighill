@@ -20,6 +20,7 @@ import (
 	"github.com/apache/arrow-go/v18/parquet/compress"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -106,7 +107,12 @@ func (r *FlightDataStreamReader) ReadParquet(ctx context.Context, request DataSt
 		return nil, fmt.Errorf("%w: marshal data stream command: %w", domain.ErrRawSnapshotMaterialize, err)
 	}
 
-	client, err := flight.NewFlightClient(r.address, nil, grpc.WithTransportCredentials(r.transportCredentials()))
+	client, err := flight.NewFlightClient(
+		r.address,
+		nil,
+		grpc.WithTransportCredentials(r.transportCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create data stream flight client: %w", domain.ErrRawSnapshotMaterialize, err)
 	}

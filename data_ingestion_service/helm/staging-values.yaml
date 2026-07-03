@@ -10,17 +10,17 @@ serviceAccount:
 
 ingress:
   enabled: true
-  host: "data-ingestion.internal.northern.exchange"
+  host: "data-ingestion.internal.bighill.example"
 
 env:
   environment: "staging"
-  kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
-  redisAddress: "redis.exchange-staging.svc.cluster.local:6379"
+  kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
+  redisAddress: "redis.bighill-staging.svc.cluster.local:6379"
   topic: "data_ingestion"
   dataRegistrySubscriberTopic: "data_registry"
   dlq: "http://localhost:4566/data-ingestion-dev-env-queue/"
   outbox: "postgres"
-  authKmsKeyId: "alias/exchange-staging-jwt-signing"
+  authKmsKeyId: "alias/bighill-staging-jwt-signing"
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"

@@ -3,50 +3,30 @@ package model
 import (
 	"errors"
 	"strings"
+
+	sharedDomain "lib/shared_lib/domain"
 )
 
-type StorageType int
+type StorageType = sharedDomain.SourceType
 
 const (
-	S3 StorageType = iota
-	AzureStorage
-	GoogleCloudStorage
-	Postgres
-	MySQL
-	Oracle
-	MongoDB
-	ClickHouse
+	UnknownStorageType = sharedDomain.SourceTypeUnknown
+	S3                 = sharedDomain.SourceTypeS3
+	AzureStorage       = sharedDomain.SourceTypeAzureStorage
+	GoogleCloudStorage = sharedDomain.SourceTypeGCS
+	Postgres           = sharedDomain.SourceTypePostgres
+	MySQL              = sharedDomain.SourceTypeMySQL
+	Oracle             = sharedDomain.SourceTypeOracle
+	MongoDB            = sharedDomain.SourceTypeMongoDB
+	ClickHouse         = sharedDomain.SourceTypeClickHouse
 )
 
-func (s StorageType) String() string {
-	if s < S3 || s > ClickHouse {
-		return ""
-	}
-	return [...]string{"S3", "AZURE_STORAGE", "GCS", "POSTGRES", "MYSQL", "ORACLE", "MONGO", "CLICKHOUSE"}[s]
-}
-
 func ToStorageType(s string) (StorageType, error) {
-
-	switch strings.ToUpper(s) {
-	case "S3":
-		return S3, nil
-	case "AZURE_STORAGE":
-		return AzureStorage, nil
-	case "GCS":
-		return GoogleCloudStorage, nil
-	case "POSTGRES":
-		return Postgres, nil
-	case "MYSQL":
-		return MySQL, nil
-	case "ORACLE":
-		return Oracle, nil
-	case "MONGO":
-		return MongoDB, nil
-	case "CLICKHOUSE":
-		return ClickHouse, nil
-	default:
-		return 0, errors.New("invalid StorageType")
+	storageType, err := sharedDomain.ToSourceType(s)
+	if err != nil {
+		return UnknownStorageType, errors.New("invalid StorageType")
 	}
+	return storageType, nil
 }
 
 type TableFormat int

@@ -13,6 +13,7 @@ import (
 	"feature_materializer_service/pkg/domain"
 
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type HTTPEmbeddingProvider struct {
@@ -29,14 +30,14 @@ func NewHTTPEmbeddingProvider(provider, endpoint, model string, dimensions int, 
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return NewHTTPEmbeddingProviderWithClient(provider, endpoint, model, dimensions, &http.Client{Timeout: timeout})
+	return NewHTTPEmbeddingProviderWithClient(provider, endpoint, model, dimensions, newTracedHTTPClient(timeout))
 }
 
 func NewHTTPEmbeddingProviderWithClient(provider, endpoint, model string, dimensions int, client *http.Client) *HTTPEmbeddingProvider {
 	log.Trace("NewHTTPEmbeddingProviderWithClient")
 
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = newTracedHTTPClient(30 * time.Second)
 	}
 	return &HTTPEmbeddingProvider{
 		client:     client,
@@ -44,6 +45,13 @@ func NewHTTPEmbeddingProviderWithClient(provider, endpoint, model string, dimens
 		endpoint:   strings.TrimRight(strings.TrimSpace(endpoint), "/"),
 		model:      strings.TrimSpace(model),
 		dimensions: dimensions,
+	}
+}
+
+func newTracedHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	}
 }
 

@@ -152,7 +152,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			datasetID.String(),
 		).Scan(&outboxCount)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(outboxCount).To(Equal(2))
+		Expect(outboxCount).To(Equal(3))
 
 		lateRaw, err := datasets.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
 		Expect(err).NotTo(HaveOccurred())

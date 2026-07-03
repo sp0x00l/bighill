@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-DOMAIN="exchange-artifacts"
+DOMAIN="bighill-artifacts"
 REPOSITORY="cpp-libs"
 REGION="${AWS_REGION:-us-east-1}"
 

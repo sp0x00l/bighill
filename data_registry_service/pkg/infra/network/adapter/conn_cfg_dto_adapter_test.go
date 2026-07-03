@@ -2,8 +2,8 @@ package adapter
 
 import (
 	"context"
-	"data_registry_service/pkg/common/serializer"
 	"data_registry_service/pkg/domain/model"
+	"lib/shared_lib/serializer"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

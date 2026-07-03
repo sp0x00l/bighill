@@ -19,6 +19,12 @@ func configureErrorPolicy(subscriber msgConn.Subscriber) {
 	}
 }
 
+func ConfigureSubscriberErrorPolicy(subscriber msgConn.Subscriber) {
+	log.Trace("ConfigureSubscriberErrorPolicy")
+
+	configureErrorPolicy(subscriber)
+}
+
 func (errorPolicy) IsNonRetryableError(err error) bool {
 	log.Trace("errorPolicy IsNonRetryableError")
 

@@ -1,0 +1,127 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Service Boundaries",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "id": 2,
+      "targets": [
+        { "expr": "sum(rate(infra_requests_total[5m]))", "legendFormat": "requests", "refId": "A" }
+      ],
+      "title": "Requests/sec",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "id": 3,
+      "targets": [
+        { "expr": "sum(rate(infra_errors_total[5m]))", "legendFormat": "errors", "refId": "A" }
+      ],
+      "title": "Errors/sec",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "id": 4,
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(infra_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "A" }
+      ],
+      "title": "Request p95",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "id": 5,
+      "targets": [
+        { "expr": "sum(db_pool_connections_ratio{state=\"acquired\"}) / clamp_min(sum(db_pool_connections_ratio{state=\"max\"}), 1)", "legendFormat": "pool usage", "refId": "A" }
+      ],
+      "title": "DB Pool Usage",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "id": 6,
+      "targets": [
+        { "expr": "sum by (boundary, operation, status) (rate(infra_requests_total[5m]))", "legendFormat": "{{boundary}} {{operation}} {{status}}", "refId": "A" }
+      ],
+      "title": "Request Rate by Boundary",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "id": 7,
+      "targets": [
+        { "expr": "sum by (boundary, operation, error_class, status) (rate(infra_errors_total[5m]))", "legendFormat": "{{boundary}} {{operation}} {{error_class}} {{status}}", "refId": "A" }
+      ],
+      "title": "Error Rate by Boundary",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "id": 8,
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(infra_request_duration_seconds_bucket[5m])) by (le, boundary, operation))", "legendFormat": "p50 {{boundary}} {{operation}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(infra_request_duration_seconds_bucket[5m])) by (le, boundary, operation))", "legendFormat": "p95 {{boundary}} {{operation}}", "refId": "B" }
+      ],
+      "title": "Request Duration by Boundary",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "id": 9,
+      "targets": [
+        { "expr": "sum by (db_name, state) (db_pool_connections_ratio)", "legendFormat": "{{db_name}} {{state}}", "refId": "A" }
+      ],
+      "title": "DB Pool Connections",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["bighill", "infra", "metrics"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "prometheus", "value": "prometheus" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Service Infra Metrics",
+  "uid": "service-infra-metrics",
+  "version": 1,
+  "weekStart": ""
+}

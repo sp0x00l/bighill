@@ -83,7 +83,7 @@ restart_deployment() {
   RESTARTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   RESTART_NONCE=$(date -u +"%Y%m%dT%H%M%S%N")
   kubectl patch deployment "${TARGET_SERVICE}" -n "${TARGET_NAMESPACE}" --type merge -p \
-    "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/restartedAt\":\"${RESTARTED_AT}\",\"exchange.dev/restart-nonce\":\"${RESTART_NONCE}\"}}}}}"
+    "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/restartedAt\":\"${RESTARTED_AT}\",\"bighill.dev/restart-nonce\":\"${RESTART_NONCE}\"}}}}}"
 }
 
 configure_kubectl "$CLUSTER_NAME" "$REGION"

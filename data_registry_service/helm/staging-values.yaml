@@ -10,11 +10,11 @@ serviceAccount:
 
 ingress:
   enabled: true
-  host: "data-registry.internal.northern.exchange"
+  host: "data-registry.internal.bighill.example"
 
 env:
   environment: "staging"
-  kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
+  kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
   dlq: "http://localhost:4566/data-registry-dev-env-queue/"
   outbox: "postgres"
   outboxRelayPollMs: "250"

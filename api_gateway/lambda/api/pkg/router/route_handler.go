@@ -250,7 +250,8 @@ func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver)
 		return "", fmt.Errorf("invalid resource: %s", routeCtx.resource)
 	}
 
-	if len(routeCtx.segments) > routeCtx.resourceIndex+1 && routeCtx.segments[routeCtx.resourceIndex+1] == "store" {
+	if len(routeCtx.segments) > routeCtx.resourceIndex+1 &&
+		(routeCtx.segments[routeCtx.resourceIndex+1] == "store" || routeCtx.segments[routeCtx.resourceIndex+1] == "uploads") {
 		return fmt.Sprintf("%s%s", resolver.dataIngestionServiceRoute, routeCtx.path), nil
 	}
 	return fmt.Sprintf("%s%s", resolver.dataRegistryServiceRoute, routeCtx.path), nil

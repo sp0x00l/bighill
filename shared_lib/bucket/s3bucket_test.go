@@ -21,20 +21,34 @@ import (
 )
 
 type mockS3Components struct {
-	UploadCalled           bool
-	PresignGetObjectCalled bool
-	DeleteObjectsCalled    bool
-	ListObjectsV2Called    bool
+	UploadCalled            bool
+	PresignGetObjectCalled  bool
+	PresignPostObjectCalled bool
+	DeleteObjectsCalled     bool
+	DeleteObjectCalled      bool
+	ListObjectsV2Called     bool
+	HeadObjectCalled        bool
+	GetObjectCalled         bool
+	CopyObjectCalled        bool
 
-	LastInput           *s3.PutObjectInput
-	LastParams          *s3.GetObjectInput
-	LastDeleteInput     *s3.DeleteObjectsInput
-	LastListObjectInput *s3.ListObjectsV2Input
-	LastOptFns          []func(*s3.PresignOptions)
+	LastInput             *s3.PutObjectInput
+	LastParams            *s3.GetObjectInput
+	LastPostInput         *s3.PutObjectInput
+	LastDeleteInput       *s3.DeleteObjectsInput
+	LastDeleteObjectInput *s3.DeleteObjectInput
+	LastListObjectInput   *s3.ListObjectsV2Input
+	LastHeadObjectInput   *s3.HeadObjectInput
+	LastGetObjectInput    *s3.GetObjectInput
+	LastCopyObjectInput   *s3.CopyObjectInput
+	LastOptFns            []func(*s3.PresignOptions)
+	LastPostOptFns        []func(*s3.PresignPostOptions)
 
 	NextError         error
 	NextPresignOutput *v4.PresignedHTTPRequest
+	NextPostOutput    *s3.PresignedPostRequest
 	NextListObjects   *s3.ListObjectsV2Output
+	NextHeadObject    *s3.HeadObjectOutput
+	NextGetObject     *s3.GetObjectOutput
 }
 
 func (m *mockS3Components) Upload(_ context.Context, input *s3.PutObjectInput, _ ...func(*manager.Uploader)) (*manager.UploadOutput, error) {
@@ -52,9 +66,24 @@ func (m *mockS3Components) PresignGetObject(_ context.Context, params *s3.GetObj
 	return m.NextPresignOutput, m.NextError
 }
 
+func (m *mockS3Components) PresignPostObject(_ context.Context, input *s3.PutObjectInput, optFns ...func(*s3.PresignPostOptions)) (*s3.PresignedPostRequest, error) {
+	m.PresignPostObjectCalled = true
+	m.LastPostInput = input
+	m.LastPostOptFns = optFns
+
+	return m.NextPostOutput, m.NextError
+}
+
 func (m *mockS3Components) DeleteObjects(_ context.Context, input *s3.DeleteObjectsInput, _ ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	m.DeleteObjectsCalled = true
 	m.LastDeleteInput = input
+
+	return nil, m.NextError
+}
+
+func (m *mockS3Components) DeleteObject(_ context.Context, input *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	m.DeleteObjectCalled = true
+	m.LastDeleteObjectInput = input
 
 	return nil, m.NextError
 }
@@ -64,6 +93,27 @@ func (m *mockS3Components) ListObjectsV2(_ context.Context, input *s3.ListObject
 	m.LastListObjectInput = input
 
 	return m.NextListObjects, m.NextError
+}
+
+func (m *mockS3Components) HeadObject(_ context.Context, input *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	m.HeadObjectCalled = true
+	m.LastHeadObjectInput = input
+
+	return m.NextHeadObject, m.NextError
+}
+
+func (m *mockS3Components) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	m.GetObjectCalled = true
+	m.LastGetObjectInput = input
+
+	return m.NextGetObject, m.NextError
+}
+
+func (m *mockS3Components) CopyObject(_ context.Context, input *s3.CopyObjectInput, _ ...func(*s3.Options)) (*s3.CopyObjectOutput, error) {
+	m.CopyObjectCalled = true
+	m.LastCopyObjectInput = input
+
+	return nil, m.NextError
 }
 
 func TestSign(t *testing.T) {
@@ -180,6 +230,38 @@ var _ = Describe("NewS3Bucket unit tests", func() {
 		})
 	})
 
+	Describe("Sign upload POST", func() {
+		It("returns a generated POST policy scoped to key, content type, and size", func() {
+			s3Mock.NextPostOutput = &s3.PresignedPostRequest{
+				URL:    "https://bucket.s3.us-east-1.amazonaws.com",
+				Values: map[string]string{"key": key, "policy": "encoded"},
+			}
+
+			post, err := s3bucket.SignUploadPost(ctx, bucketName, key, "text/csv", 1024, 15*time.Minute)
+
+			Expect(err).To(BeNil())
+			Expect(post.URL).To(Equal("https://bucket.s3.us-east-1.amazonaws.com"))
+			Expect(post.Fields).To(HaveKeyWithValue("policy", "encoded"))
+			Expect(s3Mock.PresignPostObjectCalled).To(BeTrue())
+			Expect(*s3Mock.LastPostInput.Bucket).To(Equal(bucketName))
+			Expect(*s3Mock.LastPostInput.Key).To(Equal(key))
+			Expect(*s3Mock.LastPostInput.ContentType).To(Equal("text/csv"))
+			Expect(s3Mock.LastPostOptFns).To(HaveLen(1))
+			opts := &s3.PresignPostOptions{}
+			s3Mock.LastPostOptFns[0](opts)
+			Expect(opts.Expires).To(Equal(15 * time.Minute))
+			Expect(opts.Conditions).NotTo(BeEmpty())
+		})
+
+		It("rejects invalid POST policy sizes", func() {
+			post, err := s3bucket.SignUploadPost(ctx, bucketName, key, "text/csv", 0, 15*time.Minute)
+
+			Expect(post).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring("max bytes must be greater than zero")))
+			Expect(s3Mock.PresignPostObjectCalled).To(BeFalse())
+		})
+	})
+
 	Describe("Delete from S3", func() {
 		It("should remove objects from S3", func() {
 			err := s3bucket.DeleteObjects(ctx, bucketName, []string{"key1", "key2"})
@@ -254,6 +336,74 @@ var _ = Describe("NewS3Bucket unit tests", func() {
 			Expect(res).To(BeEmpty())
 			Expect(err).NotTo(BeNil())
 			Expect(err.Error()).To(Equal("failed to list objects in bucket `test-bucket`: mock AWS error"))
+		})
+	})
+
+	Describe("Object operations", func() {
+		It("heads, reads, copies, and deletes objects", func() {
+			s3Mock.NextHeadObject = &s3.HeadObjectOutput{
+				ContentLength: aws.Int64(12),
+				ContentType:   aws.String("text/csv"),
+			}
+			s3Mock.NextGetObject = &s3.GetObjectOutput{
+				Body: io.NopCloser(strings.NewReader("abcdef")),
+			}
+
+			info, err := s3bucket.HeadObject(ctx, bucketName, key)
+			Expect(err).To(BeNil())
+			Expect(info.Size).To(Equal(int64(12)))
+			Expect(info.ContentType).To(Equal("text/csv"))
+
+			data, err := s3bucket.ReadObjectPrefix(ctx, bucketName, key, 3)
+			Expect(err).To(BeNil())
+			Expect(string(data)).To(Equal("abc"))
+			Expect(*s3Mock.LastGetObjectInput.Range).To(Equal("bytes=0-2"))
+
+			data, err = s3bucket.ReadObjectRange(ctx, bucketName, key, 4, 2)
+			Expect(err).To(BeNil())
+			Expect(string(data)).To(Equal("de"))
+			Expect(*s3Mock.LastGetObjectInput.Range).To(Equal("bytes=4-5"))
+
+			sourceKey := "staging/my report.csv"
+			Expect(s3bucket.CopyObject(ctx, bucketName, sourceKey, "raw/key", "text/csv")).To(Succeed())
+			Expect(s3Mock.CopyObjectCalled).To(BeTrue())
+			Expect(*s3Mock.LastCopyObjectInput.CopySource).To(Equal(bucketName + "/staging/my%20report.csv"))
+			Expect(*s3Mock.LastCopyObjectInput.Key).To(Equal("raw/key"))
+
+			Expect(s3bucket.DeleteObject(ctx, bucketName, key)).To(Succeed())
+			Expect(s3Mock.DeleteObjectCalled).To(BeTrue())
+		})
+
+		It("promotes objects in local S3 without using AWS credentials", func() {
+			localBucketName := "test-local-promote-" + fmt.Sprint(time.Now().UnixNano())
+			localBucket := bucket.NewBucket(ctx, bucket.LocalDevS3Region, 10*1024*1024)
+			DeferCleanup(func() {
+				_ = os.RemoveAll(filepath.Join(bucket.StorageDir, localBucketName))
+			})
+
+			Expect(localBucket.Upload(ctx, localBucketName, "staging/my report.csv", "text/csv", strings.NewReader("title\nMetropolis\n"))).To(Succeed())
+			post, err := localBucket.SignUploadPost(ctx, localBucketName, "staging/my report.csv", "text/csv", 1024, time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(post.URL).To(Equal("local-s3://" + localBucketName))
+			Expect(post.Fields).To(HaveKeyWithValue("key", "staging/my report.csv"))
+
+			info, err := localBucket.HeadObject(ctx, localBucketName, "staging/my report.csv")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(info.Size).To(BeNumerically(">", 0))
+			Expect(info.ContentType).To(Equal("text/csv"))
+
+			prefix, err := localBucket.ReadObjectPrefix(ctx, localBucketName, "staging/my report.csv", 5)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(prefix)).To(Equal("title"))
+
+			tail, err := localBucket.ReadObjectRange(ctx, localBucketName, "staging/my report.csv", 6, 10)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(tail)).To(Equal("Metropolis"))
+
+			Expect(localBucket.CopyObject(ctx, localBucketName, "staging/my report.csv", "raw/my report.csv", "text/csv")).To(Succeed())
+			Expect(filepath.Join(bucket.StorageDir, localBucketName, "raw/my report.csv")).To(BeAnExistingFile())
+			Expect(localBucket.DeleteObject(ctx, localBucketName, "staging/my report.csv")).To(Succeed())
+			Expect(filepath.Join(bucket.StorageDir, localBucketName, "staging/my report.csv")).NotTo(BeAnExistingFile())
 		})
 	})
 })

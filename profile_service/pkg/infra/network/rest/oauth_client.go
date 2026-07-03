@@ -78,8 +78,8 @@ func (p *oauthProviderClient) AuthorizationURL(state, redirectURI, codeChallenge
 	return p.authURL + "?" + values.Encode(), nil
 }
 
-func (p *oauthProviderClient) ExchangeCode(ctx context.Context, code, redirectURI, codeVerifier string) (*domain.OAuthIdentity, error) {
-	accessToken, err := p.exchangeAccessToken(ctx, code, redirectURI, codeVerifier)
+func (p *oauthProviderClient) BigHillCode(ctx context.Context, code, redirectURI, codeVerifier string) (*domain.OAuthIdentity, error) {
+	accessToken, err := p.bighillAccessToken(ctx, code, redirectURI, codeVerifier)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (p *oauthProviderClient) ExchangeCode(ctx context.Context, code, redirectUR
 	}
 }
 
-func (p *oauthProviderClient) exchangeAccessToken(ctx context.Context, code, redirectURI, codeVerifier string) (string, error) {
+func (p *oauthProviderClient) bighillAccessToken(ctx context.Context, code, redirectURI, codeVerifier string) (string, error) {
 	form := url.Values{}
 	form.Set("client_id", p.clientID)
 	form.Set("client_secret", p.clientSecret)
@@ -164,7 +164,7 @@ func (p *oauthProviderClient) exchangeAccessToken(ctx context.Context, code, red
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to exchange oauth code: %w", err)
+		return "", fmt.Errorf("failed to bighill oauth code: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -172,7 +172,7 @@ func (p *oauthProviderClient) exchangeAccessToken(ctx context.Context, code, red
 		return "", usecase.ErrInvalidOAuthCode
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("oauth token exchange failed with status %d", resp.StatusCode)
+		return "", fmt.Errorf("oauth token bighill failed with status %d", resp.StatusCode)
 	}
 
 	var payload struct {

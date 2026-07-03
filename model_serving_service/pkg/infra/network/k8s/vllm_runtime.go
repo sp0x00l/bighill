@@ -14,6 +14,7 @@ import (
 	"model_serving_service/pkg/domain/model"
 
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -82,7 +83,10 @@ func NewVLLMRuntime(config VLLMRuntimeConfig, client dynamic.Interface) (*VLLMRu
 		if timeout <= 0 {
 			timeout = 5 * time.Second
 		}
-		httpClient = &http.Client{Timeout: timeout}
+		httpClient = &http.Client{
+			Timeout:   timeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}
 	}
 	return &VLLMRuntime{
 		namespace:       strings.TrimSpace(config.Namespace),

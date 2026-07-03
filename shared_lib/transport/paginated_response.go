@@ -1,9 +1,8 @@
 package transport
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
+	serializers "lib/shared_lib/serializer"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -16,14 +15,9 @@ type PaginatedResponse struct {
 func (r *PaginatedResponse) ToBytes() ([]byte, error) {
 	log.Trace("PaginatedResponse ToBytes")
 
-	// ensure the special query characters (& and :) are not escaped
-	buff := new(bytes.Buffer)
-	enc := json.NewEncoder(buff)
-	enc.SetEscapeHTML(false)
-
-	if err := enc.Encode(r); err != nil {
+	data, err := serializers.NewJSONSerializer().Serialize(r)
+	if err != nil {
 		return nil, fmt.Errorf("failed to encode paginated response: %w", err)
 	}
-
-	return buff.Bytes(), nil
+	return append(data, '\n'), nil
 }

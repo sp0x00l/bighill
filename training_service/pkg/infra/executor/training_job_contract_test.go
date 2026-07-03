@@ -7,9 +7,11 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"testing"
 
 	"training_service/pkg/domain/model"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 type trainingJobContract struct {
@@ -29,44 +31,40 @@ type trainingJobContract struct {
 	EvaluationManifestFieldTypes map[string]string `json:"evaluation_manifest_field_types"`
 }
 
-func TestTrainingJobContract(t *testing.T) {
-	spec := readTrainingJobContract(t)
+var _ = Describe("Training job contract", func() {
+	It("matches Go env keys, Python env keys, and manifest types", func() {
+		spec := readTrainingJobContract()
 
-	assertStringSliceEqual(t, sortedMapKeys(trainingEnv(model.TrainingJobSpec{})), spec.GoTrainingEnvKeys)
-	assertStringSliceEqual(t, sortedMapKeys(evaluationEnv(model.EvaluationJobSpec{})), spec.GoEvaluationEnvKeys)
-	for _, key := range spec.PythonTrainingRequiredEnvKeys {
-		assertContains(t, spec.GoTrainingEnvKeys, key)
-	}
-	for _, key := range spec.PythonEvaluationRequiredEnvKeys {
-		assertContains(t, spec.GoEvaluationEnvKeys, key)
-	}
-	for _, key := range append(append([]string{}, spec.PythonTrainingRequiredEnvKeys...), spec.PythonTrainingOptionalEnvKeys...) {
-		assertEnvKeyContract(t, spec, key)
-	}
-	for _, key := range append(append([]string{}, spec.PythonEvaluationRequiredEnvKeys...), spec.PythonEvaluationOptionalEnvKeys...) {
-		assertEnvKeyContract(t, spec, key)
-	}
-	for _, key := range append(append([]string{}, spec.GoTrainingEnvKeys...), spec.GoEvaluationEnvKeys...) {
-		assertEnvKeyContract(t, spec, key)
-	}
-	assertStringSliceEqual(t, jsonFieldNames[model.TrainedModelArtifact](), spec.TrainingManifestKeys)
-	assertStringSliceEqual(t, jsonFieldNames[model.EvaluationReport](), spec.EvaluationManifestKeys)
-	assertStringMapEqual(t, jsonFieldTypes[model.TrainedModelArtifact](), spec.TrainingManifestFieldTypes)
-	assertStringMapEqual(t, jsonFieldTypes[model.EvaluationReport](), spec.EvaluationManifestFieldTypes)
-}
+		Expect(sortedMapKeys(trainingEnv(model.TrainingJobSpec{}))).To(Equal(spec.GoTrainingEnvKeys))
+		Expect(sortedMapKeys(evaluationEnv(model.EvaluationJobSpec{}))).To(Equal(spec.GoEvaluationEnvKeys))
+		for _, key := range spec.PythonTrainingRequiredEnvKeys {
+			expectContains(spec.GoTrainingEnvKeys, key)
+		}
+		for _, key := range spec.PythonEvaluationRequiredEnvKeys {
+			expectContains(spec.GoEvaluationEnvKeys, key)
+		}
+		for _, key := range append(append([]string{}, spec.PythonTrainingRequiredEnvKeys...), spec.PythonTrainingOptionalEnvKeys...) {
+			expectEnvKeyContract(spec, key)
+		}
+		for _, key := range append(append([]string{}, spec.PythonEvaluationRequiredEnvKeys...), spec.PythonEvaluationOptionalEnvKeys...) {
+			expectEnvKeyContract(spec, key)
+		}
+		for _, key := range append(append([]string{}, spec.GoTrainingEnvKeys...), spec.GoEvaluationEnvKeys...) {
+			expectEnvKeyContract(spec, key)
+		}
+		Expect(jsonFieldNames[model.TrainedModelArtifact]()).To(Equal(spec.TrainingManifestKeys))
+		Expect(jsonFieldNames[model.EvaluationReport]()).To(Equal(spec.EvaluationManifestKeys))
+		Expect(jsonFieldTypes[model.TrainedModelArtifact]()).To(Equal(spec.TrainingManifestFieldTypes))
+		Expect(jsonFieldTypes[model.EvaluationReport]()).To(Equal(spec.EvaluationManifestFieldTypes))
+	})
+})
 
-func readTrainingJobContract(t *testing.T) trainingJobContract {
-	t.Helper()
-
+func readTrainingJobContract() trainingJobContract {
 	path := filepath.Join("..", "..", "..", "..", "training_jobs", "contracts", "training_job_contract.json")
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read training job contract: %v", err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	var spec trainingJobContract
-	if err := json.Unmarshal(raw, &spec); err != nil {
-		t.Fatalf("decode training job contract: %v", err)
-	}
+	Expect(json.Unmarshal(raw, &spec)).To(Succeed())
 	return spec
 }
 
@@ -79,46 +77,15 @@ func sortedMapKeys(values map[string]string) []string {
 	return out
 }
 
-func assertContains(t *testing.T, values []string, expected string) {
-	t.Helper()
-
-	for _, value := range values {
-		if value == expected {
-			return
-		}
-	}
-	t.Fatalf("expected %q in %v", expected, values)
+func expectContains(values []string, expected string) {
+	Expect(values).To(ContainElement(expected))
 }
 
-func assertEnvKeyContract(t *testing.T, spec trainingJobContract, key string) {
-	t.Helper()
-
+func expectEnvKeyContract(spec trainingJobContract, key string) {
 	contract, ok := spec.EnvKeyContract[key]
-	if !ok {
-		t.Fatalf("expected env key contract for %q", key)
-	}
-	if contract.Direction == "" {
-		t.Fatalf("expected env key %q to define a direction", key)
-	}
-	if contract.Type != "string" {
-		t.Fatalf("expected env key %q to be string, got %q", key, contract.Type)
-	}
-}
-
-func assertStringSliceEqual(t *testing.T, actual []string, expected []string) {
-	t.Helper()
-
-	if !reflect.DeepEqual(actual, expected) {
-		t.Fatalf("expected %v, got %v", expected, actual)
-	}
-}
-
-func assertStringMapEqual(t *testing.T, actual map[string]string, expected map[string]string) {
-	t.Helper()
-
-	if !reflect.DeepEqual(actual, expected) {
-		t.Fatalf("expected %v, got %v", expected, actual)
-	}
+	Expect(ok).To(BeTrue(), "expected env key contract for %q", key)
+	Expect(contract.Direction).NotTo(BeEmpty(), "expected env key %q to define a direction", key)
+	Expect(contract.Type).To(Equal("string"), "expected env key %q to be string", key)
 }
 
 func jsonFieldNames[T any]() []string {

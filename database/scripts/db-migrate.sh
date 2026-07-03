@@ -24,7 +24,8 @@ migrate_service_db()
     db_name="$2"
 
     echo "Migrating local dev database, $db_name, for $service_dir service"
-    for f in "$PROJECT_ROOT/$service_dir/db/migrations/"*up*.sql; do
+    for f in "$PROJECT_ROOT/$service_dir/db/migrations/"*.up.sql; do
+        [ -e "$f" ] || continue
         echo "Running migrations: $f"
         pwd
         ls -l "$f"

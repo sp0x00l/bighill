@@ -14,3 +14,8 @@ reports/
 sqlite:
 results/
 data_stream_service/internal/infra/queryengine/datafusion_query_engine/target/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log

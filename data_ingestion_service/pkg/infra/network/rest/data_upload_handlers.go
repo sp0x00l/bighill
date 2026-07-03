@@ -5,6 +5,7 @@ import (
 	"data_ingestion_service/pkg/domain"
 	"data_ingestion_service/pkg/domain/model"
 	rest "data_ingestion_service/pkg/infra/network/restsupport"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,8 @@ type FileDetector interface {
 
 type DataUploadUseCase interface {
 	UploadFile(ctx context.Context, upload *model.DataFile) error
+	InitiateUploadSession(ctx context.Context, request model.InitiateUploadSessionRequest) (*model.InitiatedUploadSession, error)
+	CompleteUploadSession(ctx context.Context, request model.CompleteUploadSessionRequest) (*model.UploadSession, error)
 }
 
 type DatasetUsecase interface {
@@ -84,6 +87,18 @@ func NewDataUploadHandlers(uploadUseCase DataUploadUseCase, datasetUseCase Datas
 func (h *DataUploadHandlers) GetRoutes() []rest.Route {
 	routes := []rest.Route{
 		{
+			Path:     "/v1/data/uploads/{id}",
+			Handler:  h.InitiateUploadSession,
+			Method:   http.MethodPost,
+			SpanName: "initiate-data-upload-session",
+		},
+		{
+			Path:     "/v1/data/uploads/{id}/complete",
+			Handler:  h.CompleteUploadSession,
+			Method:   http.MethodPost,
+			SpanName: "complete-data-upload-session",
+		},
+		{
 			Path:     "/v1/data/store/{id}",
 			Handler:  h.UploadDataFile,
 			Method:   http.MethodPost,
@@ -94,18 +109,89 @@ func (h *DataUploadHandlers) GetRoutes() []rest.Route {
 	return routes
 }
 
-// UploadDataFile uploads a data file for the given id dataset.
-func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request) (rest.APIResponse, error) {
-	log.Trace("DataUploadHandlers UploadDataFile")
+type initiateUploadRequest struct {
+	FileName          string `json:"file_name"`
+	DeclaredFormat    string `json:"declared_format"`
+	ContentType       string `json:"content_type"`
+	DeclaredSizeBytes int64  `json:"declared_size_bytes"`
+	ClientNonce       string `json:"client_nonce"`
+}
+
+type initiateUploadResponse struct {
+	UploadID  string            `json:"upload_id"`
+	URL       string            `json:"url"`
+	Fields    map[string]string `json:"fields"`
+	ExpiresAt string            `json:"expires_at"`
+}
+
+type completeUploadResponse struct {
+	UploadID        string `json:"upload_id"`
+	DatasetID       string `json:"dataset_id"`
+	StorageLocation string `json:"storage_location"`
+	Status          string `json:"status"`
+	Checksum        string `json:"checksum"`
+	ActualSizeBytes int64  `json:"actual_size_bytes"`
+}
+
+func (h *DataUploadHandlers) InitiateUploadSession(ctx context.Context, r *http.Request) (rest.APIResponse, error) {
+	log.Trace("DataUploadHandlers InitiateUploadSession")
+
+	datasetID, authResult, dataset, err := h.authenticateDatasetForUpload(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	var request initiateUploadRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		return nil, rest.ErrBadRequest().Wrap(err).WithMessage("Invalid upload session request")
+	}
+	declaredFormat := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(request.DeclaredFormat), "."))
+	if declaredFormat == "" {
+		declaredFormat = strings.ToLower(strings.TrimPrefix(filepath.Ext(request.FileName), "."))
+	}
+	if !h.isSupportedFileFormat(declaredFormat, request.FileName) {
+		return nil, rest.ErrBadRequest().WithMessage("Declared file format is not supported")
+	}
+	contentType := strings.TrimSpace(request.ContentType)
+	if contentType == "" {
+		contentType = h.detector.GetContentType(declaredFormat)
+	}
+	if contentType == DefaultContentType {
+		return nil, rest.ErrBadRequest().WithMessage("Content type not supported")
+	}
+	result, err := h.uploadUseCase.InitiateUploadSession(ctx, model.InitiateUploadSessionRequest{
+		DatasetID:           datasetID,
+		UserID:              authResult.UserID,
+		ClientNonce:         request.ClientNonce,
+		FileName:            request.FileName,
+		DeclaredFormat:      declaredFormat,
+		DeclaredContentType: contentType,
+		DeclaredSizeBytes:   request.DeclaredSizeBytes,
+		TableNamespace:      dataset.TableNamespace,
+		TableName:           dataset.TableName,
+		TableFormat:         dataset.TableFormat,
+		CatalogProvider:     dataset.CatalogProvider,
+		ProcessingProfile:   dataset.ProcessingProfile,
+	})
+	if err != nil {
+		return nil, h.uploadError(ctx, err, "Failed to initiate upload session")
+	}
+	return jsonResponse(http.StatusCreated, initiateUploadResponse{
+		UploadID:  result.UploadID.String(),
+		URL:       result.URL,
+		Fields:    result.Fields,
+		ExpiresAt: result.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
+}
+
+func (h *DataUploadHandlers) CompleteUploadSession(ctx context.Context, r *http.Request) (rest.APIResponse, error) {
+	log.Trace("DataUploadHandlers CompleteUploadSession")
 
 	vars := mux.Vars(r)
-	datasetID, err := uuid.Parse(vars["id"])
-	if err != nil || datasetID == uuid.Nil {
-		log.WithContext(ctx).WithError(err).Error("parse dataset ID, read request failed")
-		return nil, rest.ErrBadRequest().Wrap(err).WithMessage("Invalid dataset ID")
+	uploadID, err := uuid.Parse(vars["id"])
+	if err != nil || uploadID == uuid.Nil {
+		log.WithContext(ctx).WithError(err).Error("parse upload ID failed")
+		return nil, rest.ErrBadRequest().Wrap(err).WithMessage("Invalid upload ID")
 	}
-	ctx = context.WithValue(ctx, contextKey("DatasetID"), datasetID.String())
-
 	if h.authenticator == nil {
 		log.WithContext(ctx).Error("authenticator is not configured")
 		return nil, rest.ErrInternalServer().WithMessage("Authentication is not configured")
@@ -114,22 +200,32 @@ func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request
 	if err != nil {
 		return nil, err
 	}
-	userID := authResult.UserID
-	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-
-	dataset, err := h.datasetsUsecase.DatasetForUpload(ctx, datasetID, userID)
+	session, err := h.uploadUseCase.CompleteUploadSession(ctx, model.CompleteUploadSessionRequest{
+		UploadID: uploadID,
+		UserID:   authResult.UserID,
+	})
 	if err != nil {
-		if errors.Is(err, domain.ErrResourceNotFound) {
-			log.WithContext(ctx).Error("no valid dataset found for upload")
-			return nil, rest.ErrNotFound().WithMessage("No valid dataset found for upload")
-		}
-		log.WithContext(ctx).WithError(err).Error("failed to validate dataset for upload")
-		return nil, rest.ErrInternalServer().Wrap(err).WithMessage("Failed to validate dataset for upload")
+		return nil, h.uploadError(ctx, err, "Failed to complete upload session")
 	}
-	if err := requireDatasetUploadMetadata(dataset); err != nil {
-		log.WithContext(ctx).WithError(err).Error("dataset materialization metadata is incomplete")
-		return nil, rest.ErrInternalServer().Wrap(err).WithMessage("Dataset materialization metadata is incomplete")
+	return jsonResponse(http.StatusCreated, completeUploadResponse{
+		UploadID:        session.UploadID.String(),
+		DatasetID:       session.DatasetID.String(),
+		StorageLocation: session.StorageLocation,
+		Status:          string(session.Status),
+		Checksum:        session.Checksum,
+		ActualSizeBytes: session.ActualSizeBytes,
+	})
+}
+
+// UploadDataFile uploads a data file for the given id dataset.
+func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request) (rest.APIResponse, error) {
+	log.Trace("DataUploadHandlers UploadDataFile")
+
+	datasetID, authResult, dataset, err := h.authenticateDatasetForUpload(ctx, r)
+	if err != nil {
+		return nil, err
 	}
+	userID := authResult.UserID
 
 	// Set the maximum file size for the request (this includes the entire request body) to prevent abuse.
 	r.Body = http.MaxBytesReader(nil, r.Body, h.MaxBytesReaderSizeBytes)
@@ -190,6 +286,41 @@ func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request
 	return rest.NewReponse(http.StatusCreated), nil
 }
 
+func (h *DataUploadHandlers) authenticateDatasetForUpload(ctx context.Context, r *http.Request) (uuid.UUID, AuthResult, *model.Dataset, error) {
+	log.Trace("DataUploadHandlers authenticateDatasetForUpload")
+
+	vars := mux.Vars(r)
+	datasetID, err := uuid.Parse(vars["id"])
+	if err != nil || datasetID == uuid.Nil {
+		log.WithContext(ctx).WithError(err).Error("parse dataset ID failed")
+		return uuid.Nil, AuthResult{}, nil, rest.ErrBadRequest().Wrap(err).WithMessage("Invalid dataset ID")
+	}
+	ctx = context.WithValue(ctx, contextKey("DatasetID"), datasetID.String())
+	if h.authenticator == nil {
+		log.WithContext(ctx).Error("authenticator is not configured")
+		return uuid.Nil, AuthResult{}, nil, rest.ErrInternalServer().WithMessage("Authentication is not configured")
+	}
+	authResult, err := h.authenticator.Authenticate(ctx, r)
+	if err != nil {
+		return uuid.Nil, AuthResult{}, nil, err
+	}
+	ctx = context.WithValue(ctx, contextKey("UserID"), authResult.UserID.String())
+	dataset, err := h.datasetsUsecase.DatasetForUpload(ctx, datasetID, authResult.UserID)
+	if err != nil {
+		if errors.Is(err, domain.ErrResourceNotFound) {
+			log.WithContext(ctx).Error("no valid dataset found for upload")
+			return uuid.Nil, AuthResult{}, nil, rest.ErrNotFound().WithMessage("No valid dataset found for upload")
+		}
+		log.WithContext(ctx).WithError(err).Error("failed to validate dataset for upload")
+		return uuid.Nil, AuthResult{}, nil, rest.ErrInternalServer().Wrap(err).WithMessage("Failed to validate dataset for upload")
+	}
+	if err := requireDatasetUploadMetadata(dataset); err != nil {
+		log.WithContext(ctx).WithError(err).Error("dataset materialization metadata is incomplete")
+		return uuid.Nil, AuthResult{}, nil, rest.ErrInternalServer().Wrap(err).WithMessage("Dataset materialization metadata is incomplete")
+	}
+	return datasetID, authResult, dataset, nil
+}
+
 func requireDatasetUploadMetadata(dataset *model.Dataset) error {
 	log.Trace("requireDatasetUploadMetadata")
 
@@ -223,4 +354,33 @@ func (h *DataUploadHandlers) GetSupportedFileFormats(fileName string) []string {
 		return formats
 	}
 	return defaultPriorityFormats
+}
+
+func (h *DataUploadHandlers) isSupportedFileFormat(format, fileName string) bool {
+	format = strings.ToLower(strings.TrimSpace(format))
+	for _, supported := range h.GetSupportedFileFormats(fileName) {
+		if supported == format {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *DataUploadHandlers) uploadError(ctx context.Context, err error, message string) error {
+	if errors.Is(err, domain.ErrResourceNotFound) {
+		return rest.ErrNotFound().WithMessage("Upload session not found")
+	}
+	if errors.Is(err, domain.ErrValidationFailed) {
+		return rest.ErrBadRequest().Wrap(err).WithMessage(err.Error())
+	}
+	log.WithContext(ctx).WithError(err).Error(message)
+	return rest.ErrInternalServer().Wrap(err).WithMessage(message)
+}
+
+func jsonResponse(statusCode int, body any) (rest.APIResponse, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, rest.ErrInternalServer().Wrap(err).WithMessage("Failed to encode response")
+	}
+	return rest.NewJSONResponse(statusCode, raw), nil
 }

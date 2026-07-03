@@ -43,7 +43,7 @@ func registerActiveRequestsGauge(meterName string, active *ActiveRequests) {
 	if meterName == "" {
 		meterName = "transport"
 	}
-	name := fmt.Sprintf("exchange.%s", meterName)
+	name := fmt.Sprintf("bighill.%s", meterName)
 	meter := otel.Meter(name)
 	fallbackName := fmt.Sprintf("%s-fallback", name)
 

@@ -1,4 +1,4 @@
-.PHONY: test build release-prod release-staging lint run watch install cert install-helm upgrade-helm
+.PHONY: test build release-prod release-staging lint run install cert install-helm upgrade-helm
 .DEFAULT_GOAL := run
 SHELL         := /bin/bash
 
@@ -24,10 +24,6 @@ lint:
 
 run:
 	@scripts/run.sh $(ENV)
-
-watch:
-	@scripts/watch.sh
-
 
 install:
 	@scripts/install.sh

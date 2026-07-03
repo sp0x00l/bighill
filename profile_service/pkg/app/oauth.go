@@ -106,7 +106,7 @@ func (u *profilesUseCase) CreateOAuthSession(ctx context.Context, provider strin
 		return nil, fmt.Errorf("failed to consume oauth state: %w", err)
 	}
 
-	identity, err := client.ExchangeCode(ctx, strings.TrimSpace(req.Code), state.RedirectURI, strings.TrimSpace(req.CodeVerifier))
+	identity, err := client.BigHillCode(ctx, strings.TrimSpace(req.Code), state.RedirectURI, strings.TrimSpace(req.CodeVerifier))
 	if err != nil {
 		return nil, err
 	}

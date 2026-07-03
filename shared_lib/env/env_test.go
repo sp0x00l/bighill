@@ -15,11 +15,14 @@ import (
 )
 
 func TestInfraEnv(t *testing.T) {
+	if runFatalEnvHelper() {
+		return
+	}
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "env config unit test suite")
 }
 
-func TestFatalEnvHelper(t *testing.T) {
+func runFatalEnvHelper() bool {
 	switch os.Getenv("SHARED_LIB_ENV_FATAL_CASE") {
 	case "invalid_int64":
 		os.Setenv("ENV_VAT_INT64", "*")
@@ -40,8 +43,9 @@ func TestFatalEnvHelper(t *testing.T) {
 		os.Unsetenv("ENV_VAT_STR_ARRAY")
 		config.WithDefaultStringSlice("ENV_VAT_STR_ARRAY", "")
 	default:
-		t.Skip("helper process")
+		return false
 	}
+	return true
 }
 
 var _ = Describe("environment variables", func() {
@@ -243,7 +247,7 @@ var _ = Describe("environment variables", func() {
 })
 
 func expectFatalEnvCall(caseName string) {
-	cmd := exec.Command(os.Args[0], "-test.run=TestFatalEnvHelper")
+	cmd := exec.Command(os.Args[0], "-test.run=TestInfraEnv")
 	cmd.Env = append(os.Environ(), "SHARED_LIB_ENV_FATAL_CASE="+caseName)
 	err := cmd.Run()
 	Expect(err).To(HaveOccurred())

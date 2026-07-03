@@ -1,0 +1,103 @@
+# OpenTelemetry Collector values
+mode: deployment
+replicaCount: 1
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  processors:
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+    batch:
+      send_batch_size: 1024
+      send_batch_max_size: 2048
+      timeout: 5s
+    probabilistic_sampler:
+      sampling_percentage: 10
+
+  exporters:
+    otlp/tempo:
+      endpoint: tempo.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+      sending_queue:
+        enabled: true
+        num_consumers: 10
+        queue_size: 5000
+      retry_on_failure:
+        enabled: true
+        initial_interval: 5s
+        max_interval: 30s
+        max_elapsed_time: 300s
+
+    prometheus:
+      endpoint: "0.0.0.0:9464"
+      namespace: ""  # Don't add namespace prefix to metric names
+      resource_to_telemetry_conversion:
+        enabled: true  # Add resource attributes as metric labels
+      enable_open_metrics: true  # Better Prometheus compatibility
+
+    # Logs are handled by Promtail, not OTEL collector
+    debug:
+      verbosity: basic
+
+  service:
+    telemetry:
+      metrics:
+        address: "0.0.0.0:8888"
+
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, probabilistic_sampler, batch]
+        exporters: [otlp/tempo]
+
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [prometheus]
+
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [debug]
+
+# Kubernetes Service metadata - use podLabels instead of service.labels
+podLabels:
+  Component: standalone-collector
+
+# Use default ports from chart - don't override to avoid duplicates
+# Chart already exposes: 4317 (otlp-grpc), 4318 (otlp-http)
+
+# Ports are configured via the 'ports' key at the top level in newer chart versions
+ports:
+  metrics:
+    # Internal collector telemetry - keep default port 8888
+    enabled: true
+    containerPort: 8888
+    servicePort: 8888
+    protocol: TCP
+  prometheus:
+    # Prometheus exporter for application metrics
+    enabled: true
+    containerPort: 9464
+    servicePort: 9464
+    protocol: TCP
+
+serviceMonitor:
+  enabled: true
+  extraLabels:
+    release: kube-prometheus-stack  # Must match Prometheus release label
+  metricsEndpoints:
+    - port: prometheus  # Scrape the Prometheus exporter port for application metrics

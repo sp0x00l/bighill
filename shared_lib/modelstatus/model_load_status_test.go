@@ -3,45 +3,41 @@ package modelstatus
 import (
 	"errors"
 	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestModelLoadStatusString(t *testing.T) {
-	if ModelLoadStatusNotLoaded.String() != "NOT_LOADED" {
-		t.Fatalf("unexpected not-loaded string: %s", ModelLoadStatusNotLoaded.String())
-	}
-	if ModelLoadStatusLoaded.String() != "LOADED" {
-		t.Fatalf("unexpected loaded string: %s", ModelLoadStatusLoaded.String())
-	}
-	if ModelLoadStatusFailed.String() != "FAILED" {
-		t.Fatalf("unexpected failed string: %s", ModelLoadStatusFailed.String())
-	}
-	if ModelLoadStatus(99).String() != "UNKNOWN" {
-		t.Fatalf("unexpected out-of-range string: %s", ModelLoadStatus(99).String())
-	}
+func TestModelStatus(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Model status unit test suite")
 }
 
-func TestToModelLoadStatus(t *testing.T) {
-	cases := map[string]ModelLoadStatus{
-		"":           ModelLoadStatusNotLoaded,
-		"not_loaded": ModelLoadStatusNotLoaded,
-		"LOADED":     ModelLoadStatusLoaded,
-		" failed ":   ModelLoadStatusFailed,
-	}
+var _ = Describe("ModelLoadStatus", func() {
+	It("renders strings", func() {
+		Expect(ModelLoadStatusNotLoaded.String()).To(Equal("NOT_LOADED"))
+		Expect(ModelLoadStatusLoaded.String()).To(Equal("LOADED"))
+		Expect(ModelLoadStatusFailed.String()).To(Equal("FAILED"))
+		Expect(ModelLoadStatus(99).String()).To(Equal("UNKNOWN"))
+	})
 
-	for input, want := range cases {
-		got, err := ToModelLoadStatus(input)
-		if err != nil {
-			t.Fatalf("unexpected error for %q: %v", input, err)
+	It("parses known strings", func() {
+		cases := map[string]ModelLoadStatus{
+			"":           ModelLoadStatusNotLoaded,
+			"not_loaded": ModelLoadStatusNotLoaded,
+			"LOADED":     ModelLoadStatusLoaded,
+			" failed ":   ModelLoadStatusFailed,
 		}
-		if got != want {
-			t.Fatalf("unexpected status for %q: got=%s want=%s", input, got, want)
-		}
-	}
-}
 
-func TestToModelLoadStatusRejectsUnknown(t *testing.T) {
-	_, err := ToModelLoadStatus("READY")
-	if !errors.Is(err, ErrUnknownModelLoadStatus) {
-		t.Fatalf("expected unknown model load status error, got %v", err)
-	}
-}
+		for input, want := range cases {
+			got, err := ToModelLoadStatus(input)
+			Expect(err).NotTo(HaveOccurred(), "input %q", input)
+			Expect(got).To(Equal(want), "input %q", input)
+		}
+	})
+
+	It("rejects unknown strings", func() {
+		_, err := ToModelLoadStatus("READY")
+		Expect(errors.Is(err, ErrUnknownModelLoadStatus)).To(BeTrue())
+	})
+})

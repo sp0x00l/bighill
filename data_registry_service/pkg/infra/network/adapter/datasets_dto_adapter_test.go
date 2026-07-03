@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	serializers "data_registry_service/pkg/common/serializer"
 	"data_registry_service/pkg/domain/model"
+	serializers "lib/shared_lib/serializer"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"

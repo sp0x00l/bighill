@@ -27,7 +27,7 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_OUTBOX_RELAY_BATCH_SIZE")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_API_GRPC_PORT")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_GROUP_ID")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_BASE_GROUP_ID")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_PROVIDER")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_ENDPOINT")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_MODEL")).To(Succeed())
@@ -53,7 +53,7 @@ var _ = Describe("readInferenceConfig", func() {
 
 		Expect(cfg.ServiceName).To(Equal("inference-service"))
 		Expect(cfg.DBName).To(Equal("bighill_inference_db"))
-		Expect(cfg.Messaging.GroupID).To(Equal("inference-group"))
+		Expect(cfg.Messaging.GroupID).To(Equal("inference"))
 		Expect(cfg.OutboxBackend).To(Equal("postgres"))
 		Expect(cfg.OutboxRelay.PollInterval).To(Equal(250 * time.Millisecond))
 		Expect(cfg.OutboxRelay.FailureBackoff).To(Equal(2 * time.Second))
@@ -186,12 +186,15 @@ var _ = Describe("promptStrategyFromConfig", func() {
 var _ = Describe("newHealthCheckConfig", func() {
 	It("maps health settings", func() {
 		cfg := newHealthCheckConfig(healthConfig{
-			CpuThresholdPercentage:  70,
-			MemFreeThresholdPercent: 30,
-			HealthCheckPort:         5059,
-			DBConnectionString:      "postgres://localhost/db",
-			DbLatencyThreshold:      4 * time.Second,
-			ServiceLatencyThreshold: 3 * time.Second,
+			CpuThresholdPercentage:                    70,
+			MemFreeThresholdPercent:                   30,
+			HealthCheckPort:                           5059,
+			DBConnectionString:                        "postgres://localhost/db",
+			DbLatencyThreshold:                        4 * time.Second,
+			ServiceLatencyThreshold:                   3 * time.Second,
+			MessageBrokerSubscriberMaxPollSilence:     30 * time.Second,
+			MessageBrokerSubscriberMaxProgressSilence: 90 * time.Second,
+			MessageBrokerSubscriberMaxLag:             100,
 		})
 
 		Expect(cfg.CpuThresholdPercentage).To(Equal(70))
@@ -200,5 +203,8 @@ var _ = Describe("newHealthCheckConfig", func() {
 		Expect(cfg.DBConnectionString).To(Equal("postgres://localhost/db"))
 		Expect(cfg.DbLatencyThresholdSec).To(Equal(4 * time.Second))
 		Expect(cfg.ServiceLatencyThresholdSec).To(Equal(3 * time.Second))
+		Expect(cfg.MessageBrokerSubscriberMaxPollSilenceSec).To(Equal(30 * time.Second))
+		Expect(cfg.MessageBrokerSubscriberMaxProgressSilenceSec).To(Equal(90 * time.Second))
+		Expect(cfg.MessageBrokerSubscriberMaxLag).To(Equal(int64(100)))
 	})
 })

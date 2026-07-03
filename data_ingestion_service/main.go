@@ -35,32 +35,38 @@ import (
 var Version string
 
 type ingestionConfig struct {
-	ServiceName          string
-	HTTPPort             int
-	MaxFileSizeBytes     int64
-	BucketName           string
-	BucketRegion         string
-	BucketUploadPartSize int64
-	DBName               string
-	DBConnectionString   string
-	Redis                rueidis.ClientOption
-	Messaging            messagingConn.MessengerConfig
-	OutboxBackend        string
-	OutboxRelay          messagingConn.OutboxRelayConfig
-	DatasetUploadedTopic string
-	DataRegistryTopic    string
-	Health               healthConfig
+	ServiceName                   string
+	HTTPPort                      int
+	DirectUploadMaxFileSizeBytes  int64
+	UploadSessionMaxFileSizeBytes int64
+	UploadSessionTTL              time.Duration
+	UploadValidationReadMaxBytes  int64
+	BucketName                    string
+	BucketRegion                  string
+	BucketUploadPartSize          int64
+	DBName                        string
+	DBConnectionString            string
+	Redis                         rueidis.ClientOption
+	Messaging                     messagingConn.MessengerConfig
+	OutboxBackend                 string
+	OutboxRelay                   messagingConn.OutboxRelayConfig
+	DatasetUploadedTopic          string
+	DataRegistryTopic             string
+	Health                        healthConfig
 }
 
 type healthConfig struct {
-	CpuThresholdPercentage        int
-	MemFreeThresholdPercentage    int
-	HealthCheckPort               int
-	DBConnectionString            string
-	MessageBrokerConnectionString string
-	DbLatencyThreshold            time.Duration
-	MessageBrokerLatencyThreshold time.Duration
-	ServiceLatencyThreshold       time.Duration
+	CpuThresholdPercentage                    int
+	MemFreeThresholdPercentage                int
+	HealthCheckPort                           int
+	DBConnectionString                        string
+	MessageBrokerConnectionString             string
+	DbLatencyThreshold                        time.Duration
+	MessageBrokerLatencyThreshold             time.Duration
+	ServiceLatencyThreshold                   time.Duration
+	MessageBrokerSubscriberMaxPollSilence     time.Duration
+	MessageBrokerSubscriberMaxProgressSilence time.Duration
+	MessageBrokerSubscriberMaxLag             int64
 }
 
 func init() {
@@ -71,6 +77,9 @@ func main() {
 	ctx := context.Background()
 	cancelCtx, cancelFtn := context.WithCancel(ctx)
 	cfg := readIngestionConfig()
+	if err := validateIngestionConfig(cfg); err != nil {
+		log.WithError(err).Fatal("invalid data ingestion configuration")
+	}
 	serviceName := cfg.ServiceName
 
 	log.Trace(fmt.Sprintf("starting the %s service", serviceName))
@@ -85,6 +94,10 @@ func main() {
 	outboxWriter, err := newPostgresOutbox(coreDb, cfg.OutboxBackend)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create postgres outbox")
+	}
+	orderedOutbox, ok := outboxWriter.(messagingConn.OrderedOutbox)
+	if !ok {
+		log.Fatal("postgres outbox does not support transactional enqueue operations")
 	}
 	outboxSignal := make(chan struct{}, 1)
 	outboxWriter = messagingConn.NewSignaledOutbox(outboxWriter, outboxSignal)
@@ -116,14 +129,12 @@ func main() {
 		publisher.Close()
 	}()
 
-	messagingFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
+	subscriberFactories := []messagingConn.Messenger{}
 	defer func() {
-		_ = messagingFactory.Close(cancelCtx)
+		for _, factory := range subscriberFactories {
+			_ = factory.Close(cancelCtx)
+		}
 	}()
-	subscriber, err := messagingFactory.Subscriber(cancelCtx)
-	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create the subscriber")
-	}
 
 	redisClient, err := rueidis.NewClient(cfg.Redis)
 	if err != nil {
@@ -145,12 +156,6 @@ func main() {
 	uploadBucket := bucket.NewDataBucket(cfg.BucketName, uploader)
 	datasetDB := db.NewDatasetDB(coreDb)
 	datasetUseCase := usecase.NewDatasetUseCase(datasetDB)
-	datasetLifecycleSubscriber := ingestionmessaging.NewDatasetLifecycleSubscriber(subscriber, datasetUseCase, []string{cfg.DataRegistryTopic})
-	uploadUseCase := usecase.NewDataUploadUseCase(
-		uploadBucket,
-		usecase.WithUploadEventPublisher(publisher, cfg.DatasetUploadedTopic),
-	)
-
 	formatDetector := rest.NewDetector(
 		map[string]rest.FormatValidatorFunc{
 			rest.FileTypeCSV:      rest.IsCSV,
@@ -162,9 +167,21 @@ func main() {
 			rest.FileTypeText:     rest.IsText,
 		},
 	)
+	uploadSessionDB := db.NewUploadSessionDB(
+		coreDb,
+		db.WithUploadSessionOutbox(orderedOutbox, cfg.DatasetUploadedTopic),
+		db.WithUploadSessionOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	)
+	uploadUseCase := usecase.NewDataUploadUseCase(
+		uploadBucket,
+		usecase.WithUploadSessionRepository(uploadSessionDB),
+		usecase.WithUploadDatasetRepository(datasetDB),
+		usecase.WithUploadFileDetector(formatDetector),
+		usecase.WithUploadPolicy(cfg.UploadSessionMaxFileSizeBytes, cfg.UploadSessionTTL, cfg.UploadValidationReadMaxBytes),
+	)
 
 	authHandler := rest.NewAuthHandler(authProv, authStore)
-	routes := rest.NewDataUploadHandlers(uploadUseCase, datasetUseCase, formatDetector, authHandler, cfg.MaxFileSizeBytes).GetRoutes()
+	routes := rest.NewDataUploadHandlers(uploadUseCase, datasetUseCase, formatDetector, authHandler, cfg.DirectUploadMaxFileSizeBytes).GetRoutes()
 
 	log.Infof("%s API HTTP port: %d", serviceName, cfg.HTTPPort)
 
@@ -175,6 +192,23 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
+		factory, monitor, err := messagingConn.StartStreamSubscriber(cancelCtx, messagingConn.StreamSubscriberConfig{
+			Brokers:          cfg.Messaging.Brokers,
+			DLQURL:           cfg.Messaging.DlqURL,
+			BaseGroupID:      cfg.Messaging.GroupID,
+			AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
+			Cancel:           cancelFtn,
+			Monitor:          healthCheck,
+			OnUnexpectedStop: func() { quit <- syscall.SIGTERM },
+		}, name, topics, configure)
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatalf("unable to create %s subscriber", name)
+		}
+		healthCheck = monitor
+		subscriberFactories = append(subscriberFactories, factory)
+	}
+
 	go func() {
 		if err := restService.Connect(); err != nil {
 			if err != http.ErrServerClosed {
@@ -184,12 +218,15 @@ func main() {
 		}
 	}()
 
-	go func() {
-		if err := datasetLifecycleSubscriber.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
-			log.WithContext(cancelCtx).WithError(err).Error("dataset lifecycle subscriber stopped unexpectedly")
-			quit <- syscall.SIGTERM
-		}
-	}()
+	startSubscriber("dataset-created", []string{cfg.DataRegistryTopic}, func(subscriber messagingConn.Subscriber) {
+		messagingConn.AddListener(subscriber, ingestionmessaging.NewDatasetCreatedEventListener(datasetUseCase))
+	})
+	startSubscriber("dataset-updated", []string{cfg.DataRegistryTopic}, func(subscriber messagingConn.Subscriber) {
+		messagingConn.AddListener(subscriber, ingestionmessaging.NewDatasetUpdatedEventListener(datasetUseCase))
+	})
+	startSubscriber("dataset-deleted", []string{cfg.DataRegistryTopic}, func(subscriber messagingConn.Subscriber) {
+		messagingConn.AddListener(subscriber, ingestionmessaging.NewDatasetDeletedEventListener(datasetUseCase))
+	})
 
 	go func() {
 		if err := healthCheck.Connect(ctx); err != nil {
@@ -224,25 +261,31 @@ func readIngestionConfig() ingestionConfig {
 		env.WithDefaultInt("DATA_INGESTION_SERVICE_DB_MAX_CONNECTIONS", "20"),
 	)
 	maxFileSizeMB := env.WithDefaultInt64("DATA_INGESTION_SERVICE_FILE_MAX_SIZE_MB", "2000")
-	uploadPartSizeMB := env.WithDefaultInt64("DATA_INGESTION_SERVICE_FILES_UPLOAD_PART_SIZE_MS", "10")
+	directMaxFileSizeMB := env.WithDefaultInt64("DATA_INGESTION_SERVICE_DIRECT_UPLOAD_MAX_SIZE_MB", "5")
+	validationReadMaxMB := env.WithDefaultInt64("DATA_INGESTION_SERVICE_UPLOAD_VALIDATION_READ_MAX_SIZE_MB", "5")
+	uploadPartSizeMB := env.WithDefaultInt64("DATA_INGESTION_SERVICE_FILES_UPLOAD_PART_SIZE_MB", "10")
 	return ingestionConfig{
-		ServiceName:          env.WithDefaultString("DATA_INGESTION_SERVICE_NAME", "data-ingestion-service"),
-		HTTPPort:             env.WithDefaultInt("DATA_INGESTION_SERVICE_API_HTTP_PORT", "8086"),
-		MaxFileSizeBytes:     maxFileSizeMB * 1000 * 1000,
-		BucketName:           env.WithDefaultString("DATA_INGESTION_SERVICE_FILES_BUCKET_NAME", "local-dev-bucket"),
-		BucketRegion:         env.WithDefaultString("DATA_INGESTION_SERVICE_FILES_BUCKET_REGION", "local-dev"),
-		BucketUploadPartSize: uploadPartSizeMB * 1024 * 1024,
-		DBName:               dbName,
-		DBConnectionString:   dbConnectionString,
+		ServiceName:                   env.WithDefaultString("DATA_INGESTION_SERVICE_NAME", "data-ingestion-service"),
+		HTTPPort:                      env.WithDefaultInt("DATA_INGESTION_SERVICE_API_HTTP_PORT", "8086"),
+		DirectUploadMaxFileSizeBytes:  directMaxFileSizeMB * 1000 * 1000,
+		UploadSessionMaxFileSizeBytes: maxFileSizeMB * 1000 * 1000,
+		UploadSessionTTL:              time.Duration(env.WithDefaultInt("DATA_INGESTION_SERVICE_UPLOAD_SESSION_TTL_SECONDS", "900")) * time.Second,
+		UploadValidationReadMaxBytes:  validationReadMaxMB * 1000 * 1000,
+		BucketName:                    env.WithDefaultString("DATA_INGESTION_SERVICE_FILES_BUCKET_NAME", "local-dev-bucket"),
+		BucketRegion:                  env.WithDefaultString("DATA_INGESTION_SERVICE_FILES_BUCKET_REGION", "local-dev"),
+		BucketUploadPartSize:          uploadPartSizeMB * 1024 * 1024,
+		DBName:                        dbName,
+		DBConnectionString:            dbConnectionString,
 		Redis: rueidis.ClientOption{
 			InitAddress: []string{env.WithDefaultString("DATA_INGESTION_SERVICE_REDIS_ADDRESS", "localhost:6379")},
 			Username:    env.WithDefaultString("DATA_INGESTION_SERVICE_REDIS_USERNAME", ""),
 			Password:    env.WithDefaultString("DATA_INGESTION_SERVICE_REDIS_PASSWORD", ""),
 		},
 		Messaging: messagingConn.MessengerConfig{
-			DlqURL:  env.WithDefaultString("DATA_INGESTION_SERVICE_DLQ", "http://localhost:4566/data-ingestion-dev-env-queue/"),
-			GroupID: env.WithDefaultString("DATA_INGESTION_SERVICE_KAFKA_GROUP_ID", "data-ingestion-group"),
-			Brokers: brokers,
+			DlqURL:          env.WithDefaultString("DATA_INGESTION_SERVICE_DLQ", "http://localhost:4566/data-ingestion-dev-env-queue/"),
+			GroupID:         env.WithDefaultString("DATA_INGESTION_SERVICE_KAFKA_BASE_GROUP_ID", "data-ingestion"),
+			Brokers:         brokers,
+			AutoOffsetReset: env.WithDefaultString("DATA_INGESTION_SERVICE_KAFKA_AUTO_OFFSET_RESET", "earliest"),
 		},
 		OutboxBackend: env.WithDefaultString("DATA_INGESTION_SERVICE_OUTBOX", "postgres"),
 		OutboxRelay: messagingConn.OutboxRelayConfig{
@@ -253,16 +296,43 @@ func readIngestionConfig() ingestionConfig {
 		DatasetUploadedTopic: env.WithDefaultString("DATA_INGESTION_SERVICE_TOPIC", "data_ingestion"),
 		DataRegistryTopic:    env.WithDefaultString("DATA_INGESTION_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_PORT", "5056"),
-			DBConnectionString:            dbConnectionString,
-			MessageBrokerConnectionString: brokers,
-			DbLatencyThreshold:            secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
-			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
-			ServiceLatencyThreshold:       secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			CpuThresholdPercentage:                    env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercentage:                env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:                           env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_PORT", "5056"),
+			DBConnectionString:                        dbConnectionString,
+			MessageBrokerConnectionString:             brokers,
+			DbLatencyThreshold:                        secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold:             secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:                   secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerSubscriberMaxPollSilence:     secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS", "30"),
+			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
+			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
 		},
 	}
+}
+
+func validateIngestionConfig(cfg ingestionConfig) error {
+	log.Trace("validateIngestionConfig")
+
+	if cfg.DirectUploadMaxFileSizeBytes <= 0 {
+		return fmt.Errorf("DATA_INGESTION_SERVICE_DIRECT_UPLOAD_MAX_SIZE_MB must be greater than zero")
+	}
+	if cfg.UploadSessionMaxFileSizeBytes <= 0 {
+		return fmt.Errorf("DATA_INGESTION_SERVICE_FILE_MAX_SIZE_MB must be greater than zero")
+	}
+	if cfg.UploadValidationReadMaxBytes <= 0 {
+		return fmt.Errorf("DATA_INGESTION_SERVICE_UPLOAD_VALIDATION_READ_MAX_SIZE_MB must be greater than zero")
+	}
+	if cfg.BucketUploadPartSize <= 0 {
+		return fmt.Errorf("DATA_INGESTION_SERVICE_FILES_UPLOAD_PART_SIZE_MB must be greater than zero")
+	}
+	if cfg.UploadSessionTTL <= 0 {
+		return fmt.Errorf("DATA_INGESTION_SERVICE_UPLOAD_SESSION_TTL_SECONDS must be greater than zero")
+	}
+	if cfg.UploadSessionMaxFileSizeBytes < cfg.DirectUploadMaxFileSizeBytes {
+		return fmt.Errorf("DATA_INGESTION_SERVICE_FILE_MAX_SIZE_MB must be greater than or equal to DATA_INGESTION_SERVICE_DIRECT_UPLOAD_MAX_SIZE_MB")
+	}
+	return nil
 }
 
 func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
@@ -276,9 +346,9 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 		MessageBrokerLatencyThresholdSec:             cfg.MessageBrokerLatencyThreshold,
 		ServiceLatencyThresholdSec:                   cfg.ServiceLatencyThreshold,
 		HttpCheckTargets:                             map[string]string{},
-		MessageBrokerSubscriberMaxPollSilenceSec:     0,
-		MessageBrokerSubscriberMaxProgressSilenceSec: 0,
-		MessageBrokerSubscriberMaxLag:                0,
+		MessageBrokerSubscriberMaxPollSilenceSec:     cfg.MessageBrokerSubscriberMaxPollSilence,
+		MessageBrokerSubscriberMaxProgressSilenceSec: cfg.MessageBrokerSubscriberMaxProgressSilence,
+		MessageBrokerSubscriberMaxLag:                cfg.MessageBrokerSubscriberMaxLag,
 	}
 }
 

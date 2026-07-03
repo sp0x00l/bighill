@@ -128,7 +128,7 @@ func (s *oauthProviderStub) AuthorizationURL(string, string, string) (string, er
 	}
 	return s.authorizationURL, nil
 }
-func (s *oauthProviderStub) ExchangeCode(context.Context, string, string, string) (*domain.OAuthIdentity, error) {
+func (s *oauthProviderStub) BigHillCode(context.Context, string, string, string) (*domain.OAuthIdentity, error) {
 	return s.identity, s.err
 }
 

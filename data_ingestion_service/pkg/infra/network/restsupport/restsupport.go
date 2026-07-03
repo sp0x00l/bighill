@@ -77,6 +77,10 @@ func NewReponse(statusCode int) APIResponse {
 	return response{statusCode: statusCode}
 }
 
+func NewJSONResponse(statusCode int, payload []byte) APIResponse {
+	return response{statusCode: statusCode, payload: payload}
+}
+
 type HTTPError struct {
 	statusCode int
 	message    string

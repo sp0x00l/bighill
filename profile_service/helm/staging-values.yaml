@@ -11,16 +11,16 @@ serviceAccount:
 
 ingress:
   enabled: true
-  host: "profile.internal.northern.exchange"
+  host: "profile.internal.northern.bighill"
 
 env:
   environment: "staging"
-  kafkaBroker: "kafka.exchange-staging.svc.cluster.local:9092"
-  redisAddress: "redis.exchange-staging.svc.cluster.local:6379"
+  kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
+  redisAddress: "redis.bighill-staging.svc.cluster.local:6379"
   dlq: "http://localhost:4566/profile-dev-env-queue/"
   outbox: "postgres"
   # KMS key for JWT signing - created by Terraform
-  authKmsKeyId: "alias/exchange-staging-jwt-signing"
+  authKmsKeyId: "alias/bighill-staging-jwt-signing"
   emailValidationTtlMinutes: "60"
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   dbCredentialsSecret:

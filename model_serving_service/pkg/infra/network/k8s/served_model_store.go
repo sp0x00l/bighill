@@ -165,6 +165,10 @@ func servedModelFromObject(obj *unstructured.Unstructured, namespace string) (*m
 		return nil, fmt.Errorf("%w: invalid dataset id: %w", domain.ErrValidationFailed, err)
 	}
 	modelVersion, _, _ := unstructured.NestedInt64(obj.Object, "spec", "modelVersion")
+	status, err := servedModelStatusFromObject(obj)
+	if err != nil {
+		return nil, err
+	}
 	return &model.ServedModel{
 		ResourceName:     obj.GetName(),
 		Namespace:        namespace,
@@ -181,6 +185,33 @@ func servedModelFromObject(obj *unstructured.Unstructured, namespace string) (*m
 		AdapterURI:       specString(obj, "adapterURI"),
 		ServingTarget:    specString(obj, "servingTarget"),
 		ServingModel:     specString(obj, "servingModel"),
+		Status:           status,
+	}, nil
+}
+
+func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedModelStatus, error) {
+	log.Trace("servedModelStatusFromObject")
+
+	loadStatusValue, exists, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
+	if !exists || strings.TrimSpace(loadStatusValue) == "" {
+		return nil, nil
+	}
+	loadStatus, err := model.ToModelLoadStatus(loadStatusValue)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid served model load status: %w", domain.ErrValidationFailed, err)
+	}
+	servingTarget, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
+	servingModel, _, _ := unstructured.NestedString(obj.Object, "status", "servingModel")
+	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
+	observedGeneration, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
+	readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
+	return &model.ServedModelStatus{
+		ServingLoadStatus:  loadStatus,
+		ServingTarget:      servingTarget,
+		ServingModel:       servingModel,
+		FailureReason:      failureReason,
+		ObservedGeneration: observedGeneration,
+		ReadyReplicas:      int32(readyReplicas),
 	}, nil
 }
 

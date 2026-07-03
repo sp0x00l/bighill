@@ -2,9 +2,9 @@ package adapter
 
 import (
 	"context"
-	serializers "data_registry_service/pkg/common/serializer"
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
+	serializers "lib/shared_lib/serializer"
 
 	log "github.com/sirupsen/logrus"
 )

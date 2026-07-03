@@ -23,7 +23,8 @@ env:
   redisUsername: ""
   redisPassword: ""
   kafkaBroker: "kafka:9092"
-  kafkaGroupId: "data-ingestion-group"
+  kafkaBaseGroupId: "data-ingestion"
+  kafkaAutoOffsetReset: "earliest"
   topic: "data_ingestion"
   dataRegistrySubscriberTopic: "data_registry"
   dlq: "http://localhost:4566/data-ingestion-dev-env-queue/"
@@ -34,6 +35,9 @@ env:
   filesBucketName: "local-dev-bucket"
   filesBucketRegion: "local-dev"
   fileMaxSizeMb: "2000"
+  directUploadMaxSizeMb: "5"
+  uploadSessionTtlSeconds: "900"
+  uploadValidationReadMaxSizeMb: "5"
   filesUploadPartSizeMb: "10"
   dbCredentialsSecret:
     name: ""
@@ -72,6 +76,9 @@ env:
   healthcheckServiceLatencyThreshold: "5"
   healthcheckDbLatencyThreshold: "5"
   healthcheckMessageBrokerLatencyThreshold: "5"
+  healthcheckMessageBrokerSubscriberMaxPollSilence: "30"
+  healthcheckMessageBrokerSubscriberMaxProgressSilence: "90"
+  healthcheckMessageBrokerSubscriberMaxLag: "100000"
   authKmsKeyId: ""
 resources:
   requests:

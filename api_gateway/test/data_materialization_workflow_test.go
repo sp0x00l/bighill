@@ -1,8 +1,10 @@
 package test
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +41,73 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			status, body := doMultipartFile(http.MethodPost, "/v1/data/store/"+datasetID, "file", "movies.csv", csv, user.Token, uuid.New())
 			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			status, body := doJSON(http.MethodGet, "/v1/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
+			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+
+			read := decodeObject(body)
+			g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
+			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
+			g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
+			g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
+			g.Expect(read["schemaVersion"]).To(BeNumerically(">=", 1))
+			metadata := schemaMetadataObject(g, read)
+			g.Expect(metadata["source_format"]).To(Equal("csv"))
+			g.Expect(metadata["rows"]).To(BeNumerically("==", 2))
+			expectSchemaField(g, metadata, "title")
+			expectSchemaField(g, metadata, "views")
+		}, 45*time.Second, 1*time.Second).Should(Succeed())
+	})
+
+	It("materializes a presigned upload session through staging validation and promotion", func() {
+		createPayload := map[string]any{
+			"title":             "Presigned Movie Metrics Upload",
+			"description":       "CSV uploaded through a presigned staging session and materialized by the feature pipeline",
+			"category":          "movies",
+			"tableNamespace":    "features",
+			"tableName":         "presigned_movie_metrics_upload",
+			"tableFormat":       "PARQUET",
+			"catalogProvider":   "LOCAL",
+			"processingProfile": "TEXT_RAG",
+		}
+
+		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
+		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		created := decodeObject(body)
+		datasetID := stringField(created, "id")
+
+		csv := []byte("title,views\nPresigned Intro,30\nPresigned Next,40\n")
+		var uploadID string
+		var fields map[string]any
+		Eventually(func(g Gomega) {
+			initiatePayload := map[string]any{
+				"file_name":           "presigned-movies.csv",
+				"declared_format":     "csv",
+				"content_type":        "text/csv",
+				"declared_size_bytes": len(csv),
+				"client_nonce":        "presigned-" + datasetID,
+			}
+			status, body := doJSON(http.MethodPost, "/v1/data/uploads/"+datasetID, initiatePayload, user.Token, uuid.New())
+			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+			initiated := decodeObject(body)
+			uploadID = stringField(initiated, "upload_id")
+			g.Expect(stringField(initiated, "url")).To(Equal("local-s3://local-dev-bucket"))
+			var ok bool
+			fields, ok = initiated["fields"].(map[string]any)
+			g.Expect(ok).To(BeTrue(), "fields: %#v", initiated["fields"])
+			g.Expect(fields).To(HaveKeyWithValue("key", MatchRegexp(`^staging/`)))
+			g.Expect(fields).To(HaveKeyWithValue("Content-Type", "text/csv"))
+		}, 30*time.Second, 1*time.Second).Should(Succeed())
+
+		writeLocalS3Object("local-dev-bucket", fields["key"].(string), "text/csv", csv)
+
+		status, body = doJSON(http.MethodPost, "/v1/data/uploads/"+uploadID+"/complete", nil, user.Token, uuid.New())
+		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		completed := decodeObject(body)
+		Expect(completed["status"]).To(Equal("PROMOTED"))
+		Expect(completed["storage_location"]).To(MatchRegexp(`^s3://local-dev-bucket/raw/`))
+		Expect(completed["actual_size_bytes"]).To(BeNumerically("==", len(csv)))
 
 		Eventually(func(g Gomega) {
 			status, body := doJSON(http.MethodGet, "/v1/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
@@ -180,4 +249,29 @@ func expectSchemaField(g Gomega, metadata map[string]any, fieldName string) {
 		}
 	}
 	g.Expect(fields).To(ContainElement(HaveKeyWithValue("name", fieldName)))
+}
+
+func writeLocalS3Object(bucket, key, contentType string, content []byte) {
+	root := localS3RepoRoot()
+	objectPath := filepath.Join(root, "tmp", "local_s3_storage", bucket, filepath.FromSlash(key))
+	Expect(os.MkdirAll(filepath.Dir(objectPath), 0755)).To(Succeed())
+	Expect(os.WriteFile(objectPath, content, 0600)).To(Succeed())
+	metadata, err := json.Marshal(map[string]string{"content_type": contentType})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(os.WriteFile(objectPath+".metadata.json", metadata, 0600)).To(Succeed())
+}
+
+func localS3RepoRoot() string {
+	dir, err := os.Getwd()
+	Expect(err).NotTo(HaveOccurred())
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "shared_lib")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			Fail("failed to find repository root for local S3 storage")
+		}
+		dir = parent
+	}
 }

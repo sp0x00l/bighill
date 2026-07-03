@@ -5,16 +5,20 @@ import (
 	"errors"
 	"lib/shared_lib/ctxutil"
 	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestIsCanceled(t *testing.T) {
-	if !ctxutil.IsCanceled(context.Canceled) {
-		t.Fatalf("expected context.Canceled to be treated as canceled")
-	}
-	if !ctxutil.IsCanceled(context.DeadlineExceeded) {
-		t.Fatalf("expected context.DeadlineExceeded to be treated as canceled")
-	}
-	if ctxutil.IsCanceled(errors.New("other")) {
-		t.Fatalf("expected unrelated errors not to be treated as canceled")
-	}
+func TestCtxutil(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Context utility unit test suite")
 }
+
+var _ = Describe("IsCanceled", func() {
+	It("matches context cancellation errors", func() {
+		Expect(ctxutil.IsCanceled(context.Canceled)).To(BeTrue())
+		Expect(ctxutil.IsCanceled(context.DeadlineExceeded)).To(BeTrue())
+		Expect(ctxutil.IsCanceled(errors.New("other"))).To(BeFalse())
+	})
+})

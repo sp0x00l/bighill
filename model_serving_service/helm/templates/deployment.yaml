@@ -38,8 +38,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: MODEL_SERVING_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckCpuThreshold | quote }}
+            - name: MODEL_SERVING_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
             - name: MODEL_SERVING_SERVICE_HEALTHCHECK_PORT
               value: {{ .Values.service.healthPort | quote }}
+            - name: MODEL_SERVING_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
+            - name: MODEL_SERVING_SERVICE_HEALTHCHECK_CONTROLLER_MAX_SILENCE_SECONDS
+              value: {{ .Values.env.healthcheckControllerMaxSilence | quote }}
             - name: MODEL_SERVING_SERVICE_POLL_MS
               value: {{ .Values.env.pollMs | quote }}
             - name: MODEL_SERVING_SERVICE_BACKEND
@@ -83,10 +91,18 @@ spec:
               cpu: {{ .Values.resources.limits.cpu | quote }}
           startupProbe:
             httpGet:
-              path: /health
+              path: /live
               port: health
             periodSeconds: 5
             failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health

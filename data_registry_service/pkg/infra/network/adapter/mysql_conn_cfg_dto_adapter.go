@@ -2,10 +2,10 @@ package adapter
 
 import (
 	"context"
-	serializers "data_registry_service/pkg/common/serializer"
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
 	"fmt"
+	serializers "lib/shared_lib/serializer"
 
 	"github.com/go-playground/validator/v10"
 	log "github.com/sirupsen/logrus"

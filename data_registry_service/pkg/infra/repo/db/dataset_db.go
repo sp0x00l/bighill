@@ -317,7 +317,7 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.U
 	requestedRank := processingStateRankSQL("@processing_state")
 	currentRank := processingStateRankSQL("processing_state")
 	query := `UPDATE ` + db.Name + `.datasets
-		SET processing_state = @processing_state,
+		SET processing_state = @processing_state::dataset_processing_state_enum,
 			dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
 			AND ` + requestedRank + ` > ` + currentRank + `

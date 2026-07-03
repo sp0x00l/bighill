@@ -15,6 +15,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 NAMESPACE="ml-ops-$ENVIRONMENT"
 CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+INTERNAL_ROOT_DOMAIN="${INTERNAL_ROOT_DOMAIN:-internal.bighill.example}"
+PUBLIC_ROOT_DOMAIN="${PUBLIC_ROOT_DOMAIN:-bighill.example}"
 
 # shellcheck disable=SC1091
 source "$PROJECT_ROOT/scripts/common.sh"
@@ -41,11 +43,11 @@ discover_aurora_credentials() {
   echo "Discovering Aurora credentials from Secrets Manager..."
   
   SECRET_ARN=$(aws secretsmanager list-secrets \
-    --query 'SecretList[?contains(Name, `exchange/'"${ENVIRONMENT}"'/aurora`)].ARN | [0]' \
+    --query 'SecretList[?contains(Name, `bighill/'"${ENVIRONMENT}"'/aurora`)].ARN | [0]' \
     --output text 2>/dev/null || true)
 
   if [ -z "$SECRET_ARN" ] || [ "$SECRET_ARN" = "None" ]; then
-    echo "Error: No Aurora secret found in Secrets Manager matching 'exchange/${ENVIRONMENT}/aurora'"
+    echo "Error: No Aurora secret found in Secrets Manager matching 'bighill/${ENVIRONMENT}/aurora'"
     exit 1
   fi
 
@@ -88,7 +90,7 @@ upsert_json_secret() {
 }
 
 discover_profile_oauth_credentials() {
-  local SECRET_NAME="exchange/${ENVIRONMENT}/profile-oauth"
+  local SECRET_NAME="bighill/${ENVIRONMENT}/profile-oauth"
   local SECRET_ARN
   local SECRET_JSON
 
@@ -117,11 +119,11 @@ discover_profile_oauth_credentials() {
   echo "Discovering profile OAuth credentials from Secrets Manager..."
 
   SECRET_ARN=$(aws secretsmanager list-secrets \
-    --query 'SecretList[?contains(Name, `exchange/'"${ENVIRONMENT}"'/profile-oauth`)].ARN | [0]' \
+    --query 'SecretList[?contains(Name, `bighill/'"${ENVIRONMENT}"'/profile-oauth`)].ARN | [0]' \
     --output text 2>/dev/null || true)
 
   if [ -z "$SECRET_ARN" ] || [ "$SECRET_ARN" = "None" ]; then
-    echo "Error: No profile OAuth secret found in Secrets Manager matching 'exchange/${ENVIRONMENT}/profile-oauth'"
+    echo "Error: No profile OAuth secret found in Secrets Manager matching 'bighill/${ENVIRONMENT}/profile-oauth'"
     exit 1
   fi
 
@@ -147,7 +149,7 @@ discover_profile_oauth_credentials() {
 }
 
 discover_price_oracle_ercot_credentials() {
-  local SECRET_NAME="exchange/${ENVIRONMENT}/price-oracle-ercot"
+  local SECRET_NAME="bighill/${ENVIRONMENT}/price-oracle-ercot"
   local SECRET_ARN
   local SECRET_JSON
 
@@ -180,11 +182,11 @@ discover_price_oracle_ercot_credentials() {
   echo "Discovering price-oracle ERCOT credentials from Secrets Manager..."
 
   SECRET_ARN=$(aws secretsmanager list-secrets \
-    --query 'SecretList[?contains(Name, `exchange/'"${ENVIRONMENT}"'/price-oracle-ercot`)].ARN | [0]' \
+    --query 'SecretList[?contains(Name, `bighill/'"${ENVIRONMENT}"'/price-oracle-ercot`)].ARN | [0]' \
     --output text 2>/dev/null || true)
 
   if [ -z "$SECRET_ARN" ] || [ "$SECRET_ARN" = "None" ]; then
-    echo "Error: No price-oracle ERCOT secret found in Secrets Manager matching 'exchange/${ENVIRONMENT}/price-oracle-ercot'"
+    echo "Error: No price-oracle ERCOT secret found in Secrets Manager matching 'bighill/${ENVIRONMENT}/price-oracle-ercot'"
     exit 1
   fi
 
@@ -481,9 +483,9 @@ create_redis_dns_record() {
   
   echo "Creating Redis DNS record..."
   
-  # Get the PRIVATE hosted zone ID for internal.northern.exchange
+  # Get the PRIVATE hosted zone ID for the internal BigHill domain.
   # Lambda functions in the VPC resolve DNS via the private zone, not the public zone
-  local INTERNAL_DOMAIN="internal.northern.exchange"
+  local INTERNAL_DOMAIN="${INTERNAL_ROOT_DOMAIN}"
   local ZONE_ID=$(aws route53 list-hosted-zones \
     --query "HostedZones[?Name=='${INTERNAL_DOMAIN}.' && Config.PrivateZone==\`true\`].Id | [0]" \
     --output text 2>/dev/null | sed 's|/hostedzone/||' || echo "")
@@ -495,7 +497,7 @@ create_redis_dns_record() {
   
   echo "Found private hosted zone: $ZONE_ID"
   
-  # Create CNAME record for redis.internal.northern.exchange -> NLB hostname
+  # Create CNAME record for redis.<internal-domain> -> NLB hostname
   local REDIS_DNS="redis.${INTERNAL_DOMAIN}"
   
   cat > /tmp/redis-dns-change.json <<EOF
@@ -541,8 +543,8 @@ create_events_dns_record() {
   
   echo "Found events ALB: $EVENTS_ALB_HOSTNAME"
   
-  # Get the PUBLIC hosted zone ID for staging.northern.exchange (or env.northern.exchange)
-  local PUBLIC_DOMAIN="${ENVIRONMENT}.northern.exchange"
+  # Get the PUBLIC hosted zone ID for the environment public domain.
+  local PUBLIC_DOMAIN="${ENVIRONMENT}.${PUBLIC_ROOT_DOMAIN}"
   local ZONE_ID
   ZONE_ID=$(aws route53 list-hosted-zones \
     --query "HostedZones[?Name=='${PUBLIC_DOMAIN}.' && Config.PrivateZone==\`false\`].Id | [0]" \
@@ -555,7 +557,7 @@ create_events_dns_record() {
   
   echo "Found public hosted zone: $ZONE_ID"
   
-  # Create CNAME record for events.staging.northern.exchange -> ALB hostname
+  # Create CNAME record for events.<environment-domain> -> ALB hostname
   local EVENTS_DNS="events.${PUBLIC_DOMAIN}"
   
   cat > /tmp/events-dns-change.json <<EOF
@@ -602,14 +604,14 @@ update_lambda_redis_config() {
   
   API_FUNCTION_NAME=$(aws cloudformation describe-stack-resources \
     --stack-name "$STACK_NAME" \
-    --logical-resource-id ExchangeApiFunction \
+    --logical-resource-id BighillApiFunction \
     --query 'StackResources[0].PhysicalResourceId' \
     --output text \
     --region "$REGION" 2>/dev/null || echo "")
   
   AUTH_FUNCTION_NAME=$(aws cloudformation describe-stack-resources \
     --stack-name "$STACK_NAME" \
-    --logical-resource-id ExchangeAuthFunction \
+    --logical-resource-id BighillAuthFunction \
     --query 'StackResources[0].PhysicalResourceId' \
     --output text \
     --region "$REGION" 2>/dev/null || echo "")

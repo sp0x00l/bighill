@@ -39,8 +39,10 @@ spec:
               value: {{ .Values.image.tag | quote }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
-            - name: FEATURE_MATERIALIZER_SERVICE_KAFKA_GROUP_ID
-              value: {{ .Values.env.kafkaGroupId | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_KAFKA_BASE_GROUP_ID
+              value: {{ .Values.env.kafkaBaseGroupId | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_KAFKA_AUTO_OFFSET_RESET
+              value: {{ .Values.env.kafkaAutoOffsetReset | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_TOPIC
               value: {{ .Values.env.topic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC
@@ -185,6 +187,12 @@ spec:
               value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxPollSilence | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxProgressSilence | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxLag | quote }}
           resources:
             requests:
               memory: {{ .Values.resources.requests.memory | quote }}

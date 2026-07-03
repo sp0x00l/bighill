@@ -20,6 +20,22 @@ Parameters:
     Type: Number
     Default: 10
     Description: Timeout in seconds for HTTP requests from API Gateway to backend services
+  BigHillApiCodeUri:
+    Type: String
+    Default: ./build/api_binary
+    Description: S3 URI or local path for the API Lambda artifact
+  BigHillAuthCodeUri:
+    Type: String
+    Default: ./build/auth_binary
+    Description: S3 URI or local path for the authorizer Lambda artifact
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Private subnet IDs for Lambda VPC access
+  LambdaSecurityGroupId:
+    Type: String
+    Default: ""
+    Description: Security group ID for Lambda VPC access
   DataRegistryServiceHttpDomain:
     Type: String
     Default: host.docker.internal
@@ -73,6 +89,8 @@ Parameters:
     Type: String
     Default: ""
     Description: KMS key ID for JWT signing/verification. Leave empty for local dev.
+Conditions:
+  HasVpcConfig: !Not [!Equals [!Ref LambdaSecurityGroupId, ""]]
 Globals:
   Api:
     BinaryMediaTypes:
@@ -88,11 +106,17 @@ Resources:
   BighillAuthFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: ./build/auth_binary
+      CodeUri: !Ref ./build/auth_binary
       Handler: bootstrap
       Runtime: provided.al2
       Architectures:
         - arm64
+      VpcConfig: !If
+        - HasVpcConfig
+        - SecurityGroupIds:
+            - !Ref LambdaSecurityGroupId
+          SubnetIds: !Ref PrivateSubnetIds
+        - !Ref AWS::NoValue
       Environment:
         Variables:
           LOG_LEVEL: !Ref BighillApiLogLevel
@@ -111,11 +135,17 @@ Resources:
     Properties:
       MemorySize: !Ref BighillApiFunctionMemorySize
       Timeout: !Ref BighillApiFunctionTimeout
-      CodeUri: ./build/api_binary
+      CodeUri: !Ref ./build/api_binary
       Handler: bootstrap
       Runtime: provided.al2
       Architectures:
         - arm64
+      VpcConfig: !If
+        - HasVpcConfig
+        - SecurityGroupIds:
+            - !Ref LambdaSecurityGroupId
+          SubnetIds: !Ref PrivateSubnetIds
+        - !Ref AWS::NoValue
       Environment:
         Variables:
           LOG_LEVEL: !Ref BighillApiLogLevel

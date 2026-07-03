@@ -39,5 +39,5 @@ type OAuthStateStore interface {
 
 type OAuthProviderClient interface {
 	AuthorizationURL(state, redirectURI, codeChallenge string) (string, error)
-	ExchangeCode(ctx context.Context, code, redirectURI, codeVerifier string) (*domain.OAuthIdentity, error)
+	BigHillCode(ctx context.Context, code, redirectURI, codeVerifier string) (*domain.OAuthIdentity, error)
 }

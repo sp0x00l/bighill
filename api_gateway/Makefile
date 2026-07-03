@@ -1,4 +1,4 @@
-.PHONY: install build build-BighillApiFunction build-BighillAuthFunction clean run stop test lint watch
+.PHONY: install build build-BighillApiFunction build-BighillAuthFunction clean run stop test lint
 
 ENV ?= local-dev
 
@@ -35,6 +35,3 @@ test:
 
 lint: 
 	sam validate --region us-east-1 --lint
-
-watch:
-	@scripts/watch.sh

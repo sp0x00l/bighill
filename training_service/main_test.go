@@ -206,15 +206,21 @@ var _ = Describe("newTrainingExecutor", func() {
 var _ = Describe("newHealthCheckConfig", func() {
 	It("maps health settings", func() {
 		cfg := newHealthCheckConfig(healthConfig{
-			CpuThresholdPercentage:  70,
-			MemFreeThresholdPercent: 30,
-			HealthCheckPort:         5058,
-			ServiceLatencyThreshold: 3 * time.Second,
+			CpuThresholdPercentage:                    70,
+			MemFreeThresholdPercent:                   30,
+			HealthCheckPort:                           5058,
+			ServiceLatencyThreshold:                   3 * time.Second,
+			MessageBrokerSubscriberMaxPollSilence:     30 * time.Second,
+			MessageBrokerSubscriberMaxProgressSilence: 90 * time.Second,
+			MessageBrokerSubscriberMaxLag:             100,
 		})
 
 		Expect(cfg.CpuThresholdPercentage).To(Equal(70))
 		Expect(cfg.MemFreeThresholdPercentage).To(Equal(30))
 		Expect(cfg.HealthCheckPort).To(Equal(5058))
 		Expect(cfg.ServiceLatencyThresholdSec).To(Equal(3 * time.Second))
+		Expect(cfg.MessageBrokerSubscriberMaxPollSilenceSec).To(Equal(30 * time.Second))
+		Expect(cfg.MessageBrokerSubscriberMaxProgressSilenceSec).To(Equal(90 * time.Second))
+		Expect(cfg.MessageBrokerSubscriberMaxLag).To(Equal(int64(100)))
 	})
 })

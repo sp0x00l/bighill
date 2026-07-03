@@ -21,7 +21,8 @@ env:
   serviceName: "data-registry-service"
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   kafkaBroker: "kafka:9092"
-  kafkaGroupId: "data-registry-group"
+  kafkaBaseGroupId: "data-registry"
+  kafkaAutoOffsetReset: "earliest"
   topic: "data_registry"
   featureMaterializerSubscriberTopic: "feature_materializer"
   dlq: "http://localhost:4566/data-registry-dev-env-queue/"
@@ -66,6 +67,9 @@ env:
   healthcheckServiceLatencyThreshold: "5"
   healthcheckDbLatencyThreshold: "5"
   healthcheckMessageBrokerLatencyThreshold: "5"
+  healthcheckMessageBrokerSubscriberMaxPollSilence: "30"
+  healthcheckMessageBrokerSubscriberMaxProgressSilence: "90"
+  healthcheckMessageBrokerSubscriberMaxLag: "100000"
 resources:
   requests:
     memory: "256Mi"

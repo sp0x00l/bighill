@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,10 +24,15 @@ type s3Uploader interface {
 }
 type s3Signer interface {
 	PresignGetObject(context.Context, *s3.GetObjectInput, ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+	PresignPostObject(context.Context, *s3.PutObjectInput, ...func(*s3.PresignPostOptions)) (*s3.PresignedPostRequest, error)
 }
 type s3Client interface {
 	ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 	DeleteObjects(context.Context, *s3.DeleteObjectsInput, ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
+	DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	CopyObject(context.Context, *s3.CopyObjectInput, ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
 }
 
 type S3Bucket struct {
@@ -117,6 +124,140 @@ func (bu *S3Bucket) Sign(ctx context.Context, bucket, key string, timeoutMins ti
 	}
 
 	return req.URL, nil
+}
+
+type PresignedPost struct {
+	URL    string
+	Fields map[string]string
+}
+
+type ObjectInfo struct {
+	Size        int64
+	ContentType string
+	Checksum    string
+}
+
+func (bu *S3Bucket) SignUploadPost(ctx context.Context, bucket, key, contentType string, maxBytes int64, timeout time.Duration) (*PresignedPost, error) {
+	log.Trace("S3Bucket SignUploadPost")
+
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("pre-signed POST max bytes must be greater than zero")
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("pre-signed POST timeout must be greater than zero")
+	}
+
+	putObject := &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+	if contentType != "" {
+		putObject.ContentType = aws.String(contentType)
+	}
+	conditions := []any{
+		map[string]string{"bucket": bucket},
+		map[string]string{"key": key},
+		[]any{"content-length-range", 1, maxBytes},
+	}
+	if contentType != "" {
+		conditions = append(conditions, map[string]string{"Content-Type": contentType})
+	}
+
+	req, err := bu.signer.PresignPostObject(ctx, putObject, func(opts *s3.PresignPostOptions) {
+		opts.Expires = timeout
+		opts.Conditions = conditions
+	})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("failed to generate pre-signed POST")
+		return nil, fmt.Errorf("failed to generate pre-signed POST: %w", err)
+	}
+	return &PresignedPost{URL: req.URL, Fields: req.Values}, nil
+}
+
+func (b *S3Bucket) HeadObject(ctx context.Context, bucket, key string) (*ObjectInfo, error) {
+	log.Trace("S3Bucket HeadObject")
+
+	out, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("failed to head object")
+		return nil, fmt.Errorf("failed to head object: %w", err)
+	}
+	info := &ObjectInfo{Size: aws.ToInt64(out.ContentLength)}
+	if out.ContentType != nil {
+		info.ContentType = *out.ContentType
+	}
+	if out.ETag != nil {
+		info.Checksum = *out.ETag
+	}
+	return info, nil
+}
+
+func (b *S3Bucket) ReadObjectPrefix(ctx context.Context, bucket, key string, maxBytes int64) ([]byte, error) {
+	log.Trace("S3Bucket ReadObjectPrefix")
+
+	return b.ReadObjectRange(ctx, bucket, key, 0, maxBytes)
+}
+
+func (b *S3Bucket) ReadObjectRange(ctx context.Context, bucket, key string, offset, maxBytes int64) ([]byte, error) {
+	log.Trace("S3Bucket ReadObjectRange")
+
+	if maxBytes <= 0 {
+		return nil, nil
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("object range offset must be non-negative")
+	}
+	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(fmt.Sprintf("bytes=%d-%d", offset, offset+maxBytes-1)),
+	})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("failed to read object range")
+		return nil, fmt.Errorf("failed to read object range: %w", err)
+	}
+	defer out.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(out.Body, maxBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read object range: %w", err)
+	}
+	return data, nil
+}
+
+func (b *S3Bucket) CopyObject(ctx context.Context, bucket, sourceKey, destinationKey, contentType string) error {
+	log.Trace("S3Bucket CopyObject")
+
+	copySource := bucket + "/" + strings.ReplaceAll(url.PathEscape(sourceKey), "%2F", "/")
+	input := &s3.CopyObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(destinationKey),
+		CopySource: aws.String(copySource),
+	}
+	if contentType != "" {
+		input.ContentType = aws.String(contentType)
+		input.MetadataDirective = s3types.MetadataDirectiveReplace
+	}
+	if _, err := b.client.CopyObject(ctx, input); err != nil {
+		log.WithContext(ctx).WithError(err).Error("failed to copy object")
+		return fmt.Errorf("failed to copy object: %w", err)
+	}
+	return nil
+}
+
+func (b *S3Bucket) DeleteObject(ctx context.Context, bucket, key string) error {
+	log.Trace("S3Bucket DeleteObject")
+
+	if _, err := b.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}); err != nil {
+		log.WithContext(ctx).WithError(err).Error("failed to delete object")
+		return fmt.Errorf("failed to delete object: %w", err)
+	}
+	return nil
 }
 
 func (b *S3Bucket) GetKeysWithPrefix(ctx context.Context, bucket, prefix string) ([]string, error) {

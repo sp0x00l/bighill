@@ -1,0 +1,85 @@
+# Loki log aggregation values
+loki:
+  auth_enabled: false
+  
+  commonConfig:
+    replication_factor: 1
+  
+  storage:
+    type: filesystem
+  
+  # Enable OTLP ingestion for receiving logs from OTEL collector
+  # Structured metadata enabled for log level coloring in Grafana
+  limits_config:
+    allow_structured_metadata: true
+    volume_enabled: true
+    ingestion_rate_strategy: local
+    max_global_streams_per_user: 0
+    # Query limits to prevent OOM on large queries
+    max_entries_limit_per_query: 5000
+    max_query_series: 500
+    max_query_parallelism: 16
+    query_timeout: 60s
+    split_queries_by_interval: 15m
+  
+  # Query frontend settings to limit memory usage
+  query_scheduler:
+    max_outstanding_requests_per_tenant: 100
+  
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+# Single binary mode for simplicity
+deploymentMode: SingleBinary
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1536Mi
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: ebs-sc
+
+# Disable components not needed in single binary mode
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+
+# Gateway not needed in single binary mode
+gateway:
+  enabled: false
+
+# Disable test pod
+test:
+  enabled: false
+
+# Disable monitoring components
+monitoring:
+  selfMonitoring:
+    enabled: false
+
+# Disable canary (top-level, not under monitoring)
+lokiCanary:
+  enabled: false
+
+# Disable chunks cache and results cache to simplify deployment
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false

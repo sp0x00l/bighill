@@ -13,7 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
 NAMESPACE="observability"
-GRAFANA_HOSTNAME="observability.${ENVIRONMENT}.northern.exchange"
+PUBLIC_ROOT_DOMAIN="${PUBLIC_ROOT_DOMAIN:-bighill.example}"
+GRAFANA_HOSTNAME="observability.${ENVIRONMENT}.${PUBLIC_ROOT_DOMAIN}"
 
 configure_kubectl() {
   local CLUSTER="$1"
@@ -36,7 +37,7 @@ create_namespace() {
 }
 
 get_grafana_password() {
-  local SSM_PARAM_NAME="/exchange/${ENVIRONMENT}/grafana-admin-password"
+  local SSM_PARAM_NAME="/bighill/${ENVIRONMENT}/grafana-admin-password"
   local PASSWORD=""
 
   PASSWORD=$(aws ssm get-parameter \
@@ -109,7 +110,7 @@ apply_grafana_dashboards() {
           grafana_dashboard=1 \
           app.kubernetes.io/managed-by=ml-ops-infra \
       | kubectl annotate --local -f - -o yaml \
-          grafana_folder=/tmp/dashboards/Exchange \
+          grafana_folder=/tmp/dashboards/BigHill \
       | kubectl apply -f -
   done
 }
@@ -472,7 +473,7 @@ get_acm_certificate_arn() {
     return
   fi
 
-  if command -v tofu >/dev/null 2>&1; then
+  if command -v tofu >/dev/null 2>&1 && [ -d "$PLATFORM_DIR" ]; then
     CERT_ARN="$(cd "$PLATFORM_DIR" && tofu output -raw public_env_certificate_arn 2>/dev/null || true)"
   fi
 
@@ -483,7 +484,7 @@ get_acm_certificate_arn() {
 
   # Prefer the wildcard certificate used by public ALB services.
   CERT_ARN=$(aws acm list-certificates \
-    --query "CertificateSummaryList[?DomainName=='*.${DOMAIN}.northern.exchange'].CertificateArn | [0]" \
+    --query "CertificateSummaryList[?DomainName=='*.${DOMAIN}.${PUBLIC_ROOT_DOMAIN}'].CertificateArn | [0]" \
     --output text \
     --region "${REGION}" 2>/dev/null)
 
@@ -491,7 +492,7 @@ get_acm_certificate_arn() {
     # Fallback only to an exact observability cert. Do not select unrelated
     # docs/app certs for the same environment domain.
     CERT_ARN=$(aws acm list-certificates \
-      --query "CertificateSummaryList[?DomainName=='observability.${DOMAIN}.northern.exchange'].CertificateArn | [0]" \
+      --query "CertificateSummaryList[?DomainName=='observability.${DOMAIN}.${PUBLIC_ROOT_DOMAIN}'].CertificateArn | [0]" \
       --output text \
       --region "${REGION}" 2>/dev/null)
   fi
@@ -518,7 +519,7 @@ done
 # Get ACM certificate for HTTPS
 ACM_CERT_ARN=$(get_acm_certificate_arn "$ENVIRONMENT")
 if [ -z "$ACM_CERT_ARN" ] || [ "$ACM_CERT_ARN" = "None" ] || [ "$ACM_CERT_ARN" = "null" ]; then
-  echo "Warning: No ACM certificate found for *.${ENVIRONMENT}.northern.exchange. HTTPS may not work."
+  echo "Warning: No ACM certificate found for *.${ENVIRONMENT}.${PUBLIC_ROOT_DOMAIN}. HTTPS may not work."
   ACM_CERT_ARN=""
 else
   echo "Using ACM certificate: ${ACM_CERT_ARN}"

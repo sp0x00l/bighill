@@ -1,4 +1,4 @@
-.PHONY: test build release-prod release-staging lint run watch install
+.PHONY: test build release-prod release-staging lint run install
 .DEFAULT_GOAL := run
 SHELL         := /bin/bash
 
@@ -24,9 +24,6 @@ lint:
 
 run:
 	@scripts/run.sh $(ENV)
-
-watch:
-	@scripts/watch.sh
 
 install:
 	@scripts/install.sh

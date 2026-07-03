@@ -53,7 +53,7 @@ func NewCounters(meterName string) *Counters {
 	if meterName == "" {
 		meterName = "infra"
 	}
-	meter := otel.Meter(fmt.Sprintf("exchange.%s", meterName))
+	meter := otel.Meter(fmt.Sprintf("bighill.%s", meterName))
 	return &Counters{
 		errors:                MustCounter(meter, "infra_errors_total", "Total infra errors", "infra-fallback"),
 		requests:              MustCounter(meter, "infra_requests_total", "Total infra requests", "infra-fallback"),

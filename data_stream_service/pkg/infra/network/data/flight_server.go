@@ -14,6 +14,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -55,6 +56,7 @@ func NewFlightServer(authHandler flight.ServerAuthHandler, config infra.DataConf
 	if err != nil {
 		log.WithError(err).Fatal("unable to create data stream flight server options")
 	}
+	opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	server := flight.NewServerWithMiddleware(mw, opts...)
 	fs.flightServer = server
 	return fs

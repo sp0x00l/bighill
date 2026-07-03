@@ -11,8 +11,10 @@ fi
 
 CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
 NAMESPACE="kube-system"
-INTERNAL_DOMAIN="internal.northern.exchange"
-PUBLIC_DOMAIN="${ENVIRONMENT}.northern.exchange"
+INTERNAL_ROOT_DOMAIN="${INTERNAL_ROOT_DOMAIN:-internal.bighill.example}"
+PUBLIC_ROOT_DOMAIN="${PUBLIC_ROOT_DOMAIN:-bighill.example}"
+INTERNAL_DOMAIN="${INTERNAL_ROOT_DOMAIN}"
+PUBLIC_DOMAIN="${ENVIRONMENT}.${PUBLIC_ROOT_DOMAIN}"
 
 configure_kubectl() {
   local CLUSTER="$1"

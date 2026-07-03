@@ -23,7 +23,8 @@ env:
   temporalTaskQueue: "training-service"
   trainingTriggerEnabled: "false"
   kafkaBroker: "kafka:9092"
-  kafkaGroupId: "training-group"
+  kafkaBaseGroupId: "training"
+  kafkaAutoOffsetReset: "earliest"
   topic: "training"
   dataRegistrySubscriberTopic: "data_registry"
   inferenceSubscriberTopic: "inference"
@@ -73,6 +74,9 @@ env:
   healthcheckFreeMemThreshold: "20"
   healthcheckServiceLatencyThreshold: "5"
   healthcheckMessageBrokerLatencyThreshold: "5"
+  healthcheckMessageBrokerSubscriberMaxPollSilence: "30"
+  healthcheckMessageBrokerSubscriberMaxProgressSilence: "90"
+  healthcheckMessageBrokerSubscriberMaxLag: "100000"
 resources:
   requests:
     memory: "256Mi"

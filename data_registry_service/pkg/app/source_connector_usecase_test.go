@@ -7,7 +7,6 @@ import (
 	usecase "data_registry_service/pkg/app"
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
-	"data_registry_service/pkg/mocks"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -105,6 +104,16 @@ func (s *stubCatalogClient) DeleteResource(_ context.Context, catalogID uuid.UUI
 	return s.deleteErr
 }
 
+type mockSourceConfig struct {
+	getStorageTypeCalled bool
+	nextSourceType       model.StorageType
+}
+
+func (m *mockSourceConfig) GetStorageType() model.StorageType {
+	m.getStorageTypeCalled = true
+	return m.nextSourceType
+}
+
 var _ = Describe("SourceUsecase", func() {
 	var (
 		ctx       context.Context
@@ -124,7 +133,7 @@ var _ = Describe("SourceUsecase", func() {
 		uc = usecase.NewSourceUsecase(repo, catalog)
 		userID = uuid.New()
 		catalogID = uuid.New()
-		config = &mocks.MockSourceConfig{NextSourceType: model.S3}
+		config = &mockSourceConfig{nextSourceType: model.S3}
 		connector = &model.SourceConnector{UserID: userID, Config: config}
 		catalog.createID = catalogID
 	})

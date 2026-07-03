@@ -13,6 +13,7 @@ import (
 	"inference_service/pkg/domain/model"
 
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const DefaultHTTPGenerationTimeout = 60 * time.Second
@@ -56,7 +57,8 @@ func newHTTPGenerator(provider, endpoint, modelName string, timeout time.Duratio
 	}
 	if client == nil {
 		client = &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		}
 	}
 	return &HTTPGenerator{

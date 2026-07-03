@@ -14,6 +14,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 NAMESPACE="ml-ops-${ENVIRONMENT}"
 CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
 COMMON_SCRIPT="${PROJECT_ROOT}/scripts/common.sh"
+PUBLIC_ROOT_DOMAIN="${PUBLIC_ROOT_DOMAIN:-bighill.example}"
 
 # shellcheck disable=SC1090
 . "${COMMON_SCRIPT}"
@@ -54,7 +55,7 @@ get_acm_certificate_arn() {
 
   # Prefer the wildcard certificate for public service ALBs.
   CERT_ARN=$(aws acm list-certificates \
-    --query "CertificateSummaryList[?DomainName=='*.${DOMAIN}.northern.exchange'].CertificateArn | [0]" \
+    --query "CertificateSummaryList[?DomainName=='*.${DOMAIN}.${PUBLIC_ROOT_DOMAIN}'].CertificateArn | [0]" \
     --output text \
     --region "${REGION}" 2>/dev/null || echo "")
 
@@ -62,7 +63,7 @@ get_acm_certificate_arn() {
     # Fallback only to an exact events certificate. Do not select unrelated
     # docs/app certs for the same environment domain.
     CERT_ARN=$(aws acm list-certificates \
-      --query "CertificateSummaryList[?DomainName=='events.${DOMAIN}.northern.exchange'].CertificateArn | [0]" \
+      --query "CertificateSummaryList[?DomainName=='events.${DOMAIN}.${PUBLIC_ROOT_DOMAIN}'].CertificateArn | [0]" \
       --output text \
       --region "${REGION}" 2>/dev/null || echo "")
   fi
@@ -638,14 +639,14 @@ refresh_lambda_environments() {
   
   API_FUNCTION_NAME=$(aws cloudformation describe-stack-resources \
     --stack-name "$STACK_NAME" \
-    --logical-resource-id ExchangeApiFunction \
+    --logical-resource-id BighillApiFunction \
     --query 'StackResources[0].PhysicalResourceId' \
     --output text \
     --region "$REGION" 2>/dev/null || echo "")
   
   AUTH_FUNCTION_NAME=$(aws cloudformation describe-stack-resources \
     --stack-name "$STACK_NAME" \
-    --logical-resource-id ExchangeAuthFunction \
+    --logical-resource-id BighillAuthFunction \
     --query 'StackResources[0].PhysicalResourceId' \
     --output text \
     --region "$REGION" 2>/dev/null || echo "")
@@ -708,7 +709,7 @@ ACM_CERT_ARN=$(get_acm_certificate_arn "$ENVIRONMENT")
 if [ -n "$ACM_CERT_ARN" ] && [ "$ACM_CERT_ARN" != "None" ] && [ "$ACM_CERT_ARN" != "null" ]; then
   echo "Using ACM certificate: ${ACM_CERT_ARN}"
 else
-  echo "Warning: No ACM certificate found for *.${ENVIRONMENT}.northern.exchange"
+  echo "Warning: No ACM certificate found for *.${ENVIRONMENT}.${PUBLIC_ROOT_DOMAIN}"
   ACM_CERT_ARN=""
 fi
 

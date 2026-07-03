@@ -14,6 +14,7 @@ import (
 	"inference_service/pkg/domain/model"
 
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const DefaultTEIRerankerTimeout = 30 * time.Second
@@ -45,7 +46,10 @@ func NewTEIRerankerWithClient(url, modelName string, timeout time.Duration, clie
 		timeout = DefaultTEIRerankerTimeout
 	}
 	if client == nil {
-		client = &http.Client{Timeout: timeout}
+		client = &http.Client{
+			Timeout:   timeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}
 	}
 	return &TEIReranker{
 		url:    url,

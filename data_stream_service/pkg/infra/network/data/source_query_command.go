@@ -1,7 +1,7 @@
 package data
 
 import (
-	domainErrors "data_stream_service/pkg/domain"
+	streamdomain "data_stream_service/pkg/domain"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,13 +10,13 @@ import (
 )
 
 type sourceQueryCommand struct {
-	UserID            string `json:"userId"`
-	SourceType        string `json:"sourceType"`
-	SourceConnectorID string `json:"sourceConnectorId"`
-	SQL               string `json:"sql"`
-	Database          string `json:"database"`
-	Collection        string `json:"collection"`
-	Limit             int64  `json:"limit"`
+	UserID            string                  `json:"userId"`
+	SourceType        streamdomain.SourceType `json:"sourceType"`
+	SourceConnectorID string                  `json:"sourceConnectorId"`
+	SQL               string                  `json:"sql"`
+	Database          string                  `json:"database"`
+	Collection        string                  `json:"collection"`
+	Limit             int64                   `json:"limit"`
 }
 
 func parseSourceQueryCommand(command string) (*sourceQueryCommand, error) {
@@ -24,15 +24,14 @@ func parseSourceQueryCommand(command string) (*sourceQueryCommand, error) {
 
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return nil, domainErrors.ErrValidationFailed.Extend("query command is required")
+		return nil, streamdomain.ErrValidationFailed.Extend("query command is required")
 	}
 
 	var query sourceQueryCommand
 	if err := json.Unmarshal([]byte(command), &query); err != nil {
-		return nil, domainErrors.ErrValidationFailed.Extend(fmt.Sprintf("registry query command must be JSON: %v", err))
+		return nil, streamdomain.ErrValidationFailed.Extend(fmt.Sprintf("registry query command must be JSON: %v", err))
 	}
 
-	query.SourceType = strings.ToLower(strings.TrimSpace(query.SourceType))
 	query.SourceConnectorID = strings.TrimSpace(query.SourceConnectorID)
 	query.UserID = strings.TrimSpace(query.UserID)
 	query.SQL = strings.TrimSpace(query.SQL)
@@ -40,23 +39,39 @@ func parseSourceQueryCommand(command string) (*sourceQueryCommand, error) {
 	query.Collection = strings.TrimSpace(query.Collection)
 
 	if query.UserID == "" {
-		return nil, domainErrors.ErrValidationFailed.Extend("registry query command requires userId")
+		return nil, streamdomain.ErrValidationFailed.Extend("registry query command requires userId")
 	}
 	if query.SourceConnectorID == "" {
-		return nil, domainErrors.ErrValidationFailed.Extend("registry query command requires sourceConnectorId")
+		return nil, streamdomain.ErrValidationFailed.Extend("registry query command requires sourceConnectorId")
 	}
-	if query.SourceType == "" {
-		query.SourceType = "postgres"
+	if query.SourceType == streamdomain.SourceTypeUnknown {
+		query.SourceType = streamdomain.SourceTypePostgres
 	}
-	if query.SourceType == "mongo" {
+	if !sourceTypeSupportsRegistryQuery(query.SourceType) {
+		return nil, streamdomain.ErrValidationFailed.Extend(fmt.Sprintf("unsupported source type %q for registry query engine", query.SourceType.String()))
+	}
+	if query.SourceType == streamdomain.SourceTypeMongoDB {
 		if query.SQL == "" && (query.Database == "" || query.Collection == "") {
-			return nil, domainErrors.ErrValidationFailed.Extend("mongo registry query command requires database and collection")
+			return nil, streamdomain.ErrValidationFailed.Extend("mongo registry query command requires database and collection")
 		}
 		return &query, nil
 	}
 	if query.SQL == "" {
-		return nil, domainErrors.ErrValidationFailed.Extend("registry query command requires sql")
+		return nil, streamdomain.ErrValidationFailed.Extend("registry query command requires sql")
 	}
 
 	return &query, nil
+}
+
+func sourceTypeSupportsRegistryQuery(sourceType streamdomain.SourceType) bool {
+	switch sourceType {
+	case streamdomain.SourceTypePostgres,
+		streamdomain.SourceTypeMySQL,
+		streamdomain.SourceTypeOracle,
+		streamdomain.SourceTypeMongoDB,
+		streamdomain.SourceTypeClickHouse:
+		return true
+	default:
+		return false
+	}
 }

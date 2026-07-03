@@ -170,7 +170,14 @@ func (m *Monitor) runChecks(ctx context.Context) []string {
 	results := make(map[string]error)
 	var resultsMu sync.Mutex
 
+	m.mutex.Lock()
+	checks := make(map[string]healthCheck, len(m.checks))
 	for name, check := range m.checks {
+		checks[name] = check
+	}
+	m.mutex.Unlock()
+
+	for name, check := range checks {
 		wg.Add(1)
 		go func(name string, check healthCheck) {
 			defer wg.Done()
