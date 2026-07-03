@@ -320,11 +320,11 @@ func createMongoSourceConnector(user profileTestUser) string {
 }
 
 func dataStreamFlightAddress() string {
-	host := strings.TrimSpace(os.Getenv("DATA_STREAM_API_GRPC_HOST"))
+	host := strings.TrimSpace(os.Getenv("DATA_STREAM_SERVICE_API_GRPC_HOST"))
 	if host == "" {
 		host = "localhost"
 	}
-	port := strings.TrimSpace(os.Getenv("DATA_STREAM_API_GRPC_PORT"))
+	port := strings.TrimSpace(os.Getenv("DATA_STREAM_SERVICE_API_GRPC_PORT"))
 	if port == "" {
 		return defaultDataStreamFlightAddress
 	}

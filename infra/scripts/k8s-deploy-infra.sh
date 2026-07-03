@@ -92,18 +92,18 @@ discover_profile_oauth_credentials() {
   local SECRET_ARN
   local SECRET_JSON
 
-  if [ -n "${PROFILE_OAUTH_GOOGLE_CLIENT_ID:-}" ] || [ -n "${PROFILE_OAUTH_GOOGLE_CLIENT_SECRET:-}" ] || [ -n "${PROFILE_OAUTH_DISCORD_CLIENT_ID:-}" ] || [ -n "${PROFILE_OAUTH_DISCORD_CLIENT_SECRET:-}" ]; then
-    if [ -z "${PROFILE_OAUTH_GOOGLE_CLIENT_ID:-}" ] || [ -z "${PROFILE_OAUTH_GOOGLE_CLIENT_SECRET:-}" ] || [ -z "${PROFILE_OAUTH_DISCORD_CLIENT_ID:-}" ] || [ -z "${PROFILE_OAUTH_DISCORD_CLIENT_SECRET:-}" ]; then
-      echo "Error: PROFILE_OAUTH_GOOGLE_CLIENT_ID, PROFILE_OAUTH_GOOGLE_CLIENT_SECRET, PROFILE_OAUTH_DISCORD_CLIENT_ID, and PROFILE_OAUTH_DISCORD_CLIENT_SECRET must all be set together."
+  if [ -n "${PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID:-}" ] || [ -n "${PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET:-}" ] || [ -n "${PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID:-}" ] || [ -n "${PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET:-}" ]; then
+    if [ -z "${PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID:-}" ] || [ -z "${PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET:-}" ] || [ -z "${PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID:-}" ] || [ -z "${PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET:-}" ]; then
+      echo "Error: PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID, PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET, PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID, and PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET must all be set together."
       exit 1
     fi
 
     echo "Syncing profile OAuth credentials from config to AWS Secrets Manager..."
     SECRET_JSON=$(jq -n \
-      --arg google_client_id "$PROFILE_OAUTH_GOOGLE_CLIENT_ID" \
-      --arg google_client_secret "$PROFILE_OAUTH_GOOGLE_CLIENT_SECRET" \
-      --arg discord_client_id "$PROFILE_OAUTH_DISCORD_CLIENT_ID" \
-      --arg discord_client_secret "$PROFILE_OAUTH_DISCORD_CLIENT_SECRET" \
+      --arg google_client_id "$PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID" \
+      --arg google_client_secret "$PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET" \
+      --arg discord_client_id "$PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID" \
+      --arg discord_client_secret "$PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET" \
       '{
         google_client_id: $google_client_id,
         google_client_secret: $google_client_secret,
@@ -133,12 +133,12 @@ discover_profile_oauth_credentials() {
     exit 1
   fi
 
-  PROFILE_OAUTH_GOOGLE_CLIENT_ID=$(echo "$SECRET_JSON" | jq -r '.google_client_id // empty')
-  PROFILE_OAUTH_GOOGLE_CLIENT_SECRET=$(echo "$SECRET_JSON" | jq -r '.google_client_secret // empty')
-  PROFILE_OAUTH_DISCORD_CLIENT_ID=$(echo "$SECRET_JSON" | jq -r '.discord_client_id // empty')
-  PROFILE_OAUTH_DISCORD_CLIENT_SECRET=$(echo "$SECRET_JSON" | jq -r '.discord_client_secret // empty')
+  PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID=$(echo "$SECRET_JSON" | jq -r '.google_client_id // empty')
+  PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET=$(echo "$SECRET_JSON" | jq -r '.google_client_secret // empty')
+  PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID=$(echo "$SECRET_JSON" | jq -r '.discord_client_id // empty')
+  PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET=$(echo "$SECRET_JSON" | jq -r '.discord_client_secret // empty')
 
-  if [ -z "$PROFILE_OAUTH_GOOGLE_CLIENT_ID" ] || [ -z "$PROFILE_OAUTH_GOOGLE_CLIENT_SECRET" ] || [ -z "$PROFILE_OAUTH_DISCORD_CLIENT_ID" ] || [ -z "$PROFILE_OAUTH_DISCORD_CLIENT_SECRET" ]; then
+  if [ -z "$PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID" ] || [ -z "$PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET" ] || [ -z "$PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID" ] || [ -z "$PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET" ]; then
     echo "Error: Profile OAuth secret must contain google_client_id, google_client_secret, discord_client_id, and discord_client_secret."
     exit 1
   fi
@@ -288,10 +288,10 @@ create_k8s_profile_oauth_secret() {
 
   echo "Creating Kubernetes secret '${SECRET_NAME}'..."
   kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
-    --from-literal=google_client_id="$PROFILE_OAUTH_GOOGLE_CLIENT_ID" \
-    --from-literal=google_client_secret="$PROFILE_OAUTH_GOOGLE_CLIENT_SECRET" \
-    --from-literal=discord_client_id="$PROFILE_OAUTH_DISCORD_CLIENT_ID" \
-    --from-literal=discord_client_secret="$PROFILE_OAUTH_DISCORD_CLIENT_SECRET" \
+    --from-literal=google_client_id="$PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID" \
+    --from-literal=google_client_secret="$PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET" \
+    --from-literal=discord_client_id="$PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID" \
+    --from-literal=discord_client_secret="$PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET" \
     --dry-run=client -o yaml | kubectl apply -f -
 }
 

@@ -37,7 +37,7 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: DATA_INGESTION_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
-            - name: DATA_INGESTION_API_HTTP_PORT
+            - name: DATA_INGESTION_SERVICE_API_HTTP_PORT
               value: {{ .Values.service.httpPort | quote }}
             - name: DATA_INGESTION_SERVICE_REDIS_ADDRESS
               value: {{ .Values.env.redisAddress | quote }}
@@ -45,15 +45,15 @@ spec:
               value: {{ .Values.env.redisUsername | quote }}
             - name: DATA_INGESTION_SERVICE_REDIS_PASSWORD
               value: {{ .Values.env.redisPassword | quote }}
-            - name: DATA_INGESTION_FILES_BUCKET_NAME
+            - name: DATA_INGESTION_SERVICE_FILES_BUCKET_NAME
               value: {{ .Values.env.filesBucketName | quote }}
-            - name: DATA_INGESTION_FILES_BUCKET_REGION
+            - name: DATA_INGESTION_SERVICE_FILES_BUCKET_REGION
               value: {{ .Values.env.filesBucketRegion | quote }}
-            - name: DATA_INGESTION_FILE_MAX_SIZE_MB
+            - name: DATA_INGESTION_SERVICE_FILE_MAX_SIZE_MB
               value: {{ .Values.env.fileMaxSizeMb | quote }}
-            - name: DATA_INGESTION_FILES_UPLOAD_PART_SIZE_MS
+            - name: DATA_INGESTION_SERVICE_FILES_UPLOAD_PART_SIZE_MS
               value: {{ .Values.env.filesUploadPartSizeMb | quote }}
-            - name: DATA_INGESTION_DB_NAME
+            - name: DATA_INGESTION_SERVICE_DB_NAME
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -62,7 +62,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbName | quote }}
 {{- end }}
-            - name: DATA_INGESTION_DB_USER
+            - name: DATA_INGESTION_SERVICE_DB_USER
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -71,7 +71,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbUser | quote }}
 {{- end }}
-            - name: DATA_INGESTION_DB_PASSWORD
+            - name: DATA_INGESTION_SERVICE_DB_PASSWORD
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -80,7 +80,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbPassword | quote }}
 {{- end }}
-            - name: DATA_INGESTION_DB_MAX_CONNECTIONS
+            - name: DATA_INGESTION_SERVICE_DB_MAX_CONNECTIONS
               value: {{ .Values.env.dbMaxConnections | quote }}
             - name: SHARED_LIB_DB_STATEMENT_TIMEOUT_MS
               value: {{ .Values.env.sharedLibDbStatementTimeoutMs | quote }}
@@ -133,17 +133,17 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: DATA_INGESTION_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
-            - name: DATA_INGESTION_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+            - name: DATA_INGESTION_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
-            - name: DATA_INGESTION_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+            - name: DATA_INGESTION_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
-            - name: DATA_INGESTION_HEALTHCHECK_PORT
+            - name: DATA_INGESTION_SERVICE_HEALTHCHECK_PORT
               value: {{ .Values.service.healthPort | quote }}
-            - name: DATA_INGESTION_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+            - name: DATA_INGESTION_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
-            - name: DATA_INGESTION_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+            - name: DATA_INGESTION_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
-            - name: DATA_INGESTION_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
+            - name: DATA_INGESTION_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
             {{- if .Values.env.authKmsKeyId }}
             - name: AUTH_KMS_KEY_ID

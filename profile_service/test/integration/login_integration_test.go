@@ -112,7 +112,7 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		Expect(err).ShouldNot(HaveOccurred())
 		authProvider, err := auth.NewAuthProvider(ctx, kmsClient)
 		Expect(err).ShouldNot(HaveOccurred())
-		authExpirationInMinutes := env.WithDefaultInt("PROFILE_AUTH_EXPIRATION_MINUTES", "15")
+		authExpirationInMinutes := env.WithDefaultInt("PROFILE_SERVICE_AUTH_EXPIRATION_MINUTES", "15")
 		profilesUseCase = usecase.NewProfilesUseCase(
 			usecase.ProfilesUseCaseDeps{
 				ProfilesRepository: profileDB,

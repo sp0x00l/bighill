@@ -8,4 +8,7 @@ service:
   healthPort: 5061
 env:
   environment: "staging"
+  backend: "kubernetes"
   vllmImage: "vllm/vllm-openai:latest"
+  vllmMultiTenantEnabled: "false"
+  vllmRequestTimeoutMs: "5000"

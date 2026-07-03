@@ -200,20 +200,20 @@ func main() {
 
 func readRegistryConfig() registryConfig {
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
-	dbName := env.WithDefaultString("DATA_REGISTRY_DB_NAME", "bighill_data_registry_db")
+	dbName := env.WithDefaultString("DATA_REGISTRY_SERVICE_DB_NAME", "bighill_data_registry_db")
 	dbConnectionString := postgresConnectionString(
-		env.WithDefaultString("DATA_REGISTRY_DB_USER", "bighill_data_registry_db_user"),
-		env.WithDefaultString("DATA_REGISTRY_DB_PASSWORD", ""),
+		env.WithDefaultString("DATA_REGISTRY_SERVICE_DB_USER", "bighill_data_registry_db_user"),
+		env.WithDefaultString("DATA_REGISTRY_SERVICE_DB_PASSWORD", ""),
 		env.WithDefaultString("PGHOST", "127.0.0.1"),
 		env.WithDefaultString("PGPORT", "5432"),
 		dbName,
 		env.WithDefaultString("PGSSLMODE", "disable"),
-		env.WithDefaultInt("DATA_REGISTRY_DB_MAX_CONNECTIONS", "20"),
+		env.WithDefaultInt("DATA_REGISTRY_SERVICE_DB_MAX_CONNECTIONS", "20"),
 	)
 	return registryConfig{
 		ServiceName:        env.WithDefaultString("DATA_REGISTRY_SERVICE_NAME", "data-registry-service"),
-		HTTPPort:           env.WithDefaultInt("DATA_REGISTRY_API_HTTP_PORT", "8081"),
-		GRPCPort:           env.WithDefaultInt("DATA_REGISTRY_API_GRPC_PORT", "7071"),
+		HTTPPort:           env.WithDefaultInt("DATA_REGISTRY_SERVICE_API_HTTP_PORT", "8081"),
+		GRPCPort:           env.WithDefaultInt("DATA_REGISTRY_SERVICE_API_GRPC_PORT", "7071"),
 		DBName:             dbName,
 		DBConnectionString: dbConnectionString,
 		Messaging: messagingConn.MessengerConfig{
@@ -232,14 +232,14 @@ func readRegistryConfig() registryConfig {
 			FeatureMaterializer: env.WithDefaultString("DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC", "feature_materializer"),
 		},
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("DATA_REGISTRY_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_REGISTRY_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("DATA_REGISTRY_HEALTHCHECK_PORT", "5051"),
+			CpuThresholdPercentage:        env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:               env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_PORT", "5051"),
 			DBConnectionString:            dbConnectionString,
 			MessageBrokerConnectionString: brokers,
-			DbLatencyThreshold:            secondsFromEnv("DATA_REGISTRY_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
-			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_REGISTRY_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
-			ServiceLatencyThreshold:       secondsFromEnv("DATA_REGISTRY_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			DbLatencyThreshold:            secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:       secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
 	}
 }

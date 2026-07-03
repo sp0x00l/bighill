@@ -11,7 +11,7 @@ import (
 )
 
 type ServedModelReconciler interface {
-	Reconcile(ctx context.Context, servedModel *model.ServedModel) error
+	Reconcile(ctx context.Context, servedModel *model.ServedModel) (*model.ServedModelStatus, error)
 }
 
 type servedModelReconciler struct {
@@ -28,7 +28,7 @@ func NewServedModelReconciler(runtime ServingRuntime, statusWriter ServedModelSt
 	}
 }
 
-func (r *servedModelReconciler) Reconcile(ctx context.Context, servedModel *model.ServedModel) error {
+func (r *servedModelReconciler) Reconcile(ctx context.Context, servedModel *model.ServedModel) (*model.ServedModelStatus, error) {
 	log.Trace("ServedModelReconciler Reconcile")
 
 	state, err := r.runtime.EnsureServedModel(ctx, servedModel)
@@ -41,9 +41,9 @@ func (r *servedModelReconciler) Reconcile(ctx context.Context, servedModel *mode
 			ObservedGeneration: servedModel.Generation,
 		}
 		if statusErr := r.statusWriter.UpdateStatus(ctx, servedModel.ResourceName, status); statusErr != nil {
-			return errors.Join(err, statusErr)
+			return status, errors.Join(err, statusErr)
 		}
-		return domain.ErrModelServe.Extend(err.Error())
+		return status, domain.ErrModelServe.Extend(err.Error())
 	}
 
 	loadStatus := model.ModelLoadStatusNotLoaded
@@ -52,12 +52,13 @@ func (r *servedModelReconciler) Reconcile(ctx context.Context, servedModel *mode
 	} else if state.Failed {
 		loadStatus = model.ModelLoadStatusFailed
 	}
-	return r.statusWriter.UpdateStatus(ctx, servedModel.ResourceName, &model.ServedModelStatus{
+	status := &model.ServedModelStatus{
 		ServingLoadStatus:  loadStatus,
 		ServingTarget:      state.ServingTarget,
 		ServingModel:       state.ServingModel,
 		FailureReason:      state.FailureReason,
 		ObservedGeneration: servedModel.Generation,
 		ReadyReplicas:      state.ReadyReplicas,
-	})
+	}
+	return status, r.statusWriter.UpdateStatus(ctx, servedModel.ResourceName, status)
 }

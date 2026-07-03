@@ -51,7 +51,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 	BeforeAll(func() {
 		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 
-		dbName := env.WithDefaultString("INFERENCE_DB_NAME", "bighill_inference_db")
+		dbName := env.WithDefaultString("INFERENCE_SERVICE_DB_NAME", "bighill_inference_db")
 		connectionString := testPostgresConnectionString(dbName)
 
 		var err error
@@ -449,16 +449,16 @@ func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error 
 }
 
 func testPostgresConnectionString(dbName string) string {
-	user := env.WithDefaultString("INFERENCE_DB_USER", "bighill_inference_db_user")
-	password := env.WithDefaultString("INFERENCE_DB_PASSWORD", env.WithDefaultString("BIGHILL_DB_PASSWORD", "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw"))
-	host := env.WithDefaultString("INFERENCE_DB_HOST", env.WithDefaultString("PGHOST", "127.0.0.1"))
+	user := env.WithDefaultString("INFERENCE_SERVICE_DB_USER", "bighill_inference_db_user")
+	password := env.WithDefaultString("INFERENCE_SERVICE_DB_PASSWORD", env.WithDefaultString("BIGHILL_DB_PASSWORD", "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw"))
+	host := env.WithDefaultString("INFERENCE_SERVICE_DB_HOST", env.WithDefaultString("PGHOST", "127.0.0.1"))
 	if host == "" || host == "/private/tmp" {
 		host = "127.0.0.1"
 	}
-	port := env.WithDefaultString("INFERENCE_DB_PORT", env.WithDefaultString("PGPORT", "5432"))
-	sslMode := env.WithDefaultString("INFERENCE_DB_SSLMODE", env.WithDefaultString("PGSSLMODE", "disable"))
-	maxConnections := env.WithDefaultInt("INFERENCE_DB_MAX_CONNECTIONS", "20")
-	if value := os.Getenv("INFERENCE_DB_NAME"); value != "" {
+	port := env.WithDefaultString("INFERENCE_SERVICE_DB_PORT", env.WithDefaultString("PGPORT", "5432"))
+	sslMode := env.WithDefaultString("INFERENCE_SERVICE_DB_SSLMODE", env.WithDefaultString("PGSSLMODE", "disable"))
+	maxConnections := env.WithDefaultInt("INFERENCE_SERVICE_DB_MAX_CONNECTIONS", "20")
+	if value := os.Getenv("INFERENCE_SERVICE_DB_NAME"); value != "" {
 		dbName = value
 	}
 

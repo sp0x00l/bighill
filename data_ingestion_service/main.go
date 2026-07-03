@@ -213,24 +213,24 @@ func main() {
 
 func readIngestionConfig() ingestionConfig {
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
-	dbName := env.WithDefaultString("DATA_INGESTION_DB_NAME", "bighill_data_ingestion_db")
+	dbName := env.WithDefaultString("DATA_INGESTION_SERVICE_DB_NAME", "bighill_data_ingestion_db")
 	dbConnectionString := postgresConnectionString(
-		env.WithDefaultString("DATA_INGESTION_DB_USER", "bighill_data_ingestion_db_user"),
-		env.WithDefaultString("DATA_INGESTION_DB_PASSWORD", ""),
+		env.WithDefaultString("DATA_INGESTION_SERVICE_DB_USER", "bighill_data_ingestion_db_user"),
+		env.WithDefaultString("DATA_INGESTION_SERVICE_DB_PASSWORD", ""),
 		env.WithDefaultString("PGHOST", "127.0.0.1"),
 		env.WithDefaultString("PGPORT", "5432"),
 		dbName,
 		env.WithDefaultString("PGSSLMODE", "disable"),
-		env.WithDefaultInt("DATA_INGESTION_DB_MAX_CONNECTIONS", "20"),
+		env.WithDefaultInt("DATA_INGESTION_SERVICE_DB_MAX_CONNECTIONS", "20"),
 	)
-	maxFileSizeMB := env.WithDefaultInt64("DATA_INGESTION_FILE_MAX_SIZE_MB", "2000")
-	uploadPartSizeMB := env.WithDefaultInt64("DATA_INGESTION_FILES_UPLOAD_PART_SIZE_MS", "10")
+	maxFileSizeMB := env.WithDefaultInt64("DATA_INGESTION_SERVICE_FILE_MAX_SIZE_MB", "2000")
+	uploadPartSizeMB := env.WithDefaultInt64("DATA_INGESTION_SERVICE_FILES_UPLOAD_PART_SIZE_MS", "10")
 	return ingestionConfig{
 		ServiceName:          env.WithDefaultString("DATA_INGESTION_SERVICE_NAME", "data-ingestion-service"),
-		HTTPPort:             env.WithDefaultInt("DATA_INGESTION_API_HTTP_PORT", "8086"),
+		HTTPPort:             env.WithDefaultInt("DATA_INGESTION_SERVICE_API_HTTP_PORT", "8086"),
 		MaxFileSizeBytes:     maxFileSizeMB * 1000 * 1000,
-		BucketName:           env.WithDefaultString("DATA_INGESTION_FILES_BUCKET_NAME", "local-dev-bucket"),
-		BucketRegion:         env.WithDefaultString("DATA_INGESTION_FILES_BUCKET_REGION", "local-dev"),
+		BucketName:           env.WithDefaultString("DATA_INGESTION_SERVICE_FILES_BUCKET_NAME", "local-dev-bucket"),
+		BucketRegion:         env.WithDefaultString("DATA_INGESTION_SERVICE_FILES_BUCKET_REGION", "local-dev"),
 		BucketUploadPartSize: uploadPartSizeMB * 1024 * 1024,
 		DBName:               dbName,
 		DBConnectionString:   dbConnectionString,
@@ -253,14 +253,14 @@ func readIngestionConfig() ingestionConfig {
 		DatasetUploadedTopic: env.WithDefaultString("DATA_INGESTION_SERVICE_TOPIC", "data_ingestion"),
 		DataRegistryTopic:    env.WithDefaultString("DATA_INGESTION_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("DATA_INGESTION_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_INGESTION_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("DATA_INGESTION_HEALTHCHECK_PORT", "5056"),
+			CpuThresholdPercentage:        env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:               env.WithDefaultInt("DATA_INGESTION_SERVICE_HEALTHCHECK_PORT", "5056"),
 			DBConnectionString:            dbConnectionString,
 			MessageBrokerConnectionString: brokers,
-			DbLatencyThreshold:            secondsFromEnv("DATA_INGESTION_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
-			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_INGESTION_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
-			ServiceLatencyThreshold:       secondsFromEnv("DATA_INGESTION_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			DbLatencyThreshold:            secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:       secondsFromEnv("DATA_INGESTION_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
 	}
 }

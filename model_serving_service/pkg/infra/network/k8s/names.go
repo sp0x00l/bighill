@@ -9,6 +9,8 @@ import (
 
 	"model_serving_service/pkg/domain/model"
 
+	servedmodelstore "lib/shared_lib/servedmodel"
+
 	log "github.com/sirupsen/logrus"
 )
 
@@ -18,7 +20,13 @@ func WorkloadName(servedModel *model.ServedModel) string {
 	if strings.TrimSpace(servedModel.ResourceName) != "" {
 		return dns1123Name(servedModel.ResourceName)
 	}
-	return dns1123Name(fmt.Sprintf("served-model-%s-v%d", servedModel.ModelID.String(), servedModel.ModelVersion))
+	return servedmodelstore.ResourceName(servedModel.ModelID.String(), servedModel.ModelVersion)
+}
+
+func SharedRuntimeWorkloadName(servedModel *model.ServedModel) string {
+	log.Trace("SharedRuntimeWorkloadName")
+
+	return dns1123NameWithHash("served-runtime", servedModel.BaseModel)
 }
 
 func ServingModelName(servedModel *model.ServedModel) string {
@@ -28,6 +36,12 @@ func ServingModelName(servedModel *model.ServedModel) string {
 		return strings.TrimSpace(servedModel.ServingModel)
 	}
 	return dns1123Name(fmt.Sprintf("%s-v%d-%s", servedModel.Name, servedModel.ModelVersion, servedModel.ModelID.String()[:8]))
+}
+
+func SharedRuntimeServingModelName(servedModel *model.ServedModel) string {
+	log.Trace("SharedRuntimeServingModelName")
+
+	return dns1123NameWithHash("base", servedModel.BaseModel)
 }
 
 func ServiceEndpoint(namespace, serviceName string, port int32) string {
@@ -55,6 +69,24 @@ func dns1123Name(value string) string {
 		prefix = "served-model"
 	}
 	return prefix + "-" + suffix
+}
+
+func dns1123NameWithHash(prefix string, value string) string {
+	log.Trace("dns1123NameWithHash")
+
+	source := strings.TrimSpace(value)
+	normalized := dns1123Name(source)
+	sum := sha1.Sum([]byte(source))
+	suffix := hex.EncodeToString(sum[:])[:10]
+	base := dns1123Name(fmt.Sprintf("%s-%s", prefix, normalized))
+	maxPrefixLength := maxKubernetesNameLength - len(suffix) - 1
+	if len(base) > maxPrefixLength {
+		base = strings.Trim(base[:maxPrefixLength], "-")
+	}
+	if base == "" {
+		base = dns1123Name(prefix)
+	}
+	return base + "-" + suffix
 }
 
 var invalidKubernetesNameChars = regexp.MustCompile(`[^a-z0-9-]+`)

@@ -55,49 +55,49 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
-            - name: FEATURE_MATERIALIZER_TEMPORAL_ADDRESS
+            - name: FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS
               value: {{ .Values.env.temporalAddress | quote }}
-            - name: FEATURE_MATERIALIZER_TEMPORAL_NAMESPACE
+            - name: FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE
               value: {{ .Values.env.temporalNamespace | quote }}
-            - name: FEATURE_MATERIALIZER_TEMPORAL_TASK_QUEUE
+            - name: FEATURE_MATERIALIZER_SERVICE_TEMPORAL_TASK_QUEUE
               value: {{ .Values.env.temporalTaskQueue | quote }}
-            - name: FEATURE_MATERIALIZER_ARTIFACT_BUCKET_NAME
+            - name: FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME
               value: {{ .Values.env.artifactBucketName | quote }}
-            - name: FEATURE_MATERIALIZER_ARTIFACT_BUCKET_REGION
+            - name: FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION
               value: {{ .Values.env.artifactBucketRegion | quote }}
-            - name: FEATURE_MATERIALIZER_ARTIFACT_UPLOAD_PART_SIZE_MB
+            - name: FEATURE_MATERIALIZER_SERVICE_ARTIFACT_UPLOAD_PART_SIZE_MB
               value: {{ .Values.env.artifactUploadPartSizeMb | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_PROVIDER
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER
               value: {{ .Values.env.embeddingProvider | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_URL
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL
               value: {{ .Values.env.embeddingUrl | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_MODEL
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL
               value: {{ .Values.env.embeddingModel | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_DIMENSIONS
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS
               value: {{ .Values.env.embeddingDimensions | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_MAX_ROWS
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS
               value: {{ .Values.env.embeddingMaxRows | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_STRATEGY_VERSION
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_STRATEGY_VERSION
               value: {{ .Values.env.embeddingStrategyVersion | quote }}
-            - name: FEATURE_MATERIALIZER_EXTRACTOR_NAME
+            - name: FEATURE_MATERIALIZER_SERVICE_EXTRACTOR_NAME
               value: {{ .Values.env.extractorName | quote }}
-            - name: FEATURE_MATERIALIZER_EXTRACTOR_VERSION
+            - name: FEATURE_MATERIALIZER_SERVICE_EXTRACTOR_VERSION
               value: {{ .Values.env.extractorVersion | quote }}
-            - name: FEATURE_MATERIALIZER_CLEANER_NAME
+            - name: FEATURE_MATERIALIZER_SERVICE_CLEANER_NAME
               value: {{ .Values.env.cleanerName | quote }}
-            - name: FEATURE_MATERIALIZER_CLEANER_VERSION
+            - name: FEATURE_MATERIALIZER_SERVICE_CLEANER_VERSION
               value: {{ .Values.env.cleanerVersion | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_NAME
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_CHUNKER_NAME
               value: {{ .Values.env.embeddingChunkerName | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNKER_VERSION
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_CHUNKER_VERSION
               value: {{ .Values.env.embeddingChunkerVersion | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNK_SIZE
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_CHUNK_SIZE
               value: {{ .Values.env.embeddingChunkSize | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_CHUNK_OVERLAP
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_CHUNK_OVERLAP
               value: {{ .Values.env.embeddingChunkOverlap | quote }}
-            - name: FEATURE_MATERIALIZER_EMBEDDING_REQUEST_TIMEOUT_SECONDS
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.embeddingRequestTimeoutSeconds | quote }}
-            - name: FEATURE_MATERIALIZER_DB_HOST
+            - name: FEATURE_MATERIALIZER_SERVICE_DB_HOST
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -106,7 +106,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbHost | quote }}
 {{- end }}
-            - name: FEATURE_MATERIALIZER_DB_PORT
+            - name: FEATURE_MATERIALIZER_SERVICE_DB_PORT
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -115,7 +115,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbPort | quote }}
 {{- end }}
-            - name: FEATURE_MATERIALIZER_DB_NAME
+            - name: FEATURE_MATERIALIZER_SERVICE_DB_NAME
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -124,7 +124,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbName | quote }}
 {{- end }}
-            - name: FEATURE_MATERIALIZER_DB_USER
+            - name: FEATURE_MATERIALIZER_SERVICE_DB_USER
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -133,7 +133,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbUser | quote }}
 {{- end }}
-            - name: FEATURE_MATERIALIZER_DB_PASSWORD
+            - name: FEATURE_MATERIALIZER_SERVICE_DB_PASSWORD
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -142,9 +142,9 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbPassword | quote }}
 {{- end }}
-            - name: FEATURE_MATERIALIZER_DB_MAX_CONNECTIONS
+            - name: FEATURE_MATERIALIZER_SERVICE_DB_MAX_CONNECTIONS
               value: {{ .Values.env.dbMaxConnections | quote }}
-            - name: FEATURE_MATERIALIZER_DB_SSLMODE
+            - name: FEATURE_MATERIALIZER_SERVICE_DB_SSLMODE
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -153,19 +153,19 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbSslMode | quote }}
 {{- end }}
-            - name: FEATURE_MATERIALIZER_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
-            - name: FEATURE_MATERIALIZER_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
-            - name: FEATURE_MATERIALIZER_HEALTHCHECK_PORT
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_PORT
               value: {{ .Values.service.healthPort | quote }}
-            - name: FEATURE_MATERIALIZER_API_GRPC_PORT
+            - name: FEATURE_MATERIALIZER_SERVICE_API_GRPC_PORT
               value: {{ .Values.service.grpcPort | quote }}
-            - name: FEATURE_MATERIALIZER_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
-            - name: FEATURE_MATERIALIZER_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
-            - name: FEATURE_MATERIALIZER_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
+            - name: FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
           resources:
             requests:

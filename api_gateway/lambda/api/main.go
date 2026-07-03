@@ -50,7 +50,7 @@ type APIHandler struct {
 }
 
 func NewAPIHandler() APIHandler {
-	httpClientTimeoutSeconds := env.WithDefaultInt("API_HTTP_CLIENT_TIMEOUT_SECONDS", "10")
+	httpClientTimeoutSeconds := env.WithDefaultInt("API_GATEWAY_SERVICE_HTTP_CLIENT_TIMEOUT_SECONDS", "10")
 	httpClientTimeout := time.Duration(httpClientTimeoutSeconds) * time.Second
 
 	client := &http.Client{Timeout: httpClientTimeout}

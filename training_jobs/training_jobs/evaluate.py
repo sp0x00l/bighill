@@ -10,6 +10,19 @@ from typing import Any, Iterable
 from training_jobs.manifest import EvaluationReportManifest, parse_profile
 from training_jobs.storage import artifact_info, read_json_bytes, write_json_bytes
 
+REQUIRED_ENV_KEYS = (
+    "TRAINING_EVALUATION_MANIFEST_URI",
+    "TRAINING_EVALUATION_PROFILE",
+    "TRAINING_EVALUATION_REPORT_URI",
+    "TRAINING_MODEL_URI",
+    "TRAINING_RUN_ID",
+)
+
+OPTIONAL_ENV_KEYS = (
+    "TRAINING_EVALUATION_COMMAND",
+    "TRAINING_JOB_WORK_DIR",
+)
+
 
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
@@ -19,11 +32,12 @@ def require_env(name: str) -> str:
 
 
 def main() -> None:
-    training_run_id = require_env("TRAINING_RUN_ID")
-    model_uri = require_env("TRAINING_MODEL_URI")
-    report_uri = require_env("TRAINING_EVALUATION_REPORT_URI")
-    manifest_uri = require_env("TRAINING_EVALUATION_MANIFEST_URI")
-    profile = parse_profile(os.environ.get("TRAINING_EVALUATION_PROFILE", ""))
+    required = {key: require_env(key) for key in REQUIRED_ENV_KEYS}
+    training_run_id = required["TRAINING_RUN_ID"]
+    model_uri = required["TRAINING_MODEL_URI"]
+    report_uri = required["TRAINING_EVALUATION_REPORT_URI"]
+    manifest_uri = required["TRAINING_EVALUATION_MANIFEST_URI"]
+    profile = parse_profile(required["TRAINING_EVALUATION_PROFILE"])
 
     work_dir = Path(os.environ.get("TRAINING_JOB_WORK_DIR", f"/tmp/training_jobs/{training_run_id}/eval")).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)

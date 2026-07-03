@@ -257,12 +257,12 @@ func readTrainingConfig() trainingConfig {
 			ServingLoadStatus:       env.WithDefaultString("TRAINING_SERVICE_SERVING_LOAD_STATUS", "NOT_LOADED"),
 		},
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("TRAINING_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercent:       env.WithDefaultInt("TRAINING_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("TRAINING_HEALTHCHECK_PORT", "5058"),
+			CpuThresholdPercentage:        env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercent:       env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:               env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_PORT", "5058"),
 			MessageBrokerConnectionString: brokers,
-			ServiceLatencyThreshold:       secondsFromEnv("TRAINING_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
-			MessageBrokerLatencyThreshold: secondsFromEnv("TRAINING_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:       secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold: secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
 	}
 }

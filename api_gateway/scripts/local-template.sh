@@ -35,5 +35,5 @@ yq "
   (.Parameters.RedisUsername.Default) = \"${REDIS_USERNAME}\" |
   (.Parameters.RedisPassword.Default) = \"${REDIS_PASSWORD}\" |
   (.Parameters.AuthKmsKeyId.Default) = \"${AUTH_KMS_KEY_ID}\" |
-  (.Parameters.BighillApiHttpClientTimeoutSeconds.Default) = ${API_HTTP_CLIENT_TIMEOUT_SECONDS}
+  (.Parameters.BighillApiHttpClientTimeoutSeconds.Default) = ${API_GATEWAY_SERVICE_HTTP_CLIENT_TIMEOUT_SECONDS}
 " template.yml > template.local.generated.yml

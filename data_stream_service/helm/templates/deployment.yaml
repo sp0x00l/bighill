@@ -37,25 +37,25 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: DATA_STREAM_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
-            - name: DATA_STREAM_API_GRPC_HOST
+            - name: DATA_STREAM_SERVICE_API_GRPC_HOST
               value: "0.0.0.0"
-            - name: DATA_STREAM_API_GRPC_PORT
+            - name: DATA_STREAM_SERVICE_API_GRPC_PORT
               value: {{ .Values.service.grpcPort | quote }}
-            - name: DATA_STREAM_QUERY_ENGINE_MODE
+            - name: DATA_STREAM_SERVICE_QUERY_ENGINE_MODE
               value: {{ .Values.env.queryEngineMode | quote }}
-            - name: DATA_STREAM_QUERY_ENGINE_DATA_ROOT
+            - name: DATA_STREAM_SERVICE_QUERY_ENGINE_DATA_ROOT
               value: {{ .Values.env.queryEngineDataRoot | quote }}
-            - name: DATA_STREAM_QUERY_ENGINE_BINARY_PATH
+            - name: DATA_STREAM_SERVICE_QUERY_ENGINE_BINARY_PATH
               value: {{ .Values.env.queryEngineBinaryPath | quote }}
-            - name: DATA_STREAM_QUERY_ENGINE_TIMEOUT_SECONDS
+            - name: DATA_STREAM_SERVICE_QUERY_ENGINE_TIMEOUT_SECONDS
               value: {{ .Values.env.queryEngineTimeoutSeconds | quote }}
-            - name: DATA_STREAM_DATA_REGISTRY_GRPC_ADDRESS
+            - name: DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_ADDRESS
               value: {{ .Values.env.dataRegistryGrpcAddress | quote }}
-            - name: DATA_STREAM_DATA_REGISTRY_GRPC_DIAL_TIMEOUT_MS
+            - name: DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_DIAL_TIMEOUT_MS
               value: {{ .Values.env.dataRegistryGrpcDialTimeoutMs | quote }}
-            - name: DATA_STREAM_DATA_REGISTRY_GRPC_CALL_TIMEOUT_MS
+            - name: DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_CALL_TIMEOUT_MS
               value: {{ .Values.env.dataRegistryGrpcCallTimeoutMs | quote }}
-            - name: DATA_STREAM_DATA_REGISTRY_GRPC_RETRY_COUNT
+            - name: DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_RETRY_COUNT
               value: {{ .Values.env.dataRegistryGrpcRetryCount | quote }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
@@ -71,15 +71,15 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: DATA_STREAM_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
-            - name: DATA_STREAM_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+            - name: DATA_STREAM_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
-            - name: DATA_STREAM_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+            - name: DATA_STREAM_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
-            - name: DATA_STREAM_HEALTHCHECK_PORT
+            - name: DATA_STREAM_SERVICE_HEALTHCHECK_PORT
               value: {{ .Values.service.healthPort | quote }}
-            - name: DATA_STREAM_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+            - name: DATA_STREAM_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
-            - name: DATA_STREAM_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
+            - name: DATA_STREAM_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
           resources:
             requests:

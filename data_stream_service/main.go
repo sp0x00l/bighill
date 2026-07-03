@@ -60,14 +60,14 @@ func main() {
 			Port:     cfg.GRPCPort,
 		},
 		QueryEngine: infra.QueryEngineConfig{
-			Mode:               env.WithDefaultString("DATA_STREAM_QUERY_ENGINE_MODE", "registry"),
-			DataRoot:           env.WithDefaultString("DATA_STREAM_QUERY_ENGINE_DATA_ROOT", "tmp/local_s3_storage"),
-			BinaryPath:         env.WithDefaultString("DATA_STREAM_QUERY_ENGINE_BINARY_PATH", "../query_engine/datafusion_query_engine/target/release/datafusion_query_engine"),
-			TimeoutSec:         env.WithDefaultInt("DATA_STREAM_QUERY_ENGINE_TIMEOUT_SECONDS", "30"),
-			RegistryAddress:    env.WithDefaultString("DATA_STREAM_DATA_REGISTRY_GRPC_ADDRESS", "localhost:7071"),
-			RegistryDialMs:     env.WithDefaultInt("DATA_STREAM_DATA_REGISTRY_GRPC_DIAL_TIMEOUT_MS", "500"),
-			RegistryCallMs:     env.WithDefaultInt("DATA_STREAM_DATA_REGISTRY_GRPC_CALL_TIMEOUT_MS", "15000"),
-			RegistryRetryCount: env.WithDefaultInt("DATA_STREAM_DATA_REGISTRY_GRPC_RETRY_COUNT", "3"),
+			Mode:               env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_MODE", "registry"),
+			DataRoot:           env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_DATA_ROOT", "tmp/local_s3_storage"),
+			BinaryPath:         env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_BINARY_PATH", "../query_engine/datafusion_query_engine/target/release/datafusion_query_engine"),
+			TimeoutSec:         env.WithDefaultInt("DATA_STREAM_SERVICE_QUERY_ENGINE_TIMEOUT_SECONDS", "30"),
+			RegistryAddress:    env.WithDefaultString("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_ADDRESS", "localhost:7071"),
+			RegistryDialMs:     env.WithDefaultInt("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_DIAL_TIMEOUT_MS", "500"),
+			RegistryCallMs:     env.WithDefaultInt("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_CALL_TIMEOUT_MS", "15000"),
+			RegistryRetryCount: env.WithDefaultInt("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_RETRY_COUNT", "3"),
 		},
 	}
 	queryEngine, err := data.NewQueryEngine(streamCfg.QueryEngine)
@@ -102,15 +102,15 @@ func readStreamConfig() streamConfig {
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	return streamConfig{
 		ServiceName: env.WithDefaultString("DATA_STREAM_SERVICE_NAME", "data-stream-service"),
-		GRPCHost:    env.WithDefaultString("DATA_STREAM_API_GRPC_HOST", "localhost"),
-		GRPCPort:    env.WithDefaultInt("DATA_STREAM_API_GRPC_PORT", "7070"),
+		GRPCHost:    env.WithDefaultString("DATA_STREAM_SERVICE_API_GRPC_HOST", "localhost"),
+		GRPCPort:    env.WithDefaultInt("DATA_STREAM_SERVICE_API_GRPC_PORT", "7070"),
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("DATA_STREAM_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_STREAM_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("DATA_STREAM_HEALTHCHECK_PORT", "5050"),
+			CpuThresholdPercentage:        env.WithDefaultInt("DATA_STREAM_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercentage:    env.WithDefaultInt("DATA_STREAM_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:               env.WithDefaultInt("DATA_STREAM_SERVICE_HEALTHCHECK_PORT", "5050"),
 			MessageBrokerConnectionString: brokers,
-			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_STREAM_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
-			ServiceLatencyThreshold:       secondsFromEnv("DATA_STREAM_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_STREAM_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:       secondsFromEnv("DATA_STREAM_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
 	}
 }

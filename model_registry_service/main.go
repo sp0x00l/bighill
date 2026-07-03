@@ -15,6 +15,7 @@ import (
 
 	"model_registry_service/pkg/app"
 	registryk8s "model_registry_service/pkg/infra/network/k8s"
+	localserving "model_registry_service/pkg/infra/network/localserving"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 	modeldb "model_registry_service/pkg/infra/repo/db"
 
@@ -55,6 +56,8 @@ type healthConfig struct {
 
 type servingConfig struct {
 	Enabled         bool
+	Backend         string
+	LocalStore      string
 	Namespace       string
 	CRDGroup        string
 	CRDVersion      string
@@ -136,28 +139,23 @@ func main() {
 		modeldb.WithTransactionalOutbox(orderedOutbox, cfg.Topics.ModelRegistry),
 		modeldb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
-	var servingObserver *registryk8s.ServedModelStatusObserver
+	var servingObserver interface {
+		Start(context.Context) error
+	}
 	modelUsecaseOptions := []app.ModelRegistryOption{}
-	var servedModelAdapter *registryk8s.ServedModelAdapter
+	var servingDeployer app.ModelServingDeployer
 	if cfg.Serving.Enabled {
-		servedModelAdapter, err = registryk8s.NewServedModelAdapter(registryk8s.ServedModelConfig{
-			Namespace:    cfg.Serving.Namespace,
-			Group:        cfg.Serving.CRDGroup,
-			Version:      cfg.Serving.CRDVersion,
-			Resource:     cfg.Serving.CRDResource,
-			Kind:         cfg.Serving.CRDKind,
-			PollInterval: cfg.Serving.StatusPollEvery,
-		})
+		servingDeployer, err = newServingBackend(cfg.Serving)
 		if err != nil {
-			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create served model adapter")
+			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create served model serving backend")
 		}
-		modelUsecaseOptions = append(modelUsecaseOptions, app.WithModelServingDeployer(servedModelAdapter))
+		modelUsecaseOptions = append(modelUsecaseOptions, app.WithModelServingDeployer(servingDeployer))
 	} else {
 		log.WithContext(cancelCtx).Info("served model reconciliation disabled; model serving status will only change through explicit registry events")
 	}
 	modelUsecase := app.NewModelRegistryUsecase(modelRepository, modelUsecaseOptions...)
-	if servedModelAdapter != nil {
-		servingObserver, err = registryk8s.NewServedModelStatusObserver(servedModelAdapter, modelUsecase, cfg.Serving.StatusPollEvery)
+	if cfg.Serving.Enabled {
+		servingObserver, err = newServingObserver(cfg.Serving, servingDeployer, modelUsecase)
 		if err != nil {
 			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create served model observer")
 		}
@@ -203,15 +201,15 @@ func main() {
 
 func readModelRegistryConfig() registryConfig {
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
-	dbName := env.WithDefaultString("MODEL_REGISTRY_DB_NAME", "bighill_model_registry_db")
+	dbName := env.WithDefaultString("MODEL_REGISTRY_SERVICE_DB_NAME", "bighill_model_registry_db")
 	dbConnectionString := postgresConnectionString(
-		env.WithDefaultString("MODEL_REGISTRY_DB_USER", "bighill_model_registry_db_user"),
-		env.WithDefaultString("MODEL_REGISTRY_DB_PASSWORD", ""),
+		env.WithDefaultString("MODEL_REGISTRY_SERVICE_DB_USER", "bighill_model_registry_db_user"),
+		env.WithDefaultString("MODEL_REGISTRY_SERVICE_DB_PASSWORD", ""),
 		env.WithDefaultString("PGHOST", "127.0.0.1"),
 		env.WithDefaultString("PGPORT", "5432"),
 		dbName,
 		env.WithDefaultString("PGSSLMODE", "disable"),
-		env.WithDefaultInt("MODEL_REGISTRY_DB_MAX_CONNECTIONS", "20"),
+		env.WithDefaultInt("MODEL_REGISTRY_SERVICE_DB_MAX_CONNECTIONS", "20"),
 	)
 	return registryConfig{
 		ServiceName:        env.WithDefaultString("MODEL_REGISTRY_SERVICE_NAME", "model-registry-service"),
@@ -233,25 +231,76 @@ func readModelRegistryConfig() registryConfig {
 			Training:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC", "training"),
 		},
 		Serving: servingConfig{
-			Enabled:         env.WithDefaultBool("MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED", true),
-			Namespace:       env.WithDefaultString("MODEL_REGISTRY_SERVING_NAMESPACE", "default"),
-			CRDGroup:        env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_GROUP", "serving.bighill.io"),
-			CRDVersion:      env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_VERSION", "v1alpha1"),
-			CRDResource:     env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_RESOURCE", "servedmodels"),
-			CRDKind:         env.WithDefaultString("MODEL_REGISTRY_SERVING_CRD_KIND", "ServedModel"),
-			StatusPollEvery: time.Duration(env.WithDefaultInt("MODEL_REGISTRY_SERVING_STATUS_POLL_MS", "1000")) * time.Millisecond,
+			Enabled:         env.WithDefaultBool("MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED", true),
+			Backend:         env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_BACKEND", defaultServingBackend()),
+			LocalStore:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH", ""),
+			Namespace:       env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_NAMESPACE", "default"),
+			CRDGroup:        env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_GROUP", "serving.bighill.io"),
+			CRDVersion:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_VERSION", "v1alpha1"),
+			CRDResource:     env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_RESOURCE", "servedmodels"),
+			CRDKind:         env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_KIND", "ServedModel"),
+			StatusPollEvery: time.Duration(env.WithDefaultInt("MODEL_REGISTRY_SERVICE_SERVING_STATUS_POLL_MS", "1000")) * time.Millisecond,
 		},
 		Health: healthConfig{
-			CpuThresholdPercentage:        env.WithDefaultInt("MODEL_REGISTRY_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
-			MemFreeThresholdPercent:       env.WithDefaultInt("MODEL_REGISTRY_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
-			HealthCheckPort:               env.WithDefaultInt("MODEL_REGISTRY_HEALTHCHECK_PORT", "5060"),
+			CpuThresholdPercentage:        env.WithDefaultInt("MODEL_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
+			MemFreeThresholdPercent:       env.WithDefaultInt("MODEL_REGISTRY_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
+			HealthCheckPort:               env.WithDefaultInt("MODEL_REGISTRY_SERVICE_HEALTHCHECK_PORT", "5060"),
 			DBConnectionString:            dbConnectionString,
 			MessageBrokerConnectionString: brokers,
-			DbLatencyThreshold:            secondsFromEnv("MODEL_REGISTRY_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
-			MessageBrokerLatencyThreshold: secondsFromEnv("MODEL_REGISTRY_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
-			ServiceLatencyThreshold:       secondsFromEnv("MODEL_REGISTRY_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+			DbLatencyThreshold:            secondsFromEnv("MODEL_REGISTRY_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS", "5"),
+			MessageBrokerLatencyThreshold: secondsFromEnv("MODEL_REGISTRY_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
+			ServiceLatencyThreshold:       secondsFromEnv("MODEL_REGISTRY_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
 		},
 	}
+}
+
+func newServingBackend(cfg servingConfig) (app.ModelServingDeployer, error) {
+	log.Trace("newServingBackend")
+
+	switch cfg.Backend {
+	case "local":
+		return localserving.NewAdapter(cfg.Namespace, cfg.LocalStore)
+	case "kubernetes":
+		return registryk8s.NewServedModelAdapter(registryk8s.ServedModelConfig{
+			Namespace:    cfg.Namespace,
+			Group:        cfg.CRDGroup,
+			Version:      cfg.CRDVersion,
+			Resource:     cfg.CRDResource,
+			Kind:         cfg.CRDKind,
+			PollInterval: cfg.StatusPollEvery,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported model registry serving backend %q", cfg.Backend)
+	}
+}
+
+func newServingObserver(cfg servingConfig, deployer app.ModelServingDeployer, recorder localserving.ServingStatusRecorder) (interface {
+	Start(context.Context) error
+}, error) {
+	log.Trace("newServingObserver")
+
+	switch cfg.Backend {
+	case "local":
+		adapter, ok := deployer.(*localserving.Adapter)
+		if !ok {
+			return nil, fmt.Errorf("local serving deployer has unexpected type")
+		}
+		return localserving.NewStatusObserver(adapter, recorder, cfg.StatusPollEvery)
+	case "kubernetes":
+		adapter, ok := deployer.(*registryk8s.ServedModelAdapter)
+		if !ok {
+			return nil, fmt.Errorf("kubernetes serving deployer has unexpected type")
+		}
+		return registryk8s.NewServedModelStatusObserver(adapter, recorder, cfg.StatusPollEvery)
+	default:
+		return nil, fmt.Errorf("unsupported model registry serving backend %q", cfg.Backend)
+	}
+}
+
+func defaultServingBackend() string {
+	log.Trace("defaultServingBackend")
+
+	return "kubernetes"
 }
 
 func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {

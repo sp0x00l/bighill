@@ -8,6 +8,27 @@ from pathlib import Path
 from training_jobs.manifest import TrainingArtifactManifest
 from training_jobs.storage import upload_directory, write_json_bytes
 
+REQUIRED_ENV_KEYS = (
+    "TRAINING_ARTIFACT_MANIFEST_URI",
+    "TRAINING_AXOLOTL_COMMAND",
+    "TRAINING_BASE_MODEL",
+    "TRAINING_MODEL_NAME",
+    "TRAINING_MODEL_URI",
+    "TRAINING_MODEL_VERSION",
+    "TRAINING_RECIPE_YAML",
+    "TRAINING_RUN_ID",
+)
+
+OPTIONAL_ENV_KEYS = (
+    "TRAINING_ADAPTER_URI",
+    "TRAINING_ARTIFACT_FORMAT",
+    "TRAINING_JOB_WORK_DIR",
+    "TRAINING_RECIPE_HASH",
+    "TRAINING_SERVING_LOAD_STATUS",
+    "TRAINING_SERVING_MODEL",
+    "TRAINING_SERVING_TARGET",
+)
+
 
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
@@ -17,20 +38,21 @@ def require_env(name: str) -> str:
 
 
 def main() -> None:
-    training_run_id = require_env("TRAINING_RUN_ID")
-    recipe_yaml = require_env("TRAINING_RECIPE_YAML")
-    model_uri = require_env("TRAINING_MODEL_URI")
-    manifest_uri = require_env("TRAINING_ARTIFACT_MANIFEST_URI")
-    model_name = require_env("TRAINING_MODEL_NAME")
-    model_version = require_env("TRAINING_MODEL_VERSION")
-    base_model = require_env("TRAINING_BASE_MODEL")
+    required = {key: require_env(key) for key in REQUIRED_ENV_KEYS}
+    training_run_id = required["TRAINING_RUN_ID"]
+    recipe_yaml = required["TRAINING_RECIPE_YAML"]
+    model_uri = required["TRAINING_MODEL_URI"]
+    manifest_uri = required["TRAINING_ARTIFACT_MANIFEST_URI"]
+    model_name = required["TRAINING_MODEL_NAME"]
+    model_version = required["TRAINING_MODEL_VERSION"]
+    base_model = required["TRAINING_BASE_MODEL"]
     recipe_hash = os.environ.get("TRAINING_RECIPE_HASH", "").strip()
     artifact_format = os.environ.get("TRAINING_ARTIFACT_FORMAT", "HF_PEFT_ADAPTER").strip()
     adapter_uri = os.environ.get("TRAINING_ADAPTER_URI", model_uri).strip()
     serving_target = os.environ.get("TRAINING_SERVING_TARGET", "").strip()
     serving_model = os.environ.get("TRAINING_SERVING_MODEL", "").strip()
     serving_load_status = os.environ.get("TRAINING_SERVING_LOAD_STATUS", "NOT_LOADED").strip()
-    command = require_env("TRAINING_AXOLOTL_COMMAND")
+    command = required["TRAINING_AXOLOTL_COMMAND"]
 
     work_dir = Path(os.environ.get("TRAINING_JOB_WORK_DIR", f"/tmp/training_jobs/{training_run_id}")).resolve()
     output_dir = work_dir / "adapter"

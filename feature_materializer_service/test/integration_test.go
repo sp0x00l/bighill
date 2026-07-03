@@ -49,7 +49,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 	BeforeAll(func() {
 		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 
-		dbName := env.WithDefaultString("FEATURE_MATERIALIZER_DB_NAME", "bighill_feature_materializer_db")
+		dbName := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_NAME", "bighill_feature_materializer_db")
 		connectionString := testPostgresConnectionString(dbName)
 
 		var err error
@@ -194,8 +194,8 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 		embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
 		temporalClient, err := client.Dial(client.Options{
-			HostPort:  env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
-			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
+			HostPort:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
+			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		defer temporalClient.Close()
@@ -318,13 +318,13 @@ func outboxSentCount(ctx context.Context, database *dbconn.Database, datasetID u
 }
 
 func testPostgresConnectionString(dbName string) string {
-	user := env.WithDefaultString("FEATURE_MATERIALIZER_DB_USER", "bighill_feature_materializer_db_user")
-	password := env.WithDefaultString("FEATURE_MATERIALIZER_DB_PASSWORD", env.WithDefaultString("BIGHILL_DB_PASSWORD", "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw"))
-	host := env.WithDefaultString("FEATURE_MATERIALIZER_DB_HOST", env.WithDefaultString("PGHOST", "127.0.0.1"))
-	port := env.WithDefaultString("FEATURE_MATERIALIZER_DB_PORT", env.WithDefaultString("PGPORT", "5432"))
-	sslMode := env.WithDefaultString("FEATURE_MATERIALIZER_DB_SSLMODE", env.WithDefaultString("PGSSLMODE", "disable"))
-	maxConnections := env.WithDefaultInt("FEATURE_MATERIALIZER_DB_MAX_CONNECTIONS", "20")
-	if value := os.Getenv("FEATURE_MATERIALIZER_DB_NAME"); value != "" {
+	user := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_USER", "bighill_feature_materializer_db_user")
+	password := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_PASSWORD", env.WithDefaultString("BIGHILL_DB_PASSWORD", "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw"))
+	host := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_HOST", env.WithDefaultString("PGHOST", "127.0.0.1"))
+	port := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_PORT", env.WithDefaultString("PGPORT", "5432"))
+	sslMode := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_SSLMODE", env.WithDefaultString("PGSSLMODE", "disable"))
+	maxConnections := env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_DB_MAX_CONNECTIONS", "20")
+	if value := os.Getenv("FEATURE_MATERIALIZER_SERVICE_DB_NAME"); value != "" {
 		dbName = value
 	}
 

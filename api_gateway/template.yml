@@ -124,7 +124,7 @@ Resources:
         Variables:
           LOG_LEVEL: !Ref BighillApiLogLevel
           ENVIRONMENT: !Ref StageNameParam
-          API_HTTP_CLIENT_TIMEOUT_SECONDS: !Ref BighillApiHttpClientTimeoutSeconds
+          API_GATEWAY_SERVICE_HTTP_CLIENT_TIMEOUT_SECONDS: !Ref BighillApiHttpClientTimeoutSeconds
           DATA_REGISTRY_SERVICE_HTTP_HOST: !Ref DataRegistryServiceHttpDomain
           DATA_REGISTRY_SERVICE_HTTP_PORT: !Ref DataRegistryServiceHttpPort
           DATA_INGESTION_SERVICE_HTTP_HOST: !Ref DataIngestionServiceHttpDomain

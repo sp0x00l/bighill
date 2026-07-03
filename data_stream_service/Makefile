@@ -37,9 +37,9 @@ cert:
 
 install-helm:
 	@scripts/config.sh
-	@helm install ${DATA_STREAM_SERVICE_BUILD_VERSION} bighill/data-stream-service helm/data-stream-service --set service.port=${DATA_STREAM_API_HTTP_PORT}
+	@helm install ${DATA_STREAM_SERVICE_BUILD_VERSION} bighill/data-stream-service helm/data-stream-service --set service.port=${DATA_STREAM_SERVICE_API_HTTP_PORT}
 
 upgrade-helm:
 	@scripts/config.sh
-	@helm upgrade ${DATA_STREAM_SERVICE_BUILD_VERSION} bighill/data-stream-service helm/data-stream-service --set service.port=${DATA_STREAM_API_HTTP_PORT}
+	@helm upgrade ${DATA_STREAM_SERVICE_BUILD_VERSION} bighill/data-stream-service helm/data-stream-service --set service.port=${DATA_STREAM_SERVICE_API_HTTP_PORT}
 	

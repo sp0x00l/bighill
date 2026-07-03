@@ -222,6 +222,6 @@ echo "Final steps:"
 echo "  1. Run make install to generate module replacements and protobuf output."
 echo "  2. Run make start-infra for Postgres with pgvector, Redis, Kafka, Temporal, Polaris, and local data sources."
 echo "  3. Run make start-test to start the local services and API gateway."
-echo "  4. Run make build-query-engine to rebuild DATA_STREAM_QUERY_ENGINE_MODE=datafusion after Rust changes."
+echo "  4. Run make build-query-engine to rebuild DATA_STREAM_SERVICE_QUERY_ENGINE_MODE=datafusion after Rust changes."
 
 cd "$ROOT_DIR"

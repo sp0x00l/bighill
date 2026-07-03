@@ -2,18 +2,18 @@ package k8s
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
+
+	servedmodelstore "lib/shared_lib/servedmodel"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -134,24 +135,53 @@ func (a *ServedModelAdapter) EnsureServedModel(ctx context.Context, registeredMo
 func (o *ServedModelStatusObserver) Start(ctx context.Context) error {
 	log.Trace("ServedModelStatusObserver Start")
 
-	if err := o.ProcessOnce(ctx); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	for {
+		resourceVersion, err := o.ProcessSnapshot(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			log.WithContext(ctx).WithError(err).Error("served model status snapshot failed")
+			if err := sleepContext(ctx, reconnectDelay(o.pollInterval)); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := o.Watch(ctx, resourceVersion); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			log.WithContext(ctx).WithError(err).Error("served model status watch failed")
+		}
+		if err := sleepContext(ctx, reconnectDelay(o.pollInterval)); err != nil {
 			return err
 		}
-		log.WithContext(ctx).WithError(err).Error("served model status poll failed")
 	}
-	ticker := time.NewTicker(o.pollInterval)
-	defer ticker.Stop()
+}
+
+func (o *ServedModelStatusObserver) Watch(ctx context.Context, resourceVersion string) error {
+	log.Trace("ServedModelStatusObserver Watch")
+
+	watcher, err := o.adapter.client.Resource(o.adapter.gvr).Namespace(o.adapter.namespace).Watch(ctx, metav1.ListOptions{
+		ResourceVersion: resourceVersion,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: watch served models: %w", domain.ErrModelServe, err)
+	}
+	defer watcher.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			if err := o.ProcessOnce(ctx); err != nil {
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				return nil
+			}
+			if err := o.ProcessWatchEvent(ctx, event); err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return err
 				}
-				log.WithContext(ctx).WithError(err).Error("served model status poll failed")
+				log.WithContext(ctx).WithError(err).Error("served model status watch event failed")
 			}
 		}
 	}
@@ -160,33 +190,64 @@ func (o *ServedModelStatusObserver) Start(ctx context.Context) error {
 func (o *ServedModelStatusObserver) ProcessOnce(ctx context.Context) error {
 	log.Trace("ServedModelStatusObserver ProcessOnce")
 
+	_, err := o.ProcessSnapshot(ctx)
+	return err
+}
+
+func (o *ServedModelStatusObserver) ProcessSnapshot(ctx context.Context) (string, error) {
+	log.Trace("ServedModelStatusObserver ProcessSnapshot")
+
 	items, err := o.adapter.client.Resource(o.adapter.gvr).Namespace(o.adapter.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("%w: list served models: %w", domain.ErrModelServe, err)
+		return "", fmt.Errorf("%w: list served models: %w", domain.ErrModelServe, err)
 	}
 	for i := range items.Items {
-		status, ok, err := servedModelStatusFromObject(&items.Items[i])
-		if err != nil {
-			log.WithContext(ctx).WithError(err).WithField("served_model", items.Items[i].GetName()).Error("served model status ignored")
-			continue
-		}
+		o.processStatusObject(ctx, &items.Items[i])
+	}
+	return items.GetResourceVersion(), nil
+}
+
+func (o *ServedModelStatusObserver) ProcessWatchEvent(ctx context.Context, event watch.Event) error {
+	log.Trace("ServedModelStatusObserver ProcessWatchEvent")
+
+	switch event.Type {
+	case watch.Added, watch.Modified:
+		obj, ok := event.Object.(*unstructured.Unstructured)
 		if !ok {
-			continue
+			return fmt.Errorf("%w: served model status watch event object is not unstructured", domain.ErrModelServe)
 		}
-		key := servedModelStatusID(status, items.Items[i].GetGeneration())
-		if o.seen[items.Items[i].GetName()] == key {
-			continue
-		}
-		if _, err := o.recorder.RecordModelServingStatus(ctx, status, key); err != nil {
-			log.WithContext(ctx).WithError(err).WithFields(log.Fields{
-				"served_model": items.Items[i].GetName(),
-				"model_id":     status.ModelID,
-			}).Error("served model status recording failed")
-			continue
-		}
-		o.seen[items.Items[i].GetName()] = key
+		o.processStatusObject(ctx, obj)
+	case watch.Deleted, watch.Bookmark:
+		return nil
+	case watch.Error:
+		return fmt.Errorf("%w: served model status watch returned an error event", domain.ErrModelServe)
 	}
 	return nil
+}
+
+func (o *ServedModelStatusObserver) processStatusObject(ctx context.Context, obj *unstructured.Unstructured) {
+	log.Trace("ServedModelStatusObserver processStatusObject")
+
+	status, ok, err := servedModelStatusFromObject(obj)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).WithField("served_model", obj.GetName()).Error("served model status ignored")
+		return
+	}
+	if !ok {
+		return
+	}
+	key := servedModelStatusID(status, obj.GetGeneration())
+	if o.seen[obj.GetName()] == key {
+		return
+	}
+	if _, err := o.recorder.RecordModelServingStatus(ctx, status, key); err != nil {
+		log.WithContext(ctx).WithError(err).WithFields(log.Fields{
+			"served_model": obj.GetName(),
+			"model_id":     status.ModelID,
+		}).Error("served model status recording failed")
+		return
+	}
+	o.seen[obj.GetName()] = key
 }
 
 func (a *ServedModelAdapter) servedModelObject(name string, registeredModel *model.Model) *unstructured.Unstructured {
@@ -265,28 +326,7 @@ func servedModelStatusID(status *model.ServedModelStatus, generation int64) uuid
 func ServedModelName(modelID uuid.UUID, modelVersion int) string {
 	log.Trace("ServedModelName")
 
-	return dns1123Name(fmt.Sprintf("served-model-%s-v%d", modelID.String(), modelVersion))
-}
-
-func dns1123Name(value string) string {
-	log.Trace("dns1123Name")
-
-	name := strings.ToLower(value)
-	name = invalidKubernetesNameChars.ReplaceAllString(name, "-")
-	name = strings.Trim(name, "-")
-	if name == "" {
-		name = "served-model"
-	}
-	if len(name) <= maxKubernetesNameLength {
-		return name
-	}
-	sum := sha1.Sum([]byte(name))
-	suffix := hex.EncodeToString(sum[:])[:10]
-	prefix := strings.Trim(name[:maxKubernetesNameLength-len(suffix)-1], "-")
-	if prefix == "" {
-		prefix = "served-model"
-	}
-	return prefix + "-" + suffix
+	return servedmodelstore.ResourceName(modelID.String(), modelVersion)
 }
 
 func NewDynamicClient() (dynamic.Interface, error) {
@@ -313,6 +353,28 @@ func NewDynamicClient() (dynamic.Interface, error) {
 	return client, nil
 }
 
-var invalidKubernetesNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	log.Trace("sleepContext")
 
-const maxKubernetesNameLength = 63
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func reconnectDelay(base time.Duration) time.Duration {
+	log.Trace("reconnectDelay")
+
+	if base <= 0 {
+		base = time.Second
+	}
+	jitterMax := int64(base / 5)
+	if jitterMax <= 0 {
+		return base
+	}
+	return base + time.Duration(rand.Int63n(jitterMax))
+}

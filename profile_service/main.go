@@ -200,16 +200,16 @@ func loadConfig() runtimeConfig {
 	return runtimeConfig{
 		serviceName:             env.MustString("PROFILE_SERVICE_NAME"),
 		servicePort:             env.MustInt("PROFILE_SERVICE_HTTP_PORT"),
-		authExpirationInMinutes: env.MustInt("PROFILE_AUTH_EXPIRATION_MINUTES"),
-		emailValidationTTL:      time.Duration(env.MustInt("PROFILE_EMAIL_VALIDATION_TTL_MINUTES")) * time.Minute,
-		oauthStateTTL:           time.Duration(env.MustInt("PROFILE_OAUTH_STATE_TTL_MINUTES")) * time.Minute,
+		authExpirationInMinutes: env.MustInt("PROFILE_SERVICE_AUTH_EXPIRATION_MINUTES"),
+		emailValidationTTL:      time.Duration(env.MustInt("PROFILE_SERVICE_EMAIL_VALIDATION_TTL_MINUTES")) * time.Minute,
+		oauthStateTTL:           time.Duration(env.MustInt("PROFILE_SERVICE_OAUTH_STATE_TTL_MINUTES")) * time.Minute,
 		googleOAuth: rest.OAuthProviderConfig{
-			ClientID:     env.MustString("PROFILE_OAUTH_GOOGLE_CLIENT_ID"),
-			ClientSecret: env.MustString("PROFILE_OAUTH_GOOGLE_CLIENT_SECRET"),
+			ClientID:     env.MustString("PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID"),
+			ClientSecret: env.MustString("PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET"),
 		},
 		discordOAuth: rest.OAuthProviderConfig{
-			ClientID:     env.MustString("PROFILE_OAUTH_DISCORD_CLIENT_ID"),
-			ClientSecret: env.MustString("PROFILE_OAUTH_DISCORD_CLIENT_SECRET"),
+			ClientID:     env.MustString("PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID"),
+			ClientSecret: env.MustString("PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET"),
 		},
 		redisOption: rueidis.ClientOption{
 			InitAddress: []string{env.MustString("PROFILE_SERVICE_REDIS_ADDRESS")},
@@ -217,18 +217,18 @@ func loadConfig() runtimeConfig {
 			Password:    env.MustString("PROFILE_SERVICE_REDIS_PASSWORD"),
 		},
 		messagingConfig: messagingConn.MessengerConfig{
-			DlqURL:  env.MustString("PROFILE_DLQ"),
-			GroupID: env.MustString("PROFILE_KAFKA_GROUP_ID"),
+			DlqURL:  env.MustString("PROFILE_SERVICE_DLQ"),
+			GroupID: env.MustString("PROFILE_SERVICE_KAFKA_GROUP_ID"),
 			Brokers: brokers,
 		},
-		outboxBackend: env.MustString("PROFILE_OUTBOX"),
+		outboxBackend: env.MustString("PROFILE_SERVICE_OUTBOX"),
 		outboxRelayConfig: messagingConn.OutboxRelayConfig{
 			PollInterval:   time.Duration(env.MustInt("PROFILE_SERVICE_OUTBOX_RELAY_POLL_MS")) * time.Millisecond,
 			FailureBackoff: time.Duration(env.MustInt("PROFILE_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS")) * time.Millisecond,
 			BatchSize:      int32(env.MustInt("PROFILE_SERVICE_OUTBOX_RELAY_BATCH_SIZE")),
 		},
 		kafkaPublisherTopic: env.MustString("PROFILE_SERVICE_KAFKA_PUBLISHER_TOPIC"),
-		useStagingTestToken: env.WithDefaultBool("PROFILE_USE_STAGING_TEST_EMAIL_TOKEN", env.IsStaging()),
+		useStagingTestToken: env.WithDefaultBool("PROFILE_SERVICE_USE_STAGING_TEST_EMAIL_TOKEN", env.IsStaging()),
 		healthCheckConfig: healthcheck.HealthCheckConfig{
 			CpuThresholdPercentage:           env.MustInt("PROFILE_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT"),
 			MemFreeThresholdPercentage:       env.MustInt("PROFILE_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT"),

@@ -54,6 +54,7 @@ var _ = Describe("KubeRayExecutor", func() {
 			ServingTarget:        "vllm-local",
 			ServingModel:         "ranker-v1",
 			ServingLoadStatus:    "NOT_LOADED",
+			ArtifactFormat:       "HF_PEFT_ADAPTER",
 			ArtifactManifestURI:  "s3://models/run-kube/artifact.json",
 			ArtifactBucketRegion: "local-dev",
 			AxolotlCommand:       "axolotl train",
@@ -69,6 +70,7 @@ var _ = Describe("KubeRayExecutor", func() {
 		runtimeEnv, _, _ := unstructured.NestedString(created.Object, "spec", "runtimeEnvYAML")
 		Expect(runtimeEnv).To(ContainSubstring(`TRAINING_RUN_ID: "run-kube"`))
 		Expect(runtimeEnv).To(ContainSubstring(`TRAINING_AXOLOTL_COMMAND: "axolotl train"`))
+		Expect(runtimeEnv).To(ContainSubstring(`TRAINING_ARTIFACT_FORMAT: "HF_PEFT_ADAPTER"`))
 		headContainers, _, _ := unstructured.NestedSlice(created.Object, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "containers")
 		workerGroups, _, _ := unstructured.NestedSlice(created.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
 		Expect(headContainers[0].(map[string]any)["image"]).To(Equal("training-jobs:unit"))

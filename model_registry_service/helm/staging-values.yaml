@@ -20,3 +20,4 @@ env:
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"
+  servingBackend: "kubernetes"

@@ -313,6 +313,7 @@ func trainingEnv(spec model.TrainingJobSpec) map[string]string {
 		"TRAINING_SERVING_TARGET":         spec.ServingTarget,
 		"TRAINING_SERVING_MODEL":          spec.ServingModel,
 		"TRAINING_SERVING_LOAD_STATUS":    spec.ServingLoadStatus,
+		"TRAINING_ARTIFACT_FORMAT":        spec.ArtifactFormat,
 		"TRAINING_ARTIFACT_MANIFEST_URI":  spec.ArtifactManifestURI,
 		"TRAINING_ARTIFACT_BUCKET_REGION": spec.ArtifactBucketRegion,
 		"TRAINING_AXOLOTL_COMMAND":        spec.AxolotlCommand,

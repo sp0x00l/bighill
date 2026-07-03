@@ -30,8 +30,10 @@ var _ = Describe("ServedModelReconciler", func() {
 		reconciler := app.NewServedModelReconciler(runtime, writer)
 		servedModel := validServedModel()
 
-		Expect(reconciler.Reconcile(context.Background(), servedModel)).To(Succeed())
+		status, err := reconciler.Reconcile(context.Background(), servedModel)
 
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 		Expect(runtime.received).To(Equal(servedModel))
 		Expect(writer.resourceName).To(Equal(servedModel.ResourceName))
 		Expect(writer.status.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
@@ -49,8 +51,10 @@ var _ = Describe("ServedModelReconciler", func() {
 		writer := &statusWriterStub{}
 		reconciler := app.NewServedModelReconciler(runtime, writer)
 
-		Expect(reconciler.Reconcile(context.Background(), validServedModel())).To(Succeed())
+		status, err := reconciler.Reconcile(context.Background(), validServedModel())
 
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status.ServingLoadStatus).To(Equal(model.ModelLoadStatusNotLoaded))
 		Expect(writer.status.ServingLoadStatus).To(Equal(model.ModelLoadStatusNotLoaded))
 	})
 
@@ -64,8 +68,10 @@ var _ = Describe("ServedModelReconciler", func() {
 		writer := &statusWriterStub{}
 		reconciler := app.NewServedModelReconciler(runtime, writer)
 
-		Expect(reconciler.Reconcile(context.Background(), validServedModel())).To(Succeed())
+		status, err := reconciler.Reconcile(context.Background(), validServedModel())
 
+		Expect(err).NotTo(HaveOccurred())
+		Expect(status.ServingLoadStatus).To(Equal(model.ModelLoadStatusFailed))
 		Expect(writer.status.ServingLoadStatus).To(Equal(model.ModelLoadStatusFailed))
 		Expect(writer.status.FailureReason).To(ContainSubstring("progress deadline"))
 	})
@@ -76,9 +82,10 @@ var _ = Describe("ServedModelReconciler", func() {
 		writer := &statusWriterStub{}
 		reconciler := app.NewServedModelReconciler(runtime, writer)
 
-		err := reconciler.Reconcile(context.Background(), validServedModel())
+		status, err := reconciler.Reconcile(context.Background(), validServedModel())
 
 		Expect(err).To(HaveOccurred())
+		Expect(status.ServingLoadStatus).To(Equal(model.ModelLoadStatusFailed))
 		Expect(writer.status.ServingLoadStatus).To(Equal(model.ModelLoadStatusFailed))
 		Expect(writer.status.FailureReason).To(ContainSubstring("deployment invalid"))
 	})

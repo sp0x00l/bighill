@@ -18,6 +18,8 @@ env:
   environment: "local-dev"
   serviceName: "model-serving-service"
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  backend: "kubernetes"
+  localStorePath: ""
   pollMs: "1000"
   servedModelCrdGroup: "serving.bighill.io"
   servedModelCrdVersion: "v1alpha1"
@@ -25,12 +27,14 @@ env:
   vllmImage: "vllm/vllm-openai:latest"
   vllmImagePullPolicy: "IfNotPresent"
   vllmServiceAccount: ""
+  vllmMultiTenantEnabled: "false"
   vllmReplicas: "1"
   vllmPort: "8000"
   vllmCpu: "1"
   vllmMemory: "4Gi"
   vllmGpuResource: "nvidia.com/gpu"
   vllmGpu: "1"
+  vllmRequestTimeoutMs: "5000"
 resources:
   requests:
     memory: "128Mi"

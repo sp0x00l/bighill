@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -53,12 +54,35 @@ func NewServedModelStore(config ServedModelStoreConfig, client dynamic.Interface
 	}, nil
 }
 
+func (s *ServedModelStore) Namespace() string {
+	log.Trace("ServedModelStore Namespace")
+
+	return s.namespace
+}
+
+func (s *ServedModelStore) Read(ctx context.Context, resourceName string) (*model.ServedModel, error) {
+	log.Trace("ServedModelStore Read")
+
+	obj, err := s.client.Resource(s.gvr).Namespace(s.namespace).Get(ctx, resourceName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("%w: read served model: %w", domain.ErrModelServe, err)
+	}
+	return servedModelFromObject(obj, s.namespace)
+}
+
 func (s *ServedModelStore) List(ctx context.Context) ([]*model.ServedModel, error) {
 	log.Trace("ServedModelStore List")
 
+	servedModels, _, err := s.ListWithResourceVersion(ctx)
+	return servedModels, err
+}
+
+func (s *ServedModelStore) ListWithResourceVersion(ctx context.Context) ([]*model.ServedModel, string, error) {
+	log.Trace("ServedModelStore ListWithResourceVersion")
+
 	items, err := s.client.Resource(s.gvr).Namespace(s.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("%w: list served models: %w", domain.ErrModelServe, err)
+		return nil, "", fmt.Errorf("%w: list served models: %w", domain.ErrModelServe, err)
 	}
 	out := make([]*model.ServedModel, 0, len(items.Items))
 	for i := range items.Items {
@@ -69,7 +93,19 @@ func (s *ServedModelStore) List(ctx context.Context) ([]*model.ServedModel, erro
 		}
 		out = append(out, servedModel)
 	}
-	return out, nil
+	return out, items.GetResourceVersion(), nil
+}
+
+func (s *ServedModelStore) Watch(ctx context.Context, resourceVersion string) (watch.Interface, error) {
+	log.Trace("ServedModelStore Watch")
+
+	watcher, err := s.client.Resource(s.gvr).Namespace(s.namespace).Watch(ctx, metav1.ListOptions{
+		ResourceVersion: resourceVersion,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: watch served models: %w", domain.ErrModelServe, err)
+	}
+	return watcher, nil
 }
 
 func (s *ServedModelStore) UpdateStatus(ctx context.Context, resourceName string, status *model.ServedModelStatus) error {
@@ -79,6 +115,9 @@ func (s *ServedModelStore) UpdateStatus(ctx context.Context, resourceName string
 	obj, err := resource.Get(ctx, resourceName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("%w: read served model for status update: %w", domain.ErrModelServe, err)
+	}
+	if servedModelStatusMatches(obj, status) {
+		return nil
 	}
 	setStatusFields(obj, status)
 	if _, err := resource.UpdateStatus(ctx, obj, metav1.UpdateOptions{}); err != nil {
@@ -91,6 +130,23 @@ func (s *ServedModelStore) UpdateStatus(ctx context.Context, resourceName string
 		return fmt.Errorf("%w: update served model status: %w", domain.ErrModelServe, err)
 	}
 	return nil
+}
+
+func servedModelStatusMatches(obj *unstructured.Unstructured, status *model.ServedModelStatus) bool {
+	log.Trace("servedModelStatusMatches")
+
+	loadStatus, _, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
+	servingTarget, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
+	servingModel, _, _ := unstructured.NestedString(obj.Object, "status", "servingModel")
+	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
+	observedGeneration, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
+	readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
+	return loadStatus == status.ServingLoadStatus.String() &&
+		servingTarget == status.ServingTarget &&
+		servingModel == status.ServingModel &&
+		failureReason == status.FailureReason &&
+		observedGeneration == status.ObservedGeneration &&
+		readyReplicas == int64(status.ReadyReplicas)
 }
 
 func servedModelFromObject(obj *unstructured.Unstructured, namespace string) (*model.ServedModel, error) {

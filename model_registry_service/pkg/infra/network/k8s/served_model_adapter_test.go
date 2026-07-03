@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic/fake"
 )
 
@@ -161,6 +162,28 @@ var _ = Describe("ServedModelAdapter", func() {
 		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
 
 		Expect(recorder.calls).To(Equal(1))
+	})
+
+	It("records loaded ServedModel status from watch events", func() {
+		modelRecord := validRegistryModel()
+		existing := servedModelObject(modelRecord)
+		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
+		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		recorder := &servingStatusRecorderStub{}
+		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(observer.ProcessWatchEvent(context.Background(), watch.Event{
+			Type:   watch.Modified,
+			Object: existing,
+		})).To(Succeed())
+
+		Expect(recorder.status).NotTo(BeNil())
+		Expect(recorder.status.ModelID).To(Equal(modelRecord.ModelID))
+		Expect(recorder.status.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
+		Expect(recorder.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 })
 

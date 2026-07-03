@@ -45,10 +45,10 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 
 		cfg := dbconn.DatabaseConfig{}
-		cfg.WithDbName("MODEL_REGISTRY_DB_NAME", "bighill_model_registry_db")
-		cfg.WithDbUser("MODEL_REGISTRY_DB_USER", "bighill_model_registry_db_user")
-		cfg.WithDbPassword("MODEL_REGISTRY_DB_PASSWORD", "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw")
-		cfg.WithDbMaxConnections("MODEL_REGISTRY_DB_MAX_CONNECTIONS", "20")
+		cfg.WithDbName("MODEL_REGISTRY_SERVICE_DB_NAME", "bighill_model_registry_db")
+		cfg.WithDbUser("MODEL_REGISTRY_SERVICE_DB_USER", "bighill_model_registry_db_user")
+		cfg.WithDbPassword("MODEL_REGISTRY_SERVICE_DB_PASSWORD", "LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw")
+		cfg.WithDbMaxConnections("MODEL_REGISTRY_SERVICE_DB_MAX_CONNECTIONS", "20")
 
 		var err error
 		database, err = dbconn.InitDatabase(ctx, cfg.GetName(), cfg.GetConnectionString(), log.StandardLogger())

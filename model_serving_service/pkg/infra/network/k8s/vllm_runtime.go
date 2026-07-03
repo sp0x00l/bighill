@@ -1,11 +1,14 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"model_serving_service/pkg/domain"
 	"model_serving_service/pkg/domain/model"
@@ -23,12 +26,14 @@ type VLLMRuntimeConfig struct {
 	Image           string
 	ImagePullPolicy string
 	ServiceAccount  string
+	MultiTenant     bool
 	Replicas        int32
 	Port            int32
 	CPU             string
 	Memory          string
 	GPUResource     string
 	GPU             string
+	RequestTimeout  time.Duration
 	HTTPClient      *http.Client
 }
 
@@ -37,6 +42,7 @@ type VLLMRuntime struct {
 	image           string
 	imagePullPolicy string
 	serviceAccount  string
+	multiTenant     bool
 	replicas        int32
 	port            int32
 	cpu             string
@@ -72,13 +78,18 @@ func NewVLLMRuntime(config VLLMRuntimeConfig, client dynamic.Interface) (*VLLMRu
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		timeout := config.RequestTimeout
+		if timeout <= 0 {
+			timeout = 5 * time.Second
+		}
+		httpClient = &http.Client{Timeout: timeout}
 	}
 	return &VLLMRuntime{
 		namespace:       strings.TrimSpace(config.Namespace),
 		image:           strings.TrimSpace(config.Image),
 		imagePullPolicy: withDefaultString(config.ImagePullPolicy, "IfNotPresent"),
 		serviceAccount:  strings.TrimSpace(config.ServiceAccount),
+		multiTenant:     config.MultiTenant,
 		replicas:        config.Replicas,
 		port:            config.Port,
 		cpu:             withDefaultString(config.CPU, "1"),
@@ -99,13 +110,17 @@ func (r *VLLMRuntime) EnsureServedModel(ctx context.Context, servedModel *model.
 	if strings.TrimSpace(servedModel.AdapterURI) == "" {
 		return nil, domain.ErrValidationFailed.Extend("adapter uri is required")
 	}
-	workloadName := WorkloadName(servedModel)
+	workloadName := r.workloadName(servedModel)
 	servingModel := ServingModelName(servedModel)
+	runtimeServingModel := servingModel
+	if r.multiTenant {
+		runtimeServingModel = SharedRuntimeServingModelName(servedModel)
+	}
 	servingTarget := strings.TrimSpace(servedModel.ServingTarget)
 	if servingTarget == "" {
 		servingTarget = ServiceEndpoint(r.namespace, workloadName, r.port)
 	}
-	if err := r.upsertDeployment(ctx, servedModel, workloadName, servingModel); err != nil {
+	if err := r.upsertDeployment(ctx, servedModel, workloadName, runtimeServingModel); err != nil {
 		return nil, err
 	}
 	if err := r.upsertService(ctx, servedModel, workloadName); err != nil {
@@ -125,8 +140,9 @@ func (r *VLLMRuntime) EnsureServedModel(ctx context.Context, servedModel *model.
 	if failed || !deploymentReady {
 		return state, nil
 	}
-	confirmed, failureReason := r.confirmServingModel(ctx, servingTarget, servingModel)
+	confirmed, adapterFailed, failureReason := r.ensureServingModel(ctx, servingTarget, servingModel, servedModel.AdapterURI)
 	state.Ready = confirmed
+	state.Failed = adapterFailed
 	state.FailureReason = failureReason
 	if confirmed {
 		state.FailureReason = ""
@@ -134,10 +150,89 @@ func (r *VLLMRuntime) EnsureServedModel(ctx context.Context, servedModel *model.
 	return state, nil
 }
 
+func (r *VLLMRuntime) workloadName(servedModel *model.ServedModel) string {
+	log.Trace("VLLMRuntime workloadName")
+
+	if r.multiTenant {
+		return SharedRuntimeWorkloadName(servedModel)
+	}
+	return WorkloadName(servedModel)
+}
+
 type vllmModelsResponse struct {
 	Data []struct {
 		ID string `json:"id"`
 	} `json:"data"`
+}
+
+type vllmLoadLoraAdapterRequest struct {
+	LoraName string `json:"lora_name"`
+	LoraPath string `json:"lora_path"`
+}
+
+func (r *VLLMRuntime) ensureServingModel(ctx context.Context, servingTarget string, servingModel string, adapterURI string) (bool, bool, string) {
+	log.Trace("VLLMRuntime ensureServingModel")
+
+	confirmed, failureReason := r.confirmServingModel(ctx, servingTarget, servingModel)
+	if confirmed {
+		return true, false, ""
+	}
+	if !r.multiTenant {
+		return false, false, failureReason
+	}
+	if loadFailure := r.loadLoraAdapter(ctx, servingTarget, servingModel, adapterURI); loadFailure != "" {
+		return false, true, loadFailure
+	}
+	confirmed, failureReason = r.confirmServingModel(ctx, servingTarget, servingModel)
+	if !confirmed {
+		return false, false, failureReason
+	}
+	return true, false, ""
+}
+
+func (r *VLLMRuntime) loadLoraAdapter(ctx context.Context, servingTarget string, servingModel string, adapterURI string) string {
+	log.Trace("VLLMRuntime loadLoraAdapter")
+
+	body, err := json.Marshal(vllmLoadLoraAdapterRequest{
+		LoraName: servingModel,
+		LoraPath: strings.TrimSpace(adapterURI),
+	})
+	if err != nil {
+		return err.Error()
+	}
+	endpoint := strings.TrimRight(servingTarget, "/") + "/v1/load_lora_adapter"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err.Error()
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return err.Error()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		message := strings.TrimSpace(string(raw))
+		if isIdempotentLoraLoadResponse(resp.StatusCode, message) {
+			return ""
+		}
+		if message != "" {
+			return fmt.Sprintf("vllm lora load returned status %d: %s", resp.StatusCode, message)
+		}
+		return fmt.Sprintf("vllm lora load returned status %d", resp.StatusCode)
+	}
+	return ""
+}
+
+func isIdempotentLoraLoadResponse(statusCode int, body string) bool {
+	log.Trace("isIdempotentLoraLoadResponse")
+
+	normalized := strings.ToLower(body)
+	if !strings.Contains(normalized, "already") || (!strings.Contains(normalized, "loaded") && !strings.Contains(normalized, "exist")) {
+		return false
+	}
+	return statusCode == http.StatusConflict || statusCode == http.StatusBadRequest
 }
 
 func (r *VLLMRuntime) confirmServingModel(ctx context.Context, servingTarget string, servingModel string) (bool, string) {
@@ -336,18 +431,21 @@ func (r *VLLMRuntime) serviceObject(servedModel *model.ServedModel, workloadName
 func (r *VLLMRuntime) podSpec(servedModel *model.ServedModel, servingModel string) map[string]any {
 	log.Trace("VLLMRuntime podSpec")
 
+	args := []any{
+		"--model", strings.TrimSpace(servedModel.BaseModel),
+		"--served-model-name", servingModel,
+		"--enable-lora",
+	}
+	if !r.multiTenant {
+		args = append(args, "--lora-modules", fmt.Sprintf("%s=%s", servingModel, strings.TrimSpace(servedModel.AdapterURI)))
+	}
 	spec := map[string]any{
 		"containers": []any{
 			map[string]any{
 				"name":            "vllm",
 				"image":           r.image,
 				"imagePullPolicy": r.imagePullPolicy,
-				"args": []any{
-					"--model", strings.TrimSpace(servedModel.BaseModel),
-					"--served-model-name", servingModel,
-					"--enable-lora",
-					"--lora-modules", fmt.Sprintf("%s=%s", servingModel, strings.TrimSpace(servedModel.AdapterURI)),
-				},
+				"args":            args,
 				"ports": []any{
 					map[string]any{"name": "http", "containerPort": int64(r.port), "protocol": "TCP"},
 				},
@@ -385,7 +483,6 @@ func servingLabels(servedModel *model.ServedModel, workloadName string) map[stri
 		"app.kubernetes.io/name":       "served-model",
 		"app.kubernetes.io/managed-by": "model-serving-service",
 		"bighill.io/served-model":      workloadName,
-		"bighill.io/model-id":          servedModel.ModelID.String(),
 	}
 }
 

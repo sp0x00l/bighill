@@ -199,6 +199,7 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 		ServingTarget:        a.servingTarget,
 		ServingModel:         servingModel,
 		ServingLoadStatus:    a.servingLoadStatus,
+		ArtifactFormat:       "HF_PEFT_ADAPTER",
 		ArtifactManifestURI:  modelURI + "/artifact.json",
 		ArtifactBucketRegion: a.artifactBucketRegion,
 		AxolotlCommand:       a.axolotlCommand,

@@ -47,15 +47,15 @@ spec:
               value: {{ .Values.env.redisUsername | quote }}
             - name: PROFILE_SERVICE_REDIS_PASSWORD
               value: {{ .Values.env.redisPassword | quote }}
-            - name: PROFILE_AUTH_EXPIRATION_MINUTES
+            - name: PROFILE_SERVICE_AUTH_EXPIRATION_MINUTES
               value: {{ .Values.env.authExpirationMinutes | quote }}
-            - name: PROFILE_EMAIL_VALIDATION_TTL_MINUTES
+            - name: PROFILE_SERVICE_EMAIL_VALIDATION_TTL_MINUTES
               value: {{ .Values.env.emailValidationTtlMinutes | quote }}
-            - name: PROFILE_OAUTH_STATE_TTL_MINUTES
+            - name: PROFILE_SERVICE_OAUTH_STATE_TTL_MINUTES
               value: {{ .Values.env.oauthStateTtlMinutes | quote }}
-            - name: PROFILE_USE_STAGING_TEST_EMAIL_TOKEN
+            - name: PROFILE_SERVICE_USE_STAGING_TEST_EMAIL_TOKEN
               value: {{ .Values.env.useStagingTestEmailToken | quote }}
-            - name: PROFILE_OAUTH_GOOGLE_CLIENT_ID
+            - name: PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID
 {{- if .Values.env.oauthCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -64,7 +64,7 @@ spec:
 {{- else }}
               value: ""
 {{- end }}
-            - name: PROFILE_OAUTH_GOOGLE_CLIENT_SECRET
+            - name: PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET
 {{- if .Values.env.oauthCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -73,7 +73,7 @@ spec:
 {{- else }}
               value: ""
 {{- end }}
-            - name: PROFILE_OAUTH_DISCORD_CLIENT_ID
+            - name: PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_ID
 {{- if .Values.env.oauthCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -82,7 +82,7 @@ spec:
 {{- else }}
               value: ""
 {{- end }}
-            - name: PROFILE_OAUTH_DISCORD_CLIENT_SECRET
+            - name: PROFILE_SERVICE_OAUTH_DISCORD_CLIENT_SECRET
 {{- if .Values.env.oauthCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -155,13 +155,13 @@ spec:
 {{- end }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
-            - name: PROFILE_KAFKA_GROUP_ID
+            - name: PROFILE_SERVICE_KAFKA_GROUP_ID
               value: {{ .Values.env.kafkaGroupId | quote }}
             - name: PROFILE_SERVICE_KAFKA_PUBLISHER_TOPIC
               value: {{ .Values.env.kafkaPublisherTopic | quote }}
-            - name: PROFILE_DLQ
+            - name: PROFILE_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
-            - name: PROFILE_OUTBOX
+            - name: PROFILE_SERVICE_OUTBOX
               value: {{ .Values.env.outbox | quote }}
             - name: PROFILE_SERVICE_OUTBOX_RELAY_POLL_MS
               value: {{ .Values.env.outboxRelayPollMs | quote }}

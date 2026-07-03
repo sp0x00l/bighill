@@ -34,7 +34,7 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: MODEL_REGISTRY_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
-            - name: MODEL_REGISTRY_DB_NAME
+            - name: MODEL_REGISTRY_SERVICE_DB_NAME
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -43,7 +43,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbName | quote }}
 {{- end }}
-            - name: MODEL_REGISTRY_DB_USER
+            - name: MODEL_REGISTRY_SERVICE_DB_USER
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -52,7 +52,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbUser | quote }}
 {{- end }}
-            - name: MODEL_REGISTRY_DB_PASSWORD
+            - name: MODEL_REGISTRY_SERVICE_DB_PASSWORD
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -61,7 +61,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbPassword | quote }}
 {{- end }}
-            - name: MODEL_REGISTRY_DB_MAX_CONNECTIONS
+            - name: MODEL_REGISTRY_SERVICE_DB_MAX_CONNECTIONS
               value: {{ .Values.env.dbMaxConnections | quote }}
             - name: PGHOST
 {{- if .Values.env.dbCredentialsSecret.name }}
@@ -108,31 +108,35 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: MODEL_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
-            - name: MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED
+            - name: MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED
               value: {{ .Values.env.servingReconciliationEnabled | quote }}
-            - name: MODEL_REGISTRY_SERVING_NAMESPACE
+            - name: MODEL_REGISTRY_SERVICE_SERVING_BACKEND
+              value: {{ .Values.env.servingBackend | quote }}
+            - name: MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH
+              value: {{ .Values.env.servingLocalStorePath | quote }}
+            - name: MODEL_REGISTRY_SERVICE_SERVING_NAMESPACE
               value: {{ .Values.env.servingNamespace | quote }}
-            - name: MODEL_REGISTRY_SERVING_CRD_GROUP
+            - name: MODEL_REGISTRY_SERVICE_SERVING_CRD_GROUP
               value: {{ .Values.env.servingCrdGroup | quote }}
-            - name: MODEL_REGISTRY_SERVING_CRD_VERSION
+            - name: MODEL_REGISTRY_SERVICE_SERVING_CRD_VERSION
               value: {{ .Values.env.servingCrdVersion | quote }}
-            - name: MODEL_REGISTRY_SERVING_CRD_RESOURCE
+            - name: MODEL_REGISTRY_SERVICE_SERVING_CRD_RESOURCE
               value: {{ .Values.env.servingCrdResource | quote }}
-            - name: MODEL_REGISTRY_SERVING_CRD_KIND
+            - name: MODEL_REGISTRY_SERVICE_SERVING_CRD_KIND
               value: {{ .Values.env.servingCrdKind | quote }}
-            - name: MODEL_REGISTRY_SERVING_STATUS_POLL_MS
+            - name: MODEL_REGISTRY_SERVICE_SERVING_STATUS_POLL_MS
               value: {{ .Values.env.servingStatusPollMs | quote }}
-            - name: MODEL_REGISTRY_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+            - name: MODEL_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
-            - name: MODEL_REGISTRY_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+            - name: MODEL_REGISTRY_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
-            - name: MODEL_REGISTRY_HEALTHCHECK_PORT
+            - name: MODEL_REGISTRY_SERVICE_HEALTHCHECK_PORT
               value: {{ .Values.service.healthPort | quote }}
-            - name: MODEL_REGISTRY_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+            - name: MODEL_REGISTRY_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
-            - name: MODEL_REGISTRY_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+            - name: MODEL_REGISTRY_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
-            - name: MODEL_REGISTRY_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
+            - name: MODEL_REGISTRY_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
           resources:
             requests:

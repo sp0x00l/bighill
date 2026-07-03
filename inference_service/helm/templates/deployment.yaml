@@ -37,7 +37,7 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: INFERENCE_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
-            - name: INFERENCE_DB_NAME
+            - name: INFERENCE_SERVICE_DB_NAME
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -46,7 +46,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbName | quote }}
 {{- end }}
-            - name: INFERENCE_DB_USER
+            - name: INFERENCE_SERVICE_DB_USER
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -55,7 +55,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbUser | quote }}
 {{- end }}
-            - name: INFERENCE_DB_PASSWORD
+            - name: INFERENCE_SERVICE_DB_PASSWORD
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -64,7 +64,7 @@ spec:
 {{- else }}
               value: {{ .Values.env.dbPassword | quote }}
 {{- end }}
-            - name: INFERENCE_DB_MAX_CONNECTIONS
+            - name: INFERENCE_SERVICE_DB_MAX_CONNECTIONS
               value: {{ .Values.env.dbMaxConnections | quote }}
             - name: PGHOST
 {{- if .Values.env.dbCredentialsSecret.name }}
@@ -103,63 +103,63 @@ spec:
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
-            - name: INFERENCE_API_GRPC_PORT
+            - name: INFERENCE_SERVICE_API_GRPC_PORT
               value: {{ .Values.service.grpcPort | quote }}
-            - name: INFERENCE_FEATURE_MATERIALIZER_GRPC_ADDRESS
+            - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS
               value: {{ .Values.env.featureMaterializerGrpcAddress | quote }}
-            - name: INFERENCE_FEATURE_MATERIALIZER_GRPC_DIAL_TIMEOUT_MS
+            - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_DIAL_TIMEOUT_MS
               value: {{ .Values.env.featureMaterializerGrpcDialTimeoutMs | quote }}
-            - name: INFERENCE_FEATURE_MATERIALIZER_GRPC_CALL_TIMEOUT_MS
+            - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_CALL_TIMEOUT_MS
               value: {{ .Values.env.featureMaterializerGrpcCallTimeoutMs | quote }}
-            - name: INFERENCE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT
+            - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT
               value: {{ .Values.env.featureMaterializerGrpcRetryCount | quote }}
-            - name: INFERENCE_GENERATION_PROVIDER
+            - name: INFERENCE_SERVICE_GENERATION_PROVIDER
               value: {{ .Values.env.generationProvider | quote }}
-            - name: INFERENCE_GENERATION_ENDPOINT
+            - name: INFERENCE_SERVICE_GENERATION_ENDPOINT
               value: {{ .Values.env.generationEndpoint | quote }}
-            - name: INFERENCE_GENERATION_MODEL
+            - name: INFERENCE_SERVICE_GENERATION_MODEL
               value: {{ .Values.env.generationModel | quote }}
-            - name: INFERENCE_GENERATION_REQUEST_TIMEOUT_SECONDS
+            - name: INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.generationRequestTimeoutSeconds | quote }}
-            - name: INFERENCE_RERANKER_PROVIDER
+            - name: INFERENCE_SERVICE_RERANKER_PROVIDER
               value: {{ .Values.env.rerankerProvider | quote }}
-            - name: INFERENCE_RERANKER_URL
+            - name: INFERENCE_SERVICE_RERANKER_URL
               value: {{ .Values.env.rerankerUrl | quote }}
-            - name: INFERENCE_RERANKER_MODEL
+            - name: INFERENCE_SERVICE_RERANKER_MODEL
               value: {{ .Values.env.rerankerModel | quote }}
-            - name: INFERENCE_RERANKER_REQUEST_TIMEOUT_SECONDS
+            - name: INFERENCE_SERVICE_RERANKER_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.rerankerRequestTimeoutSeconds | quote }}
-            - name: INFERENCE_RERANKER_CANDIDATE_MULTIPLIER
+            - name: INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER
               value: {{ .Values.env.rerankerCandidateMultiplier | quote }}
-            - name: INFERENCE_PREFERENCE_DATASET_EXPORT_ENABLED
+            - name: INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED
               value: {{ .Values.env.preferenceDatasetExportEnabled | quote }}
-            - name: INFERENCE_PREFERENCE_DATASET_URI_TEMPLATE
+            - name: INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE
               value: {{ .Values.env.preferenceDatasetUriTemplate | quote }}
-            - name: INFERENCE_PREFERENCE_DATASET_MIN_EXAMPLES
+            - name: INFERENCE_SERVICE_PREFERENCE_DATASET_MIN_EXAMPLES
               value: {{ .Values.env.preferenceDatasetMinExamples | quote }}
-            - name: INFERENCE_PREFERENCE_DATASET_LIMIT
+            - name: INFERENCE_SERVICE_PREFERENCE_DATASET_LIMIT
               value: {{ .Values.env.preferenceDatasetLimit | quote }}
-            - name: INFERENCE_PREFERENCE_DATASET_BUCKET_REGION
+            - name: INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION
               value: {{ .Values.env.preferenceDatasetBucketRegion | quote }}
-            - name: INFERENCE_PREFERENCE_DATASET_UPLOAD_PART_SIZE_MB
+            - name: INFERENCE_SERVICE_PREFERENCE_DATASET_UPLOAD_PART_SIZE_MB
               value: {{ .Values.env.preferenceDatasetUploadPartSizeMb | quote }}
-            - name: INFERENCE_PROMPT_STRATEGY_VERSION
+            - name: INFERENCE_SERVICE_PROMPT_STRATEGY_VERSION
               value: {{ .Values.env.promptStrategyVersion | quote }}
-            - name: INFERENCE_PROMPT_MAX_CONTEXT_TOKENS
+            - name: INFERENCE_SERVICE_PROMPT_MAX_CONTEXT_TOKENS
               value: {{ .Values.env.promptMaxContextTokens | quote }}
-            - name: INFERENCE_PROMPT_MAX_CONTEXT_CHUNKS
+            - name: INFERENCE_SERVICE_PROMPT_MAX_CONTEXT_CHUNKS
               value: {{ .Values.env.promptMaxContextChunks | quote }}
-            - name: INFERENCE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+            - name: INFERENCE_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
-            - name: INFERENCE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+            - name: INFERENCE_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
-            - name: INFERENCE_HEALTHCHECK_PORT
+            - name: INFERENCE_SERVICE_HEALTHCHECK_PORT
               value: {{ .Values.service.healthPort | quote }}
-            - name: INFERENCE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+            - name: INFERENCE_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
-            - name: INFERENCE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+            - name: INFERENCE_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
-            - name: INFERENCE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
+            - name: INFERENCE_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckMessageBrokerLatencyThreshold | quote }}
           resources:
             requests:

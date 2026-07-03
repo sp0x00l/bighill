@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 
+	env "lib/shared_lib/env"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -25,17 +27,21 @@ var _ = Describe("postgresConnectionString", func() {
 
 var _ = Describe("readModelRegistryConfig", func() {
 	BeforeEach(func() {
+		env.ResetEnvironmentCache()
+		Expect(os.Setenv("ENVIRONMENT", "local-dev")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_OUTBOX")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_KAFKA_GROUP_ID")).To(Succeed())
-		Expect(os.Unsetenv("MODEL_REGISTRY_SERVING_RECONCILIATION_ENABLED")).To(Succeed())
-		Expect(os.Unsetenv("MODEL_REGISTRY_SERVING_NAMESPACE")).To(Succeed())
-		Expect(os.Unsetenv("MODEL_REGISTRY_SERVING_CRD_GROUP")).To(Succeed())
-		Expect(os.Unsetenv("MODEL_REGISTRY_SERVING_CRD_VERSION")).To(Succeed())
-		Expect(os.Unsetenv("MODEL_REGISTRY_SERVING_CRD_RESOURCE")).To(Succeed())
-		Expect(os.Unsetenv("MODEL_REGISTRY_SERVING_CRD_KIND")).To(Succeed())
-		Expect(os.Unsetenv("MODEL_REGISTRY_SERVING_STATUS_POLL_MS")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_BACKEND")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_NAMESPACE")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_CRD_GROUP")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_CRD_VERSION")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_CRD_RESOURCE")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_CRD_KIND")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_STATUS_POLL_MS")).To(Succeed())
 		Expect(os.Unsetenv("KAFKA_BROKER")).To(Succeed())
 	})
 
@@ -49,11 +55,25 @@ var _ = Describe("readModelRegistryConfig", func() {
 		Expect(cfg.Messaging.Brokers).To(Equal("localhost:9092"))
 		Expect(cfg.Health.MessageBrokerConnectionString).To(Equal("localhost:9092"))
 		Expect(cfg.Serving.Enabled).To(BeTrue())
+		Expect(cfg.Serving.Backend).To(Equal("kubernetes"))
+		Expect(cfg.Serving.LocalStore).To(Equal(""))
 		Expect(cfg.Serving.Namespace).To(Equal("default"))
 		Expect(cfg.Serving.CRDGroup).To(Equal("serving.bighill.io"))
 		Expect(cfg.Serving.CRDVersion).To(Equal("v1alpha1"))
 		Expect(cfg.Serving.CRDResource).To(Equal("servedmodels"))
 		Expect(cfg.Serving.CRDKind).To(Equal("ServedModel"))
 		Expect(cfg.Serving.StatusPollEvery.String()).To(Equal("1s"))
+	})
+
+	It("uses the local serving backend without reading kubeconfig", func() {
+		Expect(os.Setenv("MODEL_REGISTRY_SERVICE_SERVING_BACKEND", "local")).To(Succeed())
+		cfg := readModelRegistryConfig()
+		cfg.Serving.LocalStore = GinkgoT().TempDir() + "/served_models.json"
+		Expect(os.Setenv("KUBECONFIG", "/does/not/exist")).To(Succeed())
+
+		deployer, err := newServingBackend(cfg.Serving)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deployer).NotTo(BeNil())
 	})
 })

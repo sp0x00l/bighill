@@ -34,38 +34,46 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: MODEL_SERVING_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
-            - name: MODEL_SERVING_NAMESPACE
+            - name: MODEL_SERVING_SERVICE_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: MODEL_SERVING_HEALTHCHECK_PORT
+            - name: MODEL_SERVING_SERVICE_HEALTHCHECK_PORT
               value: {{ .Values.service.healthPort | quote }}
-            - name: MODEL_SERVING_POLL_MS
+            - name: MODEL_SERVING_SERVICE_POLL_MS
               value: {{ .Values.env.pollMs | quote }}
-            - name: MODEL_SERVING_SERVED_MODEL_CRD_GROUP
+            - name: MODEL_SERVING_SERVICE_BACKEND
+              value: {{ .Values.env.backend | quote }}
+            - name: MODEL_SERVING_SERVICE_LOCAL_STORE_PATH
+              value: {{ .Values.env.localStorePath | quote }}
+            - name: MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_GROUP
               value: {{ .Values.env.servedModelCrdGroup | quote }}
-            - name: MODEL_SERVING_SERVED_MODEL_CRD_VERSION
+            - name: MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_VERSION
               value: {{ .Values.env.servedModelCrdVersion | quote }}
-            - name: MODEL_SERVING_SERVED_MODEL_CRD_RESOURCE
+            - name: MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_RESOURCE
               value: {{ .Values.env.servedModelCrdResource | quote }}
-            - name: MODEL_SERVING_VLLM_IMAGE
+            - name: MODEL_SERVING_SERVICE_VLLM_IMAGE
               value: {{ .Values.env.vllmImage | quote }}
-            - name: MODEL_SERVING_VLLM_IMAGE_PULL_POLICY
+            - name: MODEL_SERVING_SERVICE_VLLM_IMAGE_PULL_POLICY
               value: {{ .Values.env.vllmImagePullPolicy | quote }}
-            - name: MODEL_SERVING_VLLM_SERVICE_ACCOUNT
+            - name: MODEL_SERVING_SERVICE_VLLM_SERVICE_ACCOUNT
               value: {{ .Values.env.vllmServiceAccount | quote }}
-            - name: MODEL_SERVING_VLLM_REPLICAS
+            - name: MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED
+              value: {{ .Values.env.vllmMultiTenantEnabled | quote }}
+            - name: MODEL_SERVING_SERVICE_VLLM_REPLICAS
               value: {{ .Values.env.vllmReplicas | quote }}
-            - name: MODEL_SERVING_VLLM_PORT
+            - name: MODEL_SERVING_SERVICE_VLLM_PORT
               value: {{ .Values.env.vllmPort | quote }}
-            - name: MODEL_SERVING_VLLM_CPU
+            - name: MODEL_SERVING_SERVICE_VLLM_CPU
               value: {{ .Values.env.vllmCpu | quote }}
-            - name: MODEL_SERVING_VLLM_MEMORY
+            - name: MODEL_SERVING_SERVICE_VLLM_MEMORY
               value: {{ .Values.env.vllmMemory | quote }}
-            - name: MODEL_SERVING_VLLM_GPU_RESOURCE
+            - name: MODEL_SERVING_SERVICE_VLLM_GPU_RESOURCE
               value: {{ .Values.env.vllmGpuResource | quote }}
-            - name: MODEL_SERVING_VLLM_GPU
+            - name: MODEL_SERVING_SERVICE_VLLM_GPU
               value: {{ .Values.env.vllmGpu | quote }}
+            - name: MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS
+              value: {{ .Values.env.vllmRequestTimeoutMs | quote }}
           resources:
             requests:
               memory: {{ .Values.resources.requests.memory | quote }}

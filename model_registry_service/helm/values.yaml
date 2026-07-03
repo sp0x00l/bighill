@@ -45,6 +45,8 @@ env:
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"
   servingReconciliationEnabled: "true"
+  servingBackend: "kubernetes"
+  servingLocalStorePath: ""
   servingNamespace: "default"
   servingCrdGroup: "serving.bighill.io"
   servingCrdVersion: "v1alpha1"

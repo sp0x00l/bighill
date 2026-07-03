@@ -118,6 +118,7 @@ type TrainingJobSpec struct {
 	ServingTarget        string
 	ServingModel         string
 	ServingLoadStatus    string
+	ArtifactFormat       string
 	ArtifactManifestURI  string
 	ArtifactBucketRegion string
 	AxolotlCommand       string

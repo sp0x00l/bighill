@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -65,6 +66,37 @@ var _ = Describe("ServedModelStore", func() {
 		target, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
 		Expect(statusRaw).To(Equal("LOADED"))
 		Expect(target).To(Equal("http://served-model.default.svc.cluster.local:8000"))
+	})
+
+	It("skips ServedModel status writes when status has not changed", func() {
+		servedModel := validServedModel()
+		existing := servedModelCR(servedModel)
+		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, "http://served-model.default.svc.cluster.local:8000", "status", "servingTarget")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, "ranker-v1", "status", "servingModel")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, "", "status", "failureReason")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, int64(7), "status", "observedGeneration")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, int64(1), "status", "readyReplicas")).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
+		updateCalls := 0
+		client.PrependReactor("update", "servedmodels", func(action ktesting.Action) (bool, runtime.Object, error) {
+			if action.GetSubresource() == "status" {
+				updateCalls++
+			}
+			return false, nil, nil
+		})
+		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(store.UpdateStatus(context.Background(), servedModel.ResourceName, &model.ServedModelStatus{
+			ServingLoadStatus:  model.ModelLoadStatusLoaded,
+			ServingTarget:      "http://served-model.default.svc.cluster.local:8000",
+			ServingModel:       "ranker-v1",
+			ObservedGeneration: 7,
+			ReadyReplicas:      1,
+		})).To(Succeed())
+
+		Expect(updateCalls).To(Equal(0))
 	})
 
 	It("returns status-subresource write errors instead of falling back to a spec update", func() {
@@ -134,6 +166,109 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(err).NotTo(HaveOccurred())
 		ports, _, _ := unstructured.NestedSlice(service.Object, "spec", "ports")
 		Expect(ports[0].(map[string]any)["port"]).To(Equal(int64(8000)))
+	})
+
+	It("uses a shared base runtime and dynamically loads adapters in multi-tenant mode", func() {
+		servedModel := validServedModel()
+		servedModel.ServingTarget = "http://vllm.test"
+		sharedWorkloadName := servingk8s.SharedRuntimeWorkloadName(servedModel)
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), readyDeploymentWithName(sharedWorkloadName), serviceObjectWithName(sharedWorkloadName))
+		loadRequests := 0
+		config := runtimeConfig()
+		config.MultiTenant = true
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/models" && loadRequests == 0:
+				return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"}]}`), nil
+			case req.Method == http.MethodPost && req.URL.Path == "/v1/load_lora_adapter":
+				raw, err := io.ReadAll(req.Body)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(raw)).To(MatchJSON(`{"lora_name":"ranker-v1","lora_path":"s3://models/run-1"}`))
+				loadRequests++
+				return jsonResponse(req, `{}`), nil
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/models" && loadRequests == 1:
+				return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"},{"id":"ranker-v1"}]}`), nil
+			default:
+				return nil, stderrors.New("unexpected vllm request " + req.Method + " " + req.URL.Path)
+			}
+		})}
+		runtimeAdapter, err := servingk8s.NewVLLMRuntime(config, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeTrue())
+		Expect(loadRequests).To(Equal(1))
+		Expect(state.ServingTarget).To(Equal("http://vllm.test"))
+		Expect(state.ServingModel).To(Equal("ranker-v1"))
+		deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+		container := containers[0].(map[string]any)
+		Expect(container["args"]).To(ContainElement("--enable-lora"))
+		Expect(container["args"]).NotTo(ContainElement("--lora-modules"))
+	})
+
+	It("does not mark a multi-tenant adapter failed when vLLM reports it is already loaded", func() {
+		servedModel := validServedModel()
+		servedModel.ServingTarget = "http://vllm.test"
+		sharedWorkloadName := servingk8s.SharedRuntimeWorkloadName(servedModel)
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), readyDeploymentWithName(sharedWorkloadName), serviceObjectWithName(sharedWorkloadName))
+		loadRequests := 0
+		config := runtimeConfig()
+		config.MultiTenant = true
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/models":
+				return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"}]}`), nil
+			case req.Method == http.MethodPost && req.URL.Path == "/v1/load_lora_adapter":
+				loadRequests++
+				return &http.Response{
+					StatusCode: http.StatusConflict,
+					Body:       io.NopCloser(strings.NewReader(`{"error":"adapter already loaded"}`)),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Request:    req,
+				}, nil
+			default:
+				return nil, stderrors.New("unexpected vllm request " + req.Method + " " + req.URL.Path)
+			}
+		})}
+		runtimeAdapter, err := servingk8s.NewVLLMRuntime(config, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeFalse())
+		Expect(state.Failed).To(BeFalse())
+		Expect(state.FailureReason).To(ContainSubstring("not listed by vllm"))
+		Expect(loadRequests).To(Equal(1))
+	})
+
+	It("shares one workload for versions of the same base model when multi-tenant mode is enabled", func() {
+		v1 := validServedModel()
+		v2 := validServedModel()
+		v1.ResourceName = ""
+		v2.ResourceName = ""
+		v1.ModelVersion = 1
+		v1.ServingModel = "ranker-v1"
+		v2.ModelVersion = 2
+		v2.ServingModel = "ranker-v2"
+		v2.AdapterURI = "s3://models/run-2"
+
+		Expect(servingk8s.WorkloadName(v1)).NotTo(Equal(servingk8s.WorkloadName(v2)))
+		Expect(servingk8s.SharedRuntimeWorkloadName(v1)).To(Equal(servingk8s.SharedRuntimeWorkloadName(v2)))
+	})
+
+	It("hashes shared runtime names so normalized base-model collisions stay separate", func() {
+		first := validServedModel()
+		second := validServedModel()
+		first.BaseModel = "org/Model-A"
+		second.BaseModel = "org-model-a"
+
+		Expect(servingk8s.SharedRuntimeWorkloadName(first)).NotTo(Equal(servingk8s.SharedRuntimeWorkloadName(second)))
+		Expect(servingk8s.SharedRuntimeServingModelName(first)).NotTo(Equal(servingk8s.SharedRuntimeServingModelName(second)))
 	})
 
 	It("reports loaded when the vLLM deployment is ready", func() {
@@ -243,6 +378,28 @@ var _ = Describe("ServedModelController", func() {
 		statusRaw, _, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
 		Expect(statusRaw).To(Equal("NOT_LOADED"))
 	})
+
+	It("reconciles ServedModel watch events", func() {
+		servedModel := validServedModel()
+		obj := servedModelCR(servedModel)
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), obj)
+		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
+		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+
+		Expect(controller.ProcessWatchEvent(context.Background(), watch.Event{
+			Type:   watch.Modified,
+			Object: obj,
+		})).To(Succeed())
+
+		updated, err := client.Resource(servedModelGVR()).Namespace("default").Get(context.Background(), servedModel.ResourceName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		statusRaw, _, _ := unstructured.NestedString(updated.Object, "status", "servingLoadStatus")
+		Expect(statusRaw).To(Equal("NOT_LOADED"))
+	})
 })
 
 func storeConfig() servingk8s.ServedModelStoreConfig {
@@ -285,6 +442,15 @@ func runtimeConfigWithModels(modelIDs ...string) servingk8s.VLLMRuntimeConfig {
 		}, nil
 	})}
 	return config
+}
+
+func jsonResponse(req *http.Request, body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Request:    req,
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -333,11 +499,15 @@ func servedModelCR(servedModel *model.ServedModel) *unstructured.Unstructured {
 }
 
 func readyDeployment(servedModel *model.ServedModel) *unstructured.Unstructured {
+	return readyDeploymentWithName(servingk8s.WorkloadName(servedModel))
+}
+
+func readyDeploymentWithName(name string) *unstructured.Unstructured {
 	deployment := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
 		"metadata": map[string]any{
-			"name":      servingk8s.WorkloadName(servedModel),
+			"name":      name,
 			"namespace": "default",
 		},
 		"status": map[string]any{
@@ -374,11 +544,15 @@ func failedDeployment(servedModel *model.ServedModel) *unstructured.Unstructured
 }
 
 func serviceObject(servedModel *model.ServedModel) *unstructured.Unstructured {
+	return serviceObjectWithName(servingk8s.WorkloadName(servedModel))
+}
+
+func serviceObjectWithName(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
 		"metadata": map[string]any{
-			"name":      servingk8s.WorkloadName(servedModel),
+			"name":      name,
 			"namespace": "default",
 		},
 	}}
