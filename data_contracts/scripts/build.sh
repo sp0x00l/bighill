@@ -50,22 +50,6 @@ build()
         else 
             echo "Not building for Python"
         fi
-
-
-        if [ "$BUILD_FOR" = "javascript" ]; then
-            if [ "$(basename "$file")" = "event.proto" ]; then
-                echo "Building event.proto for JavaScript"
-                cd $DATA_CONTRACT_ROOT
-                cd tmp
-                protoc --proto_path=build/$file_name/ \
-                    --js_out=import_style=commonjs,binary:$DATA_CONTRACT_ROOT/tmp/build/$file_name \
-                    build/$file_name/*.proto
-            else
-                echo "Skipping $file for JavaScript"
-            fi
-        else
-            echo "Not building for JavaScript"
-        fi
         
         cd $DATA_CONTRACT_ROOT
     done
@@ -76,14 +60,6 @@ build()
         fi
         mkdir -p $DATA_CONTRACT_ROOT/build
         mv $DATA_CONTRACT_ROOT/tmp/py/build $DATA_CONTRACT_ROOT/build/python
-    fi
-
-    if [ "$BUILD_FOR" = "javascript" ]; then
-        if [ -e "$DATA_CONTRACT_ROOT/build/javascript" ]; then
-            rm -rf "$DATA_CONTRACT_ROOT/build/javascript"
-        fi
-        mkdir -p $DATA_CONTRACT_ROOT/build/javascript
-        cp -v "$DATA_CONTRACT_ROOT/tmp/build/protobufs/event/event_pb.js" "$DATA_CONTRACT_ROOT/build/javascript/"
     fi
     
     cd $DATA_CONTRACT_ROOT

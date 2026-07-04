@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
 import types
@@ -8,24 +7,6 @@ import unittest
 from pathlib import Path
 
 from training_jobs import storage
-
-
-class EnvPatch:
-    def __init__(self, values: dict[str, str]):
-        self.values = values
-        self.previous: dict[str, str | None] = {}
-
-    def __enter__(self) -> None:
-        for key, value in self.values.items():
-            self.previous[key] = os.environ.get(key)
-            os.environ[key] = value
-
-    def __exit__(self, *_args: object) -> None:
-        for key, value in self.previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
 
 
 class FakeS3NotFound(Exception):
@@ -80,13 +61,12 @@ class StorageTests(unittest.TestCase):
             source = root / "adapter"
             source.mkdir()
             (source / "adapter.bin").write_bytes(b"weights")
-            with EnvPatch(
-                {
-                    "TRAINING_ARTIFACT_BUCKET_REGION": "local-dev",
-                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(root / "local_s3"),
-                }
-            ):
-                artifact = storage.upload_directory(source, "s3://bucket/models/run-1")
+            config = storage.StorageConfig(
+                artifact_bucket_region="eu-west-1",
+                local_s3_storage_dir=root / "local_s3",
+            )
+
+            artifact = storage.upload_directory(source, "s3://bucket/models/run-1", config)
 
             self.assertEqual(artifact.uri, "s3://bucket/models/run-1")
             self.assertTrue((root / "local_s3" / "bucket" / "models" / "run-1" / "adapter.bin").is_file())
@@ -102,11 +82,12 @@ class StorageTests(unittest.TestCase):
                 source = root / "adapter"
                 source.mkdir()
                 (source / "adapter.bin").write_bytes(b"weights")
-                with EnvPatch({"TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1"}):
-                    artifact = storage.upload_directory(source, "s3://bucket/models/run-1")
-                    storage.write_json_bytes("s3://bucket/models/run-1/artifact.json", b'{"ok":true}')
-                    payload = storage.read_json_bytes("s3://bucket/models/run-1/artifact.json")
-                    info = storage.artifact_info("s3://bucket/models/run-1")
+                config = storage.StorageConfig(artifact_bucket_region="eu-west-1")
+
+                artifact = storage.upload_directory(source, "s3://bucket/models/run-1", config)
+                storage.write_json_bytes("s3://bucket/models/run-1/artifact.json", b'{"ok":true}', config)
+                payload = storage.read_json_bytes("s3://bucket/models/run-1/artifact.json", config)
+                info = storage.artifact_info("s3://bucket/models/run-1", config)
 
             self.assertEqual(fake_client.uploads[0][1:], ("bucket", "models/run-1/adapter.bin"))
             self.assertEqual(payload, b'{"ok":true}')

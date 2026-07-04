@@ -34,7 +34,7 @@ env:
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"
   filesBucketName: "local-dev-bucket"
-  filesBucketRegion: "local-dev"
+  filesBucketRegion: "eu-west-1"
   fileMaxSizeMb: "2000"
   directUploadMaxSizeMb: "5"
   uploadSessionTtlSeconds: "900"

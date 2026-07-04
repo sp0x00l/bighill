@@ -44,6 +44,7 @@ type testConnectionPool struct {
 	NextCommitErrors    []error
 	NextRollbackError   error
 	RollbackContextErr  error
+	BeginTxContext      context.Context
 	NextRowsAffected    int64
 	ExecCalledCount     int
 	LastQuery           string
@@ -93,9 +94,10 @@ func (p *testConnectionPool) Exec(_ context.Context, sql string, args ...any) (p
 	return pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", p.NextRowsAffected)), nextErr
 }
 
-func (p *testConnectionPool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
+func (p *testConnectionPool) BeginTx(ctx context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 	p.BeginTxCalled = true
 	p.BeginTxCalledCount++
+	p.BeginTxContext = ctx
 	if p.NextBeginError != nil {
 		return nil, p.NextBeginError
 	}
@@ -344,18 +346,23 @@ var _ = Describe("UnitOfWork", func() {
 		Expect(pool.RollbackCalledCount).To(Equal(1))
 	})
 
-	It("sets the tenant context for row-level security when a tenant id is present", func() {
+	It("passes tenant context through to pool acquisition and marks the callback transaction-scoped", func() {
 		pool := &testConnectionPool{}
 		uow := db.NewUnitOfWork(pool)
 		tenantID := uuid.New()
+		var callbackCtx context.Context
 
 		err := uow.Do(ctxutil.WithTenantID(context.Background(), tenantID), func(ctx context.Context, tx pgx.Tx) error {
+			callbackCtx = ctx
 			return nil
 		})
 
 		Expect(err).ToNot(HaveOccurred())
-		Expect(pool.ExecCalls).To(ContainElement("SELECT set_config('app.current_user_id', $1, true)"))
-		Expect(pool.LastArgs).To(Equal([]any{tenantID.String()}))
+		beginTenantID, ok := ctxutil.TenantID(pool.BeginTxContext)
+		Expect(ok).To(BeTrue())
+		Expect(beginTenantID).To(Equal(tenantID))
+		Expect(ctxutil.IsTransactionContext(callbackCtx)).To(BeTrue())
+		Expect(pool.ExecCalls).To(BeEmpty())
 		Expect(pool.CommitCalled).To(BeTrue())
 	})
 })
@@ -373,9 +380,9 @@ var _ = Describe("tenant context connection pool", func() {
 		Expect(pool.ExecCalls).To(BeEmpty())
 	})
 
-	It("scopes direct QueryRow calls with the tenant id from context", func() {
+	It("uses the base pool directly when tenant context is present", func() {
 		pool := &testConnectionPool{
-			NextTxRows: []pgx.Row{&testErrRow{}},
+			NextRow: &testErrRow{},
 		}
 		database := db.NewDatabase(pool, "test_db")
 		tenantID := uuid.New()
@@ -383,57 +390,49 @@ var _ = Describe("tenant context connection pool", func() {
 		err := database.Pool.QueryRow(ctxutil.WithTenantID(context.Background(), tenantID), "SELECT 1").Scan()
 
 		Expect(err).ToNot(HaveOccurred())
-		Expect(pool.BeginTxCalled).To(BeTrue())
-		Expect(pool.TxQueryRowCalled).To(BeTrue())
-		Expect(pool.ExecCalls).To(ContainElement("SELECT set_config('app.current_user_id', $1, true)"))
-		Expect(pool.ExecArgs).To(ContainElement([]any{tenantID.String()}))
-		Expect(pool.CommitCalled).To(BeTrue())
-		Expect(pool.RollbackCalled).To(BeFalse())
+		Expect(pool.PoolQueryRowCalled).To(BeTrue())
+		Expect(pool.BeginTxCalled).To(BeFalse())
+		Expect(pool.ExecCalls).To(BeEmpty())
 	})
 
-	It("scopes direct Exec calls with system context", func() {
+	It("uses the base pool directly when system context is present", func() {
 		pool := &testConnectionPool{}
 		database := db.NewDatabase(pool, "test_db")
 
 		_, err := database.Pool.Exec(ctxutil.WithSystemContext(context.Background()), "INSERT INTO tenants VALUES ($1)", uuid.New())
 
 		Expect(err).ToNot(HaveOccurred())
-		Expect(pool.BeginTxCalled).To(BeTrue())
-		Expect(pool.ExecCalls).To(ContainElement("SELECT set_config('app.system_context', 'true', true)"))
-		Expect(pool.CommitCalled).To(BeTrue())
+		Expect(pool.ExecCalled).To(BeTrue())
+		Expect(pool.BeginTxCalled).To(BeFalse())
 	})
 
-	It("closes the scoped transaction when Query rows are closed before drain", func() {
-		pool := &testConnectionPool{
-			NextRows: &testRows{count: 2},
-		}
+	It("rejects direct pool Exec calls from inside UnitOfWork callbacks", func() {
+		pool := &testConnectionPool{}
 		database := db.NewDatabase(pool, "test_db")
+		uow := db.NewUnitOfWork(database.Pool)
 
-		rows, err := database.Pool.Query(ctxutil.WithTenantID(context.Background(), uuid.New()), "SELECT * FROM rows")
-		Expect(err).ToNot(HaveOccurred())
+		err := uow.Do(context.Background(), func(ctx context.Context, tx pgx.Tx) error {
+			_, execErr := database.Pool.Exec(ctx, "UPDATE datasets SET title = $1", "bad")
+			return execErr
+		})
 
-		Expect(rows.Next()).To(BeTrue())
-		rows.Close()
-
-		Expect(pool.CommitCalled).To(BeTrue())
-		Expect(pool.RollbackCalled).To(BeFalse())
-	})
-
-	It("rolls back the scoped transaction when Query rows close with an error", func() {
-		rowErr := errors.New("scan failed")
-		pool := &testConnectionPool{
-			NextRows: &testRows{err: rowErr},
-		}
-		database := db.NewDatabase(pool, "test_db")
-
-		rows, err := database.Pool.Query(ctxutil.WithTenantID(context.Background(), uuid.New()), "SELECT * FROM rows")
-		Expect(err).ToNot(HaveOccurred())
-
-		rows.Close()
-
-		Expect(rows.Err()).To(MatchError(rowErr))
+		Expect(errors.Is(err, db.ErrDirectPoolUseInTransaction)).To(BeTrue())
+		Expect(pool.ExecCalled).To(BeFalse())
 		Expect(pool.RollbackCalled).To(BeTrue())
-		Expect(pool.CommitCalled).To(BeFalse())
+	})
+
+	It("rejects direct pool QueryRow calls from inside UnitOfWork callbacks", func() {
+		pool := &testConnectionPool{}
+		database := db.NewDatabase(pool, "test_db")
+		uow := db.NewUnitOfWork(database.Pool)
+
+		err := uow.Do(context.Background(), func(ctx context.Context, tx pgx.Tx) error {
+			return database.Pool.QueryRow(ctx, "SELECT * FROM datasets WHERE id = $1", uuid.New()).Scan()
+		})
+
+		Expect(errors.Is(err, db.ErrDirectPoolUseInTransaction)).To(BeTrue())
+		Expect(pool.QueryRowCalled).To(BeFalse())
+		Expect(pool.RollbackCalled).To(BeTrue())
 	})
 })
 
@@ -457,6 +456,7 @@ var _ = Describe("tenant RLS migration policies", func() {
 			Expect(content).To(ContainSubstring("NULLIF(current_setting('app.current_user_id', true), '')::uuid"), path)
 			Expect(strings.Contains(content, "COALESCE(NULLIF(current_setting('app.current_user_id'")).To(BeFalse(), path)
 			Expect(strings.Contains(content, "user_id = user_id")).To(BeFalse(), path)
+			Expect(strings.Contains(content, "status = 'published'")).To(BeFalse(), path)
 		}
 	})
 })

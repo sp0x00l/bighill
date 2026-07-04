@@ -9,7 +9,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/k8s-common.sh"
 
 ENVIRONMENT="${1:-}"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-eu-west-1}"
 
 if [ -z "$ENVIRONMENT" ]; then
   echo "Usage: $0 [staging|prod]"

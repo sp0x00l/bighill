@@ -98,6 +98,20 @@ func (r *recordingDataStreamReader) ReadParquet(_ context.Context, request mater
 	return r.artifact, nil
 }
 
+type recordingIcebergTableWriter struct {
+	request materialization.IcebergTableWriteRequest
+	result  *materialization.IcebergTableWriteResult
+	err     error
+}
+
+func (w *recordingIcebergTableWriter) WriteTable(_ context.Context, request materialization.IcebergTableWriteRequest) (*materialization.IcebergTableWriteResult, error) {
+	w.request = request
+	if w.err != nil {
+		return nil, w.err
+	}
+	return w.result, nil
+}
+
 type fakeDocumentExtractor struct{}
 
 func (e fakeDocumentExtractor) Name() string {
@@ -211,6 +225,35 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(store.writes[result.StorageLocation]).NotTo(BeEmpty())
 	})
 
+	It("writes uploaded Polaris Iceberg raw snapshots through the table writer", func() {
+		ctx := context.Background()
+		store := newMemoryArtifactStore()
+		datasetFile := validDatasetFile()
+		datasetFile.TableFormat = "ICEBERG"
+		datasetFile.CatalogProvider = "POLARIS"
+		rawSnapshot := validRawSnapshot(datasetFile)
+		store.objects[datasetFile.StorageLocation] = []byte("title,views\nIntro,10\n")
+		icebergWriter := &recordingIcebergTableWriter{result: &materialization.IcebergTableWriteResult{
+			Catalog:    "bighill",
+			Namespace:  rawSnapshot.TableNamespace,
+			Table:      rawSnapshot.TableName,
+			Warehouse:  "s3://bighill-mlops-lakehouse/",
+			SourceRows: 1,
+			TableRows:  1,
+		}}
+		writer := materialization.NewRawSnapshotWriter(store, materialization.WithRawIcebergTableWriter(icebergWriter))
+
+		result, err := writer.WriteRawSnapshot(ctx, datasetFile, rawSnapshot)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.TableFormat).To(Equal("ICEBERG"))
+		Expect(result.CatalogProvider).To(Equal("POLARIS"))
+		Expect(icebergWriter.request.Namespace).To(Equal(rawSnapshot.TableNamespace))
+		Expect(icebergWriter.request.Table).To(Equal(rawSnapshot.TableName))
+		Expect(icebergWriter.request.ParquetData).NotTo(BeEmpty())
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"iceberg_table_rows":1`))
+	})
+
 	It("writes a ready raw snapshot from a data stream connector dataset", func() {
 		ctx := context.Background()
 		store := newMemoryArtifactStore()
@@ -249,6 +292,64 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(reader.request.SQL).To(Equal("SELECT title FROM movies"))
 	})
 
+	It("writes connector-backed Polaris Iceberg raw snapshots through the table writer", func() {
+		ctx := context.Background()
+		store := newMemoryArtifactStore()
+		datasetFile := validDatasetFile()
+		datasetFile.StorageLocation = ""
+		datasetFile.SourceType = "postgres"
+		datasetFile.SourceConnectorID = uuid.New()
+		datasetFile.SourceQuery = "SELECT title FROM movies"
+		datasetFile.TableFormat = "ICEBERG"
+		datasetFile.CatalogProvider = "POLARIS"
+		rawSnapshot := validRawSnapshot(datasetFile)
+		reader := &recordingDataStreamReader{
+			artifact: &materialization.ParquetArtifact{
+				Data:           []byte("PAR1fakePAR1"),
+				SchemaVersion:  1,
+				SchemaMetadata: `{"format":"arrow","rows":2}`,
+				RowCount:       2,
+			},
+		}
+		icebergWriter := &recordingIcebergTableWriter{result: &materialization.IcebergTableWriteResult{
+			Catalog:    "bighill",
+			Namespace:  rawSnapshot.TableNamespace,
+			Table:      rawSnapshot.TableName,
+			Warehouse:  "s3://bighill-mlops-lakehouse/",
+			SourceRows: 2,
+			TableRows:  2,
+		}}
+		writer := materialization.NewDataStreamRawSnapshotWriter(
+			store,
+			reader,
+			materialization.WithDataStreamRawIcebergTableWriter(icebergWriter),
+		)
+
+		result, err := writer.WriteRawSnapshot(ctx, datasetFile, rawSnapshot)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.TableFormat).To(Equal("ICEBERG"))
+		Expect(result.CatalogProvider).To(Equal("POLARIS"))
+		Expect(icebergWriter.request.Namespace).To(Equal(rawSnapshot.TableNamespace))
+		Expect(icebergWriter.request.Table).To(Equal(rawSnapshot.TableName))
+		Expect(icebergWriter.request.ParquetData).To(Equal([]byte("PAR1fakePAR1")))
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"iceberg_table_rows":2`))
+	})
+
+	It("fails the external Iceberg writer when Polaris credentials are missing", func() {
+		writer := materialization.NewExternalIcebergTableWriter(materialization.ExternalIcebergTableWriterConfig{})
+
+		_, err := writer.WriteTable(context.Background(), materialization.IcebergTableWriteRequest{
+			Namespace:   "features",
+			Table:       "movies",
+			ParquetData: []byte("PAR1fakePAR1"),
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrCatalogRegister)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("polaris credential or token is required")))
+	})
+
 	It("builds a feature snapshot artifact", func() {
 		ctx := context.Background()
 		store := newMemoryArtifactStore()
@@ -268,6 +369,66 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(result.Status).To(Equal(model.SnapshotStatusReady))
 		Expect(result.StorageLocation).To(ContainSubstring("lakehouse/features/"))
 		Expect(result.SchemaMetadata).To(ContainSubstring(`"source_format":"csv"`))
+		Expect(result.TableFormat).To(Equal("PARQUET"))
+		Expect(result.CatalogProvider).To(Equal("LOCAL"))
+	})
+
+	It("writes Polaris Iceberg feature snapshots through the table writer", func() {
+		ctx := context.Background()
+		store := newMemoryArtifactStore()
+		datasetFile := validDatasetFile()
+		datasetFile.TableFormat = "ICEBERG"
+		datasetFile.CatalogProvider = "POLARIS"
+		rawSnapshot := validRawSnapshot(datasetFile)
+		rawSnapshot.StorageLocation = "s3://local/raw/snapshot.parquet"
+		rawArtifact, err := materialization.NormalizeArtifactToParquet(ctx, []byte("title,views\nIntro,10\n"), "text/csv", "csv")
+		Expect(err).NotTo(HaveOccurred())
+		rawSnapshot.SchemaMetadata = rawArtifact.SchemaMetadata
+		store.objects[rawSnapshot.StorageLocation] = rawArtifact.Data
+		writer := &recordingIcebergTableWriter{result: &materialization.IcebergTableWriteResult{
+			Catalog:    "bighill",
+			Namespace:  rawSnapshot.TableNamespace,
+			Table:      rawSnapshot.TableName,
+			Warehouse:  "s3://bighill-mlops-lakehouse/",
+			SourceRows: 1,
+			TableRows:  1,
+		}}
+		builder := materialization.NewFeatureSnapshotBuilder(store, materialization.WithFeatureIcebergTableWriter(writer))
+		featureSnapshot := validFeatureSnapshot(rawSnapshot)
+
+		result, err := builder.BuildFeatureSnapshot(ctx, rawSnapshot, featureSnapshot)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.SnapshotStatusReady))
+		Expect(result.TableFormat).To(Equal("ICEBERG"))
+		Expect(result.CatalogProvider).To(Equal("POLARIS"))
+		Expect(writer.request.Namespace).To(Equal("features"))
+		Expect(writer.request.Table).To(Equal("movies"))
+		Expect(writer.request.ParquetData).NotTo(BeEmpty())
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"iceberg_catalog":"bighill"`))
+		Expect(result.SchemaMetadata).To(ContainSubstring(`"iceberg_table_rows":1`))
+	})
+
+	It("fails a Polaris Iceberg feature snapshot when the table writer fails", func() {
+		ctx := context.Background()
+		store := newMemoryArtifactStore()
+		datasetFile := validDatasetFile()
+		datasetFile.TableFormat = "ICEBERG"
+		datasetFile.CatalogProvider = "POLARIS"
+		rawSnapshot := validRawSnapshot(datasetFile)
+		rawSnapshot.StorageLocation = "s3://local/raw/snapshot.parquet"
+		rawArtifact, err := materialization.NormalizeArtifactToParquet(ctx, []byte("title,views\nIntro,10\n"), "text/csv", "csv")
+		Expect(err).NotTo(HaveOccurred())
+		store.objects[rawSnapshot.StorageLocation] = rawArtifact.Data
+		builder := materialization.NewFeatureSnapshotBuilder(store, materialization.WithFeatureIcebergTableWriter(&recordingIcebergTableWriter{
+			err: errors.New("catalog unavailable"),
+		}))
+		featureSnapshot := validFeatureSnapshot(rawSnapshot)
+
+		_, err = builder.BuildFeatureSnapshot(ctx, rawSnapshot, featureSnapshot)
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrCatalogRegister)).To(BeTrue())
 	})
 
 	It("preserves source extraction metadata when building feature snapshots", func() {

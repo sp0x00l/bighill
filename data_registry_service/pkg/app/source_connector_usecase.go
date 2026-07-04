@@ -146,8 +146,7 @@ func (u *sourceUsecase) DeleteSourceConnector(ctx context.Context, connectorID, 
 
 	err = u.sourceRepository.Delete(ctx, connectorID, userID)
 	if err != nil {
-		// can't fail with not found, getCatalogID would have failed first
-		log.WithContext(ctx).Errorf("MANUAL INTERVENTION REQUIRED: Rolling back source connector. Failed to delete source connector: %v", err)
+		log.WithContext(ctx).Errorf("Failed to delete source connector: %v", err)
 		return err
 	}
 	return nil

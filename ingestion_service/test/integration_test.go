@@ -19,6 +19,7 @@ import (
 	repo "ingestion_service/pkg/infra/repo/db"
 	ingestionpb "lib/data_contracts_lib/ingestion"
 	corebucket "lib/shared_lib/bucket"
+	"lib/shared_lib/ctxutil"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	messaging "lib/shared_lib/messaging"
@@ -312,6 +313,7 @@ func validIngestionDataset(datasetID, userID uuid.UUID) *model.Dataset {
 }
 
 func upsertIngestionTenant(ctx context.Context, database *dbconn.Database, userID uuid.UUID) error {
+	ctx = ctxutil.WithSystemContext(ctx)
 	_, err := database.Pool.Exec(ctx, `
 		INSERT INTO `+database.Name+`.tenants (id, email, deleted)
 		VALUES ($1, $2, false)

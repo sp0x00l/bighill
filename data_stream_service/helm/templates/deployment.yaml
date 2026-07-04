@@ -69,6 +69,42 @@ spec:
               value: {{ .Values.env.dataRegistryGrpcCallTimeoutMs | quote }}
             - name: DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_RETRY_COUNT
               value: {{ .Values.env.dataRegistryGrpcRetryCount | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_BASE_URL
+              value: {{ .Values.env.polarisBaseUrl | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_CATALOG
+              value: {{ .Values.env.polarisCatalog | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_WAREHOUSE
+              value: {{ .Values.env.polarisWarehouse | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_CREDENTIAL
+{{- if .Values.env.polarisCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.polarisCredentialsSecret.name }}
+                  key: {{ .Values.env.polarisCredentialsSecret.credentialKey }}
+{{- else }}
+              value: {{ .Values.env.polarisCredential | quote }}
+{{- end }}
+            - name: DATA_STREAM_SERVICE_POLARIS_TOKEN
+{{- if .Values.env.polarisCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.polarisCredentialsSecret.name }}
+                  key: {{ .Values.env.polarisCredentialsSecret.tokenKey }}
+{{- else }}
+              value: {{ .Values.env.polarisToken | quote }}
+{{- end }}
+            - name: DATA_STREAM_SERVICE_POLARIS_SCOPE
+              value: {{ .Values.env.polarisScope | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_STORAGE_ENDPOINT
+              value: {{ .Values.env.polarisStorageEndpoint | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_STORAGE_ACCESS_KEY_ID
+              value: {{ .Values.env.polarisStorageAccessKeyId | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_STORAGE_SECRET_ACCESS_KEY
+              value: {{ .Values.env.polarisStorageSecretAccessKey | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_STORAGE_REGION
+              value: {{ .Values.env.polarisStorageRegion | quote }}
+            - name: DATA_STREAM_SERVICE_POLARIS_STORAGE_PATH_STYLE
+              value: {{ .Values.env.polarisStoragePathStyle | quote }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
             - name: DATA_STREAM_SERVICE_KAFKA_GROUP_ID

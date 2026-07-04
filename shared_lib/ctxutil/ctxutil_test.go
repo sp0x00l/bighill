@@ -41,3 +41,12 @@ var _ = Describe("TenantID", func() {
 		Expect(ok).To(BeFalse())
 	})
 })
+
+var _ = Describe("TransactionContext", func() {
+	It("marks transaction-scoped contexts", func() {
+		ctx := ctxutil.WithTransactionContext(context.Background())
+
+		Expect(ctxutil.IsTransactionContext(ctx)).To(BeTrue())
+		Expect(ctxutil.IsTransactionContext(context.Background())).To(BeFalse())
+	})
+})

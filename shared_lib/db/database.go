@@ -36,7 +36,7 @@ func NewDatabase(pool ConnectionPool, dbName string) *Database {
 	}
 
 	return &Database{
-		Pool: newTenantContextPool(pool),
+		Pool: newGuardedConnectionPool(pool),
 		Name: dbName,
 	}
 }

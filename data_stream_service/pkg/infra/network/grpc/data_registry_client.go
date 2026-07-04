@@ -17,6 +17,7 @@ import (
 
 type DataRegistryClient interface {
 	ReadSourceConnector(ctx context.Context, connectorID, userID uuid.UUID, sourceType string) (*dataregistrypb.SourceConnector, error)
+	ReadDatasetTable(ctx context.Context, datasetID, userID uuid.UUID, snapshotID string) (*dataregistrypb.ReadDatasetTableResponse, error)
 	Close() error
 }
 
@@ -85,4 +86,22 @@ func (c *dataRegistryClient) ReadSourceConnector(ctx context.Context, connectorI
 		return nil, fmt.Errorf("read source connector returned empty connector")
 	}
 	return resp.GetConnector(), nil
+}
+
+func (c *dataRegistryClient) ReadDatasetTable(ctx context.Context, datasetID, userID uuid.UUID, snapshotID string) (*dataregistrypb.ReadDatasetTableResponse, error) {
+	log.Trace("dataRegistryClient ReadDatasetTable")
+
+	resp, err := c.client.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
+		DatasetId:  datasetID.String(),
+		UserId:     userID.String(),
+		SnapshotId: snapshotID,
+	})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("dataRegistryClient read dataset table failed")
+		return nil, fmt.Errorf("read dataset table: %w", rpcLib.ExtractGRPCErrMsg(err))
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("read dataset table returned empty response")
+	}
+	return resp, nil
 }

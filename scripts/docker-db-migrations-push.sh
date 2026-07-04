@@ -14,7 +14,7 @@ usage() {
 
 ENVIRONMENT="${1:-}"
 TARGETARCH="${2:-arm64}"
-AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_REGION="${AWS_REGION:-eu-west-1}"
 ECR_REPO="${ECR_REPO:-bighill/mlops}"
 
 if [ -z "$ENVIRONMENT" ]; then

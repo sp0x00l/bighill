@@ -95,6 +95,8 @@ func NewPgxConnection(ctx context.Context, dbName, connection string, logs *logr
 	config.ConnConfig.RuntimeParams["lock_timeout"] = strconv.Itoa(lockTimeoutMs)
 	config.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = strconv.Itoa(idleInTxTimeoutMs)
 
+	configureTenantSessionHooks(config, dbName)
+
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		metrics.Default().RecordError(ctx, metrics.BoundaryDB, "connect", metrics.ClassifyDB(err), "")

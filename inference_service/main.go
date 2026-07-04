@@ -357,7 +357,7 @@ func readInferenceConfig() inferenceConfig {
 			URITemplate:      env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE", "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl"),
 			MinExamples:      env.WithDefaultInt("INFERENCE_SERVICE_PREFERENCE_DATASET_MIN_EXAMPLES", "1"),
 			Limit:            env.WithDefaultInt("INFERENCE_SERVICE_PREFERENCE_DATASET_LIMIT", "1000"),
-			BucketRegion:     env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION", "local-dev"),
+			BucketRegion:     env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION", "eu-west-1"),
 			UploadPartSizeMB: env.WithDefaultInt64("INFERENCE_SERVICE_PREFERENCE_DATASET_UPLOAD_PART_SIZE_MB", "10"),
 		},
 		GRPCPort: env.WithDefaultInt("INFERENCE_SERVICE_API_GRPC_PORT", "7073"),

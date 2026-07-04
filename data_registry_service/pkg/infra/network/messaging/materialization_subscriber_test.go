@@ -51,23 +51,15 @@ func (s *materializationUsecaseStub) CreateDataset(context.Context, *model.Datas
 	return nil
 }
 
-func (s *materializationUsecaseStub) ReadPublishedDatasets(context.Context, corePagination.Pagination, []model.Filter) ([]*model.Dataset, int, error) {
-	return nil, 0, nil
-}
-
-func (s *materializationUsecaseStub) ReadPublishedDatasetByID(context.Context, uuid.UUID) (*model.Dataset, error) {
-	return nil, nil
-}
-
-func (s *materializationUsecaseStub) ReadPublishedDatasetsByUserID(context.Context, uuid.UUID, corePagination.Pagination, []model.Filter) ([]*model.Dataset, int, error) {
-	return nil, 0, nil
-}
-
 func (s *materializationUsecaseStub) ReadDatasetsForUser(context.Context, uuid.UUID, corePagination.Pagination, []model.Filter) ([]*model.Dataset, int, error) {
 	return nil, 0, nil
 }
 
 func (s *materializationUsecaseStub) ReadDatasetForUser(context.Context, uuid.UUID, uuid.UUID) (*model.Dataset, error) {
+	return nil, nil
+}
+
+func (s *materializationUsecaseStub) ReadDatasetTable(context.Context, uuid.UUID, uuid.UUID, string) (*model.Dataset, error) {
 	return nil, nil
 }
 
@@ -276,6 +268,46 @@ var _ = Describe("Materialization event listeners", func() {
 
 		Expect(err).To(HaveOccurred())
 		Expect(msgConn.IsNonRetryable(err)).To(BeTrue())
+	})
+
+	It("returns non-retryable errors for invalid raw-ready payloads", func() {
+		datasetID := uuid.New()
+		listener := registrymessaging.NewRawSnapshotReadyEventListener(&materializationUsecaseStub{})
+
+		err := listener.Handle(context.Background(), datasetID, &featurepb.RawSnapshotReadyEvent{
+			DatasetId:         datasetID.String(),
+			UserId:            uuid.NewString(),
+			RawSnapshotId:     uuid.NewString(),
+			StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:    "raw",
+			TableName:         "movies_raw",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "NOT_A_CATALOG",
+			SchemaVersion:     1,
+			SchemaMetadata:    "{}",
+			ProcessingProfile: "TEXT_RAG",
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(msgConn.IsNonRetryable(err)).To(BeTrue())
+	})
+
+	It("leaves usecase failures retryable", func() {
+		datasetID := uuid.New()
+		uc := &materializationUsecaseStub{err: errors.New("database unavailable")}
+		listener := registrymessaging.NewEmbeddingSnapshotReadyEventListener(uc)
+
+		err := listener.Handle(context.Background(), datasetID, &featurepb.EmbeddingSnapshotReadyEvent{
+			DatasetId:           datasetID.String(),
+			UserId:              uuid.NewString(),
+			FeatureSnapshotId:   uuid.NewString(),
+			EmbeddingSnapshotId: uuid.NewString(),
+			VectorStore:         "pgvector",
+			CollectionName:      "movies",
+		})
+
+		Expect(err).To(MatchError("database unavailable"))
+		Expect(msgConn.IsNonRetryable(err)).To(BeFalse())
 	})
 
 	It("returns non-retryable errors for mismatched resource keys", func() {

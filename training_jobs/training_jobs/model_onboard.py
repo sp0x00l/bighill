@@ -5,6 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from training_jobs.config import read_storage_config
 from training_jobs import storage
 
 
@@ -61,6 +62,7 @@ def main() -> None:
     base_model = require_env("INGESTION_SERVICE_MODEL_BASE_MODEL")
     artifact_type = optional_env("INGESTION_SERVICE_MODEL_ARTIFACT_TYPE", "BASE_MODEL")
     artifact_format = optional_env("INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT", "HF_MODEL")
+    storage_config = read_storage_config()
 
     with tempfile.TemporaryDirectory() as tmp:
         local_dir = Path(tmp) / "snapshot"
@@ -69,7 +71,7 @@ def main() -> None:
         validate_snapshot(snapshot_path)
         artifact_uri = f"{output_root}/{resource_id}/snapshot"
         manifest_uri = f"{output_root}/{resource_id}/manifest.json"
-        artifact = storage.upload_directory(snapshot_path, artifact_uri)
+        artifact = storage.upload_directory(snapshot_path, artifact_uri, storage_config)
         manifest = {
             "resource_id": resource_id,
             "storage_location": artifact.uri,
@@ -86,7 +88,7 @@ def main() -> None:
             "hf_revision": revision,
             "hf_commit_sha": commit,
         }
-        storage.write_json_bytes(manifest_uri, json.dumps(manifest, sort_keys=True).encode("utf-8"))
+        storage.write_json_bytes(manifest_uri, json.dumps(manifest, sort_keys=True).encode("utf-8"), storage_config)
         print(json.dumps(manifest, sort_keys=True))
 
 

@@ -128,6 +128,44 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: DATA_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: DATA_REGISTRY_SERVICE_CATALOG_PROVIDER
+              value: {{ .Values.env.catalogProvider | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_BASE_URL
+              value: {{ .Values.env.polarisBaseUrl | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_TOKEN_URL
+              value: {{ .Values.env.polarisTokenUrl | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_CLIENT_ID
+{{- if .Values.env.polarisCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.polarisCredentialsSecret.name }}
+                  key: {{ .Values.env.polarisCredentialsSecret.clientIdKey }}
+{{- else }}
+              value: {{ .Values.env.polarisClientId | quote }}
+{{- end }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_CLIENT_SECRET
+{{- if .Values.env.polarisCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.polarisCredentialsSecret.name }}
+                  key: {{ .Values.env.polarisCredentialsSecret.clientSecretKey }}
+{{- else }}
+              value: {{ .Values.env.polarisClientSecret | quote }}
+{{- end }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_SCOPE
+              value: {{ .Values.env.polarisScope | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_CATALOG
+              value: {{ .Values.env.polarisCatalog | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_BASE_LOCATION
+              value: {{ .Values.env.polarisBaseLocation | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_REGION
+              value: {{ .Values.env.polarisRegion | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_STORAGE_ENDPOINT
+              value: {{ .Values.env.polarisStorageEndpoint | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_STORAGE_PATH_STYLE
+              value: {{ .Values.env.polarisStoragePathStyle | quote }}
+            - name: DATA_REGISTRY_SERVICE_POLARIS_TIMEOUT_SECONDS
+              value: {{ .Values.env.polarisTimeoutSeconds | quote }}
             - name: DATA_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: DATA_REGISTRY_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT

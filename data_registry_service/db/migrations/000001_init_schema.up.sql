@@ -163,7 +163,6 @@ ALTER TABLE bighill_data_registry_db.datasets FORCE ROW LEVEL SECURITY;
 CREATE POLICY datasets_tenant_isolation ON bighill_data_registry_db.datasets
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR status = 'published'
     OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
 )
 WITH CHECK (

@@ -232,24 +232,6 @@ Resources:
             RestApiId: !Ref BighillApi
             Path: /v1/data/registry
             Method: post
-        GetPublishedDatasets:
-          Type: Api
-          Properties:
-            RestApiId: !Ref BighillApi
-            Path: /v1/public/data/registry
-            Method: get
-        GetPublishedDatasetById:
-          Type: Api
-          Properties:
-            RestApiId: !Ref BighillApi
-            Path: /v1/public/data/registry/{datasetId}
-            Method: get
-        GetPublishedDatasetsByUserId:
-          Type: Api
-          Properties:
-            RestApiId: !Ref BighillApi
-            Path: /v1/public/data/registry/user/{userId}
-            Method: get
         GetDatasets:
           Type: Api
           Properties:
@@ -580,39 +562,6 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/public/data/registry:
-            get:
-              produces:
-                - application/vnd.bighill.api-v1+json
-              responses: {}
-              x-amazon-apigateway-integration:
-                httpMethod: POST
-                type: aws_proxy
-                uri:
-                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
-              security: []
-          /v1/public/data/registry/{datasetId}:
-            get:
-              produces:
-                - application/vnd.bighill.api-v1+json
-              responses: {}
-              x-amazon-apigateway-integration:
-                httpMethod: POST
-                type: aws_proxy
-                uri:
-                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
-              security: []
-          /v1/public/data/registry/user/{userId}:
-            get:
-              produces:
-                - application/vnd.bighill.api-v1+json
-              responses: {}
-              x-amazon-apigateway-integration:
-                httpMethod: POST
-                type: aws_proxy
-                uri:
-                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
-              security: []
           /v1/data/registry/connector/{type}:
             post:
               consumes:

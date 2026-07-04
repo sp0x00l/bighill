@@ -18,6 +18,8 @@ func NewQueryEngine(config infra.QueryEngineConfig) (QueryEngine, error) {
 		return NewLocalQueryEngine(), nil
 	case "datafusion":
 		return NewDataFusionQueryEngine(config)
+	case "lakehouse":
+		return NewLakehouseQueryEngine(config)
 	case "registry", "datasource":
 		return NewRegistryQueryEngine(config)
 	default:

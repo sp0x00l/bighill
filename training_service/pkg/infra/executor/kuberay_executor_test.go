@@ -56,7 +56,7 @@ var _ = Describe("KubeRayExecutor", func() {
 			ServingLoadStatus:    "NOT_LOADED",
 			ArtifactFormat:       "HF_PEFT_ADAPTER",
 			ArtifactManifestURI:  "s3://models/run-kube/artifact.json",
-			ArtifactBucketRegion: "local-dev",
+			ArtifactBucketRegion: "eu-west-1",
 			AxolotlCommand:       "axolotl train",
 			RecipeYAML:           "base_model: mistral",
 			RecipeHash:           "hash",

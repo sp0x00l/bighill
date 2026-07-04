@@ -179,11 +179,6 @@ func (u *profilesUseCase) CreateProfile(ctx context.Context, profileAccount *dom
 	if err = u.msgPublisher.PublishUserCreatedEvent(ctx, profileAccount); err != nil {
 		return err
 	}
-	if !profileAccount.EmailVerified {
-		if err = u.msgPublisher.PublishEmailVerificationRequestedEvent(ctx, profileAccount); err != nil {
-			return err
-		}
-	}
 
 	return nil
 }

@@ -79,6 +79,17 @@ func main() {
 			RegistryDialMs:     env.WithDefaultInt("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_DIAL_TIMEOUT_MS", "500"),
 			RegistryCallMs:     env.WithDefaultInt("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_CALL_TIMEOUT_MS", "15000"),
 			RegistryRetryCount: env.WithDefaultInt("DATA_STREAM_SERVICE_DATA_REGISTRY_GRPC_RETRY_COUNT", "3"),
+			PolarisBaseURL:     env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_BASE_URL", "http://localhost:8181"),
+			PolarisCatalog:     env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_CATALOG", "bighill"),
+			PolarisWarehouse:   env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_WAREHOUSE", "s3://bighill-mlops-lakehouse/"),
+			PolarisCredential:  env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_CREDENTIAL", ""),
+			PolarisToken:       env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_TOKEN", ""),
+			PolarisScope:       env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_SCOPE", "PRINCIPAL_ROLE:ALL"),
+			PolarisS3Endpoint:  env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_STORAGE_ENDPOINT", "http://localhost:9100"),
+			PolarisS3AccessKey: env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_STORAGE_ACCESS_KEY_ID", "polaris_root"),
+			PolarisS3SecretKey: env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_STORAGE_SECRET_ACCESS_KEY", "polaris_pass"),
+			PolarisS3Region:    env.WithDefaultString("DATA_STREAM_SERVICE_POLARIS_STORAGE_REGION", "eu-west-1"),
+			PolarisS3PathStyle: env.WithDefaultBool("DATA_STREAM_SERVICE_POLARIS_STORAGE_PATH_STYLE", true),
 		},
 	}
 	queryEngine, err := data.NewQueryEngine(streamCfg.QueryEngine)

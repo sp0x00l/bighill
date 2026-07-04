@@ -274,7 +274,7 @@ func readTrainingConfig() trainingConfig {
 			KubeRayMemory:           env.WithDefaultString("TRAINING_SERVICE_KUBERAY_MEMORY", "4Gi"),
 			KubeRayGPUResource:      env.WithDefaultString("TRAINING_SERVICE_KUBERAY_GPU_RESOURCE", "nvidia.com/gpu"),
 			KubeRayGPU:              env.WithDefaultString("TRAINING_SERVICE_KUBERAY_GPU", "1"),
-			ArtifactBucketRegion:    env.WithDefaultString("TRAINING_SERVICE_ARTIFACT_BUCKET_REGION", "local-dev"),
+			ArtifactBucketRegion:    env.WithDefaultString("TRAINING_SERVICE_ARTIFACT_BUCKET_REGION", "eu-west-1"),
 			ModelURIPrefix:          env.WithDefaultString("TRAINING_SERVICE_MODEL_URI_PREFIX", "s3://local-dev-bucket/models"),
 			EvaluationURIPrefix:     env.WithDefaultString("TRAINING_SERVICE_EVALUATION_URI_PREFIX", "s3://local-dev-bucket/evaluations"),
 			ServingTarget:           env.WithDefaultString("TRAINING_SERVICE_SERVING_TARGET", ""),

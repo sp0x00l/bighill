@@ -61,7 +61,7 @@ class EvaluationJobTests(unittest.TestCase):
             with EnvPatch(
                 {
                     "BIGHILL_LOCAL_S3_STORAGE_DIR": str(storage),
-                    "TRAINING_ARTIFACT_BUCKET_REGION": "local-dev",
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
                     "TRAINING_RUN_ID": "run-1",
                     "TRAINING_MODEL_URI": "s3://models/run-1",
                     "TRAINING_EVALUATION_PROFILE": profile,
@@ -96,7 +96,7 @@ class EvaluationJobTests(unittest.TestCase):
             with EnvPatch(
                 {
                     "BIGHILL_LOCAL_S3_STORAGE_DIR": str(storage),
-                    "TRAINING_ARTIFACT_BUCKET_REGION": "local-dev",
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
                     "TRAINING_RUN_ID": "run-2",
                     "TRAINING_MODEL_URI": "s3://models/run-2",
                     "TRAINING_EVALUATION_PROFILE": "{}",
@@ -151,7 +151,7 @@ class EvaluationJobTests(unittest.TestCase):
             with EnvPatch(
                 {
                     "BIGHILL_LOCAL_S3_STORAGE_DIR": str(storage),
-                    "TRAINING_ARTIFACT_BUCKET_REGION": "local-dev",
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
                     "TRAINING_RUN_ID": "run-3",
                     "TRAINING_MODEL_URI": "s3://models/run-3",
                     "TRAINING_EVALUATION_PROFILE": profile,

@@ -31,7 +31,6 @@ func (f CategoryFilter) GetType() FilterBy {
 	return FilterByCategory
 }
 
-// GetFilterAndFillArguments returns the filter string and fills the arguments
 func (f CategoryFilter) GetFilterAndFillArguments(field string, args map[string]any) string {
 	log.Trace("CategoryFilter GetFilterAndFillArguments")
 

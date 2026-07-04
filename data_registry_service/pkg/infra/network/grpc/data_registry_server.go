@@ -26,18 +26,23 @@ import (
 
 type DataRegistryServer struct {
 	dataregistrypb.UnimplementedDataRegistryServiceServer
-	sourceUsecase usecase.SourceUsecase
-	grpcServer    *grpc.Server
+	datasetUsecase usecase.DatasetUsecase
+	sourceUsecase  usecase.SourceUsecase
+	grpcServer     *grpc.Server
 }
 
-func NewDataRegistryGrpcServer(sourceUsecase usecase.SourceUsecase) *DataRegistryServer {
+func NewDataRegistryGrpcServer(datasetUsecase usecase.DatasetUsecase, sourceUsecase usecase.SourceUsecase) *DataRegistryServer {
 	log.Trace("NewDataRegistryGrpcServer")
 
+	if datasetUsecase == nil {
+		log.Fatal("NewDataRegistryGrpcServer: datasetUsecase is required")
+	}
 	if sourceUsecase == nil {
 		log.Fatal("NewDataRegistryGrpcServer: sourceUsecase is required")
 	}
 	return &DataRegistryServer{
-		sourceUsecase: sourceUsecase,
+		datasetUsecase: datasetUsecase,
+		sourceUsecase:  sourceUsecase,
 	}
 }
 
@@ -106,6 +111,40 @@ func (s *DataRegistryServer) ReadSourceConnector(ctx context.Context, req *datar
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &dataregistrypb.ReadSourceConnectorResponse{Connector: pbConnector}, nil
+}
+
+func (s *DataRegistryServer) ReadDatasetTable(ctx context.Context, req *dataregistrypb.ReadDatasetTableRequest) (*dataregistrypb.ReadDatasetTableResponse, error) {
+	log.Trace("DataRegistryServer ReadDatasetTable")
+
+	datasetID, err := uuid.Parse(req.GetDatasetId())
+	if err != nil || datasetID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid dataset_id")
+	}
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil || userID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+	ctx = ctxutil.WithTenantID(ctx, userID)
+
+	dataset, err := s.datasetUsecase.ReadDatasetTable(ctx, datasetID, userID, req.GetSnapshotId())
+	if err != nil {
+		return nil, datasetTableStatusError(err)
+	}
+
+	return &dataregistrypb.ReadDatasetTableResponse{
+		DatasetId:       dataset.ID.String(),
+		UserId:          dataset.UserID.String(),
+		DatasetVersion:  int32(dataset.DatasetVersion),
+		ProcessingState: dataset.ProcessingState.String(),
+		StorageLocation: dataset.Location,
+		TableNamespace:  dataset.TableNamespace,
+		TableName:       dataset.TableName,
+		TableFormat:     dataset.TableFormat.String(),
+		CatalogProvider: dataset.CatalogProvider.String(),
+		SchemaVersion:   int32(dataset.SchemaVersion),
+		SchemaMetadata:  dataset.SchemaMetadata,
+		SnapshotId:      req.GetSnapshotId(),
+	}, nil
 }
 
 func sourceConnectorToPB(connector *model.SourceConnector) (*dataregistrypb.SourceConnector, error) {
@@ -201,6 +240,20 @@ func sourceConnectorStatusError(err error) error {
 		rpcLib.GRPCCode(codes.NotFound, domainErrors.ErrResourceNotFound),
 		rpcLib.GRPCCode(codes.AlreadyExists, domainErrors.ErrResourceAlreadyExists),
 		rpcLib.GRPCCode(codes.InvalidArgument, domainErrors.ErrValidationFailed),
+	)
+	return status.Error(code, err.Error())
+}
+
+func datasetTableStatusError(err error) error {
+	log.Trace("datasetTableStatusError")
+
+	if err == nil {
+		return nil
+	}
+	code := rpcLib.MapToGRPCStatus(
+		err,
+		rpcLib.GRPCCode(codes.NotFound, domainErrors.ErrResourceNotFound),
+		rpcLib.GRPCCode(codes.FailedPrecondition, domainErrors.ErrValidationFailed),
 	)
 	return status.Error(code, err.Error())
 }

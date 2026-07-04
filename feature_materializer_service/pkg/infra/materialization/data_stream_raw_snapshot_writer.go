@@ -13,17 +13,34 @@ import (
 )
 
 type DataStreamRawSnapshotWriter struct {
-	store  ArtifactStore
-	reader DataStreamReader
+	store         ArtifactStore
+	reader        DataStreamReader
+	icebergWriter IcebergTableWriter
 }
 
-func NewDataStreamRawSnapshotWriter(store ArtifactStore, reader DataStreamReader) *DataStreamRawSnapshotWriter {
+type DataStreamRawSnapshotWriterOption func(*DataStreamRawSnapshotWriter)
+
+func WithDataStreamRawIcebergTableWriter(writer IcebergTableWriter) DataStreamRawSnapshotWriterOption {
+	log.Trace("WithDataStreamRawIcebergTableWriter")
+
+	return func(rawWriter *DataStreamRawSnapshotWriter) {
+		rawWriter.icebergWriter = writer
+	}
+}
+
+func NewDataStreamRawSnapshotWriter(store ArtifactStore, reader DataStreamReader, opts ...DataStreamRawSnapshotWriterOption) *DataStreamRawSnapshotWriter {
 	log.Trace("NewDataStreamRawSnapshotWriter")
 
-	return &DataStreamRawSnapshotWriter{
+	writer := &DataStreamRawSnapshotWriter{
 		store:  store,
 		reader: reader,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(writer)
+		}
+	}
+	return writer
 }
 
 func (w *DataStreamRawSnapshotWriter) SupportsRawSnapshot(datasetFile *model.DatasetFile) bool {
@@ -67,10 +84,25 @@ func (w *DataStreamRawSnapshotWriter) WriteRawSnapshot(ctx context.Context, data
 	out.StorageLocation = location
 	out.ContentType = parquetContentType
 	out.FileExtension = "parquet"
-	out.TableFormat = "PARQUET"
+	out.TableFormat = datasetFile.TableFormat
+	out.CatalogProvider = datasetFile.CatalogProvider
 	out.ProcessingProfile = datasetFile.ProcessingProfile
 	out.SchemaVersion = artifact.SchemaVersion
 	out.SchemaMetadata = artifact.SchemaMetadata
 	out.Status = model.SnapshotStatusReady
+	if isPolarisIceberg(out.CatalogProvider, out.TableFormat) {
+		if w.icebergWriter == nil {
+			return nil, domain.ErrCatalogRegister.Extend("iceberg table writer is required")
+		}
+		result, err := w.icebergWriter.WriteTable(ctx, IcebergTableWriteRequest{
+			Namespace:   out.TableNamespace,
+			Table:       out.TableName,
+			ParquetData: artifact.Data,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%w: write iceberg raw table: %w", domain.ErrCatalogRegister, err)
+		}
+		out.SchemaMetadata = mergeIcebergWriteMetadata(out.SchemaMetadata, result)
+	}
 	return &out, nil
 }

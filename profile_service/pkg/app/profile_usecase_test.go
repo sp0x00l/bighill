@@ -97,9 +97,6 @@ func (s *encryptorStub) Encrypt(_ context.Context, plaintext string) (string, er
 func (n *noopUserPublisher) PublishUserCreatedEvent(context.Context, *domain.ProfileAccount) error {
 	return nil
 }
-func (n *noopUserPublisher) PublishEmailVerificationRequestedEvent(context.Context, *domain.ProfileAccount) error {
-	return nil
-}
 func (n *noopUserPublisher) PublishUserUpdatedEvent(context.Context, *domain.Profile) error {
 	return nil
 }
@@ -107,9 +104,6 @@ func (n *noopUserPublisher) PublishUserDeletedEvent(context.Context, uuid.UUID) 
 	return nil
 }
 func (r *recordingUserPublisher) PublishUserCreatedEvent(context.Context, *domain.ProfileAccount) error {
-	return nil
-}
-func (r *recordingUserPublisher) PublishEmailVerificationRequestedEvent(context.Context, *domain.ProfileAccount) error {
 	return nil
 }
 func (r *recordingUserPublisher) PublishUserUpdatedEvent(_ context.Context, profile *domain.Profile) error {

@@ -33,12 +33,3 @@ message UserUpdatedEvent {
 message UserDeletedEvent {
     string user_id = 1;    
 }
-
-// EmailVerificationRequestedEvent carries the verification token as a separate
-// message type on the profile topic. The token is a credential and must not be
-// included in UserCreatedEvent.
-message EmailVerificationRequestedEvent {
-  string user_id = 1;
-  string email = 2;
-  string email_verify_token = 3;
-}

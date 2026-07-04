@@ -12,9 +12,6 @@ import (
 type DatasetRepositoryAdapter interface {
 	Close()
 	Create(context.Context, *model.Dataset, uuid.UUID) error
-	ReadPublished(context.Context, transport.Pagination, []model.Filter) ([]*model.Dataset, int, error)
-	ReadPublishedByID(context.Context, uuid.UUID) (*model.Dataset, error)
-	ReadPublishedByUserID(context.Context, uuid.UUID, transport.Pagination, []model.Filter) ([]*model.Dataset, int, error)
 	Read(context.Context, uuid.UUID, transport.Pagination, []model.Filter) ([]*model.Dataset, int, error)
 	ReadByID(context.Context, uuid.UUID, uuid.UUID) (*model.Dataset, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
@@ -38,4 +35,8 @@ type CatalogClientAdapter interface {
 	CreateResource(ctx context.Context, name string, sourceConnCfg model.ConnectorConfig) (uuid.UUID, error)
 	ReplaceResource(ctx context.Context, name string, catalogID uuid.UUID, sourceConnCfg model.ConnectorConfig) error
 	DeleteResource(ctx context.Context, catalogID uuid.UUID) error
+}
+
+type DatasetTableCatalogAdapter interface {
+	ValidateDatasetTable(ctx context.Context, dataset *model.Dataset) error
 }

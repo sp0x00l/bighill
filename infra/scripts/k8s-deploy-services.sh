@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ENVIRONMENT="${1:-}"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-eu-west-1}"
 
 if [ -z "$ENVIRONMENT" ]; then
   echo "Usage: $0 [staging|prod]"

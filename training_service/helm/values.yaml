@@ -64,7 +64,7 @@ env:
   kubeRayMemory: "4Gi"
   kubeRayGpuResource: "nvidia.com/gpu"
   kubeRayGpu: "1"
-  artifactBucketRegion: "local-dev"
+  artifactBucketRegion: "eu-west-1"
   modelUriPrefix: "s3://local-dev-bucket/models"
   evaluationUriPrefix: "s3://local-dev-bucket/evaluations"
   servingTarget: ""

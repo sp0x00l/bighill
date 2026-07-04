@@ -21,6 +21,7 @@ import (
 	featuretemporal "feature_materializer_service/pkg/infra/temporalworker"
 	ingestionpb "lib/data_contracts_lib/ingestion"
 	corebucket "lib/shared_lib/bucket"
+	"lib/shared_lib/ctxutil"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	sharedmessaging "lib/shared_lib/messaging"
@@ -295,6 +296,7 @@ func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {
 }
 
 func upsertFeatureMaterializerTenant(ctx context.Context, database *dbconn.Database, userID uuid.UUID) error {
+	ctx = ctxutil.WithSystemContext(ctx)
 	_, err := database.Pool.Exec(ctx, `
 		INSERT INTO `+database.Name+`.tenants (id, email, deleted)
 		VALUES ($1, $2, false)

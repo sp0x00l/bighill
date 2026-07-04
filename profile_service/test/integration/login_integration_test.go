@@ -126,6 +126,7 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 			usecase.ProfilesUseCaseConfig{
 				AuthExpirationInMinutes: authExpirationInMinutes,
 				EmailValidationTTL:      60 * time.Minute,
+				UseStagingTestToken:     env.WithDefaultBool("PROFILE_SERVICE_USE_STAGING_TEST_EMAIL_TOKEN", false),
 			},
 			usecase.WithProfileClock(sharedclock.System{}),
 		)
@@ -171,12 +172,8 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 				"phoneNumber": phone,
 				"countryCode": "GB",
 			}
-			var verifyToken string
-			listener, cancel := newUserCreatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-			defer cancel()
-
 			userID = createProfileAccount(port, profilePayload)
-			verifyToken = readEmailVerifyToken(listener, userID)
+			verifyToken := stagingEmailVerifyToken(email)
 
 			log.Infof("Created profile with userID: %s", userID.String())
 

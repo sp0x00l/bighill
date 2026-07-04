@@ -46,7 +46,7 @@ class ModelOnboardTests(unittest.TestCase):
             with EnvPatch(
                 {
                     "BIGHILL_LOCAL_S3_STORAGE_DIR": str(local_s3),
-                    "TRAINING_ARTIFACT_BUCKET_REGION": "local-dev",
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
                     "INGESTION_SERVICE_MODEL_RESOURCE_ID": "11111111-1111-1111-1111-111111111111",
                     "INGESTION_SERVICE_MODEL_NAME": "llama-test",
                     "INGESTION_SERVICE_MODEL_VERSION": "1",

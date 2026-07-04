@@ -1,5 +1,5 @@
 image:
-  repository: 385800116362.dkr.ecr.us-east-1.amazonaws.com/bighill/mlops
+  repository: 385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops
   tag: "profile-service-0.0.1-staging"
   pullPolicy: Always
 

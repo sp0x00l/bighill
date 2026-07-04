@@ -31,7 +31,6 @@ type SecretEncryptor interface {
 
 type UserEventPublisher interface {
 	PublishUserCreatedEvent(ctx context.Context, profileAccount *domain.ProfileAccount) error
-	PublishEmailVerificationRequestedEvent(ctx context.Context, profileAccount *domain.ProfileAccount) error
 	PublishUserUpdatedEvent(ctx context.Context, profile *domain.Profile) error
 	PublishUserDeletedEvent(ctx context.Context, userID uuid.UUID) error
 }

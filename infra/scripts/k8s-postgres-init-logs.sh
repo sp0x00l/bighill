@@ -3,7 +3,7 @@ set -euo pipefail
 
 ENVIRONMENT="${1:-}"
 JOB_NAME="${2:-ml-ops-infra-ml-ops-services-postgres-bootstrap}"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-eu-west-1}"
 
 if [ -z "$ENVIRONMENT" ]; then
   echo "Usage: $0 [staging|prod] [job-name-optional]"

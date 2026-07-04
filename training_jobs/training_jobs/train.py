@@ -5,6 +5,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
+from training_jobs.config import read_storage_config
 from training_jobs.manifest import TrainingArtifactManifest
 from training_jobs.storage import upload_directory, write_json_bytes
 
@@ -53,6 +54,7 @@ def main() -> None:
     serving_model = os.environ.get("TRAINING_SERVING_MODEL", "").strip()
     serving_load_status = os.environ.get("TRAINING_SERVING_LOAD_STATUS", "NOT_LOADED").strip()
     command = required["TRAINING_AXOLOTL_COMMAND"]
+    storage_config = read_storage_config()
 
     work_dir = Path(os.environ.get("TRAINING_JOB_WORK_DIR", f"/tmp/training_jobs/{training_run_id}")).resolve()
     output_dir = work_dir / "adapter"
@@ -61,7 +63,7 @@ def main() -> None:
     recipe_path.write_text(recipe_with_local_output(recipe_yaml, output_dir), encoding="utf-8")
 
     run_training_command(command, recipe_path, output_dir)
-    artifact = upload_directory(output_dir, model_uri)
+    artifact = upload_directory(output_dir, model_uri, storage_config)
     manifest = TrainingArtifactManifest(
         training_run_id=training_run_id,
         model_uri=model_uri,
@@ -77,7 +79,7 @@ def main() -> None:
         serving_load_status=serving_load_status,
         recipe_hash=recipe_hash,
     )
-    write_json_bytes(manifest_uri, manifest.to_json())
+    write_json_bytes(manifest_uri, manifest.to_json(), storage_config)
 
 
 def recipe_with_local_output(recipe_yaml: str, output_dir: Path) -> str:

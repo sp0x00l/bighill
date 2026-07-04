@@ -3,18 +3,15 @@
 set -euo pipefail
 
 install() {
-    local CURRENT_DIR
-    CURRENT_DIR=$(pwd)
-    local SCRIPT_DIR
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local PROJECT_ROOT
-    PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+    local CURRENT_DIR=$(pwd)
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
     local DATA_CONTRACT_ROOT=$PROJECT_ROOT/data_contracts
 
     mkdir -p "$DATA_CONTRACT_ROOT/build/protobufs"
     cd "$DATA_CONTRACT_ROOT/build/protobufs"
 
-    # Prepare module used by services via replace lib/data_contracts_lib => ../data_contracts/build/protobufs
+
     cat > go.mod <<'EOF'
 module lib/data_contracts_lib
 

@@ -80,9 +80,6 @@ func (s *userPublisherStub) PublishUserCreatedEvent(context.Context, *domain.Pro
 	s.createdCalled = true
 	return nil
 }
-func (s *userPublisherStub) PublishEmailVerificationRequestedEvent(context.Context, *domain.ProfileAccount) error {
-	return nil
-}
 func (s *userPublisherStub) PublishUserUpdatedEvent(context.Context, *domain.Profile) error {
 	return nil
 }

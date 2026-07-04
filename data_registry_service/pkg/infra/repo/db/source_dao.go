@@ -54,6 +54,55 @@ type Dataset struct {
 	IdempotencyKey pgtype.UUID `db:"idempotency_key"`
 }
 
+type datasetScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanDatasetDAO(row datasetScanner) (*DatasetDAO, error) {
+	log.Trace("DatasetDAO scanDatasetDAO")
+
+	var dataset DatasetDAO
+	err := row.Scan(
+		&dataset.ID,
+		&dataset.UserID,
+		&dataset.Title,
+		&dataset.Description,
+		&dataset.Origin,
+		&dataset.Location,
+		&dataset.SourceType,
+		&dataset.SourceConnectorID,
+		&dataset.SourceQuery,
+		&dataset.SourceDatabase,
+		&dataset.SourceCollection,
+		&dataset.Status,
+		&dataset.Category,
+		&dataset.TableNamespace,
+		&dataset.TableName,
+		&dataset.TableFormat,
+		&dataset.CatalogProvider,
+		&dataset.ProcessingProfile,
+		&dataset.SchemaVersion,
+		&dataset.SchemaMetadata,
+		&dataset.ProcessingState,
+		&dataset.DatasetVersion,
+		&dataset.RawSnapshotID,
+		&dataset.FeatureSnapshotID,
+		&dataset.EmbeddingSnapshotID,
+		&dataset.VectorStore,
+		&dataset.CollectionName,
+		&dataset.EmbeddingDimensions,
+		&dataset.EmbeddingCount,
+		&dataset.EmbeddingStrategyVersion,
+		&dataset.EmbeddingChunkerName,
+		&dataset.EmbeddingChunkerVersion,
+		&dataset.EmbeddingChunkSize,
+		&dataset.EmbeddingChunkOverlap,
+		&dataset.EmbeddingProvider,
+		&dataset.EmbeddingModel,
+	)
+	return &dataset, err
+}
+
 func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 	log.Trace("DatasetDAO toDAO")
 

@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,7 +46,23 @@ type registryConfig struct {
 	Topic                 string
 	ProfileTopic          string
 	MaterializationTopics registrymessaging.MaterializationTopics
+	Catalog               catalogConfig
 	Health                healthConfig
+}
+
+type catalogConfig struct {
+	Provider            string
+	PolarisBaseURL      string
+	PolarisTokenURL     string
+	PolarisClientID     string
+	PolarisClientSecret string
+	PolarisScope        string
+	PolarisCatalog      string
+	PolarisBaseLocation string
+	PolarisRegion       string
+	PolarisStorageURL   string
+	PolarisPathStyle    bool
+	PolarisTimeout      time.Duration
 }
 
 type healthConfig struct {
@@ -133,10 +150,10 @@ func main() {
 	)
 	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 
-	datasetUseCase := usecase.NewDatasetUseCase(datasetDB)
 	encoder := serializers.NewJSONSerializer()
 
-	catalogClient := catalogclient.NewLocalCatalogClient()
+	catalogClient, tableCatalog := newCatalogAdapters(cfg.Catalog)
+	datasetUseCase := usecase.NewDatasetUseCase(datasetDB, usecase.WithDatasetTableCatalog(tableCatalog))
 	sourceConnectorUseCase := usecase.NewSourceUsecase(sourceConnectorDB, catalogClient)
 	connectorRestDTOAdapter := adapter.NewRestSourceConnDTOAdapter(adapter.GetConnCfgToDTOFunc, adapter.GetConnCfgFromDTOFunc, encoder)
 	filtersAdapter := adapter.NewFilterDTOAdapter()
@@ -148,7 +165,7 @@ func main() {
 	log.Infof("%s API gRPC port: %d", serviceName, cfg.GRPCPort)
 
 	restService := rest.NewService(routes, cfg.HTTPPort, serviceName)
-	grpcService := registrygrpc.NewDataRegistryGrpcServer(sourceConnectorUseCase)
+	grpcService := registrygrpc.NewDataRegistryGrpcServer(datasetUseCase, sourceConnectorUseCase)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
@@ -271,6 +288,20 @@ func readRegistryConfig() registryConfig {
 		MaterializationTopics: registrymessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC", "feature_materializer"),
 		},
+		Catalog: catalogConfig{
+			Provider:            env.WithDefaultString("DATA_REGISTRY_SERVICE_CATALOG_PROVIDER", "local"),
+			PolarisBaseURL:      env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_BASE_URL", "http://localhost:8181"),
+			PolarisTokenURL:     env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_TOKEN_URL", ""),
+			PolarisClientID:     env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_CLIENT_ID", ""),
+			PolarisClientSecret: env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_CLIENT_SECRET", ""),
+			PolarisScope:        env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_SCOPE", "PRINCIPAL_ROLE:ALL"),
+			PolarisCatalog:      env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_CATALOG", "bighill"),
+			PolarisBaseLocation: env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_BASE_LOCATION", "s3://bighill-mlops-lakehouse/"),
+			PolarisRegion:       env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_REGION", "eu-west-1"),
+			PolarisStorageURL:   env.WithDefaultString("DATA_REGISTRY_SERVICE_POLARIS_STORAGE_ENDPOINT", "http://polaris-object-store:9000"),
+			PolarisPathStyle:    env.WithDefaultBool("DATA_REGISTRY_SERVICE_POLARIS_STORAGE_PATH_STYLE", true),
+			PolarisTimeout:      time.Duration(env.WithDefaultInt("DATA_REGISTRY_SERVICE_POLARIS_TIMEOUT_SECONDS", "15")) * time.Second,
+		},
 		Health: healthConfig{
 			CpuThresholdPercentage:                    env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercentage:                env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
@@ -284,6 +315,53 @@ func readRegistryConfig() registryConfig {
 			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
 			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
 		},
+	}
+}
+
+func newCatalogAdapters(cfg catalogConfig) (usecase.CatalogClientAdapter, usecase.DatasetTableCatalogAdapter) {
+	log.Trace("newCatalogAdapters")
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "", "local":
+		local := catalogclient.NewLocalCatalogClient()
+		return local, local
+	case "polaris":
+		validatePolarisCatalogConfig(cfg)
+		polaris := catalogclient.NewPolarisCatalogClient(catalogclient.PolarisCatalogConfig{
+			BaseURL:             cfg.PolarisBaseURL,
+			TokenURL:            cfg.PolarisTokenURL,
+			ClientID:            cfg.PolarisClientID,
+			ClientSecret:        cfg.PolarisClientSecret,
+			Scope:               cfg.PolarisScope,
+			Catalog:             cfg.PolarisCatalog,
+			DefaultBaseLocation: cfg.PolarisBaseLocation,
+			StorageRegion:       cfg.PolarisRegion,
+			StorageEndpoint:     cfg.PolarisStorageURL,
+			StoragePathStyle:    cfg.PolarisPathStyle,
+			Timeout:             cfg.PolarisTimeout,
+		}, nil)
+		return polaris, polaris
+	default:
+		log.Fatalf("unsupported catalog provider %q", cfg.Provider)
+		return nil, nil
+	}
+}
+
+func validatePolarisCatalogConfig(cfg catalogConfig) {
+	log.Trace("validatePolarisCatalogConfig")
+
+	required := map[string]string{
+		"DATA_REGISTRY_SERVICE_POLARIS_BASE_URL":         cfg.PolarisBaseURL,
+		"DATA_REGISTRY_SERVICE_POLARIS_CLIENT_ID":        cfg.PolarisClientID,
+		"DATA_REGISTRY_SERVICE_POLARIS_CLIENT_SECRET":    cfg.PolarisClientSecret,
+		"DATA_REGISTRY_SERVICE_POLARIS_CATALOG":          cfg.PolarisCatalog,
+		"DATA_REGISTRY_SERVICE_POLARIS_BASE_LOCATION":    cfg.PolarisBaseLocation,
+		"DATA_REGISTRY_SERVICE_POLARIS_STORAGE_ENDPOINT": cfg.PolarisStorageURL,
+	}
+	for key, value := range required {
+		if strings.TrimSpace(value) == "" {
+			log.Fatalf("%s is required when DATA_REGISTRY_SERVICE_CATALOG_PROVIDER=polaris", key)
+		}
 	}
 }
 

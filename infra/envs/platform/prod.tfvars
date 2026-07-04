@@ -1,5 +1,5 @@
 env_name = "prod"
-region   = "us-east-1"
+region   = "eu-west-1"
 
 cluster_admin_arns = []
 

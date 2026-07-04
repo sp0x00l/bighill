@@ -3,7 +3,7 @@ set -euo pipefail
 
 DOMAIN="bighill-artifacts"
 REPOSITORY="cpp-libs"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-eu-west-1}"
 
 upload_pdf_extractor_lib() {
     local ARCH="${1:-arm64}"

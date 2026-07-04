@@ -349,7 +349,7 @@ func readIngestionConfig() ingestionConfig {
 		UploadSessionTTL:              time.Duration(env.WithDefaultInt("INGESTION_SERVICE_UPLOAD_SESSION_TTL_SECONDS", "900")) * time.Second,
 		UploadValidationReadMaxBytes:  validationReadMaxMB * 1000 * 1000,
 		BucketName:                    env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_NAME", "local-dev-bucket"),
-		BucketRegion:                  env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_REGION", "local-dev"),
+		BucketRegion:                  env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_REGION", "eu-west-1"),
 		BucketUploadPartSize:          uploadPartSizeMB * 1024 * 1024,
 		DBName:                        dbName,
 		DBConnectionString:            dbConnectionString,

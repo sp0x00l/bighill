@@ -44,6 +44,7 @@ type materializerConfig struct {
 	ArtifactBucket       artifactBucketConfig
 	Embedding            embeddingConfig
 	DataStream           dataStreamConfig
+	Iceberg              icebergConfig
 	Temporal             temporalConfig
 	GRPCPort             int
 	DatasetUploadedTopic string
@@ -86,6 +87,22 @@ type dataStreamConfig struct {
 	CACertPath     string
 	ClientCertPath string
 	ClientKeyPath  string
+}
+
+type icebergConfig struct {
+	WriterBinaryPath  string
+	WriterTimeout     time.Duration
+	PolarisBaseURL    string
+	PolarisCatalog    string
+	PolarisWarehouse  string
+	PolarisCredential string
+	PolarisToken      string
+	PolarisScope      string
+	S3Endpoint        string
+	S3AccessKeyID     string
+	S3SecretAccessKey string
+	S3Region          string
+	S3PathStyle       bool
 }
 
 type temporalConfig struct {
@@ -194,7 +211,6 @@ func main() {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create artifact store")
 	}
 
-	rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
 	dataStreamReader := materialization.NewFlightDataStreamReaderWithConfig(materialization.FlightDataStreamReaderConfig{
 		Address:        cfg.DataStream.Address,
 		Timeout:        cfg.DataStream.RequestTimeout,
@@ -205,8 +221,28 @@ func main() {
 		ClientCertPath: cfg.DataStream.ClientCertPath,
 		ClientKeyPath:  cfg.DataStream.ClientKeyPath,
 	})
-	dataStreamRawWriter := materialization.NewDataStreamRawSnapshotWriter(artifactStore, dataStreamReader)
-	featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
+	icebergWriter := materialization.NewExternalIcebergTableWriter(materialization.ExternalIcebergTableWriterConfig{
+		BinaryPath:        cfg.Iceberg.WriterBinaryPath,
+		Timeout:           cfg.Iceberg.WriterTimeout,
+		PolarisBaseURL:    cfg.Iceberg.PolarisBaseURL,
+		PolarisCatalog:    cfg.Iceberg.PolarisCatalog,
+		PolarisWarehouse:  cfg.Iceberg.PolarisWarehouse,
+		PolarisCredential: cfg.Iceberg.PolarisCredential,
+		PolarisToken:      cfg.Iceberg.PolarisToken,
+		PolarisScope:      cfg.Iceberg.PolarisScope,
+		S3Endpoint:        cfg.Iceberg.S3Endpoint,
+		S3AccessKeyID:     cfg.Iceberg.S3AccessKeyID,
+		S3SecretAccessKey: cfg.Iceberg.S3SecretAccessKey,
+		S3Region:          cfg.Iceberg.S3Region,
+		S3PathStyle:       cfg.Iceberg.S3PathStyle,
+	})
+	rawWriter := materialization.NewRawSnapshotWriter(artifactStore, materialization.WithRawIcebergTableWriter(icebergWriter))
+	dataStreamRawWriter := materialization.NewDataStreamRawSnapshotWriter(
+		artifactStore,
+		dataStreamReader,
+		materialization.WithDataStreamRawIcebergTableWriter(icebergWriter),
+	)
+	featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore, materialization.WithFeatureIcebergTableWriter(icebergWriter))
 	embeddingStrategy := embeddingStrategyFromConfig(cfg.Embedding)
 	embeddingProvider, err := newEmbeddingProvider(cfg.Embedding)
 	if err != nil {
@@ -336,7 +372,7 @@ func readMaterializerConfig() materializerConfig {
 		},
 		ArtifactBucket: artifactBucketConfig{
 			Name:           env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME", "local-dev-bucket"),
-			Region:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION", "local-dev"),
+			Region:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION", "eu-west-1"),
 			UploadPartSize: uploadPartSizeMB * 1024 * 1024,
 		},
 		Embedding: embeddingConfig{
@@ -365,6 +401,21 @@ func readMaterializerConfig() materializerConfig {
 			CACertPath:     env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CA_CERT_PATH", ""),
 			ClientCertPath: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CLIENT_CERT_PATH", ""),
 			ClientKeyPath:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CLIENT_KEY_PATH", ""),
+		},
+		Iceberg: icebergConfig{
+			WriterBinaryPath:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ICEBERG_WRITER_BINARY_PATH", "/usr/local/bin/datafusion_query_engine"),
+			WriterTimeout:     secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_ICEBERG_WRITER_TIMEOUT_SECONDS", "120"),
+			PolarisBaseURL:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_BASE_URL", "http://localhost:8181"),
+			PolarisCatalog:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_CATALOG", "bighill"),
+			PolarisWarehouse:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_WAREHOUSE", "s3://bighill-mlops-lakehouse/"),
+			PolarisCredential: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_CREDENTIAL", ""),
+			PolarisToken:      env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_TOKEN", ""),
+			PolarisScope:      env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_SCOPE", "PRINCIPAL_ROLE:ALL"),
+			S3Endpoint:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_ENDPOINT", "http://localhost:9100"),
+			S3AccessKeyID:     env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_ACCESS_KEY_ID", "polaris_root"),
+			S3SecretAccessKey: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_SECRET_ACCESS_KEY", "polaris_pass"),
+			S3Region:          env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_REGION", "eu-west-1"),
+			S3PathStyle:       env.WithDefaultBool("FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_PATH_STYLE", true),
 		},
 		Temporal: temporalConfig{
 			Address:   env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),

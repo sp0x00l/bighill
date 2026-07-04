@@ -5,7 +5,7 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 . $BIGHILL_ROOT/database/scripts/config.sh $1
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
-    export INGESTION_SERVICE_FILES_BUCKET_REGION=local-dev
+    export INGESTION_SERVICE_FILES_BUCKET_REGION=eu-west-1
     export INGESTION_SERVICE_FILES_BUCKET_NAME=local-dev-bucket
     export INGESTION_SERVICE_DLQ=http://localhost:4566/ingestion-dev-env-queue/
     export INGESTION_SERVICE_OUTBOX=postgres

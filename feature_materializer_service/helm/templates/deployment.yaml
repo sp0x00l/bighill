@@ -119,6 +119,46 @@ spec:
               value: {{ .Values.env.dataStreamTlsClientCertPath | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_TLS_CLIENT_KEY_PATH
               value: {{ .Values.env.dataStreamTlsClientKeyPath | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_ICEBERG_WRITER_BINARY_PATH
+              value: {{ .Values.env.icebergWriterBinaryPath | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_ICEBERG_WRITER_TIMEOUT_SECONDS
+              value: {{ .Values.env.icebergWriterTimeoutSeconds | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_BASE_URL
+              value: {{ .Values.env.polarisBaseUrl | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_CATALOG
+              value: {{ .Values.env.polarisCatalog | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_WAREHOUSE
+              value: {{ .Values.env.polarisWarehouse | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_CREDENTIAL
+{{- if .Values.env.polarisCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.polarisCredentialsSecret.name }}
+                  key: {{ .Values.env.polarisCredentialsSecret.credentialKey }}
+{{- else }}
+              value: {{ .Values.env.polarisCredential | quote }}
+{{- end }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_TOKEN
+{{- if .Values.env.polarisCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.polarisCredentialsSecret.name }}
+                  key: {{ .Values.env.polarisCredentialsSecret.tokenKey }}
+{{- else }}
+              value: {{ .Values.env.polarisToken | quote }}
+{{- end }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_SCOPE
+              value: {{ .Values.env.polarisScope | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_ENDPOINT
+              value: {{ .Values.env.polarisStorageEndpoint | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_ACCESS_KEY_ID
+              value: {{ .Values.env.polarisStorageAccessKeyId | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_SECRET_ACCESS_KEY
+              value: {{ .Values.env.polarisStorageSecretAccessKey | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_REGION
+              value: {{ .Values.env.polarisStorageRegion | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_PATH_STYLE
+              value: {{ .Values.env.polarisStoragePathStyle | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DB_HOST
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:

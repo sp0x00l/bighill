@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,6 +59,64 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			expectSchemaField(g, metadata, "title")
 			expectSchemaField(g, metadata, "views")
 		}, 45*time.Second, 1*time.Second).Should(Succeed())
+	})
+
+	It("uploads a downloaded open dataset and streams the materialized table through Data Stream Flight", func() {
+		createPayload := map[string]any{
+			"title":             "Open Iris Measurements",
+			"description":       "Small open CSV fixture uploaded and queried through the lakehouse stream path",
+			"category":          "flowers",
+			"tableNamespace":    "features",
+			"tableName":         "open_iris_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8],
+			"tableFormat":       "ICEBERG",
+			"catalogProvider":   "POLARIS",
+			"processingProfile": "GENERIC_PARQUET",
+		}
+
+		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
+		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		created := decodeObject(body)
+		datasetID := uuid.MustParse(stringField(created, "id"))
+
+		openDataset, err := os.ReadFile("data/open_iris.csv")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(openDataset).NotTo(BeEmpty())
+
+		Eventually(func(g Gomega) {
+			status, body := doMultipartFile(http.MethodPost, "/v1/data/store/"+datasetID.String(), "file", "open_iris.csv", openDataset, user.Token, uuid.New())
+			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		}, 30*time.Second, 1*time.Second).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			status, body := doJSON(http.MethodGet, "/v1/data/registry/"+datasetID.String(), nil, user.Token, uuid.Nil)
+			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+
+			read := decodeObject(body)
+			g.Expect(read["processingState"]).To(Equal("FEATURE_MATERIALIZED"))
+			g.Expect(read["tableFormat"]).To(Equal("ICEBERG"))
+			g.Expect(read["catalogProvider"]).To(Equal("POLARIS"))
+			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
+			metadata := schemaMetadataObject(g, read)
+			g.Expect(metadata["source_format"]).To(Equal("csv"))
+			g.Expect(metadata["rows"]).To(BeNumerically("==", 150))
+			expectSchemaField(g, metadata, "sepal_length")
+			expectSchemaField(g, metadata, "species")
+		}, 45*time.Second, 1*time.Second).Should(Succeed())
+
+		commandBytes, err := json.Marshal(map[string]string{
+			"userId":    user.ID.String(),
+			"datasetId": datasetID.String(),
+			"sql":       "SELECT species, sepal_length FROM dataset ORDER BY sepal_length DESC LIMIT 2",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			result := queryFlight(commandBytes)
+			g.Expect(result.RowCount).To(Equal(int64(2)))
+			g.Expect(result.Columns).To(Equal([]string{"species", "sepal_length"}))
+			g.Expect(result.FirstRow["species"]).NotTo(BeEmpty())
+			g.Expect(result.FirstRow["sepal_length"]).To(BeNumerically("==", 7.9))
+		}, 20*time.Second, 1*time.Second).Should(Succeed())
 	})
 
 	It("materializes a presigned upload session through staging validation and promotion", func() {

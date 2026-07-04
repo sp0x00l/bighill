@@ -7,7 +7,9 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
+from training_jobs.config import read_storage_config
 from training_jobs.manifest import EvaluationReportManifest, parse_profile
+from training_jobs.storage import StorageConfig
 from training_jobs.storage import artifact_info, read_json_bytes, write_json_bytes
 
 REQUIRED_ENV_KEYS = (
@@ -38,6 +40,10 @@ def main() -> None:
     report_uri = required["TRAINING_EVALUATION_REPORT_URI"]
     manifest_uri = required["TRAINING_EVALUATION_MANIFEST_URI"]
     profile = parse_profile(required["TRAINING_EVALUATION_PROFILE"])
+    openai_api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if openai_api_key and not str(profile.get("judge_api_key", "")).strip():
+        profile["judge_api_key"] = openai_api_key
+    storage_config = read_storage_config()
 
     work_dir = Path(os.environ.get("TRAINING_JOB_WORK_DIR", f"/tmp/training_jobs/{training_run_id}/eval")).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -51,9 +57,9 @@ def main() -> None:
         report.setdefault("evaluator_version", str(profile.get("evaluator_version", "external-v1")))
         report.setdefault("metric_suite", str(profile.get("metric_suite", "external")))
     elif evaluator_name == "ragas" or normalized_profile_value(profile, "metric_suite", default="") in {"ragas", "rag"}:
-        report = run_ragas_evaluator(model_uri, profile)
+        report = run_ragas_evaluator(model_uri, profile, storage_config)
     else:
-        report = built_in_evaluator(model_uri, profile)
+        report = built_in_evaluator(model_uri, profile, storage_config)
 
     manifest = EvaluationReportManifest(
         training_run_id=training_run_id,
@@ -72,9 +78,9 @@ def main() -> None:
         failure_reason=str(report.get("failure_reason", "")),
     )
     payload = manifest.to_json()
-    write_json_bytes(report_uri, payload)
+    write_json_bytes(report_uri, payload, storage_config)
     if manifest_uri != report_uri:
-        write_json_bytes(manifest_uri, payload)
+        write_json_bytes(manifest_uri, payload, storage_config)
 
 
 def run_external_evaluator(command: str, report_path: Path, model_uri: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -96,11 +102,11 @@ def run_external_evaluator(command: str, report_path: Path, model_uri: str, prof
     return report
 
 
-def built_in_evaluator(model_uri: str, profile: dict[str, Any]) -> dict[str, Any]:
-    artifact_info(model_uri)
+def built_in_evaluator(model_uri: str, profile: dict[str, Any], storage_config: StorageConfig) -> dict[str, Any]:
+    artifact_info(model_uri, storage_config)
     dataset_uri = str(profile.get("dataset_uri", "")).strip()
     if dataset_uri:
-        rows = evaluation_rows(dataset_uri)
+        rows = evaluation_rows(dataset_uri, storage_config)
         metrics = rag_style_metrics(rows)
     else:
         metrics = {
@@ -131,12 +137,12 @@ def built_in_evaluator(model_uri: str, profile: dict[str, Any]) -> dict[str, Any
     }
 
 
-def run_ragas_evaluator(model_uri: str, profile: dict[str, Any]) -> dict[str, Any]:
-    artifact_info(model_uri)
+def run_ragas_evaluator(model_uri: str, profile: dict[str, Any], storage_config: StorageConfig) -> dict[str, Any]:
+    artifact_info(model_uri, storage_config)
     dataset_uri = str(profile.get("dataset_uri", "")).strip()
     if not dataset_uri:
         raise RuntimeError("ragas evaluation requires dataset_uri")
-    rows = evaluation_rows(dataset_uri)
+    rows = evaluation_rows(dataset_uri, storage_config)
     dataset = ragas_dataset(rows)
     metrics = ragas_metrics(profile)
     llm = ragas_llm(profile)
@@ -160,8 +166,8 @@ def run_ragas_evaluator(model_uri: str, profile: dict[str, Any]) -> dict[str, An
     }
 
 
-def evaluation_rows(dataset_uri: str) -> list[dict[str, Any]]:
-    raw = read_json_bytes(dataset_uri).decode("utf-8")
+def evaluation_rows(dataset_uri: str, storage_config: StorageConfig) -> list[dict[str, Any]]:
+    raw = read_json_bytes(dataset_uri, storage_config).decode("utf-8")
     rows: list[dict[str, Any]] = []
     for line in raw.splitlines():
         stripped = line.strip()
@@ -237,7 +243,7 @@ def ragas_llm(profile: dict[str, Any]) -> Any:
         return None
     provider = str(profile.get("judge_provider", "openai")).strip() or "openai"
     base_url = str(profile.get("judge_base_url", "")).strip()
-    api_key = str(profile.get("judge_api_key", os.environ.get("OPENAI_API_KEY", "not-needed"))).strip()
+    api_key = str(profile.get("judge_api_key", "not-needed")).strip()
     if provider != "openai":
         return None
     try:

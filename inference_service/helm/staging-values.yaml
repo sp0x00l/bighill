@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  repository: "385800116362.dkr.ecr.us-east-1.amazonaws.com/bighill/mlops/inference-service"
+  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops/inference-service"
   tag: "0.0.1"
   pullPolicy: Always
 service:

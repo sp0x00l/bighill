@@ -12,13 +12,30 @@ import (
 )
 
 type RawSnapshotWriter struct {
-	store ArtifactStore
+	store         ArtifactStore
+	icebergWriter IcebergTableWriter
 }
 
-func NewRawSnapshotWriter(store ArtifactStore) *RawSnapshotWriter {
+type RawSnapshotWriterOption func(*RawSnapshotWriter)
+
+func WithRawIcebergTableWriter(writer IcebergTableWriter) RawSnapshotWriterOption {
+	log.Trace("WithRawIcebergTableWriter")
+
+	return func(rawWriter *RawSnapshotWriter) {
+		rawWriter.icebergWriter = writer
+	}
+}
+
+func NewRawSnapshotWriter(store ArtifactStore, opts ...RawSnapshotWriterOption) *RawSnapshotWriter {
 	log.Trace("NewRawSnapshotWriter")
 
-	return &RawSnapshotWriter{store: store}
+	writer := &RawSnapshotWriter{store: store}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(writer)
+		}
+	}
+	return writer
 }
 
 func (w *RawSnapshotWriter) SupportsRawSnapshot(datasetFile *model.DatasetFile) bool {
@@ -48,13 +65,28 @@ func (w *RawSnapshotWriter) WriteRawSnapshot(ctx context.Context, datasetFile *m
 
 	out := *rawSnapshot
 	out.StorageLocation = location
-	out.TableFormat = "PARQUET"
+	out.TableFormat = datasetFile.TableFormat
+	out.CatalogProvider = datasetFile.CatalogProvider
 	out.ProcessingProfile = datasetFile.ProcessingProfile
 	out.SchemaVersion = artifact.SchemaVersion
 	out.SchemaMetadata = artifact.SchemaMetadata
 	out.Status = model.SnapshotStatusReady
 	if out.TableNamespace == "" || out.TableName == "" {
 		return nil, domain.ErrValidationFailed.Extend("raw snapshot table reference is required")
+	}
+	if isPolarisIceberg(out.CatalogProvider, out.TableFormat) {
+		if w.icebergWriter == nil {
+			return nil, domain.ErrCatalogRegister.Extend("iceberg table writer is required")
+		}
+		result, err := w.icebergWriter.WriteTable(ctx, IcebergTableWriteRequest{
+			Namespace:   out.TableNamespace,
+			Table:       out.TableName,
+			ParquetData: artifact.Data,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%w: write iceberg raw table: %w", domain.ErrCatalogRegister, err)
+		}
+		out.SchemaMetadata = mergeIcebergWriteMetadata(out.SchemaMetadata, result)
 	}
 	return &out, nil
 }

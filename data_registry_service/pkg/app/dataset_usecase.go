@@ -2,7 +2,9 @@ package usecase
 
 import (
 	"context"
+	"strings"
 
+	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
 	corePagination "lib/shared_lib/transport"
@@ -15,9 +17,6 @@ import (
 
 type DatasetUsecase interface {
 	CreateDataset(ctx context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) error
-	ReadPublishedDatasets(ctx context.Context, pagination corePagination.Pagination, filters []model.Filter) ([]*model.Dataset, int, error)
-	ReadPublishedDatasetByID(ctx context.Context, ID uuid.UUID) (*model.Dataset, error)
-	ReadPublishedDatasetsByUserID(ctx context.Context, userID uuid.UUID, pagination corePagination.Pagination, filters []model.Filter) ([]*model.Dataset, int, error)
 	ReadDatasetsForUser(ctx context.Context, userID uuid.UUID, pagination corePagination.Pagination, filters []model.Filter) ([]*model.Dataset, int, error)
 	ReadDatasetForUser(ctx context.Context, ID uuid.UUID, userID uuid.UUID) (*model.Dataset, error)
 	DeleteDataset(ctx context.Context, ID uuid.UUID, userID uuid.UUID) error
@@ -25,18 +24,34 @@ type DatasetUsecase interface {
 	ReplaceDataset(ctx context.Context, dataset *model.Dataset) (*model.Dataset, error)
 	AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, error)
 	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error)
+	ReadDatasetTable(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, snapshotID string) (*model.Dataset, error)
 }
 
 type datasetUseCase struct {
 	datasetsRepository DatasetRepositoryAdapter
+	tableCatalog       DatasetTableCatalogAdapter
 }
 
-func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter) *datasetUseCase {
+type DatasetUsecaseOption func(*datasetUseCase)
+
+func WithDatasetTableCatalog(tableCatalog DatasetTableCatalogAdapter) DatasetUsecaseOption {
+	return func(u *datasetUseCase) {
+		u.tableCatalog = tableCatalog
+	}
+}
+
+func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter, opts ...DatasetUsecaseOption) *datasetUseCase {
 	log.Trace("NewDatasetUseCase")
 
-	return &datasetUseCase{
+	usecase := &datasetUseCase{
 		datasetsRepository: datasetsRepository,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(usecase)
+		}
+	}
+	return usecase
 }
 
 func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) (err error) {
@@ -58,41 +73,6 @@ func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Datas
 	model.NormalizeDatasetMetadata(dataset)
 
 	return u.datasetsRepository.Create(ctx, dataset, idempotencyKey)
-}
-
-func (u *datasetUseCase) ReadPublishedDatasets(ctx context.Context, pagination corePagination.Pagination, filters []model.Filter) (datasets []*model.Dataset, total int, err error) {
-	log.Trace("DatasetUseCase ReadPublishedDatasets")
-
-	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_published_datasets",
-		attribute.Int("filter_count", len(filters)),
-	)
-	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
-
-	return u.datasetsRepository.ReadPublished(ctx, pagination, filters)
-}
-
-func (u *datasetUseCase) ReadPublishedDatasetByID(ctx context.Context, datasetID uuid.UUID) (dataset *model.Dataset, err error) {
-	log.Trace("DatasetUsecase ReadPublishedDatasetByID")
-
-	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_published_dataset_by_id",
-		attribute.String("dataset_id", datasetID.String()),
-	)
-	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
-
-	return u.datasetsRepository.ReadPublishedByID(ctx, datasetID)
-}
-
-func (u *datasetUseCase) ReadPublishedDatasetsByUserID(ctx context.Context, userID uuid.UUID, pagination corePagination.Pagination, filters []model.Filter) (datasets []*model.Dataset, total int, err error) {
-	log.Trace("DatasetUseCase ReadPublishedDatasetsByUserID")
-
-	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_published_datasets_by_user_id",
-		attribute.String("user_id", userID.String()),
-		attribute.Int("filter_count", len(filters)),
-	)
-	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
-
-	ctx = ctxutil.WithTenantID(ctx, userID)
-	return u.datasetsRepository.ReadPublishedByUserID(ctx, userID, pagination, filters)
 }
 
 func (u *datasetUseCase) ReadDatasetsForUser(ctx context.Context, userID uuid.UUID, pagination corePagination.Pagination, filters []model.Filter) (datasets []*model.Dataset, total int, err error) {
@@ -119,6 +99,30 @@ func (u *datasetUseCase) ReadDatasetForUser(ctx context.Context, datasetID uuid.
 
 	ctx = ctxutil.WithTenantID(ctx, userID)
 	return u.datasetsRepository.ReadByID(ctx, datasetID, userID)
+}
+
+func (u *datasetUseCase) ReadDatasetTable(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, snapshotID string) (dataset *model.Dataset, err error) {
+	log.Trace("DatasetUsecase ReadDatasetTable")
+
+	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.read_dataset_table",
+		attribute.String("dataset_id", datasetID.String()),
+		attribute.String("user_id", userID.String()),
+		attribute.String("snapshot_id", snapshotID),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	if strings.TrimSpace(snapshotID) != "" {
+		return nil, domainErrors.ErrValidationFailed.Extend("snapshot-pinned dataset table reads are not supported")
+	}
+	ctx = ctxutil.WithTenantID(ctx, userID)
+	dataset, err = u.datasetsRepository.ReadByID(ctx, datasetID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !isQueryableDatasetTable(dataset) {
+		return nil, domainErrors.ErrValidationFailed.Extend("dataset table is not materialized")
+	}
+	return dataset, nil
 }
 
 func (u *datasetUseCase) DeleteDataset(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) (err error) {
@@ -204,4 +208,19 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 		ctx = ctxutil.WithTenantID(ctx, materialized.UserID)
 	}
 	return u.datasetsRepository.RecordMaterialization(ctx, materialized, state)
+}
+
+func isQueryableDatasetTable(dataset *model.Dataset) bool {
+	log.Trace("isQueryableDatasetTable")
+
+	if dataset == nil {
+		return false
+	}
+	if dataset.ProcessingState != model.DatasetProcessingFeatureMaterialized &&
+		dataset.ProcessingState != model.DatasetProcessingEmbeddingsMaterialized {
+		return false
+	}
+	return strings.TrimSpace(dataset.Location) != "" &&
+		strings.TrimSpace(dataset.TableNamespace) != "" &&
+		strings.TrimSpace(dataset.TableName) != ""
 }

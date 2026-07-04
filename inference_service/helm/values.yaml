@@ -64,7 +64,7 @@ env:
   preferenceDatasetUriTemplate: "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl"
   preferenceDatasetMinExamples: "1"
   preferenceDatasetLimit: "1000"
-  preferenceDatasetBucketRegion: "local-dev"
+  preferenceDatasetBucketRegion: "eu-west-1"
   preferenceDatasetUploadPartSizeMb: "10"
   promptStrategyVersion: "rag-prompt-v1"
   promptMaxContextTokens: "3000"

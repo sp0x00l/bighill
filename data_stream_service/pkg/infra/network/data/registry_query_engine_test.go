@@ -29,6 +29,10 @@ func (s *dataRegistryClientStub) ReadSourceConnector(_ context.Context, _ uuid.U
 	return s.connector, nil
 }
 
+func (s *dataRegistryClientStub) ReadDatasetTable(context.Context, uuid.UUID, uuid.UUID, string) (*dataregistrypb.ReadDatasetTableResponse, error) {
+	return nil, fmt.Errorf("should not be called")
+}
+
 func (s *dataRegistryClientStub) Close() error {
 	return nil
 }

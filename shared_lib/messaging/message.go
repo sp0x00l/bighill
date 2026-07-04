@@ -16,7 +16,7 @@ const (
 	MsgTypeUserCreated
 	MsgTypeUserUpdated
 	MsgTypeUserDeleted
-	MsgTypeEmailVerificationRequested
+	msgTypeEmailVerificationRequestedDeprecated
 	MsgTypeDatasetFileUploaded
 	MsgTypeRawSnapshotReady
 	msgTypeFeatureSnapshotBuildRequestedDeprecated
@@ -34,22 +34,21 @@ const (
 )
 
 var msgType = map[MsgType]string{
-	MsgTypeUserCreated:                "user_created",
-	MsgTypeUserUpdated:                "user_updated",
-	MsgTypeUserDeleted:                "user_deleted",
-	MsgTypeEmailVerificationRequested: "email_verification_requested",
-	MsgTypeDatasetFileUploaded:        "dataset_file_uploaded",
-	MsgTypeRawSnapshotReady:           "raw_snapshot_ready",
-	MsgTypeFeatureSnapshotReady:       "feature_snapshot_ready",
-	MsgTypeEmbeddingSnapshotReady:     "embedding_snapshot_ready",
-	MsgTypeDatasetCreated:             "dataset_created",
-	MsgTypeDatasetDeleted:             "dataset_deleted",
-	MsgTypeDatasetUpdated:             "dataset_updated",
-	MsgTypeModelTrainingCompleted:     "model_training_completed",
-	MsgTypeModelTrainingFailed:        "model_training_failed",
-	MsgTypeModelUpdated:               "model_updated",
-	MsgTypePreferenceDatasetReady:     "preference_dataset_ready",
-	MsgTypeModelArtifactIngested:      "model_artifact_ingested",
+	MsgTypeUserCreated:            "user_created",
+	MsgTypeUserUpdated:            "user_updated",
+	MsgTypeUserDeleted:            "user_deleted",
+	MsgTypeDatasetFileUploaded:    "dataset_file_uploaded",
+	MsgTypeRawSnapshotReady:       "raw_snapshot_ready",
+	MsgTypeFeatureSnapshotReady:   "feature_snapshot_ready",
+	MsgTypeEmbeddingSnapshotReady: "embedding_snapshot_ready",
+	MsgTypeDatasetCreated:         "dataset_created",
+	MsgTypeDatasetDeleted:         "dataset_deleted",
+	MsgTypeDatasetUpdated:         "dataset_updated",
+	MsgTypeModelTrainingCompleted: "model_training_completed",
+	MsgTypeModelTrainingFailed:    "model_training_failed",
+	MsgTypeModelUpdated:           "model_updated",
+	MsgTypePreferenceDatasetReady: "preference_dataset_ready",
+	MsgTypeModelArtifactIngested:  "model_artifact_ingested",
 }
 
 func (m MsgType) String() string {

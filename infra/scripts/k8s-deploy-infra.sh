@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ENVIRONMENT="${1:-}"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-eu-west-1}"
 ONLY_SYNC_SECRETS="${ONLY_SYNC_SECRETS:-false}"
 SKIP_PRICE_ORACLE_ERCOT_SECRET_SYNC="${SKIP_PRICE_ORACLE_ERCOT_SECRET_SYNC:-false}"
 
@@ -782,7 +782,8 @@ ensure_polaris_service() {
     if [ -n "$ENDPOINTS" ]; then
       echo "Polaris catalog service has endpoints: $ENDPOINTS"
       echo "K8s pods can use polaris-catalog.$NAMESPACE.svc.cluster.local:8181"
-      return 0
+      bootstrap_polaris_catalog
+      return $?
     fi
     RETRIES=$((RETRIES - 1))
     echo "Waiting for Polaris catalog endpoints... ($RETRIES retries left)"
@@ -791,6 +792,70 @@ ensure_polaris_service() {
 
   echo "ERROR: Polaris catalog endpoints not ready"
   return 1
+}
+
+bootstrap_polaris_catalog() {
+  echo "Bootstrapping Polaris catalog and service credentials..."
+
+  local LOCAL_PORT="${POLARIS_BOOTSTRAP_LOCAL_PORT:-18181}"
+  local BOOTSTRAP_OUT
+  BOOTSTRAP_OUT=$(mktemp)
+  local PF_LOG
+  PF_LOG=$(mktemp)
+  local EXISTING_SERVICE_CREDENTIAL=""
+  local EXISTING_SERVICE_CREDENTIAL_ENCODED
+  EXISTING_SERVICE_CREDENTIAL_ENCODED=$(kubectl get secret polaris-client-credentials -n "$NAMESPACE" -o jsonpath='{.data.credential}' 2>/dev/null || true)
+  if [ -n "$EXISTING_SERVICE_CREDENTIAL_ENCODED" ]; then
+    EXISTING_SERVICE_CREDENTIAL=$(python3 -c 'import base64, sys; print(base64.b64decode(sys.argv[1]).decode())' "$EXISTING_SERVICE_CREDENTIAL_ENCODED")
+  fi
+
+  kubectl port-forward -n "$NAMESPACE" svc/polaris-catalog "$LOCAL_PORT:8181" >"$PF_LOG" 2>&1 &
+  local PF_PID=$!
+  sleep 3
+
+  POLARIS_BASE_URL="http://127.0.0.1:$LOCAL_PORT" \
+  POLARIS_ROOT_CLIENT_ID="${POLARIS_ROOT_CLIENT_ID:-root}" \
+  POLARIS_ROOT_CLIENT_SECRET="${POLARIS_ROOT_CLIENT_SECRET:-s3cr3t}" \
+  POLARIS_CATALOG="${POLARIS_CATALOG:-bighill}" \
+  POLARIS_WAREHOUSE="${POLARIS_WAREHOUSE:-s3://bighill-mlops-lakehouse/}" \
+  POLARIS_STORAGE_ENDPOINT="${POLARIS_STORAGE_ENDPOINT:-http://polaris-object-store:9000}" \
+  POLARIS_STORAGE_REGION="${POLARIS_STORAGE_REGION:-eu-west-1}" \
+  POLARIS_STORAGE_PATH_STYLE="${POLARIS_STORAGE_PATH_STYLE:-true}" \
+  POLARIS_SERVICE_PRINCIPAL="${POLARIS_SERVICE_PRINCIPAL:-bighill-services}" \
+  POLARIS_PRINCIPAL_ROLE="${POLARIS_PRINCIPAL_ROLE:-bighill-services}" \
+  POLARIS_CATALOG_ROLE="${POLARIS_CATALOG_ROLE:-bighill-catalog-writer}" \
+  POLARIS_SERVICE_CREDENTIAL="$EXISTING_SERVICE_CREDENTIAL" \
+  python3 "$PROJECT_ROOT/infra/scripts/polaris_bootstrap.py" >"$BOOTSTRAP_OUT"
+  local BOOTSTRAP_STATUS=$?
+
+  kill "$PF_PID" >/dev/null 2>&1 || true
+  wait "$PF_PID" >/dev/null 2>&1 || true
+
+  if [ $BOOTSTRAP_STATUS -ne 0 ]; then
+    echo "ERROR: Polaris bootstrap failed"
+    cat "$BOOTSTRAP_OUT" >&2 || true
+    cat "$PF_LOG" >&2 || true
+    rm -f "$BOOTSTRAP_OUT" "$PF_LOG"
+    return $BOOTSTRAP_STATUS
+  fi
+
+  local SERVICE_CREDENTIAL
+  SERVICE_CREDENTIAL=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["credential"])' "$BOOTSTRAP_OUT")
+  local SERVICE_CLIENT_ID
+  SERVICE_CLIENT_ID=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["client_id"])' "$BOOTSTRAP_OUT")
+  local SERVICE_CLIENT_SECRET
+  SERVICE_CLIENT_SECRET=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["client_secret"])' "$BOOTSTRAP_OUT")
+  kubectl create secret generic polaris-client-credentials \
+    -n "$NAMESPACE" \
+    --from-literal=credential="$SERVICE_CREDENTIAL" \
+    --from-literal=client_id="$SERVICE_CLIENT_ID" \
+    --from-literal=client_secret="$SERVICE_CLIENT_SECRET" \
+    --from-literal=token="" \
+    --dry-run=client \
+    -o yaml | kubectl apply -f -
+
+  rm -f "$BOOTSTRAP_OUT" "$PF_LOG"
+  echo "Polaris catalog bootstrap complete."
 }
 
 wait_for_kafka() {

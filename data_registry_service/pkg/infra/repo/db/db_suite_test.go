@@ -1,4 +1,4 @@
-package usecase_test
+package db
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestAppUseCases(t *testing.T) {
+func TestDB(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Data registry app unit test suite")
+	RunSpecs(t, "Data registry repository DB unit test suite")
 }

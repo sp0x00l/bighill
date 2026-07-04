@@ -47,7 +47,7 @@ var _ = Describe("Data Registry API", Ordered, func() {
 		Expect(status).To(Equal(http.StatusBadRequest), "body: %s", string(body))
 	})
 
-	It("lists, replaces, publishes, and reads the public dataset", func() {
+	It("lists, replaces, publishes, and reads the user's published dataset", func() {
 		status, body := doJSON(http.MethodGet, "/v1/data/registry?limit=10&page=1", nil, user.Token, uuid.Nil)
 		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 		list := decodeObject(body)
@@ -70,7 +70,7 @@ var _ = Describe("Data Registry API", Ordered, func() {
 		status, body = doJSON(http.MethodPatch, "/v1/data/registry/"+datasetID+"/publish", nil, user.Token, uuid.Nil)
 		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 
-		status, body = doJSON(http.MethodGet, "/v1/public/data/registry/"+datasetID, nil, "", uuid.Nil)
+		status, body = doJSON(http.MethodGet, "/v1/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
 		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 		published := decodeObject(body)
 		Expect(published["id"]).To(Equal(datasetID))

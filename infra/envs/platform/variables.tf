@@ -6,7 +6,7 @@ variable "env_name" {
 variable "region" {
   description = "AWS region"
   type        = string
-  default     = "us-east-1"
+  default     = "eu-west-1"
 }
 
 variable "kubernetes_namespace" {
@@ -24,7 +24,7 @@ variable "vpc_cidr" {
 variable "azs" {
   description = "Availability zones"
   type        = list(string)
-  default     = ["us-east-1a", "us-east-1b"]
+  default     = ["eu-west-1a", "eu-west-1b"]
 }
 
 variable "public_subnets" {

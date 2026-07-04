@@ -3,7 +3,7 @@ set -euo pipefail
 
 ENVIRONMENT="${1:-}"
 SERVICE_FILTER="${2:-}"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-eu-west-1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 

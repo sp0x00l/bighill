@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"testing"
 
 	usecase "data_registry_service/pkg/app"
 	"data_registry_service/pkg/domain/model"
@@ -13,18 +14,15 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+func TestAppUseCases(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Data registry app unit test suite")
+}
+
 type stubDatasetRepository struct {
 	createDataset        *model.Dataset
 	createIdempotencyKey uuid.UUID
 	createErr            error
-
-	readPublishedDatasets []*model.Dataset
-	readPublishedTotal    int
-	readPublishedErr      error
-
-	readPublishedByIDDatasetID uuid.UUID
-	readPublishedByIDDataset   *model.Dataset
-	readPublishedByIDErr       error
 
 	readDatasetID uuid.UUID
 	readUserID    uuid.UUID
@@ -56,6 +54,16 @@ type stubDatasetRepository struct {
 	replaceErr     error
 }
 
+type stubDatasetTableCatalog struct {
+	dataset *model.Dataset
+	err     error
+}
+
+func (s *stubDatasetTableCatalog) ValidateDatasetTable(_ context.Context, dataset *model.Dataset) error {
+	s.dataset = dataset
+	return s.err
+}
+
 func (s *stubDatasetRepository) Close() {}
 
 func (s *stubDatasetRepository) Create(_ context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) error {
@@ -64,21 +72,8 @@ func (s *stubDatasetRepository) Create(_ context.Context, dataset *model.Dataset
 	return s.createErr
 }
 
-func (s *stubDatasetRepository) ReadPublished(_ context.Context, _ core.Pagination, _ []model.Filter) ([]*model.Dataset, int, error) {
-	return s.readPublishedDatasets, s.readPublishedTotal, s.readPublishedErr
-}
-
-func (s *stubDatasetRepository) ReadPublishedByID(_ context.Context, datasetID uuid.UUID) (*model.Dataset, error) {
-	s.readPublishedByIDDatasetID = datasetID
-	return s.readPublishedByIDDataset, s.readPublishedByIDErr
-}
-
-func (s *stubDatasetRepository) ReadPublishedByUserID(_ context.Context, _ uuid.UUID, _ core.Pagination, _ []model.Filter) ([]*model.Dataset, int, error) {
-	return s.readPublishedDatasets, s.readPublishedTotal, s.readPublishedErr
-}
-
 func (s *stubDatasetRepository) Read(_ context.Context, _ uuid.UUID, _ core.Pagination, _ []model.Filter) ([]*model.Dataset, int, error) {
-	return s.readPublishedDatasets, s.readPublishedTotal, s.readPublishedErr
+	return nil, 0, s.readErr
 }
 
 func (s *stubDatasetRepository) ReadByID(_ context.Context, datasetID, userID uuid.UUID) (*model.Dataset, error) {
@@ -150,17 +145,6 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(uc.CreateDataset(ctx, &model.Dataset{}, uuid.New())).To(MatchError(expectedErr))
 	})
 
-	It("reads a published dataset by ID", func() {
-		expected := &model.Dataset{ID: datasetID}
-		repo.readPublishedByIDDataset = expected
-
-		got, err := uc.ReadPublishedDatasetByID(ctx, datasetID)
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal(expected))
-		Expect(repo.readPublishedByIDDatasetID).To(Equal(datasetID))
-	})
-
 	It("reads a user's dataset by ID", func() {
 		expected := &model.Dataset{ID: datasetID, UserID: userID}
 		repo.readDataset = expected
@@ -171,6 +155,47 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(got).To(Equal(expected))
 		Expect(repo.readDatasetID).To(Equal(datasetID))
 		Expect(repo.readUserID).To(Equal(userID))
+	})
+
+	It("reads materialized dataset table metadata", func() {
+		expected := &model.Dataset{
+			ID:              datasetID,
+			UserID:          userID,
+			Location:        "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:  "features",
+			TableName:       "movies",
+			ProcessingState: model.DatasetProcessingFeatureMaterialized,
+		}
+		repo.readDataset = expected
+
+		got, err := uc.ReadDatasetTable(ctx, datasetID, userID, "")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(expected))
+		Expect(repo.readDatasetID).To(Equal(datasetID))
+		Expect(repo.readUserID).To(Equal(userID))
+	})
+
+	It("rejects dataset table reads before materialization", func() {
+		repo.readDataset = &model.Dataset{
+			ID:              datasetID,
+			UserID:          userID,
+			Location:        "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:  "raw",
+			TableName:       "movies",
+			ProcessingState: model.DatasetProcessingRawMaterialized,
+		}
+
+		_, err := uc.ReadDatasetTable(ctx, datasetID, userID, "")
+
+		Expect(err).To(MatchError(ContainSubstring("dataset table is not materialized")))
+	})
+
+	It("rejects snapshot-pinned dataset table reads until snapshots are persisted", func() {
+		_, err := uc.ReadDatasetTable(ctx, datasetID, userID, "123")
+
+		Expect(err).To(MatchError(ContainSubstring("snapshot-pinned dataset table reads are not supported")))
+		Expect(repo.readDatasetID).To(Equal(uuid.Nil))
 	})
 
 	It("deletes a dataset through the repository", func() {
@@ -268,4 +293,51 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(repo.updateMaterializationState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 	})
+
+	It("records catalog-backed materialization without synchronous catalog validation", func() {
+		tableCatalog := &stubDatasetTableCatalog{err: errors.New("catalog should not be consulted")}
+		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetTableCatalog(tableCatalog))
+		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingFeatureMaterialized}
+		repo.updateMaterializationResult = updated
+		materialized := &model.Dataset{
+			ID:              datasetID,
+			UserID:          userID,
+			Location:        "s3://warehouse/features/movies",
+			TableNamespace:  "features",
+			TableName:       "movies",
+			TableFormat:     model.Iceberg,
+			CatalogProvider: model.PolarisCatalog,
+		}
+
+		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingFeatureMaterialized)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(updated))
+		Expect(tableCatalog.dataset).To(BeNil())
+		Expect(repo.updateMaterializationDataset).To(Equal(materialized))
+	})
+
+	It("does not validate catalog-backed table metadata for raw materialization events", func() {
+		tableCatalog := &stubDatasetTableCatalog{err: errors.New("catalog should not be consulted")}
+		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetTableCatalog(tableCatalog))
+		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingRawMaterialized}
+		repo.updateMaterializationResult = updated
+		materialized := &model.Dataset{
+			ID:              datasetID,
+			UserID:          userID,
+			Location:        "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:  "features",
+			TableName:       "movies",
+			TableFormat:     model.Iceberg,
+			CatalogProvider: model.PolarisCatalog,
+		}
+
+		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingRawMaterialized)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(updated))
+		Expect(tableCatalog.dataset).To(BeNil())
+		Expect(repo.updateMaterializationDataset).To(Equal(materialized))
+	})
+
 })

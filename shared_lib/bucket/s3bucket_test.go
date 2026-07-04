@@ -135,7 +135,7 @@ var _ = Describe("NewS3Bucket unit tests", func() {
 		ctx = context.Background()
 		bucketName = "test-bucket"
 		s3Mock = &mockS3Components{}
-		s3bucket = bucket.NewS3Bucket("us-east-1", s3Mock, s3Mock, s3Mock)
+		s3bucket = bucket.NewS3Bucket("eu-west-1", s3Mock, s3Mock, s3Mock)
 		key = "key"
 		body = io.NopCloser(strings.NewReader("mock body"))
 	})
@@ -197,13 +197,13 @@ var _ = Describe("NewS3Bucket unit tests", func() {
 
 		It("should return a generated signed URL", func() {
 			s3Mock.NextPresignOutput = &v4.PresignedHTTPRequest{
-				URL: "https://bucket.s3.us-east-1.amazonaws.com/key",
+				URL: "https://bucket.s3.eu-west-1.amazonaws.com/key",
 			}
 
 			url, err := s3bucket.Sign(ctx, bucketName, key, timeoutMins)
 
 			Expect(err).To(BeNil())
-			Expect(url).To(Equal("https://bucket.s3.us-east-1.amazonaws.com/key"))
+			Expect(url).To(Equal("https://bucket.s3.eu-west-1.amazonaws.com/key"))
 
 			Expect(s3Mock.PresignGetObjectCalled).To(BeTrue())
 			Expect(s3Mock.LastParams).NotTo(BeNil())
@@ -233,14 +233,14 @@ var _ = Describe("NewS3Bucket unit tests", func() {
 	Describe("Sign upload POST", func() {
 		It("returns a generated POST policy scoped to key, content type, and size", func() {
 			s3Mock.NextPostOutput = &s3.PresignedPostRequest{
-				URL:    "https://bucket.s3.us-east-1.amazonaws.com",
+				URL:    "https://bucket.s3.eu-west-1.amazonaws.com",
 				Values: map[string]string{"key": key, "policy": "encoded"},
 			}
 
 			post, err := s3bucket.SignUploadPost(ctx, bucketName, key, "text/csv", 1024, 15*time.Minute)
 
 			Expect(err).To(BeNil())
-			Expect(post.URL).To(Equal("https://bucket.s3.us-east-1.amazonaws.com"))
+			Expect(post.URL).To(Equal("https://bucket.s3.eu-west-1.amazonaws.com"))
 			Expect(post.Fields).To(HaveKeyWithValue("policy", "encoded"))
 			Expect(s3Mock.PresignPostObjectCalled).To(BeTrue())
 			Expect(*s3Mock.LastPostInput.Bucket).To(Equal(bucketName))

@@ -14,7 +14,6 @@ import (
 
 type UserEventPublisher interface {
 	PublishUserCreatedEvent(ctx context.Context, profileAccount *domain.ProfileAccount) error
-	PublishEmailVerificationRequestedEvent(ctx context.Context, profileAccount *domain.ProfileAccount) error
 	PublishUserUpdatedEvent(ctx context.Context, profile *domain.Profile) error
 	PublishUserDeletedEvent(ctx context.Context, userID uuid.UUID) error
 }
@@ -58,33 +57,6 @@ func (b *userEventPublisher) PublishUserCreatedEvent(ctx context.Context, profil
 	if err := b.publisher.Publish(ctx, b.profileTopic, message, userCreatedEvent); err != nil {
 		log.WithContext(ctx).WithError(err).Errorf("Failed to publish event")
 		return fmt.Errorf("publish event failed")
-	}
-
-	return nil
-}
-
-func (b *userEventPublisher) PublishEmailVerificationRequestedEvent(ctx context.Context, profileAccount *domain.ProfileAccount) error {
-	log.Trace("UserEventPublisher PublishEmailVerificationRequestedEvent")
-
-	if profileAccount == nil || profileAccount.ID == uuid.Nil || profileAccount.Email == "" || profileAccount.EmailVerifyToken == "" {
-		log.WithContext(ctx).Error("Invalid arguments for publishing email verification requested message")
-		return fmt.Errorf("invalid arguments to publish email verification event")
-	}
-
-	emailVerificationEvent := &profileeventpb.EmailVerificationRequestedEvent{
-		UserId:           profileAccount.ID.String(),
-		Email:            profileAccount.Email,
-		EmailVerifyToken: profileAccount.EmailVerifyToken,
-	}
-
-	message := shared.Message{
-		ResourceKey: profileAccount.ID,
-		MsgType:     shared.MsgTypeEmailVerificationRequested,
-	}
-
-	if err := b.publisher.Publish(ctx, b.profileTopic, message, emailVerificationEvent); err != nil {
-		log.WithContext(ctx).WithError(err).Errorf("Failed to publish email verification event")
-		return fmt.Errorf("publish email verification event failed")
 	}
 
 	return nil

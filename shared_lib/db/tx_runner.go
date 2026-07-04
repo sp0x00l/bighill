@@ -83,11 +83,7 @@ func (u *UnitOfWork) doOnce(ctx context.Context, fn func(ctx context.Context, tx
 		sharedtrace.RecordSpanError(span, err)
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	if err := applySessionContext(ctx, tx); err != nil {
-		_ = u.rollback(tx)
-		sharedtrace.RecordSpanError(span, err)
-		return err
-	}
+	txCtx := ctxutil.WithTransactionContext(ctx)
 
 	defer func() {
 		if p := recover(); p != nil {
@@ -97,16 +93,16 @@ func (u *UnitOfWork) doOnce(ctx context.Context, fn func(ctx context.Context, tx
 		}
 	}()
 
-	if err = fn(ctx, tx); err != nil {
+	if err = fn(txCtx, tx); err != nil {
 		if rbErr := u.rollback(tx); rbErr != nil && !ignoreRollbackError(rbErr) {
 			// Preserve fn errors without a transaction prefix; they already carry
 			// domain context. Commit errors are prefixed below so they stand apart
 			// from operation failures.
-			sharedtrace.RecordSpanErrorFromContext(ctx, span, err)
+			sharedtrace.RecordSpanErrorFromContext(txCtx, span, err)
 			sharedtrace.RecordSpanError(span, rbErr)
 			return fmt.Errorf("%w; rollback tx: %v", err, rbErr)
 		}
-		sharedtrace.RecordSpanErrorFromContext(ctx, span, err)
+		sharedtrace.RecordSpanErrorFromContext(txCtx, span, err)
 		return err
 	}
 

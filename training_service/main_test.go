@@ -103,7 +103,7 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(cfg.Executor.KubeRayMemory).To(Equal("4Gi"))
 		Expect(cfg.Executor.KubeRayGPUResource).To(Equal("nvidia.com/gpu"))
 		Expect(cfg.Executor.KubeRayGPU).To(Equal("1"))
-		Expect(cfg.Executor.ArtifactBucketRegion).To(Equal("local-dev"))
+		Expect(cfg.Executor.ArtifactBucketRegion).To(Equal("eu-west-1"))
 		Expect(cfg.Executor.ModelURIPrefix).To(Equal("s3://local-dev-bucket/models"))
 		Expect(cfg.Executor.EvaluationURIPrefix).To(Equal("s3://local-dev-bucket/evaluations"))
 		Expect(cfg.Executor.ServingTarget).To(Equal(""))

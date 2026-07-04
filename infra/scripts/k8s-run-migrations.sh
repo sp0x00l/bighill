@@ -4,7 +4,7 @@ set -euo pipefail
 ENV="${1:-staging}"
 NAMESPACE="ml-ops-${ENV}"
 RELEASE_NAME="ml-ops-infra"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-eu-west-1}"
 CLUSTER_NAME="ml-ops-${ENV}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

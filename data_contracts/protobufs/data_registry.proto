@@ -6,6 +6,7 @@ option go_package = "lib/data_contracts_lib/data_registry";
 
 service DataRegistryService {
   rpc ReadSourceConnector(ReadSourceConnectorRequest) returns (ReadSourceConnectorResponse);
+  rpc ReadDatasetTable(ReadDatasetTableRequest) returns (ReadDatasetTableResponse);
 }
 
 message Dataset {
@@ -80,6 +81,27 @@ message ReadSourceConnectorRequest {
 
 message ReadSourceConnectorResponse {
   SourceConnector connector = 1;
+}
+
+message ReadDatasetTableRequest {
+  string dataset_id = 1;
+  string user_id = 2;
+  string snapshot_id = 3;
+}
+
+message ReadDatasetTableResponse {
+  string dataset_id = 1;
+  string user_id = 2;
+  int32 dataset_version = 3;
+  string processing_state = 4;
+  string storage_location = 5;
+  string table_namespace = 6;
+  string table_name = 7;
+  string table_format = 8;
+  string catalog_provider = 9;
+  int32 schema_version = 10;
+  string schema_metadata = 11;
+  string snapshot_id = 12;
 }
 
 message SourceConnector {

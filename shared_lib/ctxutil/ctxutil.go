@@ -9,6 +9,7 @@ import (
 
 type tenantIDKey struct{}
 type systemContextKey struct{}
+type transactionContextKey struct{}
 
 func WithTenantID(ctx context.Context, tenantID uuid.UUID) context.Context {
 	if tenantID == uuid.Nil {
@@ -31,6 +32,15 @@ func WithSystemContext(ctx context.Context) context.Context {
 
 func IsSystemContext(ctx context.Context) bool {
 	value, ok := ctx.Value(systemContextKey{}).(bool)
+	return ok && value
+}
+
+func WithTransactionContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, transactionContextKey{}, true)
+}
+
+func IsTransactionContext(ctx context.Context) bool {
+	value, ok := ctx.Value(transactionContextKey{}).(bool)
 	return ok && value
 }
 

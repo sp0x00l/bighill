@@ -34,4 +34,4 @@ test:
 	@scripts/test.sh $(ENV)
 
 lint: 
-	sam validate --region us-east-1 --lint
+	sam validate --region eu-west-1 --lint

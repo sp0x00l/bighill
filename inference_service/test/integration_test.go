@@ -21,6 +21,7 @@ import (
 	datasetpb "lib/data_contracts_lib/data_registry"
 	inferencepb "lib/data_contracts_lib/inference"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
+	"lib/shared_lib/ctxutil"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	sharedmessaging "lib/shared_lib/messaging"
@@ -467,6 +468,7 @@ func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error 
 }
 
 func upsertInferenceTenant(ctx context.Context, database *dbconn.Database, userID uuid.UUID) error {
+	ctx = ctxutil.WithSystemContext(ctx)
 	_, err := database.Pool.Exec(ctx, `
 		INSERT INTO `+database.Name+`.tenants (id, email, deleted)
 		VALUES ($1, $2, false)

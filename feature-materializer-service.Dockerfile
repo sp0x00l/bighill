@@ -3,6 +3,14 @@ ARG BUILD_MODE=full
 ARG TARGETARCH=amd64
 ARG BUILD_VERSION_REQUIRED=0.0.0
 
+FROM --platform=linux/${TARGETARCH} rust:1-alpine AS query_engine_builder
+
+RUN apk add --no-cache build-base cmake openssl-dev perl pkgconf
+
+WORKDIR /query_engine
+COPY ./data_stream_service/internal/infra/queryengine/datafusion_query_engine .
+RUN cargo build --release
+
 FROM --platform=linux/${TARGETARCH} golang:alpine AS pdf_builder_full
 ARG TARGETARCH
 
@@ -79,6 +87,7 @@ FROM --platform=linux/${TARGETARCH} golang:alpine
 LABEL bighill="services"
 
 COPY --from=go_builder /go/bin/feature_materializer_service /go/bin/feature_materializer_service
+COPY --from=query_engine_builder /query_engine/target/release/datafusion_query_engine /usr/local/bin/datafusion_query_engine
 COPY --from=go_builder /etc/group /etc/group
 COPY --from=go_builder /etc/passwd /etc/passwd
 

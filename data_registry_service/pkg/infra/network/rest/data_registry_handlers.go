@@ -20,8 +20,7 @@ import (
 type contextKey string
 
 const (
-	pathPublicPublishedDatasets = "/v1/public/data/registry"
-	pathAuthUserDatasets        = "/v1/data/registry"
+	pathAuthUserDatasets = "/v1/data/registry"
 )
 
 type SourceConnectorAdapter interface {
@@ -60,24 +59,6 @@ func (h *DataRegistryHandlers) GetRoutes() []Route {
 			Handler:  h.CreateDataset,
 			Method:   http.MethodPost,
 			SpanName: "create-dataset",
-		},
-		{
-			Path:     pathPublicPublishedDatasets,
-			Handler:  h.ReadPublishedDatasets,
-			Method:   http.MethodGet,
-			SpanName: "read-published-datasets",
-		},
-		{
-			Path:     "/v1/public/data/registry/{datasetId}",
-			Handler:  h.ReadPublishedDatasetByID,
-			Method:   http.MethodGet,
-			SpanName: "read-published-dataset-by-id",
-		},
-		{
-			Path:     "/v1/public/data/registry/user/{userId}",
-			Handler:  h.ReadPublishedDatasetsByUserID,
-			Method:   http.MethodGet,
-			SpanName: "read-published-dataset-by-user-id",
 		},
 		{
 			Path:     pathAuthUserDatasets,
@@ -172,100 +153,6 @@ func (h *DataRegistryHandlers) CreateDataset(ctx context.Context, req *http.Requ
 	}
 
 	return NewResponseWithPayload(http.StatusCreated, datasetBytes), nil
-}
-
-func (h *DataRegistryHandlers) ReadPublishedDatasets(ctx context.Context, req *http.Request) (APIResponse, error) {
-	log.Trace("DataRegistryHandlers ReadPublishedDatasets")
-
-	pagination, filters, err := h.requestToPaginationAndFilters(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx = context.WithValue(ctx, contextKey("Pagination"), pagination)
-	ctx = context.WithValue(ctx, contextKey("Filters"), filters)
-
-	datasets, count, err := h.datasetsUsecase.ReadPublishedDatasets(ctx, *pagination, filters)
-	if err != nil {
-		log.WithContext(ctx).WithError(err).Errorf("read published dataset failed")
-		if domainErrors.IsServiceError(err, domainErrors.ErrResourceNotFound) {
-			return nil, ErrNotFound().Wrap(err).WithMessage("Datasets not found")
-		}
-		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to read dataset")
-	}
-
-	metadata, _ := NewMetadata(ctx, count, *pagination, req.URL.String())
-	paginatedResponse := &PaginatedResponse{
-		Metadata: metadata,
-	}
-	if len(datasets) > 0 {
-		paginatedResponse.Resources = h.datasetDTOAdapter.ToDTOs(ctx, datasets, pathPublicPublishedDatasets)
-	}
-	return NewResponseWithPagination(http.StatusOK, paginatedResponse), nil
-}
-
-func (h *DataRegistryHandlers) ReadPublishedDatasetByID(ctx context.Context, req *http.Request) (APIResponse, error) {
-	log.Trace("DataRegistryHandlers ReadPublishedDatasetByID")
-
-	ctx, datasetID, err := h.readDatasetId(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	dataset, err := h.datasetsUsecase.ReadPublishedDatasetByID(ctx, datasetID)
-	if err != nil {
-		log.WithContext(ctx).WithError(err).Errorf("read published dataset by id %s failed", datasetID.String())
-		if domainErrors.IsServiceError(err, domainErrors.ErrResourceNotFound) {
-			return nil, ErrNotFound().Wrap(err).WithMessage("Dataset not found")
-		}
-		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to read dataset")
-	}
-
-	datasetBytes, err := h.datasetDTOAdapter.ToDTO(ctx, dataset, pathPublicPublishedDatasets)
-	if err != nil {
-		log.WithContext(ctx).WithError(err).Errorf("encode published dataset failed for datasetID %s", datasetID.String())
-		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode dataset")
-	}
-
-	return NewResponseWithPayload(http.StatusOK, datasetBytes), nil
-}
-
-func (h *DataRegistryHandlers) ReadPublishedDatasetsByUserID(ctx context.Context, req *http.Request) (APIResponse, error) {
-	log.Trace("DataRegistryHandlers ReadPublishedDatasetsByUserID")
-
-	userID, err := uuid.Parse(mux.Vars(req)["userId"])
-	if err != nil {
-		log.Warnf("Invalid user ID when reading published dataset by user Id: %v, parse error %v", userID, err)
-		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid user ID")
-	}
-	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
-
-	pagination, filters, err := h.requestToPaginationAndFilters(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx = context.WithValue(ctx, contextKey("Pagination"), pagination)
-	ctx = context.WithValue(ctx, contextKey("Filters"), filters)
-
-	datasets, count, err := h.datasetsUsecase.ReadPublishedDatasetsByUserID(ctx, userID, *pagination, filters)
-	if err != nil {
-		log.WithContext(ctx).WithError(err).Errorf("read published datasets for user %s failed", userID.String())
-		if domainErrors.IsServiceError(err, domainErrors.ErrResourceNotFound) {
-			return nil, ErrNotFound().Wrap(err).WithMessage("Datasets not found")
-		}
-		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to read dataset")
-	}
-
-	metadata, _ := NewMetadata(ctx, count, *pagination, req.URL.String())
-	paginatedResponse := &PaginatedResponse{
-		Metadata: metadata,
-	}
-	if len(datasets) > 0 {
-		paginatedResponse.Resources = h.datasetDTOAdapter.ToDTOs(ctx, datasets, pathPublicPublishedDatasets)
-	}
-	return NewResponseWithPagination(http.StatusOK, paginatedResponse), nil
 }
 
 func (h *DataRegistryHandlers) ReadDatasets(ctx context.Context, req *http.Request) (APIResponse, error) {

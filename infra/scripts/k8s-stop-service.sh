@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 ENV="${1:-staging}"
 SERVICE_INPUT="${2:-}"
 NAMESPACE="ml-ops-${ENV}"
-REGION="${AWS_REGION:-us-east-1}"
+REGION="${AWS_REGION:-eu-west-1}"
 CLUSTER_NAME="ml-ops-${ENV}"
 
 if [ -z "${SERVICE_INPUT}" ]; then

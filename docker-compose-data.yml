@@ -27,8 +27,8 @@ services:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
       - MINIO_DOMAIN=storage
-      - MINIO_REGION_NAME=us-east-1
-      - MINIO_REGION=us-east-1
+      - MINIO_REGION_NAME=eu-west-1
+      - MINIO_REGION=eu-west-1
     command: ["server", "/data", "--console-address", ":9001"]
 
   mongodb-data-source:

@@ -1,6 +1,14 @@
 ARG TARGETARCH=amd64
 ARG BUILD_VERSION_REQUIRED=0.0.0
 
+FROM --platform=linux/${TARGETARCH} rust:1-alpine AS query_engine_builder
+
+RUN apk add --no-cache build-base cmake openssl-dev perl pkgconf
+
+WORKDIR /query_engine
+COPY ./data_stream_service/internal/infra/queryengine/datafusion_query_engine .
+RUN cargo build --release
+
 FROM --platform=linux/${TARGETARCH} golang:alpine AS builder
 
 RUN addgroup -S data_stream_service_server_group && \
@@ -23,6 +31,7 @@ FROM --platform=linux/${TARGETARCH} golang:alpine
 LABEL bighill="services"
 
 COPY --from=builder /go/bin/data_stream_service /go/bin/data_stream_service
+COPY --from=query_engine_builder /query_engine/target/release/datafusion_query_engine /usr/local/bin/datafusion_query_engine
 COPY --from=builder /etc/group /etc/group
 COPY --from=builder /etc/passwd /etc/passwd
 

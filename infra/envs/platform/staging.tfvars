@@ -1,5 +1,5 @@
 env_name = "staging"
-region   = "us-east-1"
+region   = "eu-west-1"
 
 # Add IAM users/roles that should administer the EKS cluster.
 cluster_admin_arns = []

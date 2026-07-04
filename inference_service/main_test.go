@@ -75,7 +75,7 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.PreferenceDataset.URITemplate).To(Equal("s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl"))
 		Expect(cfg.PreferenceDataset.MinExamples).To(Equal(1))
 		Expect(cfg.PreferenceDataset.Limit).To(Equal(1000))
-		Expect(cfg.PreferenceDataset.BucketRegion).To(Equal("local-dev"))
+		Expect(cfg.PreferenceDataset.BucketRegion).To(Equal("eu-west-1"))
 		Expect(cfg.PreferenceDataset.UploadPartSizeMB).To(Equal(int64(10)))
 		Expect(cfg.Generation.PromptStrategy).To(Equal("rag-prompt-v1"))
 		Expect(cfg.Generation.MaxContextTokens).To(Equal(3000))

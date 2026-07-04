@@ -173,7 +173,7 @@ push() {
   local TARGETARCH="${2:-}"
   local EXCLUDE="${3:-${EXCLUDE_SERVICES:-${CI_EXCLUDE_SERVICES:-}}}"
   local MIGRATIONS_SERVICE_BUILD_VERSION="0.0.1"
-  local AWS_REGION="${AWS_REGION:-us-east-1}"
+  local AWS_REGION="${AWS_REGION:-eu-west-1}"
   local AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}"
   local ECR_REPO="bighill/mlops"
   local ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"

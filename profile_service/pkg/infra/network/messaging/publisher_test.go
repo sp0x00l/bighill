@@ -117,31 +117,6 @@ var _ = Describe("UserEventPublisher", func() {
 		})
 	})
 
-	Describe("PublishEmailVerificationRequestedEvent", func() {
-		When("the arguments are valid", func() {
-			It("publishes to the profile topic", func() {
-				err := publisher.PublishEmailVerificationRequestedEvent(ctx, &domain.ProfileAccount{
-					ID:               userID,
-					Email:            "user@example.com",
-					EmailVerifyToken: "token-1",
-				})
-
-				Expect(err).To(BeNil())
-				Expect(clientMock.PublishCalled).To(BeTrue())
-				Expect(clientMock.LastTopic).To(Equal("profile"))
-				Expect(clientMock.LastMessage.MsgType).To(Equal(shared.MsgTypeEmailVerificationRequested))
-				Expect(clientMock.LastMessage.ResourceKey).To(Equal(userID))
-
-				payload := &profileeventpb.EmailVerificationRequestedEvent{}
-				err = proto.Unmarshal(clientMock.LastMessage.Payload, payload)
-				Expect(err).To(BeNil())
-				Expect(payload.UserId).To(Equal(userID.String()))
-				Expect(payload.Email).To(Equal("user@example.com"))
-				Expect(payload.EmailVerifyToken).To(Equal("token-1"))
-			})
-		})
-	})
-
 	Describe("PublishUserUpdatedEvent", func() {
 		When("the arguments are valid", func() {
 			It("publishes a user updated event", func() {

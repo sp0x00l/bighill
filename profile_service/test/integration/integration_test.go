@@ -3,6 +3,8 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,11 +59,6 @@ type userCreatedEventListener struct {
 	payloads map[uuid.UUID]*profileeventpb.UserCreatedEvent
 }
 
-type emailVerificationRequestedEventListener struct {
-	mu       sync.Mutex
-	payloads map[uuid.UUID]*profileeventpb.EmailVerificationRequestedEvent
-}
-
 type userUpdatedEventListener struct {
 	mu       sync.Mutex
 	payloads map[uuid.UUID]*profileeventpb.UserUpdatedEvent
@@ -88,24 +85,6 @@ func (u *userCreatedEventListener) MsgType() msgConn.MsgType {
 
 func (u *userCreatedEventListener) NewMessage() *profileeventpb.UserCreatedEvent {
 	return &profileeventpb.UserCreatedEvent{}
-}
-
-func (u *emailVerificationRequestedEventListener) Handle(ctx context.Context, id uuid.UUID, payload *profileeventpb.EmailVerificationRequestedEvent) error {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if u.payloads == nil {
-		u.payloads = make(map[uuid.UUID]*profileeventpb.EmailVerificationRequestedEvent)
-	}
-	u.payloads[id] = payload
-	return nil
-}
-
-func (u *emailVerificationRequestedEventListener) MsgType() msgConn.MsgType {
-	return msgConn.MsgTypeEmailVerificationRequested
-}
-
-func (u *emailVerificationRequestedEventListener) NewMessage() *profileeventpb.EmailVerificationRequestedEvent {
-	return &profileeventpb.EmailVerificationRequestedEvent{}
 }
 
 func (u *userUpdatedEventListener) Handle(ctx context.Context, id uuid.UUID, payload *profileeventpb.UserUpdatedEvent) error {
@@ -251,6 +230,7 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 				usecase.ProfilesUseCaseConfig{
 					AuthExpirationInMinutes: authExpirationInMinutes,
 					EmailValidationTTL:      60 * time.Minute,
+					UseStagingTestToken:     env.WithDefaultBool("PROFILE_SERVICE_USE_STAGING_TEST_EMAIL_TOKEN", false),
 				},
 				usecase.WithProfileClock(sharedclock.System{}),
 			)
@@ -570,11 +550,8 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 
 		Context("verify password (POST /public/v1/profiles/password/verify)", func() {
 			It("returns 401 when password is valid but the email is not verified", func() {
-				listener, cancel := newUserCreatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-				defer cancel()
-
-				profileID := createProfileAccount(port, newProfileAccountDTO(fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0]), uniqueGBPhone()))
-				Expect(readEmailVerifyToken(listener, profileID)).NotTo(BeEmpty())
+				email := fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0])
+				profileID := createProfileAccount(port, newProfileAccountDTO(email, uniqueGBPhone()))
 
 				profile, err := profileDB.Read(ctx, profileID)
 				Expect(err).ShouldNot(HaveOccurred())
@@ -598,11 +575,9 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			})
 
 			It("returns a token after the email has been verified", func() {
-				listener, cancel := newUserCreatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-				defer cancel()
-
-				profileID := createProfileAccount(port, newProfileAccountDTO(fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0]), uniqueGBPhone()))
-				verifyToken := readEmailVerifyToken(listener, profileID)
+				email := fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0])
+				profileID := createProfileAccount(port, newProfileAccountDTO(email, uniqueGBPhone()))
+				verifyToken := stagingEmailVerifyToken(email)
 
 				profile, err := profileDB.Read(ctx, profileID)
 				Expect(err).ShouldNot(HaveOccurred())
@@ -641,11 +616,9 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 
 		Context("verify email (POST /public/v1/profiles/email/verify)", func() {
 			It("marks the profile email as verified", func() {
-				listener, cancel := newUserCreatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-				defer cancel()
-
-				profileID := createProfileAccount(port, newProfileAccountDTO(fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0]), uniqueGBPhone()))
-				verifyToken := readEmailVerifyToken(listener, profileID)
+				email := fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0])
+				profileID := createProfileAccount(port, newProfileAccountDTO(email, uniqueGBPhone()))
+				verifyToken := stagingEmailVerifyToken(email)
 
 				verifyPayload, err := json.Marshal(map[string]any{"token": verifyToken})
 				Expect(err).ShouldNot(HaveOccurred())
@@ -669,13 +642,12 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			})
 
 			It("publishes a user updated event after verification", func() {
-				createdListener, cancelCreated := newUserCreatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-				defer cancelCreated()
 				updatedListener, cancelUpdated := newUserUpdatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
 				defer cancelUpdated()
 
-				profileID := createProfileAccount(port, newProfileAccountDTO(fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0]), uniqueGBPhone()))
-				verifyToken := readEmailVerifyToken(createdListener, profileID)
+				email := fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0])
+				profileID := createProfileAccount(port, newProfileAccountDTO(email, uniqueGBPhone()))
+				verifyToken := stagingEmailVerifyToken(email)
 
 				verifyPayload, err := json.Marshal(map[string]any{"token": verifyToken})
 				Expect(err).ShouldNot(HaveOccurred())
@@ -702,11 +674,9 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			})
 
 			It("returns 404 for an invalid token and leaves the profile unverified", func() {
-				listener, cancel := newUserCreatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-				defer cancel()
-
-				profileID := createProfileAccount(port, newProfileAccountDTO(fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0]), uniqueGBPhone()))
-				Expect(readEmailVerifyToken(listener, profileID)).NotTo(BeEmpty())
+				email := fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0])
+				profileID := createProfileAccount(port, newProfileAccountDTO(email, uniqueGBPhone()))
+				Expect(stagingEmailVerifyToken(email)).NotTo(BeEmpty())
 
 				verifyPayload, err := json.Marshal(map[string]any{"token": "invalid-token"})
 				Expect(err).ShouldNot(HaveOccurred())
@@ -730,11 +700,9 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			})
 
 			It("rejects replay of the same token", func() {
-				listener, cancel := newUserCreatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-				defer cancel()
-
-				profileID := createProfileAccount(port, newProfileAccountDTO(fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0]), uniqueGBPhone()))
-				verifyToken := readEmailVerifyToken(listener, profileID)
+				email := fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0])
+				profileID := createProfileAccount(port, newProfileAccountDTO(email, uniqueGBPhone()))
+				verifyToken := stagingEmailVerifyToken(email)
 
 				verifyPayload, err := json.Marshal(map[string]any{"token": verifyToken})
 				Expect(err).ShouldNot(HaveOccurred())
@@ -916,30 +884,6 @@ func uniqueGBPhoneFromStub(stub string) (string, error) {
 	return "+44" + after + suffix, nil
 }
 
-func newUserCreatedEventCapture(ctx context.Context, messagingFactory msgConn.Messenger, kafkaPublisherTopic string) (*emailVerificationRequestedEventListener, func()) {
-	_ = messagingFactory
-
-	cancelCtxSubscriber, cancelFtnSubscriber := context.WithCancel(context.Background())
-	isolatedFactory := msgConn.NewMessenger(msgConn.MessengerConfig{
-		DlqURL:          "http://localhost:4566/profile-dev-env-queue/",
-		GroupID:         "profile-capture-" + uuid.New().String(),
-		Brokers:         "localhost:9092",
-		AutoOffsetReset: "latest",
-	}, cancelFtnSubscriber)
-
-	msgSubscriber, err := isolatedFactory.Subscriber(ctx)
-	Expect(err).ShouldNot(HaveOccurred())
-
-	listener := &emailVerificationRequestedEventListener{}
-	msgConn.AddListener(msgSubscriber, listener)
-
-	startSubscriberOrFail(cancelCtxSubscriber, "profile-email-verify-assert", func(ctx context.Context) error {
-		return msgSubscriber.Subscribe(ctx, []string{kafkaPublisherTopic})
-	})
-	waitForSubscriberAssignment(ctx, msgSubscriber)
-	return listener, cancelFtnSubscriber
-}
-
 func newUserUpdatedEventCapture(ctx context.Context, messagingFactory msgConn.Messenger, kafkaPublisherTopic string) (*userUpdatedEventListener, func()) {
 	_ = messagingFactory
 
@@ -1019,21 +963,9 @@ func createProfileAccount(port int, profileAccount map[string]any) uuid.UUID {
 	return uuid.MustParse(profileDTO["id"].(string))
 }
 
-func readEmailVerifyToken(listener *emailVerificationRequestedEventListener, profileID uuid.UUID) string {
-	Eventually(func() string {
-		listener.mu.Lock()
-		defer listener.mu.Unlock()
-		payload, ok := listener.payloads[profileID]
-		if !ok || payload == nil {
-			return ""
-		}
-		return payload.EmailVerifyToken
-	}, 15*time.Second, 50*time.Millisecond).ShouldNot(BeEmpty())
-
-	listener.mu.Lock()
-	verifyToken := listener.payloads[profileID].EmailVerifyToken
-	listener.mu.Unlock()
-	return verifyToken
+func stagingEmailVerifyToken(email string) string {
+	emailHash := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return "staging-test-email-verify-token-" + hex.EncodeToString(emailHash[:8])
 }
 
 func purgeTopic(ctx context.Context, brokers, topic string) error {

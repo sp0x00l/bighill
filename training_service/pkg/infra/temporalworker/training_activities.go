@@ -91,7 +91,7 @@ func NewTrainingActivities(publisher TrainingEventPublisher, opts ...TrainingAct
 		modelURIPrefix:       "s3://local-dev-bucket/models",
 		evaluationURIPrefix:  "s3://local-dev-bucket/evaluations",
 		servingLoadStatus:    "NOT_LOADED",
-		artifactBucketRegion: "local-dev",
+		artifactBucketRegion: "eu-west-1",
 		axolotlCommand:       "axolotl train",
 	}
 	for _, opt := range opts {

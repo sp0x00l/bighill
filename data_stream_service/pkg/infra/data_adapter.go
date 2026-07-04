@@ -18,6 +18,17 @@ type QueryEngineConfig struct {
 	RegistryDialMs     int
 	RegistryCallMs     int
 	RegistryRetryCount int
+	PolarisBaseURL     string
+	PolarisCatalog     string
+	PolarisWarehouse   string
+	PolarisCredential  string
+	PolarisToken       string
+	PolarisScope       string
+	PolarisS3Endpoint  string
+	PolarisS3AccessKey string
+	PolarisS3SecretKey string
+	PolarisS3Region    string
+	PolarisS3PathStyle bool
 }
 
 type DataConfig struct {

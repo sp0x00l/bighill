@@ -54,7 +54,7 @@ class TrainingJobTests(unittest.TestCase):
             with EnvPatch(
                 {
                     "BIGHILL_LOCAL_S3_STORAGE_DIR": str(storage),
-                    "TRAINING_ARTIFACT_BUCKET_REGION": "local-dev",
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
                     "TRAINING_RUN_ID": "run-1",
                     "TRAINING_DATASET_URI": "s3://features/dataset.parquet",
                     "TRAINING_MODEL_NAME": "ranker",

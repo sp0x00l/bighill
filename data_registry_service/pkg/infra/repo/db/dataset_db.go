@@ -130,34 +130,6 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 	return nil
 }
 
-func (db *datasetDB) ReadPublished(ctx context.Context, pagination core.Pagination, filters []model.Filter) ([]*model.Dataset, int, error) {
-	log.Trace("DatasetDB ReadPublished")
-
-	whereClause := fmt.Sprintf("status = '%s' AND deleted = false", model.Published.String())
-	return db.readPaginatedDatasets(ctx, whereClause, pagination, filters, uuid.Nil)
-}
-
-func (db *datasetDB) ReadPublishedByID(ctx context.Context, datasetID uuid.UUID) (*model.Dataset, error) {
-	log.Trace("DatasetDB ReadPublishedByID")
-
-	whereClause := fmt.Sprintf("id = @id AND status = '%s' AND deleted = false", model.Published.String())
-	query := db.getSelectSQL(whereClause)
-	row := db.Pool.QueryRow(ctx, query, pgx.NamedArgs{"id": datasetID})
-
-	datasetModel, err := db.scanRow(ctx, row)
-	if err != nil {
-		return nil, err
-	}
-	return datasetModel, nil
-}
-
-func (db *datasetDB) ReadPublishedByUserID(ctx context.Context, userID uuid.UUID, pagination core.Pagination, filters []model.Filter) ([]*model.Dataset, int, error) {
-	log.Trace("DatasetDB ReadPublishedByUserID")
-
-	whereClause := fmt.Sprintf("status = '%s' AND user_id = @user_id AND deleted = false", model.Published.String())
-	return db.readPaginatedDatasets(ctx, whereClause, pagination, filters, userID)
-}
-
 func (db *datasetDB) Read(ctx context.Context, userID uuid.UUID, pagination core.Pagination, filters []model.Filter) ([]*model.Dataset, int, error) {
 	log.Trace("DatasetDB Read")
 
@@ -637,51 +609,13 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 
 	var datasets []*model.Dataset
 	for rows.Next() {
-		var dataset DatasetDAO
-		err := rows.Scan(
-			&dataset.ID,
-			&dataset.UserID,
-			&dataset.Title,
-			&dataset.Description,
-			&dataset.Origin,
-			&dataset.Location,
-			&dataset.SourceType,
-			&dataset.SourceConnectorID,
-			&dataset.SourceQuery,
-			&dataset.SourceDatabase,
-			&dataset.SourceCollection,
-			&dataset.Status,
-			&dataset.Category,
-			&dataset.TableNamespace,
-			&dataset.TableName,
-			&dataset.TableFormat,
-			&dataset.CatalogProvider,
-			&dataset.ProcessingProfile,
-			&dataset.SchemaVersion,
-			&dataset.SchemaMetadata,
-			&dataset.ProcessingState,
-			&dataset.DatasetVersion,
-			&dataset.RawSnapshotID,
-			&dataset.FeatureSnapshotID,
-			&dataset.EmbeddingSnapshotID,
-			&dataset.VectorStore,
-			&dataset.CollectionName,
-			&dataset.EmbeddingDimensions,
-			&dataset.EmbeddingCount,
-			&dataset.EmbeddingStrategyVersion,
-			&dataset.EmbeddingChunkerName,
-			&dataset.EmbeddingChunkerVersion,
-			&dataset.EmbeddingChunkSize,
-			&dataset.EmbeddingChunkOverlap,
-			&dataset.EmbeddingProvider,
-			&dataset.EmbeddingModel,
-		)
+		dataset, err := scanDatasetDAO(rows)
 		if err != nil {
 			log.WithContext(ctx).WithError(err).Error("Failed to read datasets")
 			wrappedErr := fmt.Errorf("failed to read datasets: %w", err)
 			return nil, wrappedErr
 		}
-		datasetModel, err := fromDAO(ctx, &dataset)
+		datasetModel, err := fromDAO(ctx, dataset)
 		if err != nil {
 			return nil, err
 		}
@@ -694,15 +628,7 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, error) {
 	log.Trace("DatasetDB scanRow")
 
-	var dataset DatasetDAO
-	err := row.Scan(&dataset.ID, &dataset.UserID, &dataset.Title, &dataset.Description, &dataset.Origin,
-		&dataset.Location, &dataset.SourceType, &dataset.SourceConnectorID, &dataset.SourceQuery, &dataset.SourceDatabase, &dataset.SourceCollection,
-		&dataset.Status, &dataset.Category, &dataset.TableNamespace, &dataset.TableName,
-		&dataset.TableFormat, &dataset.CatalogProvider, &dataset.ProcessingProfile, &dataset.SchemaVersion, &dataset.SchemaMetadata, &dataset.ProcessingState,
-		&dataset.DatasetVersion, &dataset.RawSnapshotID, &dataset.FeatureSnapshotID, &dataset.EmbeddingSnapshotID,
-		&dataset.VectorStore, &dataset.CollectionName, &dataset.EmbeddingDimensions, &dataset.EmbeddingCount,
-		&dataset.EmbeddingStrategyVersion, &dataset.EmbeddingChunkerName, &dataset.EmbeddingChunkerVersion,
-		&dataset.EmbeddingChunkSize, &dataset.EmbeddingChunkOverlap, &dataset.EmbeddingProvider, &dataset.EmbeddingModel)
+	dataset, err := scanDatasetDAO(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domainErrors.ErrResourceNotFound
@@ -712,7 +638,7 @@ func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, 
 		return nil, wrappedErr
 	}
 
-	datasetModel, err := fromDAO(ctx, &dataset)
+	datasetModel, err := fromDAO(ctx, dataset)
 	if err != nil {
 		return nil, err
 	}
