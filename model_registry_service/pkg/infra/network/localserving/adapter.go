@@ -19,10 +19,10 @@ type Adapter struct {
 }
 
 type StatusObserver struct {
-	adapter      *Adapter
-	recorder     ServingStatusRecorder
-	pollInterval time.Duration
-	seen         map[string]uuid.UUID
+	adapter        *Adapter
+	recorder       ServingStatusRecorder
+	resyncInterval time.Duration
+	seen           map[string]uuid.UUID
 }
 
 type ServingStatusRecorder interface {
@@ -64,7 +64,7 @@ func ServedModelName(modelID uuid.UUID, modelVersion int) string {
 	return localstore.ResourceName(modelID.String(), modelVersion)
 }
 
-func NewStatusObserver(adapter *Adapter, recorder ServingStatusRecorder, pollInterval time.Duration) (*StatusObserver, error) {
+func NewStatusObserver(adapter *Adapter, recorder ServingStatusRecorder, resyncInterval time.Duration) (*StatusObserver, error) {
 	log.Trace("localserving NewStatusObserver")
 
 	if adapter == nil {
@@ -73,30 +73,50 @@ func NewStatusObserver(adapter *Adapter, recorder ServingStatusRecorder, pollInt
 	if recorder == nil {
 		return nil, fmt.Errorf("serving status recorder is required")
 	}
-	if pollInterval <= 0 {
-		return nil, fmt.Errorf("served model status poll interval is required")
-	}
 	return &StatusObserver{
-		adapter:      adapter,
-		recorder:     recorder,
-		pollInterval: pollInterval,
-		seen:         map[string]uuid.UUID{},
+		adapter:        adapter,
+		recorder:       recorder,
+		resyncInterval: resyncInterval,
+		seen:           map[string]uuid.UUID{},
 	}, nil
 }
 
 func (o *StatusObserver) Start(ctx context.Context) error {
 	log.Trace("localserving StatusObserver Start")
 
-	ticker := time.NewTicker(o.pollInterval)
-	defer ticker.Stop()
 	for {
-		if err := o.ProcessOnce(ctx); err != nil {
-			log.WithContext(ctx).WithError(err).Error("local served model status poll failed")
+		resourceVersion, err := o.ProcessSnapshot(ctx)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("local served model status snapshot failed")
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		changes, err := o.adapter.store.Watch(ctx, o.adapter.namespace, resourceVersion)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("local served model status watch failed")
+			return err
+		}
+		resync := time.NewTicker(o.resyncInterval)
+	watchLoop:
+		for {
+			select {
+			case <-ctx.Done():
+				resync.Stop()
+				return ctx.Err()
+			case <-resync.C:
+				if _, err := o.ProcessSnapshot(ctx); err != nil {
+					log.WithContext(ctx).WithError(err).Error("local served model status snapshot failed")
+				}
+			case _, ok := <-changes:
+				if !ok {
+					resync.Stop()
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					break watchLoop
+				}
+				if _, err := o.ProcessSnapshot(ctx); err != nil {
+					log.WithContext(ctx).WithError(err).Error("local served model status snapshot failed")
+				}
+			}
 		}
 	}
 }
@@ -104,14 +124,21 @@ func (o *StatusObserver) Start(ctx context.Context) error {
 func (o *StatusObserver) ProcessOnce(ctx context.Context) error {
 	log.Trace("localserving StatusObserver ProcessOnce")
 
-	records, _, err := o.adapter.store.List(o.adapter.namespace)
+	_, err := o.ProcessSnapshot(ctx)
+	return err
+}
+
+func (o *StatusObserver) ProcessSnapshot(ctx context.Context) (string, error) {
+	log.Trace("localserving StatusObserver ProcessSnapshot")
+
+	records, resourceVersion, err := o.adapter.store.List(o.adapter.namespace)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for _, record := range records {
 		o.processRecord(ctx, record)
 	}
-	return nil
+	return resourceVersion, nil
 }
 
 func (o *StatusObserver) processRecord(ctx context.Context, record localstore.Record) {

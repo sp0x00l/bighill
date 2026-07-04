@@ -36,26 +36,22 @@ var _ = Describe("PolarisCatalogClient", func() {
 				Expect(r.Form.Get("client_secret")).To(Equal("s3cr3t"))
 				Expect(r.Form.Get("scope")).To(Equal("PRINCIPAL_ROLE:ALL"))
 				return jsonResponse(http.StatusOK, map[string]any{"access_token": "token"}), nil
-			case r.Method == http.MethodGet && r.URL.Path == "/api/management/v1/catalogs/bighill":
-				return jsonResponse(http.StatusNotFound, map[string]any{"error": map[string]any{"message": "missing"}}), nil
-			case r.Method == http.MethodPost && r.URL.Path == "/api/management/v1/catalogs":
-				var payload polarisCreateCatalogRequest
-				Expect(json.NewDecoder(r.Body).Decode(&payload)).To(Succeed())
-				Expect(payload.Catalog.Name).To(Equal("bighill"))
-				Expect(payload.Catalog.Type).To(Equal("INTERNAL"))
-				Expect(payload.Catalog.Properties["default-base-location"]).To(Equal("s3://warehouse/"))
-				Expect(payload.Catalog.StorageConfigInfo.StorageType).To(Equal("S3"))
-				Expect(payload.Catalog.StorageConfigInfo.Endpoint).To(Equal("http://object-store:9000"))
-				return jsonResponse(http.StatusCreated, map[string]any{"name": "bighill"}), nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/catalog/v1/config":
+				Expect(r.URL.Query().Get("warehouse")).To(Equal("s3://warehouse/"))
+				return jsonResponse(http.StatusOK, map[string]any{"defaults": map[string]string{}, "overrides": map[string]string{}}), nil
+			case r.Method == http.MethodHead && strings.HasPrefix(r.URL.Path, "/api/catalog/v1/bighill/namespaces/source_connector_"):
+				return emptyResponse(http.StatusNotFound), nil
 			case r.Method == http.MethodPost && r.URL.Path == "/api/catalog/v1/bighill/namespaces":
 				var payload map[string]any
 				Expect(json.NewDecoder(r.Body).Decode(&payload)).To(Succeed())
 				Expect(payload["namespace"]).NotTo(BeEmpty())
-				return jsonResponse(http.StatusConflict, map[string]any{"error": "already exists"}), nil
+				return jsonResponse(http.StatusOK, map[string]any{}), nil
 			case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/catalog/v1/bighill/namespaces/source_connector_"):
-				return jsonResponse(http.StatusNoContent, nil), nil
-			case r.Method == http.MethodGet && r.URL.Path == "/api/catalog/v1/bighill/namespaces/features/tables/movies":
-				return jsonResponse(http.StatusOK, map[string]any{"metadata-location": "s3://warehouse/features/movies/metadata/00001.json"}), nil
+				return emptyResponse(http.StatusNoContent), nil
+			case r.Method == http.MethodHead && r.URL.Path == "/api/catalog/v1/bighill/namespaces/features":
+				return emptyResponse(http.StatusOK), nil
+			case r.Method == http.MethodHead && r.URL.Path == "/api/catalog/v1/bighill/namespaces/features/tables/movies":
+				return emptyResponse(http.StatusOK), nil
 			default:
 				return jsonResponse(http.StatusNotFound, map[string]any{"error": r.Method + " " + r.URL.Path}), nil
 			}
@@ -80,8 +76,8 @@ var _ = Describe("PolarisCatalogClient", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(catalogID).To(Equal(resourceID))
-		Expect(requestLog).To(ContainElement("GET /api/management/v1/catalogs/bighill"))
-		Expect(requestLog).To(ContainElement("POST /api/management/v1/catalogs"))
+		Expect(requestLog).To(ContainElement("GET /api/catalog/v1/config"))
+		Expect(requestLog).To(ContainElement(MatchRegexp(`HEAD /api/catalog/v1/bighill/namespaces/source_connector_`)))
 		Expect(requestLog).To(ContainElement("POST /api/catalog/v1/bighill/namespaces"))
 	})
 
@@ -106,8 +102,8 @@ var _ = Describe("PolarisCatalogClient", func() {
 
 		Expect(client.ValidateDatasetTable(ctx, dataset)).To(Succeed())
 
-		Expect(requestLog).To(ContainElement("POST /api/catalog/v1/bighill/namespaces"))
-		Expect(requestLog).To(ContainElement("GET /api/catalog/v1/bighill/namespaces/features/tables/movies"))
+		Expect(requestLog).To(ContainElement("HEAD /api/catalog/v1/bighill/namespaces/features"))
+		Expect(requestLog).To(ContainElement("HEAD /api/catalog/v1/bighill/namespaces/features/tables/movies"))
 	})
 
 	It("fails validation when a Polaris Iceberg table is not registered", func() {
@@ -121,12 +117,12 @@ var _ = Describe("PolarisCatalogClient", func() {
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == "/api/catalog/v1/oauth/tokens":
 				return jsonResponse(http.StatusOK, map[string]any{"access_token": "token"}), nil
-			case r.Method == http.MethodGet && r.URL.Path == "/api/management/v1/catalogs/bighill":
-				return jsonResponse(http.StatusOK, map[string]any{"name": "bighill"}), nil
-			case r.Method == http.MethodPost && r.URL.Path == "/api/catalog/v1/bighill/namespaces":
-				return jsonResponse(http.StatusOK, map[string]any{"namespace": []string{"features"}}), nil
-			case strings.Contains(r.URL.Path, "/tables/missing"):
-				return jsonResponse(http.StatusNotFound, map[string]any{"error": "missing"}), nil
+			case r.Method == http.MethodGet && r.URL.Path == "/api/catalog/v1/config":
+				return jsonResponse(http.StatusOK, map[string]any{"defaults": map[string]string{}, "overrides": map[string]string{}}), nil
+			case r.Method == http.MethodHead && r.URL.Path == "/api/catalog/v1/bighill/namespaces/features":
+				return emptyResponse(http.StatusOK), nil
+			case r.Method == http.MethodHead && strings.Contains(r.URL.Path, "/tables/missing"):
+				return emptyResponse(http.StatusNotFound), nil
 			default:
 				return jsonResponse(http.StatusNotFound, map[string]any{"error": r.URL.Path}), nil
 			}
@@ -185,5 +181,13 @@ func jsonResponse(status int, payload any) *http.Response {
 		StatusCode: status,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(string(body))),
+	}
+}
+
+func emptyResponse(status int) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader("")),
 	}
 }

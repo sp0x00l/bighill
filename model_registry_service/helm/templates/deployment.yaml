@@ -120,6 +120,8 @@ spec:
               value: {{ .Values.env.servingBackend | quote }}
             - name: MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH
               value: {{ .Values.env.servingLocalStorePath | quote }}
+            - name: MODEL_REGISTRY_SERVICE_SERVING_LOCAL_RESYNC_SECONDS
+              value: {{ .Values.env.servingLocalResyncSeconds | quote }}
             - name: MODEL_REGISTRY_SERVICE_SERVING_NAMESPACE
               value: {{ .Values.env.servingNamespace | quote }}
             - name: MODEL_REGISTRY_SERVICE_SERVING_CRD_GROUP

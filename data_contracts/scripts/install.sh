@@ -15,7 +15,7 @@ install() {
     cat > go.mod <<'EOF'
 module lib/data_contracts_lib
 
-go 1.24
+go 1.26.0
 
 require (
     google.golang.org/grpc v1.77.0

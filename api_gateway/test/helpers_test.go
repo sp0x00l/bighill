@@ -2,6 +2,8 @@ package test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -143,7 +145,7 @@ func createVerifiedProfileAndLogin() profileTestUser {
 	userID, err := uuid.Parse(stringField(created, "id"))
 	Expect(err).NotTo(HaveOccurred())
 
-	verifyPayload := map[string]any{"token": emailVerificationToken}
+	verifyPayload := map[string]any{"token": testEmailVerificationToken(email)}
 	status, body = doJSON(http.MethodPost, "/public/v1/profiles/email/verify", verifyPayload, "", uuid.Nil)
 	Expect(status).To(Equal(http.StatusNoContent), "body: %s", string(body))
 
@@ -166,6 +168,11 @@ func createVerifiedProfileAndLogin() profileTestUser {
 		Phone:    phone,
 		Token:    token,
 	}
+}
+
+func testEmailVerificationToken(email string) string {
+	emailHash := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return emailVerificationToken + "-" + hex.EncodeToString(emailHash[:8])
 }
 
 func initRunSalt() {

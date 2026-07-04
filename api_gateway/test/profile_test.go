@@ -23,7 +23,7 @@ var _ = Describe("Profile API", Ordered, func() {
 		status, body = doJSON(http.MethodPost, "/public/v1/profiles", payload, "", uuid.New())
 		Expect(status).To(Equal(http.StatusConflict), "body: %s", string(body))
 
-		status, body = doJSON(http.MethodPost, "/public/v1/profiles/email/verify", map[string]any{"token": emailVerificationToken}, "", uuid.Nil)
+		status, body = doJSON(http.MethodPost, "/public/v1/profiles/email/verify", map[string]any{"token": testEmailVerificationToken(payload["email"].(string))}, "", uuid.Nil)
 		Expect(status).To(Equal(http.StatusNoContent), "body: %s", string(body))
 	})
 

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Int64Array, UInt64Array};
@@ -10,15 +11,17 @@ use datafusion::catalog::CatalogProvider;
 use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::*;
-use iceberg::{Catalog, CatalogBuilder, ErrorKind, NamespaceIdent};
+use iceberg::io::{
+    S3_ACCESS_KEY_ID, S3_DISABLE_CONFIG_LOAD, S3_DISABLE_EC2_METADATA, S3_ENDPOINT,
+    S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
+use iceberg::{Catalog, CatalogBuilder, ErrorKind, NamespaceIdent, TableIdent};
 use iceberg_catalog_rest::{
     RestCatalogBuilder, REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE,
 };
-use iceberg_datafusion::IcebergCatalogProvider;
+use iceberg_datafusion::{IcebergCatalogProvider, IcebergStaticTableProvider};
+use iceberg_storage_opendal::OpenDalStorageFactory;
 use serde::Serialize;
-
-mod s3_storage;
-use s3_storage::S3StorageFactory;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -36,6 +39,7 @@ async fn query(config: &Config) -> Result<()> {
     let ctx = SessionContext::new();
     match config.source.as_str() {
         "parquet" => {
+            validate_local_literal_data_root(config)?;
             ctx.register_parquet("dataset", &config.data_root, ParquetReadOptions::default())
                 .await?;
         }
@@ -63,6 +67,7 @@ async fn write_iceberg(config: &Config) -> Result<()> {
     }
 
     validate_iceberg_config(config)?;
+    validate_local_literal_data_root(config)?;
 
     let ctx = SessionContext::new();
     ctx.register_parquet("source", &config.data_root, ParquetReadOptions::default())
@@ -75,6 +80,16 @@ async fn write_iceberg(config: &Config) -> Result<()> {
     let catalog = load_rest_catalog(config).await?;
     let namespace = namespace_ident(&config.namespace)?;
     ensure_namespace(catalog.as_ref(), &namespace).await?;
+    let table_ident = TableIdent::new(namespace.clone(), config.table.clone());
+    if catalog
+        .table_exists(&table_ident)
+        .await
+        .map_err(to_datafusion_error)?
+    {
+        return Err(DataFusionError::Execution(format!(
+            "iceberg table {table_ident} already exists; overwrite/rematerialize requires a snapshot-replace commit and will not drop existing data"
+        )));
+    }
 
     let provider = IcebergCatalogProvider::try_new(catalog.clone())
         .await
@@ -85,10 +100,6 @@ async fn write_iceberg(config: &Config) -> Result<()> {
             config.namespace
         ))
     })?;
-
-    if schema_provider.table(&config.table).await?.is_some() {
-        schema_provider.deregister_table(&config.table)?;
-    }
 
     let arrow_schema = Arc::new(source_schema);
     let empty_batch = RecordBatch::new_empty(arrow_schema.clone());
@@ -124,22 +135,16 @@ async fn write_iceberg(config: &Config) -> Result<()> {
 async fn register_iceberg_dataset(ctx: &SessionContext, config: &Config) -> Result<()> {
     validate_iceberg_config(config)?;
     let catalog = load_rest_catalog(config).await?;
-    let provider = IcebergCatalogProvider::try_new(catalog)
+    let namespace = namespace_ident(&config.namespace)?;
+    let table_ident = TableIdent::new(namespace, config.table.clone());
+    let table = catalog
+        .load_table(&table_ident)
         .await
         .map_err(to_datafusion_error)?;
-    let schema_provider = provider.schema(&config.namespace).ok_or_else(|| {
-        DataFusionError::Execution(format!(
-            "iceberg namespace {:?} is not available",
-            config.namespace
-        ))
-    })?;
-    let table_provider = schema_provider.table(&config.table).await?.ok_or_else(|| {
-        DataFusionError::Execution(format!(
-            "iceberg table {:?}.{:?} is not available",
-            config.namespace, config.table
-        ))
-    })?;
-    ctx.register_table("dataset", table_provider)?;
+    let table_provider = IcebergStaticTableProvider::try_new_from_table(table)
+        .await
+        .map_err(to_datafusion_error)?;
+    ctx.register_table("dataset", Arc::new(table_provider))?;
     Ok(())
 }
 
@@ -165,14 +170,27 @@ async fn load_rest_catalog(config: &Config) -> Result<Arc<dyn Catalog>> {
     if !config.catalog_scope.is_empty() {
         props.insert("scope".to_string(), config.catalog_scope.clone());
     }
+    props.insert(S3_ENDPOINT.to_string(), config.s3_endpoint.clone());
+    props.insert(
+        S3_ACCESS_KEY_ID.to_string(),
+        config.s3_access_key_id.clone(),
+    );
+    props.insert(
+        S3_SECRET_ACCESS_KEY.to_string(),
+        config.s3_secret_access_key.clone(),
+    );
+    props.insert(S3_REGION.to_string(), config.s3_region.clone());
+    props.insert(
+        S3_PATH_STYLE_ACCESS.to_string(),
+        config.s3_path_style.to_string(),
+    );
+    props.insert(S3_DISABLE_EC2_METADATA.to_string(), "true".to_string());
+    props.insert(S3_DISABLE_CONFIG_LOAD.to_string(), "true".to_string());
 
     let _ = warehouse_bucket(&config.warehouse)?;
-    let storage_factory = S3StorageFactory {
-        endpoint: config.s3_endpoint.clone(),
-        region: config.s3_region.clone(),
-        access_key_id: config.s3_access_key_id.clone(),
-        secret_access_key: config.s3_secret_access_key.clone(),
-        path_style: config.s3_path_style,
+    let storage_factory = OpenDalStorageFactory::S3 {
+        configured_scheme: "s3".to_string(),
+        customized_credential_load: None,
     };
 
     let catalog = RestCatalogBuilder::default()
@@ -255,6 +273,24 @@ fn validate_iceberg_config(config: &Config) -> Result<()> {
         return Err(DataFusionError::Execution(
             "iceberg catalog-credential or catalog-token is required".to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_local_literal_data_root(config: &Config) -> Result<()> {
+    let data_root = config.data_root.trim();
+    if data_root.contains("://")
+        || data_root.contains('*')
+        || data_root.contains('?')
+        || data_root.contains('[')
+    {
+        return Ok(());
+    }
+    if !Path::new(data_root).exists() {
+        return Err(DataFusionError::Execution(format!(
+            "data root {:?} does not exist",
+            config.data_root
+        )));
     }
     Ok(())
 }

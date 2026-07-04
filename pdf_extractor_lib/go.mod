@@ -1,6 +1,6 @@
 module pdf_extractor_lib
 
-go 1.25.0
+go 1.26.4
 
 replace lib/pdf_extractor_lib => ../pdf_extractor_lib
 

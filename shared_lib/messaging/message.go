@@ -16,7 +16,7 @@ const (
 	MsgTypeUserCreated
 	MsgTypeUserUpdated
 	MsgTypeUserDeleted
-	msgTypeEmailVerificationRequestedDeprecated
+	msgTypeEmailVerificationRequestedReserved
 	MsgTypeDatasetFileUploaded
 	MsgTypeRawSnapshotReady
 	msgTypeFeatureSnapshotBuildRequestedDeprecated

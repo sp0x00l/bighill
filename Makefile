@@ -4,6 +4,9 @@ START_MODE ?= run
 BUILD_MODE ?= prebuilt
 EXCLUDE_SERVICES ?=
 CI_TEST_EXCLUDE_SERVICES ?=
+GO_BIN ?= $(shell go env GOPATH)/bin
+
+export PATH := $(GO_BIN):$(PATH)
 
 .PHONY: install install-dev install-all build-all build-query-engine test test-query-engine start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api kafka-clean kafka-create-topics kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka upgrade-go kafka-clean-test-topics k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
 
@@ -25,25 +28,22 @@ test:
 	@shared_lib/scripts/install.sh
 	@shared_lib/scripts/test.sh $(ENV)
 
-	@scripts/stop-servers.sh
-	@scripts/stop-infra.sh $(ENV)
-	@scripts/start-infra.sh $(ENV)
-
-	@CI_TEST_EXCLUDE_SERVICES=$(CI_TEST_EXCLUDE_SERVICES) scripts/install-services.sh
-
-	@scripts/kafka/kafka-clean-topics.sh $(ENV)
-	@scripts/kafka/kafka-create-topics.sh $(ENV)
-	@api_gateway/scripts/check-docker.sh
-	@CI_TEST_EXCLUDE_SERVICES=$(CI_TEST_EXCLUDE_SERVICES) scripts/start-servers.sh build $(ENV)
-	@api_gateway/scripts/install.sh
-	@api_gateway/scripts/build.sh auth
-	@api_gateway/scripts/build.sh api
-	@cd api_gateway && ./scripts/run.sh
-	@cd api_gateway && ./scripts/test.sh $(ENV)
-
-	@cd api_gateway && ./scripts/stop.sh
-	@scripts/stop-servers.sh
-	@scripts/stop-infra.sh $(ENV)
+	@set -e; \
+	cleanup() { cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; cd "$(CURDIR)" && scripts/stop-servers.sh || true; cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; }; \
+	trap cleanup EXIT; \
+	scripts/stop-servers.sh; \
+	scripts/stop-infra.sh $(ENV); \
+	scripts/start-infra.sh $(ENV); \
+	CI_TEST_EXCLUDE_SERVICES=$(CI_TEST_EXCLUDE_SERVICES) scripts/install-services.sh; \
+	scripts/kafka/kafka-clean-topics.sh $(ENV); \
+	scripts/kafka/kafka-create-topics.sh $(ENV); \
+	api_gateway/scripts/check-docker.sh; \
+	CI_TEST_EXCLUDE_SERVICES=$(CI_TEST_EXCLUDE_SERVICES) scripts/start-servers.sh build $(ENV); \
+	api_gateway/scripts/install.sh; \
+	api_gateway/scripts/build.sh auth; \
+	api_gateway/scripts/build.sh api; \
+	cd api_gateway && ./scripts/run.sh; \
+	./scripts/test.sh $(ENV)
 
 build-query-engine:
 	@$(MAKE) -C data_stream_service/internal/infra/queryengine build
@@ -98,11 +98,14 @@ test-servers:
 	@scripts/test-servers.sh $(ENV)
 
 test-api:
-	@scripts/stop-servers.sh
-	@scripts/stop-infra.sh $(ENV)
-	@scripts/start-infra.sh $(ENV)
-	@scripts/start-servers.sh $(START_MODE) $(ENV)
-	@scripts/test-api.sh 
+	@set -e; \
+	cleanup() { cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; cd "$(CURDIR)" && scripts/stop-servers.sh || true; cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; }; \
+	trap cleanup EXIT; \
+	scripts/stop-servers.sh; \
+	scripts/stop-infra.sh $(ENV); \
+	scripts/start-infra.sh $(ENV); \
+	scripts/start-servers.sh $(START_MODE) $(ENV); \
+	scripts/test-api.sh $(ENV)
 
 kafka-clean:
 	# @scripts/stop-servers.sh

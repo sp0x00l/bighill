@@ -13,7 +13,7 @@ build_data_infra()
     done
 
     docker pull projectnessie/nessie:latest
-    docker pull minio/minio:latest
+    docker pull minio/minio:RELEASE.2025-09-07T16-13-09Z
 
     cd $CURRENT_DIR
 }

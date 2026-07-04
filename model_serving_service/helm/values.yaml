@@ -19,7 +19,7 @@ env:
   serviceName: "model-serving-service"
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   backend: "kubernetes"
-  localStorePath: ""
+  localStorePath: "/tmp/bighill/local_served_models/served_models.json"
   pollMs: "1000"
   servedModelCrdGroup: "serving.bighill.io"
   servedModelCrdVersion: "v1alpha1"

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
@@ -67,10 +68,57 @@ func (s *Store) ListWithResourceVersion(ctx context.Context) ([]*model.ServedMod
 	return out, resourceVersion, nil
 }
 
-func (s *Store) Watch(ctx context.Context, _ string) (watch.Interface, error) {
+func (s *Store) Watch(ctx context.Context, resourceVersion string) (watch.Interface, error) {
 	log.Trace("localserving Store Watch")
 
-	return watch.NewEmptyWatch(), nil
+	records, _, err := s.store.List(s.namespace)
+	if err != nil {
+		return nil, err
+	}
+	known := recordsByName(records)
+	changes, err := s.store.Watch(ctx, s.namespace, resourceVersion)
+	if err != nil {
+		return nil, err
+	}
+	events := make(chan watch.Event)
+	go func() {
+		defer close(events)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-changes:
+				if !ok {
+					return
+				}
+				nextRecords, _, err := s.store.List(s.namespace)
+				if err != nil {
+					log.WithContext(ctx).WithError(err).Error("local served model watch list failed")
+					continue
+				}
+				next := recordsByName(nextRecords)
+				for name, record := range next {
+					eventType := watch.Modified
+					if _, exists := known[name]; !exists {
+						eventType = watch.Added
+					}
+					if !sendWatchEvent(ctx, events, watch.Event{Type: eventType, Object: recordToObject(record)}) {
+						return
+					}
+				}
+				for name := range known {
+					if _, exists := next[name]; exists {
+						continue
+					}
+					if !sendWatchEvent(ctx, events, watch.Event{Type: watch.Deleted, Object: deletedObject(name)}) {
+						return
+					}
+				}
+				known = next
+			}
+		}
+	}()
+	return watch.NewProxyWatcher(events), nil
 }
 
 func (s *Store) UpdateStatus(ctx context.Context, resourceName string, status *model.ServedModelStatus) error {
@@ -152,4 +200,70 @@ func parseOptionalUUID(value string) (uuid.UUID, error) {
 		return uuid.Nil, nil
 	}
 	return uuid.Parse(value)
+}
+
+func recordsByName(records []localstore.Record) map[string]localstore.Record {
+	log.Trace("recordsByName")
+
+	out := make(map[string]localstore.Record, len(records))
+	for _, record := range records {
+		out[record.Name] = record
+	}
+	return out
+}
+
+func sendWatchEvent(ctx context.Context, events chan<- watch.Event, event watch.Event) bool {
+	log.Trace("sendWatchEvent")
+
+	select {
+	case <-ctx.Done():
+		return false
+	case events <- event:
+		return true
+	}
+}
+
+func deletedObject(name string) *unstructured.Unstructured {
+	log.Trace("deletedObject")
+
+	obj := &unstructured.Unstructured{}
+	obj.SetName(name)
+	return obj
+}
+
+func recordToObject(record localstore.Record) *unstructured.Unstructured {
+	log.Trace("recordToObject")
+
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "serving.bighill.io/v1alpha1",
+		"kind":       "ServedModel",
+		"spec": map[string]any{
+			"modelID":          record.Spec.ModelID,
+			"trainingRunID":    record.Spec.TrainingRunID,
+			"datasetID":        record.Spec.DatasetID,
+			"name":             record.Spec.Name,
+			"modelVersion":     int64(record.Spec.ModelVersion),
+			"baseModel":        record.Spec.BaseModel,
+			"artifactLocation": record.Spec.ArtifactLocation,
+			"artifactFormat":   record.Spec.ArtifactFormat,
+			"artifactChecksum": record.Spec.ArtifactChecksum,
+			"adapterURI":       record.Spec.AdapterURI,
+			"servingTarget":    record.Spec.ServingTarget,
+			"servingModel":     record.Spec.ServingModel,
+		},
+	}}
+	obj.SetName(record.Name)
+	obj.SetNamespace(record.Namespace)
+	obj.SetGeneration(record.Generation)
+	if record.Status.ServingLoadStatus != "" {
+		obj.Object["status"] = map[string]any{
+			"servingLoadStatus":  record.Status.ServingLoadStatus,
+			"servingTarget":      record.Status.ServingTarget,
+			"servingModel":       record.Status.ServingModel,
+			"failureReason":      record.Status.FailureReason,
+			"observedGeneration": record.Status.ObservedGeneration,
+			"readyReplicas":      int64(record.Status.ReadyReplicas),
+		}
+	}
+	return obj
 }

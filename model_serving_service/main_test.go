@@ -52,7 +52,7 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(cfg.Health.ControllerMaxSilence.String()).To(Equal("30s"))
 		Expect(cfg.PollEvery.String()).To(Equal("1s"))
 		Expect(cfg.Backend).To(Equal("kubernetes"))
-		Expect(cfg.LocalStore).To(Equal(""))
+		Expect(cfg.LocalStore).To(ContainSubstring("local_served_models"))
 		Expect(cfg.ServedModel.Group).To(Equal("serving.bighill.io"))
 		Expect(cfg.ServedModel.Version).To(Equal("v1alpha1"))
 		Expect(cfg.ServedModel.Resource).To(Equal("servedmodels"))

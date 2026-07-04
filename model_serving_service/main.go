@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -119,7 +120,7 @@ func readModelServingConfig() modelServingConfig {
 		Namespace:   env.WithDefaultString("MODEL_SERVING_SERVICE_NAMESPACE", "default"),
 		PollEvery:   time.Duration(env.WithDefaultInt("MODEL_SERVING_SERVICE_POLL_MS", "1000")) * time.Millisecond,
 		Backend:     env.WithDefaultString("MODEL_SERVING_SERVICE_BACKEND", defaultServingBackend()),
-		LocalStore:  env.WithDefaultString("MODEL_SERVING_SERVICE_LOCAL_STORE_PATH", ""),
+		LocalStore:  env.WithDefaultString("MODEL_SERVING_SERVICE_LOCAL_STORE_PATH", defaultLocalStorePath()),
 		ServedModel: servedModelConfig{
 			Group:    env.WithDefaultString("MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_GROUP", "serving.bighill.io"),
 			Version:  env.WithDefaultString("MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_VERSION", "v1alpha1"),
@@ -146,6 +147,12 @@ func readModelServingConfig() modelServingConfig {
 			ControllerMaxSilence:       secondsFromEnv("MODEL_SERVING_SERVICE_HEALTHCHECK_CONTROLLER_MAX_SILENCE_SECONDS", "30"),
 		},
 	}
+}
+
+func defaultLocalStorePath() string {
+	log.Trace("defaultLocalStorePath")
+
+	return filepath.Join(os.TempDir(), "bighill", "local_served_models", "served_models.json")
 }
 
 func newServingBackend(cfg modelServingConfig) (servingk8s.ServedModelRepository, app.ServingRuntime, error) {

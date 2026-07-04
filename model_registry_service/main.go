@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -60,15 +61,16 @@ type healthConfig struct {
 }
 
 type servingConfig struct {
-	Enabled         bool
-	Backend         string
-	LocalStore      string
-	Namespace       string
-	CRDGroup        string
-	CRDVersion      string
-	CRDResource     string
-	CRDKind         string
-	StatusPollEvery time.Duration
+	Enabled          bool
+	Backend          string
+	LocalStore       string
+	LocalResyncEvery time.Duration
+	Namespace        string
+	CRDGroup         string
+	CRDVersion       string
+	CRDResource      string
+	CRDKind          string
+	StatusPollEvery  time.Duration
 }
 
 func init() {
@@ -268,15 +270,16 @@ func readModelRegistryConfig() registryConfig {
 		},
 		ProfileTopic: env.WithDefaultString("MODEL_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
 		Serving: servingConfig{
-			Enabled:         env.WithDefaultBool("MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED", true),
-			Backend:         env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_BACKEND", defaultServingBackend()),
-			LocalStore:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH", ""),
-			Namespace:       env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_NAMESPACE", "default"),
-			CRDGroup:        env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_GROUP", "serving.bighill.io"),
-			CRDVersion:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_VERSION", "v1alpha1"),
-			CRDResource:     env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_RESOURCE", "servedmodels"),
-			CRDKind:         env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_KIND", "ServedModel"),
-			StatusPollEvery: time.Duration(env.WithDefaultInt("MODEL_REGISTRY_SERVICE_SERVING_STATUS_POLL_MS", "1000")) * time.Millisecond,
+			Enabled:          env.WithDefaultBool("MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED", true),
+			Backend:          env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_BACKEND", defaultServingBackend()),
+			LocalStore:       env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH", defaultLocalStorePath()),
+			LocalResyncEvery: time.Duration(env.WithDefaultInt("MODEL_REGISTRY_SERVICE_SERVING_LOCAL_RESYNC_SECONDS", "30")) * time.Second,
+			Namespace:        env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_NAMESPACE", "default"),
+			CRDGroup:         env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_GROUP", "serving.bighill.io"),
+			CRDVersion:       env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_VERSION", "v1alpha1"),
+			CRDResource:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_RESOURCE", "servedmodels"),
+			CRDKind:          env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_KIND", "ServedModel"),
+			StatusPollEvery:  time.Duration(env.WithDefaultInt("MODEL_REGISTRY_SERVICE_SERVING_STATUS_POLL_MS", "1000")) * time.Millisecond,
 		},
 		Health: healthConfig{
 			CpuThresholdPercentage:                    env.WithDefaultInt("MODEL_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
@@ -292,6 +295,12 @@ func readModelRegistryConfig() registryConfig {
 			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("MODEL_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
 		},
 	}
+}
+
+func defaultLocalStorePath() string {
+	log.Trace("defaultLocalStorePath")
+
+	return filepath.Join(os.TempDir(), "bighill", "local_served_models", "served_models.json")
 }
 
 func newServingBackend(cfg servingConfig) (app.ModelServingDeployer, error) {
@@ -325,7 +334,7 @@ func newServingObserver(cfg servingConfig, deployer app.ModelServingDeployer, re
 		if !ok {
 			return nil, fmt.Errorf("local serving deployer has unexpected type")
 		}
-		return localserving.NewStatusObserver(adapter, recorder, cfg.StatusPollEvery)
+		return localserving.NewStatusObserver(adapter, recorder, cfg.LocalResyncEvery)
 	case "kubernetes":
 		adapter, ok := deployer.(*registryk8s.ServedModelAdapter)
 		if !ok {

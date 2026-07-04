@@ -119,8 +119,8 @@ install_runtime_images() {
 
     echo "Pulling runtime infra images..."
     docker pull pgvector/pgvector:pg17 || true
-    docker pull apache/polaris:latest || true
-    docker pull rustfs/rustfs:1.0.0-alpha.81 || true
+    docker pull apache/polaris:1.0.0-incubating || true
+    docker pull minio/minio:RELEASE.2025-09-07T16-13-09Z || true
     docker pull amazon/aws-cli:2.35.11 || true
 }
 

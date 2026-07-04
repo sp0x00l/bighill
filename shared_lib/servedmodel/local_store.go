@@ -1,6 +1,7 @@
 package servedmodel
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -58,27 +60,13 @@ func NewStore(path string) (*Store, error) {
 	log.Trace("servedmodel NewStore")
 
 	if strings.TrimSpace(path) == "" {
-		resolved, err := DefaultStorePath()
-		if err != nil {
-			return nil, err
-		}
-		path = resolved
+		return nil, fmt.Errorf("served model local store path is required")
 	}
 	path = filepath.Clean(path)
 	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
 		return nil, err
 	}
 	return &Store{path: path}, nil
-}
-
-func DefaultStorePath() (string, error) {
-	log.Trace("servedmodel DefaultStorePath")
-
-	rootDir, err := findRoot()
-	if err != nil {
-		return "", fmt.Errorf("served model local store path is required when repository root cannot be found: %w", err)
-	}
-	return filepath.Join(rootDir, "tmp/local_served_models/served_models.json"), nil
 }
 
 func ResourceName(modelID string, modelVersion int) string {
@@ -146,7 +134,7 @@ func (s *Store) Read(name string) (Record, bool, error) {
 
 	var out Record
 	var ok bool
-	err := s.withDB(func(db *database) error {
+	err := s.withReadDB(func(db *database) error {
 		out, ok = db.Items[name]
 		return nil
 	})
@@ -158,7 +146,7 @@ func (s *Store) List(namespace string) ([]Record, string, error) {
 
 	out := []Record{}
 	resourceVersion := "0"
-	err := s.withDB(func(db *database) error {
+	err := s.withReadDB(func(db *database) error {
 		resourceVersion = strconvFormatInt(db.ResourceVersion)
 		total := 0
 		for _, record := range db.Items {
@@ -175,6 +163,52 @@ func (s *Store) List(namespace string) ([]Record, string, error) {
 	return out, resourceVersion, err
 }
 
+func (s *Store) Watch(ctx context.Context, namespace string, resourceVersion string) (<-chan string, error) {
+	log.Trace("servedmodel Store Watch")
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	if err := watcher.Add(filepath.Dir(s.path)); err != nil {
+		watcher.Close()
+		return nil, err
+	}
+
+	changes := make(chan string, 1)
+	go func() {
+		defer close(changes)
+		defer watcher.Close()
+
+		lastResourceVersion := strings.TrimSpace(resourceVersion)
+		if ok := s.emitIfChanged(ctx, namespace, &lastResourceVersion, changes); !ok {
+			return
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.WithError(err).Warn("served model local store watch failed")
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if !s.isStoreFileEvent(event.Name) {
+					continue
+				}
+				if ok := s.emitIfChanged(ctx, namespace, &lastResourceVersion, changes); !ok {
+					return
+				}
+			}
+		}
+	}()
+	return changes, nil
+}
+
 func (s *Store) Reset() error {
 	log.Trace("servedmodel Store Reset")
 
@@ -185,8 +219,20 @@ func (s *Store) Reset() error {
 	})
 }
 
+func (s *Store) withReadDB(fn func(*database) error) error {
+	log.Trace("servedmodel Store withReadDB")
+
+	return s.withLockedDB(false, fn)
+}
+
 func (s *Store) withDB(fn func(*database) error) error {
 	log.Trace("servedmodel Store withDB")
+
+	return s.withLockedDB(true, fn)
+}
+
+func (s *Store) withLockedDB(write bool, fn func(*database) error) error {
+	log.Trace("servedmodel Store withLockedDB")
 
 	lockPath := s.path + ".lock"
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o666)
@@ -194,7 +240,11 @@ func (s *Store) withDB(fn func(*database) error) error {
 		return err
 	}
 	defer lockFile.Close()
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+	lockMode := syscall.LOCK_SH
+	if write {
+		lockMode = syscall.LOCK_EX
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), lockMode); err != nil {
 		return err
 	}
 	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
@@ -206,7 +256,31 @@ func (s *Store) withDB(fn func(*database) error) error {
 	if err := fn(db); err != nil {
 		return err
 	}
+	if !write {
+		return nil
+	}
 	return s.writeDB(db)
+}
+
+func (s *Store) emitIfChanged(ctx context.Context, namespace string, lastResourceVersion *string, changes chan<- string) bool {
+	log.Trace("servedmodel Store emitIfChanged")
+
+	_, nextResourceVersion, err := s.List(namespace)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Warn("served model local store watch ignored event")
+		return true
+	}
+	if nextResourceVersion == *lastResourceVersion {
+		return true
+	}
+	*lastResourceVersion = nextResourceVersion
+	select {
+	case <-ctx.Done():
+		return false
+	case changes <- nextResourceVersion:
+	default:
+	}
+	return true
 }
 
 func (s *Store) readDB() (*database, error) {
@@ -246,29 +320,16 @@ func (s *Store) writeDB(db *database) error {
 	return os.Rename(tmp, s.path)
 }
 
+func (s *Store) isStoreFileEvent(path string) bool {
+	log.Trace("servedmodel Store isStoreFileEvent")
+
+	clean := filepath.Clean(path)
+	return clean == s.path || clean == s.path+".tmp"
+}
+
 type database struct {
 	ResourceVersion int64             `json:"resource_version"`
 	Items           map[string]Record `json:"items"`
-}
-
-func findRoot() (string, error) {
-	log.Trace("servedmodel findRoot")
-
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "shared_lib")); err == nil {
-			return dir, nil
-		}
-		parentDir := filepath.Dir(dir)
-		if parentDir == dir {
-			break
-		}
-		dir = parentDir
-	}
-	return "", os.ErrNotExist
 }
 
 func strconvFormatInt(value int64) string {

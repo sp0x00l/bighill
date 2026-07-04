@@ -137,6 +137,37 @@ fn reads_parquet_dataset_directories() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn reads_parquet_globs() -> Result<(), Box<dyn Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    write_parquet_rows(
+        &temp_dir.path().join("part-000.parquet"),
+        &[("age", 42), ("score", 9001)],
+    )?;
+    write_parquet_rows(&temp_dir.path().join("part-001.parquet"), &[("rank", 7)])?;
+    let glob = temp_dir.path().join("*.parquet");
+
+    let output = query_engine()
+        .arg("--data-root")
+        .arg(glob)
+        .arg("--sql")
+        .arg("SELECT feature, value FROM dataset ORDER BY value")
+        .output()?;
+
+    assert_success(&output);
+    let (_, rows) = read_feature_value_ipc(output.stdout)?;
+
+    assert_eq!(
+        rows,
+        vec![
+            ("rank".to_string(), 7),
+            ("age".to_string(), 42),
+            ("score".to_string(), 9001),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn emits_schema_for_empty_result_sets() -> Result<(), Box<dyn Error>> {
     let temp_dir = tempfile::tempdir()?;
     let parquet_path = temp_dir.path().join("dataset.parquet");

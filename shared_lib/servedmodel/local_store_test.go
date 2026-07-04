@@ -1,9 +1,11 @@
 package servedmodel_test
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"lib/shared_lib/servedmodel"
 
@@ -17,6 +19,12 @@ func TestServedModelStore(t *testing.T) {
 }
 
 var _ = Describe("Store", func() {
+	It("requires an explicit store path", func() {
+		_, err := servedmodel.NewStore("")
+
+		Expect(err).To(MatchError(ContainSubstring("served model local store path is required")))
+	})
+
 	It("shares ServedModel intent and status through a file-backed store", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
 		registryStore, err := servedmodel.NewStore(path)
@@ -91,5 +99,48 @@ var _ = Describe("Store", func() {
 		_, _, err = store.List("serving")
 
 		Expect(errors.Is(err, servedmodel.ErrNamespaceMismatch)).To(BeTrue())
+	})
+
+	It("watches resource-version changes without emitting events for reads", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
+		store, err := servedmodel.NewStore(path)
+		Expect(err).NotTo(HaveOccurred())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		changes, err := store.Watch(ctx, "default", "0")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(store.UpsertSpec("served-model-one", "default", servedmodel.Spec{
+			ModelID:      "4f4b8258-f9af-49f8-b5a8-f84d75891f3b",
+			Name:         "ranker",
+			ModelVersion: 1,
+			BaseModel:    "mistral",
+		})).To(Succeed())
+		Eventually(changes).WithTimeout(2 * time.Second).Should(Receive(Equal("1")))
+
+		_, _, err = store.List("default")
+		Expect(err).NotTo(HaveOccurred())
+		Consistently(changes).WithTimeout(150 * time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("replays a missed resource version when a watch starts after a write", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
+		store, err := servedmodel.NewStore(path)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(store.UpsertSpec("served-model-one", "default", servedmodel.Spec{
+			ModelID:      "4f4b8258-f9af-49f8-b5a8-f84d75891f3b",
+			Name:         "ranker",
+			ModelVersion: 1,
+			BaseModel:    "mistral",
+		})).To(Succeed())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		changes, err := store.Watch(ctx, "default", "0")
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(changes).WithTimeout(2 * time.Second).Should(Receive(Equal("1")))
 	})
 })

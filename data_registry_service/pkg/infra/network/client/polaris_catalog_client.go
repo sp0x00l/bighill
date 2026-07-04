@@ -1,19 +1,22 @@
 package client
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
 
+	"github.com/apache/iceberg-go"
+	"github.com/apache/iceberg-go/catalog"
+	"github.com/apache/iceberg-go/catalog/rest"
+	"github.com/apache/iceberg-go/table"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
@@ -33,8 +36,10 @@ type PolarisCatalogConfig struct {
 }
 
 type PolarisCatalogClient struct {
-	config PolarisCatalogConfig
-	client *http.Client
+	config      PolarisCatalogConfig
+	transport   http.RoundTripper
+	mu          sync.Mutex
+	restCatalog *rest.Catalog
 }
 
 func NewPolarisCatalogClient(config PolarisCatalogConfig, client *http.Client) *PolarisCatalogClient {
@@ -43,9 +48,13 @@ func NewPolarisCatalogClient(config PolarisCatalogConfig, client *http.Client) *
 	if client == nil {
 		client = &http.Client{Timeout: config.Timeout}
 	}
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
 	return &PolarisCatalogClient{
-		config: normalizePolarisCatalogConfig(config),
-		client: client,
+		config:    normalizePolarisCatalogConfig(config),
+		transport: transport,
 	}
 }
 
@@ -108,217 +117,199 @@ func (c *PolarisCatalogClient) ValidateDatasetTable(ctx context.Context, dataset
 	if dataset.CatalogProvider != model.PolarisCatalog {
 		return nil
 	}
-	if err := c.EnsureCatalog(ctx); err != nil {
-		return err
-	}
 	if err := c.EnsureNamespace(ctx, dataset.TableNamespace); err != nil {
 		return err
 	}
-	if err := c.LoadTable(ctx, dataset.TableNamespace, dataset.TableName); err != nil {
-		return err
-	}
-	return nil
+	return c.LoadTable(ctx, dataset.TableNamespace, dataset.TableName)
 }
 
 func (c *PolarisCatalogClient) EnsureCatalog(ctx context.Context) error {
 	log.Trace("PolarisCatalogClient EnsureCatalog")
 
-	token, err := c.token(ctx)
-	if err != nil {
-		return err
-	}
-	path := fmt.Sprintf("/api/management/v1/catalogs/%s", url.PathEscape(c.config.Catalog))
-	resp, body, err := c.do(ctx, http.MethodGet, path, token, nil)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == http.StatusOK {
-		return nil
-	}
-	if resp.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("read polaris catalog: status %d: %s", resp.StatusCode, body)
-	}
-
-	payload := polarisCreateCatalogRequest{
-		Catalog: polarisCatalog{
-			Type: "INTERNAL",
-			Name: c.config.Catalog,
-			Properties: map[string]string{
-				"default-base-location": c.config.DefaultBaseLocation,
-			},
-			StorageConfigInfo: polarisStorageConfig{
-				StorageType:      "S3",
-				AllowedLocations: []string{c.config.DefaultBaseLocation},
-				Region:           c.config.StorageRegion,
-				Endpoint:         c.config.StorageEndpoint,
-				PathStyleAccess:  c.config.StoragePathStyle,
-			},
-		},
-	}
-	resp, body, err = c.do(ctx, http.MethodPost, "/api/management/v1/catalogs", token, payload)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
-		return fmt.Errorf("create polaris catalog: status %d: %s", resp.StatusCode, body)
-	}
-	return nil
+	_, err := c.catalog(ctx)
+	return err
 }
 
 func (c *PolarisCatalogClient) EnsureNamespace(ctx context.Context, namespace string) error {
 	log.Trace("PolarisCatalogClient EnsureNamespace")
 
-	namespace = strings.TrimSpace(namespace)
-	if namespace == "" {
-		return domainErrors.ErrValidationFailed.Extend("polaris namespace is required")
-	}
-	token, err := c.token(ctx)
+	catalogClient, err := c.catalog(ctx)
 	if err != nil {
 		return err
 	}
-	payload := map[string]any{
-		"namespace":  []string{namespace},
-		"properties": map[string]string{},
-	}
-	path := fmt.Sprintf("/api/catalog/v1/%s/namespaces", url.PathEscape(c.config.Catalog))
-	resp, body, err := c.do(ctx, http.MethodPost, path, token, payload)
+	namespaceIdent, err := namespaceIdent(namespace)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
-		return fmt.Errorf("create polaris namespace: status %d: %s", resp.StatusCode, body)
+	exists, err := catalogClient.CheckNamespaceExists(ctx, namespaceIdent)
+	if err != nil {
+		return fmt.Errorf("check polaris namespace: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	if err := catalogClient.CreateNamespace(ctx, namespaceIdent, iceberg.Properties{}); err != nil && !errors.Is(err, catalog.ErrNamespaceAlreadyExists) {
+		return fmt.Errorf("create polaris namespace: %w", err)
 	}
 	return nil
 }
 
-func (c *PolarisCatalogClient) LoadTable(ctx context.Context, namespace, table string) error {
+func (c *PolarisCatalogClient) LoadTable(ctx context.Context, namespace, tableName string) error {
 	log.Trace("PolarisCatalogClient LoadTable")
 
-	namespace = strings.TrimSpace(namespace)
-	table = strings.TrimSpace(table)
-	if namespace == "" || table == "" {
-		return domainErrors.ErrValidationFailed.Extend("polaris table reference is required")
-	}
-	token, err := c.token(ctx)
+	catalogClient, err := c.catalog(ctx)
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("/api/catalog/v1/%s/namespaces/%s/tables/%s", url.PathEscape(c.config.Catalog), url.PathEscape(namespace), url.PathEscape(table))
-	resp, body, err := c.do(ctx, http.MethodGet, path, token, nil)
+	tableIdent, err := tableIdent(namespace, tableName)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode == http.StatusOK {
+	exists, err := catalogClient.CheckTableExists(ctx, tableIdent)
+	if err != nil {
+		return fmt.Errorf("check polaris table: %w", err)
+	}
+	if exists {
 		return nil
 	}
-	if resp.StatusCode == http.StatusNotFound {
-		return domainErrors.ErrValidationFailed.Extend(fmt.Sprintf("polaris iceberg table %s.%s is not registered", namespace, table))
-	}
-	return fmt.Errorf("load polaris table: status %d: %s", resp.StatusCode, body)
+	return domainErrors.ErrValidationFailed.Extend(fmt.Sprintf("polaris iceberg table %s.%s is not registered", namespace, tableName))
 }
 
 func (c *PolarisCatalogClient) DeleteNamespace(ctx context.Context, namespace string) error {
 	log.Trace("PolarisCatalogClient DeleteNamespace")
 
-	namespace = strings.TrimSpace(namespace)
-	if namespace == "" {
-		return domainErrors.ErrValidationFailed.Extend("polaris namespace is required")
-	}
-	token, err := c.token(ctx)
+	catalogClient, err := c.catalog(ctx)
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("/api/catalog/v1/%s/namespaces/%s", url.PathEscape(c.config.Catalog), url.PathEscape(namespace))
-	resp, body, err := c.do(ctx, http.MethodDelete, path, token, nil)
+	namespaceIdent, err := namespaceIdent(namespace)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
-		return nil
-	}
-	return fmt.Errorf("delete polaris namespace: status %d: %s", resp.StatusCode, body)
-}
-
-func (c *PolarisCatalogClient) token(ctx context.Context) (string, error) {
-	log.Trace("PolarisCatalogClient token")
-
-	values := url.Values{}
-	values.Set("grant_type", "client_credentials")
-	values.Set("client_id", c.config.ClientID)
-	values.Set("client_secret", c.config.ClientSecret)
-	if c.config.Scope != "" {
-		values.Set("scope", c.config.Scope)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.TokenURL, strings.NewReader(values.Encode()))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request polaris token: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read polaris token response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("request polaris token: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var out struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return "", fmt.Errorf("decode polaris token response: %w", err)
-	}
-	if strings.TrimSpace(out.AccessToken) == "" {
-		return "", fmt.Errorf("polaris token response did not include access_token")
-	}
-	return out.AccessToken, nil
-}
-
-func (c *PolarisCatalogClient) do(ctx context.Context, method, path, token string, payload any) (*http.Response, string, error) {
-	log.Trace("PolarisCatalogClient do")
-
-	var body io.Reader
-	if payload != nil {
-		bodyBytes, err := json.Marshal(payload)
-		if err != nil {
-			return nil, "", err
+	if err := catalogClient.DropNamespace(ctx, namespaceIdent); err != nil {
+		if errors.Is(err, catalog.ErrNoSuchNamespace) {
+			return nil
 		}
-		body = bytes.NewReader(bodyBytes)
+		return fmt.Errorf("delete polaris namespace: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.config.BaseURL+path, body)
+	return nil
+}
+
+func (c *PolarisCatalogClient) catalog(ctx context.Context) (*rest.Catalog, error) {
+	log.Trace("PolarisCatalogClient catalog")
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.restCatalog != nil {
+		return c.restCatalog, nil
+	}
+
+	ctx, cancel := c.contextWithTimeout(ctx)
+	defer cancel()
+
+	options := []rest.Option{
+		rest.WithWarehouseLocation(c.config.DefaultBaseLocation),
+		rest.WithPrefix(c.config.Catalog),
+		rest.WithScope(c.config.Scope),
+		rest.WithCustomTransport(c.transport),
+	}
+	if c.config.ClientID != "" || c.config.ClientSecret != "" {
+		options = append(options, rest.WithCredential(c.config.ClientID+":"+c.config.ClientSecret))
+	}
+	if c.config.TokenURL != "" {
+		tokenURL, err := url.Parse(c.config.TokenURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse polaris token url: %w", err)
+		}
+		options = append(options, rest.WithAuthURI(tokenURL))
+	}
+
+	catalogClient, err := rest.NewCatalog(ctx, c.config.Catalog, normalizeCatalogURI(c.config.BaseURL), options...)
 	if err != nil {
-		return nil, "", err
+		return nil, fmt.Errorf("load polaris catalog: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
+	c.restCatalog = catalogClient
+	return catalogClient, nil
+}
+
+func (c *PolarisCatalogClient) contextWithTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	log.Trace("PolarisCatalogClient contextWithTimeout")
+
+	if c.config.Timeout <= 0 {
+		return context.WithCancel(ctx)
 	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("request polaris %s %s: %w", method, path, err)
+	return context.WithTimeout(ctx, c.config.Timeout)
+}
+
+func namespaceIdent(namespace string) (table.Identifier, error) {
+	log.Trace("namespaceIdent")
+
+	parts := namespaceParts(namespace)
+	if len(parts) == 0 {
+		return nil, domainErrors.ErrValidationFailed.Extend("polaris namespace is required")
 	}
-	defer resp.Body.Close()
-	bytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("read polaris response: %w", err)
+	return table.Identifier(parts), nil
+}
+
+func tableIdent(namespace string, tableName string) (table.Identifier, error) {
+	log.Trace("tableIdent")
+
+	tableName = strings.TrimSpace(tableName)
+	if tableName == "" {
+		return nil, domainErrors.ErrValidationFailed.Extend("polaris table reference is required")
 	}
-	return resp, strings.TrimSpace(string(bytes)), nil
+	parts := namespaceParts(namespace)
+	if len(parts) == 0 {
+		return nil, domainErrors.ErrValidationFailed.Extend("polaris table reference is required")
+	}
+	return table.Identifier(append(parts, tableName)), nil
+}
+
+func namespaceParts(namespace string) []string {
+	log.Trace("namespaceParts")
+
+	out := []string{}
+	for _, part := range strings.Split(strings.TrimSpace(namespace), ".") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func normalizeCatalogURI(uri string) string {
+	log.Trace("normalizeCatalogURI")
+
+	uri = strings.TrimRight(strings.TrimSpace(uri), "/")
+	if strings.HasSuffix(uri, "/api/catalog") {
+		return uri
+	}
+	return uri + "/api/catalog"
+}
+
+func normalizeTokenURL(baseURL string, tokenURL string) string {
+	log.Trace("normalizeTokenURL")
+
+	tokenURL = strings.TrimSpace(tokenURL)
+	if tokenURL != "" {
+		return tokenURL
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.HasSuffix(baseURL, "/api/catalog") {
+		return baseURL + "/v1/oauth/tokens"
+	}
+	if baseURL != "" {
+		return baseURL + "/api/catalog/v1/oauth/tokens"
+	}
+	return ""
 }
 
 func normalizePolarisCatalogConfig(config PolarisCatalogConfig) PolarisCatalogConfig {
 	log.Trace("normalizePolarisCatalogConfig")
 
 	config.BaseURL = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	config.TokenURL = strings.TrimSpace(config.TokenURL)
-	if config.TokenURL == "" && config.BaseURL != "" {
-		config.TokenURL = config.BaseURL + "/api/catalog/v1/oauth/tokens"
-	}
+	config.TokenURL = normalizeTokenURL(config.BaseURL, config.TokenURL)
 	config.ClientID = strings.TrimSpace(config.ClientID)
 	config.ClientSecret = strings.TrimSpace(config.ClientSecret)
 	config.Scope = strings.TrimSpace(config.Scope)
@@ -331,23 +322,4 @@ func normalizePolarisCatalogConfig(config PolarisCatalogConfig) PolarisCatalogCo
 
 func catalogResourceNamespace(resourceID uuid.UUID) string {
 	return "source_connector_" + strings.ReplaceAll(resourceID.String(), "-", "_")
-}
-
-type polarisCreateCatalogRequest struct {
-	Catalog polarisCatalog `json:"catalog"`
-}
-
-type polarisCatalog struct {
-	Type              string               `json:"type"`
-	Name              string               `json:"name"`
-	Properties        map[string]string    `json:"properties"`
-	StorageConfigInfo polarisStorageConfig `json:"storageConfigInfo"`
-}
-
-type polarisStorageConfig struct {
-	StorageType      string   `json:"storageType"`
-	AllowedLocations []string `json:"allowedLocations"`
-	Region           string   `json:"region,omitempty"`
-	Endpoint         string   `json:"endpoint,omitempty"`
-	PathStyleAccess  bool     `json:"pathStyleAccess"`
 }

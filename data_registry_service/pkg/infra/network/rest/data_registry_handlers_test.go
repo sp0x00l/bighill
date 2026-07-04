@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"testing"
 
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
@@ -18,6 +19,11 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestRest(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Data registry REST unit test suite")
+}
 
 type datasetUsecaseStub struct {
 	createDataset        *model.Dataset
