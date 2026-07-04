@@ -43,11 +43,11 @@ Parameters:
   DataRegistryServiceHttpPort:
     Type: String
     Default: "8081"
-  DataIngestionServiceHttpDomain:
+  IngestionServiceHttpDomain:
     Type: String
     Default: host.docker.internal
-    Description: The data ingestion service host name
-  DataIngestionServiceHttpPort:
+    Description: The ingestion service host name
+  IngestionServiceHttpPort:
     Type: String
     Default: "8086"
   ProfileServiceHttpDomain:
@@ -153,8 +153,8 @@ Resources:
           API_GATEWAY_SERVICE_HTTP_CLIENT_TIMEOUT_SECONDS: !Ref BighillApiHttpClientTimeoutSeconds
           DATA_REGISTRY_SERVICE_HTTP_HOST: !Ref DataRegistryServiceHttpDomain
           DATA_REGISTRY_SERVICE_HTTP_PORT: !Ref DataRegistryServiceHttpPort
-          DATA_INGESTION_SERVICE_HTTP_HOST: !Ref DataIngestionServiceHttpDomain
-          DATA_INGESTION_SERVICE_HTTP_PORT: !Ref DataIngestionServiceHttpPort
+          INGESTION_SERVICE_HTTP_HOST: !Ref IngestionServiceHttpDomain
+          INGESTION_SERVICE_HTTP_PORT: !Ref IngestionServiceHttpPort
           PROFILE_SERVICE_HTTP_HOST: !Ref ProfileServiceHttpDomain
           PROFILE_SERVICE_HTTP_PORT: !Ref ProfileServiceHttpPort
           OTEL_EXPORTER_OTLP_ENDPOINT: !Ref OtlpCollectorUrl
@@ -309,6 +309,36 @@ Resources:
           Properties:
             RestApiId: !Ref BighillApi
             Path: /v1/data/store/{id}
+            Method: post
+        PostDataUpload:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/uploads/{id}
+            Method: post
+        PostDataUploadComplete:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/data/uploads/{id}/complete
+            Method: post
+        PostModelUpload:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/models/uploads
+            Method: post
+        PostModelUploadComplete:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/models/uploads/{id}/complete
+            Method: post
+        PostHuggingFaceModelOnboard:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/models/onboard/huggingface
             Method: post
   BighillApi:
     Type: AWS::Serverless::Api
@@ -642,6 +672,76 @@ Resources:
             post:
               consumes:
                 - multipart/form-data
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/data/uploads/{id}:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/data/uploads/{id}/complete:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/models/uploads:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/models/uploads/{id}/complete:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/models/onboard/huggingface:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
               produces:
                 - application/vnd.bighill.api-v1+json
               responses: {}

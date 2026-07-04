@@ -26,8 +26,8 @@ public_domain_root = "bighill.example"
 
 data_registry_service_http_domain  = "data-registry-service.internal.bighill.example"
 data_registry_service_http_port    = "80"
-data_ingestion_service_http_domain = "data-ingestion-service.internal.bighill.example"
-data_ingestion_service_http_port   = "80"
+ingestion_service_http_domain = "ingestion-service.internal.bighill.example"
+ingestion_service_http_port   = "80"
 profile_service_http_domain        = "profile-service.internal.bighill.example"
 profile_service_http_port          = "80"
 

@@ -4,33 +4,35 @@ option go_package = "lib/data_contracts_lib/training";
 
 message ModelTrainingCompletedEvent {
   string training_run_id = 1;
-  string dataset_id = 2;
-  string dataset_version = 3;
-  string feature_snapshot_id = 4;
-  string model_id = 5;
-  string model_name = 6;
-  string model_version = 7;
-  string base_model = 8;
-  string artifact_location = 9;
-  string artifact_format = 10;
-  string artifact_checksum = 11;
-  int64 artifact_size_bytes = 12;
-  string metrics_metadata = 13;
-  string report_location = 14;
-  string adapter_uri = 15;
-  string serving_target = 16;
-  string serving_model = 17;
-  string serving_load_status = 18;
+  string user_id = 2;
+  string dataset_id = 3;
+  string dataset_version = 4;
+  string feature_snapshot_id = 5;
+  string model_id = 6;
+  string model_name = 7;
+  string model_version = 8;
+  string base_model = 9;
+  string artifact_location = 10;
+  string artifact_format = 11;
+  string artifact_checksum = 12;
+  int64 artifact_size_bytes = 13;
+  string metrics_metadata = 14;
+  string report_location = 15;
+  string adapter_uri = 16;
+  string serving_target = 17;
+  string serving_model = 18;
+  string serving_load_status = 19;
 }
 
 message ModelTrainingFailedEvent {
   string training_run_id = 1;
-  string dataset_id = 2;
-  string dataset_version = 3;
-  string feature_snapshot_id = 4;
-  string model_id = 5;
-  string model_name = 6;
-  string model_version = 7;
-  string base_model = 8;
-  string failure_reason = 9;
+  string user_id = 2;
+  string dataset_id = 3;
+  string dataset_version = 4;
+  string feature_snapshot_id = 5;
+  string model_id = 6;
+  string model_name = 7;
+  string model_version = 8;
+  string base_model = 9;
+  string failure_reason = 10;
 }

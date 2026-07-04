@@ -279,14 +279,6 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(publisher.failedResult).To(Equal(&result))
 	})
 
-	It("rejects completed training publish without a publisher", func() {
-		activities := temporalworker.NewTrainingActivities(nil)
-
-		err := activities.PublishModelTrainingCompleted(context.Background(), model.TrainingRunResult{TrainingRunID: "training-run-1"})
-
-		Expect(errors.Is(err, domain.ErrTrainModel)).To(BeTrue())
-	})
-
 	It("rejects failed training publish without a failure reason", func() {
 		activities := temporalworker.NewTrainingActivities(&recordingTrainingEventPublisher{})
 

@@ -41,7 +41,7 @@ func (s *inferenceUsecaseStub) RecordDatasetUpdated(context.Context, *model.Infe
 	return nil, nil
 }
 
-func (s *inferenceUsecaseStub) ReadModel(context.Context, uuid.UUID) (*model.InferenceModel, error) {
+func (s *inferenceUsecaseStub) ReadModel(context.Context, uuid.UUID, uuid.UUID) (*model.InferenceModel, error) {
 	return nil, nil
 }
 
@@ -78,6 +78,7 @@ func (s *featureMaterializerServiceClientStub) SearchEmbeddings(_ context.Contex
 var _ = Describe("InferenceServer", func() {
 	It("maps generate requests and responses", func() {
 		requestID := uuid.New()
+		userID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		recordID := uuid.New()
@@ -106,6 +107,7 @@ var _ = Describe("InferenceServer", func() {
 
 		response, err := server.Generate(context.Background(), &inferencepb.GenerateRequest{
 			RequestId:       requestID.String(),
+			UserId:          userID.String(),
 			DatasetId:       datasetID.String(),
 			ModelId:         modelID.String(),
 			QueryText:       "what is relevant?",
@@ -115,6 +117,7 @@ var _ = Describe("InferenceServer", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.request.RequestID).To(Equal(requestID))
+		Expect(uc.request.UserID).To(Equal(userID))
 		Expect(uc.request.DatasetID).To(Equal(datasetID))
 		Expect(uc.request.ModelID).To(Equal(modelID))
 		Expect(uc.request.TopK).To(Equal(4))
@@ -142,9 +145,11 @@ var _ = Describe("InferenceServer", func() {
 	It("requires request identity and top-k at the boundary", func() {
 		server := NewInferenceGrpcServer(&inferenceUsecaseStub{})
 		datasetID := uuid.New()
+		userID := uuid.New()
 		modelID := uuid.New()
 
 		_, err := server.Generate(context.Background(), &inferencepb.GenerateRequest{
+			UserId:    userID.String(),
 			DatasetId: datasetID.String(),
 			ModelId:   modelID.String(),
 			QueryText: "query",
@@ -154,6 +159,7 @@ var _ = Describe("InferenceServer", func() {
 
 		_, err = server.Generate(context.Background(), &inferencepb.GenerateRequest{
 			RequestId: uuid.NewString(),
+			UserId:    userID.String(),
 			DatasetId: datasetID.String(),
 			ModelId:   modelID.String(),
 			QueryText: "query",
@@ -193,10 +199,12 @@ var _ = Describe("InferenceServer", func() {
 
 	It("maps preference dataset export requests into the usecase", func() {
 		requestID := uuid.New()
+		userID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		uc := &inferenceUsecaseStub{exportResult: &model.PreferenceDataset{
 			RequestID: requestID,
+			UserID:    userID,
 			DatasetID: datasetID,
 			ModelID:   modelID,
 			OutputURI: "s3://local-dev-bucket/preferences/dataset.jsonl",
@@ -209,6 +217,7 @@ var _ = Describe("InferenceServer", func() {
 
 		response, err := server.ExportPreferenceDataset(context.Background(), &inferencepb.ExportPreferenceDatasetRequest{
 			RequestId:   requestID.String(),
+			UserId:      userID.String(),
 			DatasetId:   datasetID.String(),
 			ModelId:     modelID.String(),
 			OutputUri:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
@@ -218,6 +227,7 @@ var _ = Describe("InferenceServer", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.exportRequest.RequestID).To(Equal(requestID))
+		Expect(uc.exportRequest.UserID).To(Equal(userID))
 		Expect(uc.exportRequest.DatasetID).To(Equal(datasetID))
 		Expect(uc.exportRequest.ModelID).To(Equal(modelID))
 		Expect(uc.exportRequest.MinExamples).To(Equal(1))
@@ -255,6 +265,7 @@ var _ = Describe("InferenceServer", func() {
 var _ = Describe("FeatureMaterializerClient", func() {
 	It("maps search responses into retrieved contexts", func() {
 		datasetID := uuid.New()
+		userID := uuid.New()
 		recordID := uuid.New()
 		snapshotID := uuid.New()
 		clientStub := &featureMaterializerServiceClientStub{
@@ -272,9 +283,10 @@ var _ = Describe("FeatureMaterializerClient", func() {
 		}
 		client := &featureMaterializerClient{client: clientStub}
 
-		contexts, err := client.SearchEmbeddings(context.Background(), datasetID, "query", 6, map[string]string{"source": "manual"})
+		contexts, err := client.SearchEmbeddings(context.Background(), userID, datasetID, "query", 6, map[string]string{"source": "manual"})
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(clientStub.request.GetUserId()).To(Equal(userID.String()))
 		Expect(clientStub.request.GetDatasetId()).To(Equal(datasetID.String()))
 		Expect(clientStub.request.GetQueryText()).To(Equal("query"))
 		Expect(clientStub.request.GetTopK()).To(Equal(int32(6)))
@@ -295,7 +307,7 @@ var _ = Describe("FeatureMaterializerClient", func() {
 			},
 		}}
 
-		_, err := client.SearchEmbeddings(context.Background(), uuid.New(), "query", 5, nil)
+		_, err := client.SearchEmbeddings(context.Background(), uuid.New(), uuid.New(), "query", 5, nil)
 
 		Expect(err).To(HaveOccurred())
 	})

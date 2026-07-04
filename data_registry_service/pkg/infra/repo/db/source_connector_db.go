@@ -48,6 +48,9 @@ func (db *sourceConnectorDB) Create(ctx context.Context, sourceConnector *model.
 				return domainErrors.ErrResourceAlreadyExists
 			}
 		}
+		if coreDB.IsForeignKeyViolation(err) {
+			return domainErrors.ErrValidationFailed.Extend("tenant projection is not ready")
+		}
 		return fmt.Errorf("database error. Failed to insert connector: %w", err)
 	}
 

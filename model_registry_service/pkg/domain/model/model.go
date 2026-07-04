@@ -4,8 +4,13 @@ import "github.com/google/uuid"
 
 type Model struct {
 	ModelID           uuid.UUID
+	UserID            uuid.UUID
 	TrainingRunID     uuid.UUID
 	DatasetID         uuid.UUID
+	ModelKind         ModelKind
+	Source            ModelSource
+	SourceURI         string
+	SourceMetadata    string
 	Name              string
 	ModelVersion      int
 	BaseModel         string

@@ -57,11 +57,12 @@ func (c *featureMaterializerClient) Close() error {
 	return c.conn.Close()
 }
 
-func (c *featureMaterializerClient) SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error) {
+func (c *featureMaterializerClient) SearchEmbeddings(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error) {
 	log.Trace("featureMaterializerClient SearchEmbeddings")
 
 	resp, err := c.client.SearchEmbeddings(ctx, &featurepb.SearchEmbeddingsRequest{
 		DatasetId:       datasetID.String(),
+		UserId:          userID.String(),
 		QueryText:       queryText,
 		TopK:            int32(topK),
 		MetadataFilters: metadataFilters,

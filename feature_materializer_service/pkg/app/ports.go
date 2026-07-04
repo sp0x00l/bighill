@@ -41,7 +41,7 @@ type EmbeddingSnapshotRepository interface {
 }
 
 type EmbeddingSearchRepository interface {
-	ReadActiveEmbeddingSnapshot(ctx context.Context, datasetID uuid.UUID) (*model.EmbeddingSnapshot, error)
+	ReadActiveEmbeddingSnapshot(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.EmbeddingSnapshot, error)
 	SearchEmbeddingRecords(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, queryVector []float32, topK int) ([]model.EmbeddingRecord, error)
 }
 

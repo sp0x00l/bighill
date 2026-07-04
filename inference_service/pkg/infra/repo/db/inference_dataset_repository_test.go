@@ -8,6 +8,7 @@ import (
 	"inference_service/pkg/domain/model"
 	inferencedb "inference_service/pkg/infra/repo/db"
 	coreDB "lib/shared_lib/db"
+	"lib/shared_lib/uuidutil"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -75,6 +76,7 @@ var _ = Describe("InferenceDatasetRepository", func() {
 			Expect(pool.queries[0]).To(ContainSubstring("INSERT INTO test_db.inference_datasets"))
 			Expect(pool.queries[1]).To(ContainSubstring("FROM test_db.inference_datasets WHERE dataset_id = @dataset_id"))
 			Expect(namedArgs(pool.args[1])).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: staleDataset.DatasetID, Valid: true}))
+			Expect(namedArgs(pool.args[1])).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: staleDataset.UserID, Valid: true}))
 		})
 
 		It("defaults empty schema metadata to an empty JSON object", func() {
@@ -116,12 +118,13 @@ var _ = Describe("InferenceDatasetRepository", func() {
 			dataset := validInferenceDataset()
 			pool.nextRows = []pgx.Row{inferenceDatasetRow(dataset)}
 
-			record, err := repository.ReadDataset(ctx, dataset.DatasetID)
+			record, err := repository.ReadDataset(ctx, dataset.UserID, dataset.DatasetID)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(record).To(Equal(dataset))
 			Expect(pool.lastQuery).To(ContainSubstring("SELECT dataset_id::text"))
-			Expect(pool.lastQuery).To(ContainSubstring("FROM test_db.inference_datasets WHERE dataset_id = @dataset_id"))
+			Expect(pool.lastQuery).To(ContainSubstring("FROM test_db.inference_datasets WHERE dataset_id = @dataset_id AND user_id = @user_id"))
+			Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: dataset.UserID, Valid: true}))
 		})
 
 		It("maps empty optional snapshot ids to uuid.Nil", func() {
@@ -131,7 +134,7 @@ var _ = Describe("InferenceDatasetRepository", func() {
 			dataset.EmbeddingSnapshotID = uuid.Nil
 			pool.nextRows = []pgx.Row{inferenceDatasetRow(dataset)}
 
-			record, err := repository.ReadDataset(ctx, dataset.DatasetID)
+			record, err := repository.ReadDataset(ctx, dataset.UserID, dataset.DatasetID)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(record.RawSnapshotID).To(Equal(uuid.Nil))
@@ -140,7 +143,7 @@ var _ = Describe("InferenceDatasetRepository", func() {
 		})
 
 		It("returns a domain not-found error when no dataset row exists", func() {
-			record, err := repository.ReadDataset(ctx, uuid.New())
+			record, err := repository.ReadDataset(ctx, uuid.New(), uuid.New())
 
 			Expect(record).To(BeNil())
 			Expect(errors.Is(err, domain.ErrDatasetNotFound)).To(BeTrue())
@@ -193,9 +196,9 @@ func inferenceDatasetRow(dataset *model.InferenceDataset) pgx.Row {
 		dataset.ProcessingProfile,
 		dataset.SchemaVersion,
 		dataset.SchemaMetadata,
-		optionalUUIDString(dataset.RawSnapshotID),
-		optionalUUIDString(dataset.FeatureSnapshotID),
-		optionalUUIDString(dataset.EmbeddingSnapshotID),
+		uuidutil.StringOrEmpty(dataset.RawSnapshotID),
+		uuidutil.StringOrEmpty(dataset.FeatureSnapshotID),
+		uuidutil.StringOrEmpty(dataset.EmbeddingSnapshotID),
 		dataset.VectorStore,
 		dataset.CollectionName,
 		dataset.EmbeddingDimensions,
@@ -208,11 +211,4 @@ func inferenceDatasetRow(dataset *model.InferenceDataset) pgx.Row {
 		dataset.EmbeddingProvider,
 		dataset.EmbeddingModel,
 	}}
-}
-
-func optionalUUIDString(value uuid.UUID) string {
-	if value == uuid.Nil {
-		return ""
-	}
-	return value.String()
 }

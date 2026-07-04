@@ -42,8 +42,13 @@ func ToModelStatus(value string) (ModelStatus, error) {
 
 type InferenceModel struct {
 	ModelID           uuid.UUID
+	UserID            uuid.UUID
 	TrainingRunID     uuid.UUID
 	DatasetID         uuid.UUID
+	ModelKind         ModelKind
+	Source            ModelSource
+	SourceURI         string
+	SourceMetadata    string
 	Name              string
 	ModelVersion      int
 	BaseModel         string
@@ -58,4 +63,8 @@ type InferenceModel struct {
 	MetricsMetadata   string
 	Status            ModelStatus
 	FailureReason     string
+}
+
+func (m *InferenceModel) RequiresDatasetMatch() bool {
+	return m.ModelKind.String() != ModelKindBase.String()
 }

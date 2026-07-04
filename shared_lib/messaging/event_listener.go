@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"strings"
+
+	"lib/shared_lib/ctxutil"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -51,8 +54,31 @@ func AddListener[T proto.Message](s Subscriber, handler EventListener[T]) {
 		}
 		newCtx := context.WithValue(ctx, contextKey("resource_key"), msg.ResourceKey)
 		newCtx = context.WithValue(newCtx, contextKey("msg_type"), msgType.String())
+		if tenantID, ok := tenantIDFromPayload(payload); ok {
+			newCtx = ctxutil.WithTenantID(newCtx, tenantID)
+		}
 
 		return handler.Handle(newCtx, msg.ResourceKey, payload)
 	})
 	log.Info("Registered kafka event listener for message type:", msgType)
+}
+
+type userIDPayload interface {
+	GetUserId() string
+}
+
+func tenantIDFromPayload(payload any) (uuid.UUID, bool) {
+	event, ok := payload.(userIDPayload)
+	if !ok {
+		return uuid.Nil, false
+	}
+	raw := strings.TrimSpace(event.GetUserId())
+	if raw == "" {
+		return uuid.Nil, false
+	}
+	tenantID, err := uuid.Parse(raw)
+	if err != nil || tenantID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return tenantID, true
 }

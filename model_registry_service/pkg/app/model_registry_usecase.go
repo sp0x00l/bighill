@@ -7,6 +7,7 @@ import (
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
+	"lib/shared_lib/ctxutil"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ type ModelRegistryUsecase interface {
 	MarkModelFailed(ctx context.Context, modelID uuid.UUID, failureReason string) (*model.Model, error)
 	RecordModelTrainingCompleted(ctx context.Context, trainedModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
 	RecordModelTrainingFailed(ctx context.Context, failedModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
+	RecordModelArtifactIngested(ctx context.Context, ingestedModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
 	RecordModelServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, idempotencyKey uuid.UUID) (*model.Model, error)
 }
 
@@ -61,6 +63,9 @@ func (u *modelRegistryUsecase) RegisterModel(ctx context.Context, registeredMode
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	if registeredModel != nil {
+		ctx = ctxutil.WithTenantID(ctx, registeredModel.UserID)
+	}
 	out, err = u.repo.Create(ctx, registeredModel, idempotencyKey)
 	if err != nil {
 		return nil, err
@@ -71,6 +76,7 @@ func (u *modelRegistryUsecase) RegisterModel(ctx context.Context, registeredMode
 func (u *modelRegistryUsecase) ReadModel(ctx context.Context, modelID uuid.UUID) (out *model.Model, err error) {
 	log.Trace("ModelRegistryUsecase ReadModel")
 
+	ctx = ctxutil.WithSystemContext(ctx)
 	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.read",
 		attribute.String("model_id", modelID.String()),
 	)
@@ -82,6 +88,7 @@ func (u *modelRegistryUsecase) ReadModel(ctx context.Context, modelID uuid.UUID)
 func (u *modelRegistryUsecase) MarkModelReady(ctx context.Context, modelID uuid.UUID, artifactLocation string) (out *model.Model, err error) {
 	log.Trace("ModelRegistryUsecase MarkModelReady")
 
+	ctx = ctxutil.WithSystemContext(ctx)
 	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.mark_ready",
 		attribute.String("model_id", modelID.String()),
 	)
@@ -97,6 +104,7 @@ func (u *modelRegistryUsecase) MarkModelReady(ctx context.Context, modelID uuid.
 func (u *modelRegistryUsecase) MarkModelFailed(ctx context.Context, modelID uuid.UUID, failureReason string) (out *model.Model, err error) {
 	log.Trace("ModelRegistryUsecase MarkModelFailed")
 
+	ctx = ctxutil.WithSystemContext(ctx)
 	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.mark_failed",
 		attribute.String("model_id", modelID.String()),
 	)
@@ -118,6 +126,9 @@ func (u *modelRegistryUsecase) RecordModelTrainingCompleted(ctx context.Context,
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	trainedModel.Status = model.ModelStatusEvaluated
+	trainedModel.ModelKind = model.ModelKindFineTuned
+	trainedModel.Source = model.ModelSourceTraining
+	ctx = ctxutil.WithTenantID(ctx, trainedModel.UserID)
 	if trainedModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
 		trainedModel.Status = model.ModelStatusReady
 	}
@@ -144,6 +155,7 @@ func (u *modelRegistryUsecase) RecordModelTrainingFailed(ctx context.Context, fa
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	failedModel.Status = model.ModelStatusFailed
+	ctx = ctxutil.WithTenantID(ctx, failedModel.UserID)
 	out, err = u.repo.Create(ctx, failedModel, idempotencyKey)
 	if err != nil {
 		if errors.Is(err, domain.ErrModelExists) {
@@ -154,9 +166,44 @@ func (u *modelRegistryUsecase) RecordModelTrainingFailed(ctx context.Context, fa
 	return out, nil
 }
 
+func (u *modelRegistryUsecase) RecordModelArtifactIngested(ctx context.Context, ingestedModel *model.Model, idempotencyKey uuid.UUID) (out *model.Model, err error) {
+	log.Trace("ModelRegistryUsecase RecordModelArtifactIngested")
+
+	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.record_artifact_ingested",
+		attribute.String("idempotency_key", idempotencyKey.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	ingestedModel.Status = model.ModelStatusEvaluated
+	if ingestedModel.ModelKind == model.ModelKindBase {
+		ingestedModel.UserID = uuid.Nil
+	} else {
+		ctx = ctxutil.WithTenantID(ctx, ingestedModel.UserID)
+	}
+	if ingestedModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
+		ingestedModel.Status = model.ModelStatusReady
+	}
+	if ingestedModel.MetricsMetadata == "" {
+		ingestedModel.MetricsMetadata = "{}"
+	}
+	out, err = u.repo.Create(ctx, ingestedModel, idempotencyKey)
+	if err != nil {
+		if errors.Is(err, domain.ErrModelExists) {
+			out, err = u.repo.ReadByID(ctx, ingestedModel.ModelID)
+			if err != nil {
+				return nil, err
+			}
+			return out, u.ensureServedModel(ctx, out)
+		}
+		return nil, err
+	}
+	return out, u.ensureServedModel(ctx, out)
+}
+
 func (u *modelRegistryUsecase) RecordModelServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, idempotencyKey uuid.UUID) (out *model.Model, err error) {
 	log.Trace("ModelRegistryUsecase RecordModelServingStatus")
 
+	ctx = ctxutil.WithSystemContext(ctx)
 	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.record_serving_status",
 		attribute.String("idempotency_key", idempotencyKey.String()),
 	)

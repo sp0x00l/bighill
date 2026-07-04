@@ -79,6 +79,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 	It("persists dataset metadata through Postgres", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		dataset := &model.Dataset{
 			ID:              datasetID,
 			UserID:          userID,
@@ -172,6 +173,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 	It("reports duplicate idempotency keys and missing datasets with domain errors", func() {
 		idempotencyKey := uuid.New()
 		userID := uuid.New()
+		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		first := &model.Dataset{ID: uuid.New(), UserID: userID, Title: "duplicate-a"}
 		second := &model.Dataset{ID: uuid.New(), UserID: userID, Title: "duplicate-b"}
 
@@ -185,6 +187,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 
 	It("persists source connectors through Postgres", func() {
 		userID := uuid.New()
+		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		connector := &model.SourceConnector{
 			UserID: userID,
 			Config: &model.ClickHouseConnCfg{
@@ -215,6 +218,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 
 	It("returns no rows rather than failing when a requested page is beyond the dataset count", func() {
 		userID := uuid.New()
+		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		Expect(datasets.CreateDataset(ctx, &model.Dataset{
 			ID:     uuid.New(),
 			UserID: userID,
@@ -230,6 +234,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 	It("updates dataset processing state from Kafka materialization events", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		Expect(datasets.CreateDataset(ctx, &model.Dataset{
 			ID:     datasetID,
 			UserID: userID,
@@ -416,4 +421,13 @@ func isKafkaErrorCode(err error, code kafka.ErrorCode) bool {
 
 	var kafkaErr kafka.Error
 	return errors.As(err, &kafkaErr) && kafkaErr.Code() == code
+}
+
+func upsertDataRegistryTenant(ctx context.Context, database *dbconn.Database, userID uuid.UUID) error {
+	_, err := database.Pool.Exec(ctx, `
+		INSERT INTO `+database.Name+`.tenants (id, email, deleted)
+		VALUES ($1, $2, false)
+		ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, deleted = false
+	`, userID, userID.String()+"@example.test")
+	return err
 }

@@ -16,6 +16,7 @@ type PreferenceExample struct {
 	PreferenceExampleID uuid.UUID
 	FeedbackID          uuid.UUID
 	RequestID           uuid.UUID
+	UserID              uuid.UUID
 	DatasetID           uuid.UUID
 	ModelID             uuid.UUID
 	Split               string
@@ -28,6 +29,7 @@ type PreferenceExample struct {
 
 type PreferenceDatasetExportRequest struct {
 	RequestID   uuid.UUID
+	UserID      uuid.UUID
 	DatasetID   uuid.UUID
 	ModelID     uuid.UUID
 	OutputURI   string
@@ -38,6 +40,7 @@ type PreferenceDatasetExportRequest struct {
 type PreferenceDataset struct {
 	PreferenceDatasetID uuid.UUID
 	RequestID           uuid.UUID
+	UserID              uuid.UUID
 	DatasetID           uuid.UUID
 	ModelID             uuid.UUID
 	ParentAdapterURI    string

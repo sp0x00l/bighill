@@ -160,22 +160,23 @@ func (tx *testTx) Prepare(context.Context, string, string) (*pgconn.StatementDes
 }
 
 type mockProfileScan struct {
-	ID            string
-	Email         string
-	FirstName     string
-	LastName      string
-	PhoneNumber   string
-	DateOfBirth   time.Time
-	CountryCode   string
-	AddressLine1  string
-	AddressLine2  string
-	City          string
-	State         string
-	PostalCode    string
-	Country       string
-	PasswordHash  string
-	EmailVerified bool
-	Deleted       bool
+	ID                         string
+	Email                      string
+	FirstName                  string
+	LastName                   string
+	PhoneNumber                string
+	DateOfBirth                time.Time
+	CountryCode                string
+	AddressLine1               string
+	AddressLine2               string
+	City                       string
+	State                      string
+	PostalCode                 string
+	Country                    string
+	HuggingFaceTokenCiphertext string
+	PasswordHash               string
+	EmailVerified              bool
+	Deleted                    bool
 }
 
 func (m mockProfileScan) scan(dest ...any) error {
@@ -232,7 +233,11 @@ func (m mockProfileScan) scan(dest ...any) error {
 			err := countryPtr.Scan(m.Country)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if emailVerifiedPtr, ok := dest[13].(*pgtype.Bool); ok {
+		if huggingFaceTokenPtr, ok := dest[13].(*pgtype.Text); ok {
+			err := huggingFaceTokenPtr.Scan(m.HuggingFaceTokenCiphertext)
+			Expect(err).ShouldNot(HaveOccurred())
+		}
+		if emailVerifiedPtr, ok := dest[14].(*pgtype.Bool); ok {
 			err := emailVerifiedPtr.Scan(m.EmailVerified)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
@@ -500,7 +505,7 @@ var _ = Describe("Profile Database", func() {
 				Expect(dbConnMock.QueryRowCalled).Should(BeTrue())
 				Expect(rowMock.ScanCalled).Should(BeTrue())
 
-				updateQuery := `UPDATE test_db.profilesSET email = @email, first_name = @first_name, last_name = @last_name, phone_number = @phone_number,date_of_birth = @date_of_birth, country_code = @country_code, address_line_1 = @address_line_1,address_line_2 = @address_line_2, city = @city, state = @state, postal_code = @postal_code, country = @countryWHERE id = @id AND deleted = false RETURNING id, email, first_name, last_name, phone_number, date_of_birth, country_code,address_line_1, address_line_2, city, state, postal_code, country, email_verified;`
+				updateQuery := `UPDATE test_db.profilesSET email = @email, first_name = @first_name, last_name = @last_name, phone_number = @phone_number,date_of_birth = @date_of_birth, country_code = @country_code, address_line_1 = @address_line_1,address_line_2 = @address_line_2, city = @city, state = @state, postal_code = @postal_code, country = @countryWHERE id = @id AND deleted = false RETURNING id, email, first_name, last_name, phone_number, date_of_birth, country_code,address_line_1, address_line_2, city, state, postal_code, country, huggingface_token_ciphertext, email_verified;`
 				lastQuery := strings.ReplaceAll(dbConnMock.LastQuery, "\n\t", "")
 				lastQuery = strings.ReplaceAll(lastQuery, "    ", "")
 				Expect(lastQuery).Should(Equal(updateQuery))
@@ -576,6 +581,47 @@ var _ = Describe("Profile Database", func() {
 				Expect(res.LastName).Should(Equal("updated_last"))
 				Expect(res.AddressLine1).Should(Equal("456 New St"))
 			})
+		})
+	})
+
+	Describe("UpdateHuggingFaceToken", func() {
+		BeforeEach(func() {
+			database = db.NewProfileDB(dbCore)
+			Expect(database).ShouldNot(BeNil())
+		})
+
+		It("updates the encrypted token and returns the profile", func() {
+			rowMock := &mockProfileRow{
+				NextScan: mockProfileScan{
+					ID:                         userID.String(),
+					Email:                      "email",
+					HuggingFaceTokenCiphertext: "ciphertext-1",
+				},
+			}
+			dbConnMock.NextRow = rowMock
+
+			res, err := database.UpdateHuggingFaceToken(ctx, userID, "ciphertext-1")
+
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(res).ShouldNot(BeNil())
+			Expect(res.ID).Should(Equal(userID))
+			Expect(res.HuggingFaceTokenCiphertext).Should(Equal("ciphertext-1"))
+			Expect(dbConnMock.QueryRowCalled).Should(BeTrue())
+			Expect(dbConnMock.LastQuery).Should(ContainSubstring("SET huggingface_token_ciphertext = @huggingface_token_ciphertext"))
+			Expect(dbConnMock.LastArgs[0]).Should(SatisfyAll(
+				HaveKeyWithValue("id", pgtype.UUID{Bytes: userID, Valid: true}),
+				HaveKeyWithValue("huggingface_token_ciphertext", pgtype.Text{String: "ciphertext-1", Valid: true}),
+			))
+		})
+
+		It("returns not found when no profile is updated", func() {
+			rowMock := &mockProfileRow{NextError: pgx.ErrNoRows}
+			dbConnMock.NextRow = rowMock
+
+			res, err := database.UpdateHuggingFaceToken(ctx, userID, "ciphertext-1")
+
+			Expect(res).To(BeNil())
+			Expect(err).To(MatchError(domain.ErrProfileNotFound))
 		})
 	})
 
@@ -709,7 +755,7 @@ var _ = Describe("Profile Database", func() {
 				Expect(res.PostalCode).Should(Equal("10001"))
 				Expect(res.Country).Should(Equal("Test Country"))
 
-				expectedQuery := "\n\tSELECT id, email, first_name, last_name, phone_number,\n\tdate_of_birth, country_code, address_line_1, address_line_2, city, state,\n\tpostal_code, country, email_verified\n\tFROM test_db.profiles WHERE id = @id AND deleted = false;"
+				expectedQuery := "\n\tSELECT id, email, first_name, last_name, phone_number,\n\tdate_of_birth, country_code, address_line_1, address_line_2, city, state,\n\tpostal_code, country, huggingface_token_ciphertext, email_verified\n\tFROM test_db.profiles WHERE id = @id AND deleted = false;"
 				Expect(dbConnMock.LastQuery).Should(Equal(expectedQuery))
 				Expect(dbConnMock.LastArgs[0]).Should(Equal(
 					pgx.NamedArgs{

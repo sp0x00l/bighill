@@ -43,7 +43,7 @@ service account annotations:
 ```yaml
 serviceAccount:
   create: true
-  name: data-ingestion-service
+  name: ingestion-service
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/bighill-staging-data-ingestion-service
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/bighill-staging-ingestion-service
 ```

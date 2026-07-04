@@ -24,6 +24,7 @@ import (
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
+	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
 
 	log "github.com/sirupsen/logrus"
@@ -39,6 +40,7 @@ type registryConfig struct {
 	OutboxBackend      string
 	OutboxRelay        messagingConn.OutboxRelayConfig
 	Topics             registrymessaging.ModelRegistryTopics
+	ProfileTopic       string
 	Serving            servingConfig
 	Health             healthConfig
 }
@@ -140,6 +142,7 @@ func main() {
 		modeldb.WithTransactionalOutbox(orderedOutbox, cfg.Topics.ModelRegistry),
 		modeldb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
+	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 	var servingObserver interface {
 		Start(context.Context) error
 	}
@@ -189,6 +192,21 @@ func main() {
 	})
 	startSubscriber("training-failed", []string{cfg.Topics.Training}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, registrymessaging.NewModelTrainingFailedEventListener(modelUsecase))
+	})
+	startSubscriber("model-artifact-ingested", []string{cfg.Topics.Ingestion}, func(subscriber messagingConn.Subscriber) {
+		messagingConn.AddListener(subscriber, registrymessaging.NewModelArtifactIngestedEventListener(modelUsecase))
+	})
+	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
+	})
+	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
+	})
+	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
 
 	go func() {
@@ -246,7 +264,9 @@ func readModelRegistryConfig() registryConfig {
 		Topics: registrymessaging.ModelRegistryTopics{
 			ModelRegistry: env.WithDefaultString("MODEL_REGISTRY_SERVICE_TOPIC", "model_registry"),
 			Training:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC", "training"),
+			Ingestion:     env.WithDefaultString("MODEL_REGISTRY_SERVICE_INGESTION_SUBSCRIBER_TOPIC", "ingestion"),
 		},
+		ProfileTopic: env.WithDefaultString("MODEL_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
 		Serving: servingConfig{
 			Enabled:         env.WithDefaultBool("MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED", true),
 			Backend:         env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_BACKEND", defaultServingBackend()),

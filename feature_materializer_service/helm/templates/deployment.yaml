@@ -45,10 +45,12 @@ spec:
               value: {{ .Values.env.kafkaAutoOffsetReset | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_TOPIC
               value: {{ .Values.env.topic | quote }}
-            - name: FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC
-              value: {{ .Values.env.dataIngestionSubscriberTopic | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_INGESTION_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.ingestionSubscriberTopic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_PROFILE_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.profileSubscriberTopic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX

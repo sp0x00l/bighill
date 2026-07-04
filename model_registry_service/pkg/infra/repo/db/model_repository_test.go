@@ -136,8 +136,13 @@ func (r errorRow) Scan(...any) error {
 
 type modelRow struct {
 	ModelID           uuid.UUID
+	UserID            uuid.UUID
 	TrainingRunID     uuid.UUID
 	DatasetID         uuid.UUID
+	ModelKind         string
+	Source            string
+	SourceURI         string
+	SourceMetadata    string
 	Name              string
 	ModelVersion      int
 	BaseModel         string
@@ -156,22 +161,27 @@ type modelRow struct {
 
 func (r modelRow) Scan(dest ...any) error {
 	*(dest[0].(*string)) = r.ModelID.String()
-	*(dest[1].(*string)) = r.TrainingRunID.String()
-	*(dest[2].(*string)) = r.DatasetID.String()
-	*(dest[3].(*string)) = r.Name
-	*(dest[4].(*int)) = r.ModelVersion
-	*(dest[5].(*string)) = r.BaseModel
-	*(dest[6].(*string)) = r.ArtifactLocation
-	*(dest[7].(*string)) = r.ArtifactFormat
-	*(dest[8].(*string)) = r.ArtifactChecksum
-	*(dest[9].(*int64)) = r.ArtifactSizeBytes
-	*(dest[10].(*string)) = r.AdapterURI
-	*(dest[11].(*string)) = r.ServingTarget
-	*(dest[12].(*string)) = r.ServingModel
-	*(dest[13].(*string)) = r.ServingLoadStatus
-	*(dest[14].(*string)) = r.MetricsMetadata
-	*(dest[15].(*string)) = r.Status
-	*(dest[16].(*string)) = r.FailureReason
+	*(dest[1].(*string)) = r.UserID.String()
+	*(dest[2].(*string)) = r.TrainingRunID.String()
+	*(dest[3].(*string)) = r.DatasetID.String()
+	*(dest[4].(*string)) = r.ModelKind
+	*(dest[5].(*string)) = r.Source
+	*(dest[6].(*string)) = r.SourceURI
+	*(dest[7].(*string)) = r.SourceMetadata
+	*(dest[8].(*string)) = r.Name
+	*(dest[9].(*int)) = r.ModelVersion
+	*(dest[10].(*string)) = r.BaseModel
+	*(dest[11].(*string)) = r.ArtifactLocation
+	*(dest[12].(*string)) = r.ArtifactFormat
+	*(dest[13].(*string)) = r.ArtifactChecksum
+	*(dest[14].(*int64)) = r.ArtifactSizeBytes
+	*(dest[15].(*string)) = r.AdapterURI
+	*(dest[16].(*string)) = r.ServingTarget
+	*(dest[17].(*string)) = r.ServingModel
+	*(dest[18].(*string)) = r.ServingLoadStatus
+	*(dest[19].(*string)) = r.MetricsMetadata
+	*(dest[20].(*string)) = r.Status
+	*(dest[21].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -208,13 +218,18 @@ var _ = Describe("ModelRepository", func() {
 		repository = modeldb.NewModelRepository(dbCore)
 
 		modelID = uuid.New()
+		userID := uuid.New()
 		trainingRunID = uuid.New()
 		datasetID = uuid.New()
 		idempotencyKey = uuid.New()
 		registered = &model.Model{
 			ModelID:           modelID,
+			UserID:            userID,
 			TrainingRunID:     trainingRunID,
 			DatasetID:         datasetID,
+			ModelKind:         model.ModelKindFineTuned,
+			Source:            model.ModelSourceTraining,
+			SourceMetadata:    "{}",
 			Name:              "movie-ranker",
 			ModelVersion:      7,
 			BaseModel:         "mistral-7b",
@@ -249,8 +264,12 @@ var _ = Describe("ModelRepository", func() {
 
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: registered.UserID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("training_run_id", pgtype.UUID{Bytes: trainingRunID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("model_kind", model.ModelKindFineTuned.String()))
+			Expect(args).To(HaveKeyWithValue("source", model.ModelSourceTraining.String()))
+			Expect(args).To(HaveKeyWithValue("source_metadata", "{}"))
 			Expect(args).To(HaveKeyWithValue("name", registered.Name))
 			Expect(args).To(HaveKeyWithValue("model_version", registered.ModelVersion))
 			Expect(args).To(HaveKeyWithValue("artifact_format", registered.ArtifactFormat))
@@ -293,7 +312,10 @@ var _ = Describe("ModelRepository", func() {
 			Expect(outbox.message.DispatchKey).To(ContainSubstring("model_updated:"))
 			var payload modelregistrypb.ModelUpdatedEvent
 			Expect(proto.Unmarshal(outbox.message.Message.Payload, &payload)).To(Succeed())
+			Expect(payload.GetUserId()).To(Equal(registered.UserID.String()))
 			Expect(payload.GetAdapterUri()).To(Equal(registered.AdapterURI))
+			Expect(payload.GetModelKind()).To(Equal(model.ModelKindFineTuned.String()))
+			Expect(payload.GetSource()).To(Equal(model.ModelSourceTraining.String()))
 			Expect(payload.GetServingTarget()).To(Equal(registered.ServingTarget))
 			Expect(payload.GetServingModel()).To(Equal(registered.ServingModel))
 			Expect(payload.GetServingLoadStatus()).To(Equal(model.ModelLoadStatusLoaded.String()))
@@ -388,6 +410,7 @@ var _ = Describe("ModelRepository", func() {
 			Expect(outbox.message.Topic).To(Equal("model_registry"))
 			var payload modelregistrypb.ModelUpdatedEvent
 			Expect(proto.Unmarshal(outbox.message.Message.Payload, &payload)).To(Succeed())
+			Expect(payload.GetUserId()).To(Equal(registered.UserID.String()))
 			Expect(payload.GetStatus()).To(Equal(model.ModelStatusReady.String()))
 			Expect(payload.GetServingLoadStatus()).To(Equal(model.ModelLoadStatusLoaded.String()))
 			Expect(signalCount).To(Equal(1))
@@ -419,8 +442,13 @@ var _ = Describe("ModelRepository", func() {
 func newModelRow(modelRecord *model.Model) modelRow {
 	return modelRow{
 		ModelID:           modelRecord.ModelID,
+		UserID:            modelRecord.UserID,
 		TrainingRunID:     modelRecord.TrainingRunID,
 		DatasetID:         modelRecord.DatasetID,
+		ModelKind:         modelRecord.ModelKind.String(),
+		Source:            modelRecord.Source.String(),
+		SourceURI:         modelRecord.SourceURI,
+		SourceMetadata:    modelRecord.SourceMetadata,
 		Name:              modelRecord.Name,
 		ModelVersion:      modelRecord.ModelVersion,
 		BaseModel:         modelRecord.BaseModel,

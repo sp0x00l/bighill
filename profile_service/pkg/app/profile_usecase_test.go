@@ -14,14 +14,16 @@ import (
 )
 
 type passwordProfileDBStub struct {
-	userID              uuid.UUID
-	passwordHash        string
-	readErr             error
-	verifyTokenProfile  *domain.Profile
-	verifyTokenErr      error
-	deleteCalled        bool
-	savedProfileAccount *domain.ProfileAccount
-	savedIdempotencyKey uuid.UUID
+	userID                  uuid.UUID
+	passwordHash            string
+	readErr                 error
+	verifyTokenProfile      *domain.Profile
+	verifyTokenErr          error
+	deleteCalled            bool
+	huggingFaceTokenProfile *domain.Profile
+	huggingFaceCiphertext   string
+	savedProfileAccount     *domain.ProfileAccount
+	savedIdempotencyKey     uuid.UUID
 }
 
 func (s *passwordProfileDBStub) Save(_ context.Context, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
@@ -32,6 +34,10 @@ func (s *passwordProfileDBStub) Save(_ context.Context, profile *domain.ProfileA
 }
 func (s *passwordProfileDBStub) Update(context.Context, uuid.UUID, *domain.Profile) (*domain.Profile, error) {
 	return nil, nil
+}
+func (s *passwordProfileDBStub) UpdateHuggingFaceToken(_ context.Context, _ uuid.UUID, ciphertext string) (*domain.Profile, error) {
+	s.huggingFaceCiphertext = ciphertext
+	return s.huggingFaceTokenProfile, nil
 }
 func (s *passwordProfileDBStub) UpdatePassword(context.Context, uuid.UUID, string) error {
 	return nil
@@ -75,6 +81,17 @@ type noopUserPublisher struct{}
 type recordingUserPublisher struct {
 	updatedProfile *domain.Profile
 	deletedUserID  uuid.UUID
+}
+
+type encryptorStub struct {
+	nextCiphertext string
+	nextErr        error
+	lastPlaintext  string
+}
+
+func (s *encryptorStub) Encrypt(_ context.Context, plaintext string) (string, error) {
+	s.lastPlaintext = plaintext
+	return s.nextCiphertext, s.nextErr
 }
 
 func (n *noopUserPublisher) PublishUserCreatedEvent(context.Context, *domain.ProfileAccount) error {
@@ -196,8 +213,8 @@ var _ = Describe("profilesUseCase CreateProfile", func() {
 		err := profiles.CreateProfile(context.Background(), profile, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dbStub.savedProfileAccount).NotTo(BeNil())
-		Expect(dbStub.savedProfileAccount.EmailVerifyToken).To(Equal("staging-test-email-verify-token"))
-		Expect(profile.EmailVerifyToken).To(Equal("staging-test-email-verify-token"))
+		Expect(dbStub.savedProfileAccount.EmailVerifyToken).To(HavePrefix("staging-test-email-verify-token-"))
+		Expect(profile.EmailVerifyToken).To(Equal(dbStub.savedProfileAccount.EmailVerifyToken))
 		Expect(dbStub.savedProfileAccount.EmailVerifyExpiresAt.IsZero()).To(BeFalse())
 	})
 
@@ -272,5 +289,43 @@ var _ = Describe("profilesUseCase DeleteProfile", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dbStub.deleteCalled).To(BeTrue())
 		Expect(publisher.deletedUserID).To(Equal(userID))
+	})
+})
+
+var _ = Describe("profilesUseCase ReplaceHuggingFaceToken", func() {
+	It("encrypts the token, stores it, and publishes the updated profile", func() {
+		userID := uuid.New()
+		updated := &domain.Profile{
+			ProfileAccount: domain.ProfileAccount{
+				ID:                         userID,
+				Email:                      "user@example.com",
+				HuggingFaceTokenCiphertext: "ciphertext-1",
+			},
+		}
+		dbStub := &passwordProfileDBStub{huggingFaceTokenProfile: updated}
+		publisher := &recordingUserPublisher{}
+		encryptor := &encryptorStub{nextCiphertext: "ciphertext-1"}
+
+		profiles := usecase.NewProfilesUseCase(
+			usecase.ProfilesUseCaseDeps{
+				ProfilesRepository: dbStub,
+				MsgPublisher:       publisher,
+				AuthStore:          &passwordAuthStoreStub{},
+				AuthProvider:       &passwordAuthProviderStub{},
+				SecretEncryptor:    encryptor,
+			},
+			usecase.ProfilesUseCaseConfig{
+				AuthExpirationInMinutes: 15,
+				EmailValidationTTL:      60 * time.Minute,
+			},
+			usecase.WithProfileClock(sharedclock.System{}),
+		)
+
+		err := profiles.ReplaceHuggingFaceToken(context.Background(), userID, "hf-token")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(encryptor.lastPlaintext).To(Equal("hf-token"))
+		Expect(dbStub.huggingFaceCiphertext).To(Equal("ciphertext-1"))
+		Expect(publisher.updatedProfile).To(Equal(updated))
 	})
 })

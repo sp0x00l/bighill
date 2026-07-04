@@ -12,6 +12,7 @@ import (
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
 	featurepb "lib/data_contracts_lib/feature_materializer"
+	"lib/shared_lib/ctxutil"
 	rpcLib "lib/shared_lib/rpc"
 
 	"github.com/google/uuid"
@@ -88,6 +89,11 @@ func (s *FeatureMaterializerServer) SearchEmbeddings(ctx context.Context, req *f
 	if err != nil || datasetID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid dataset_id")
 	}
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil || userID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	queryText := strings.TrimSpace(req.GetQueryText())
 	if queryText == "" {
 		return nil, status.Error(codes.InvalidArgument, "query_text is required")
@@ -97,7 +103,7 @@ func (s *FeatureMaterializerServer) SearchEmbeddings(ctx context.Context, req *f
 		return nil, status.Error(codes.InvalidArgument, "top_k must be greater than zero")
 	}
 
-	result, err := s.searchUsecase.SearchEmbeddings(ctx, datasetID, queryText, topK)
+	result, err := s.searchUsecase.SearchEmbeddings(ctx, userID, datasetID, queryText, topK)
 	if err != nil {
 		return nil, embeddingSearchStatusError(err)
 	}

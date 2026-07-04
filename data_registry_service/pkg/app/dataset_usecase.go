@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"data_registry_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 	corePagination "lib/shared_lib/transport"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
@@ -51,6 +52,9 @@ func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Datas
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.create_dataset", attrs...)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	if dataset != nil {
+		ctx = ctxutil.WithTenantID(ctx, dataset.UserID)
+	}
 	model.NormalizeDatasetMetadata(dataset)
 
 	return u.datasetsRepository.Create(ctx, dataset, idempotencyKey)
@@ -87,6 +91,7 @@ func (u *datasetUseCase) ReadPublishedDatasetsByUserID(ctx context.Context, user
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	return u.datasetsRepository.ReadPublishedByUserID(ctx, userID, pagination, filters)
 }
 
@@ -99,6 +104,7 @@ func (u *datasetUseCase) ReadDatasetsForUser(ctx context.Context, userID uuid.UU
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	return u.datasetsRepository.Read(ctx, userID, pagination, filters)
 }
 
@@ -111,6 +117,7 @@ func (u *datasetUseCase) ReadDatasetForUser(ctx context.Context, datasetID uuid.
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	return u.datasetsRepository.ReadByID(ctx, datasetID, userID)
 }
 
@@ -123,6 +130,7 @@ func (u *datasetUseCase) DeleteDataset(ctx context.Context, datasetID uuid.UUID,
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	return u.datasetsRepository.Delete(ctx, datasetID, userID)
 }
 
@@ -135,6 +143,7 @@ func (u *datasetUseCase) PublishDataset(ctx context.Context, datasetID uuid.UUID
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	return u.datasetsRepository.UpdatePublishedState(ctx, datasetID, userID)
 }
 
@@ -151,6 +160,9 @@ func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Data
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.replace_dataset", attrs...)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	if dataset != nil {
+		ctx = ctxutil.WithTenantID(ctx, dataset.UserID)
+	}
 	model.NormalizeDatasetMetadata(dataset)
 
 	return u.datasetsRepository.Replace(ctx, dataset)
@@ -166,6 +178,7 @@ func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, data
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	updated, _, err = u.datasetsRepository.UpdateProcessingState(ctx, datasetID, userID, state)
 	if err != nil {
 		return nil, err
@@ -187,5 +200,8 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.record_materialization", attrs...)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	if materialized != nil {
+		ctx = ctxutil.WithTenantID(ctx, materialized.UserID)
+	}
 	return u.datasetsRepository.RecordMaterialization(ctx, materialized, state)
 }

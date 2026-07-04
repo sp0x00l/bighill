@@ -2,6 +2,7 @@ DROP TRIGGER IF EXISTS outbox_messages_updated_at ON bighill_inference_db.outbox
 DROP TRIGGER IF EXISTS preference_dataset_snapshots_updated_at ON bighill_inference_db.preference_dataset_snapshots;
 DROP TRIGGER IF EXISTS inference_datasets_updated_at ON bighill_inference_db.inference_datasets;
 DROP TRIGGER IF EXISTS inference_models_updated_at ON bighill_inference_db.inference_models;
+DROP TRIGGER IF EXISTS tenants_updated_at ON bighill_inference_db.tenants;
 DROP TABLE IF EXISTS bighill_inference_db.outbox_messages;
 DROP TABLE IF EXISTS bighill_inference_db.preference_dataset_snapshots;
 DROP TABLE IF EXISTS bighill_inference_db.preference_examples;
@@ -9,7 +10,12 @@ DROP TABLE IF EXISTS bighill_inference_db.inference_feedback;
 DROP TABLE IF EXISTS bighill_inference_db.inference_requests;
 DROP TABLE IF EXISTS bighill_inference_db.inference_datasets;
 DROP TABLE IF EXISTS bighill_inference_db.inference_models;
+DROP TABLE IF EXISTS bighill_inference_db.tenants;
 DROP TYPE IF EXISTS inference_request_status_enum;
 DROP TYPE IF EXISTS inference_dataset_processing_state_enum;
+DROP TYPE IF EXISTS inference_model_source_enum;
+DROP TYPE IF EXISTS inference_model_kind_enum;
 DROP TYPE IF EXISTS inference_model_load_status_enum;
 DROP TYPE IF EXISTS inference_model_status_enum;
+
+DROP FUNCTION IF EXISTS updated_at_column();

@@ -12,6 +12,7 @@ import (
 type ProfileDB interface {
 	Save(ctx context.Context, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error
 	Update(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error)
+	UpdateHuggingFaceToken(ctx context.Context, userID uuid.UUID, ciphertext string) (*domain.Profile, error)
 	UpdatePassword(ctx context.Context, userID uuid.UUID, newPassword string) error
 	VerifyEmail(ctx context.Context, token string) (*domain.Profile, error)
 	Read(ctx context.Context, userID uuid.UUID) (*domain.Profile, error)
@@ -22,6 +23,10 @@ type ProfileDB interface {
 	CreateOAuthProfile(ctx context.Context, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error)
 	SaveOAuthIdentity(ctx context.Context, userID uuid.UUID, identity domain.OAuthIdentity) error
 	Delete(ctx context.Context, userID uuid.UUID) error
+}
+
+type SecretEncryptor interface {
+	Encrypt(context.Context, string) (string, error)
 }
 
 type UserEventPublisher interface {

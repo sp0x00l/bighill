@@ -16,12 +16,16 @@ import (
 type embeddingSearchRepoStub struct {
 	activeSnapshot *model.EmbeddingSnapshot
 	activeErr      error
+	userID         uuid.UUID
+	datasetID      uuid.UUID
 	queryVector    []float32
 	topK           int
 	records        []model.EmbeddingRecord
 }
 
-func (s *embeddingSearchRepoStub) ReadActiveEmbeddingSnapshot(context.Context, uuid.UUID) (*model.EmbeddingSnapshot, error) {
+func (s *embeddingSearchRepoStub) ReadActiveEmbeddingSnapshot(_ context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.EmbeddingSnapshot, error) {
+	s.userID = userID
+	s.datasetID = datasetID
 	if s.activeErr != nil {
 		return nil, s.activeErr
 	}
@@ -77,9 +81,11 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		}
 		uc := usecase.NewEmbeddingSearchUsecase(repo, providerFactory)
 
-		result, err := uc.SearchEmbeddings(context.Background(), datasetID, "what happened?", 7)
+		result, err := uc.SearchEmbeddings(context.Background(), activeSnapshot.UserID, datasetID, "what happened?", 7)
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(repo.userID).To(Equal(activeSnapshot.UserID))
+		Expect(repo.datasetID).To(Equal(datasetID))
 		Expect(result.EmbeddingSnapshot).To(Equal(activeSnapshot))
 		Expect(result.Matches).To(HaveLen(1))
 		Expect(receivedStrategy.EmbeddingProvider).To(Equal(activeSnapshot.EmbeddingProvider))
@@ -97,7 +103,7 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 			return queryEmbeddingProviderStub{dimensions: activeSnapshot.EmbeddingDimensions + 1}, nil
 		})
 
-		result, err := uc.SearchEmbeddings(context.Background(), activeSnapshot.DatasetID, "query", 5)
+		result, err := uc.SearchEmbeddings(context.Background(), activeSnapshot.UserID, activeSnapshot.DatasetID, "query", 5)
 
 		Expect(result).To(BeNil())
 		Expect(errors.Is(err, domain.ErrEmbeddingSearch)).To(BeTrue())

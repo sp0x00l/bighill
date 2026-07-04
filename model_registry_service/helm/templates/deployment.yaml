@@ -100,6 +100,10 @@ spec:
               value: {{ .Values.env.topic | quote }}
             - name: MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC
               value: {{ .Values.env.trainingSubscriberTopic | quote }}
+            - name: MODEL_REGISTRY_SERVICE_INGESTION_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.ingestionSubscriberTopic | quote }}
+            - name: MODEL_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.profileSubscriberTopic | quote }}
             - name: MODEL_REGISTRY_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: MODEL_REGISTRY_SERVICE_OUTBOX

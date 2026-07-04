@@ -17,6 +17,7 @@ import (
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
 	serializers "lib/shared_lib/serializer"
+	sharedTenant "lib/shared_lib/tenant"
 	"lib/shared_lib/trace"
 	"net"
 	"net/http"
@@ -42,6 +43,7 @@ type registryConfig struct {
 	OutboxBackend         string
 	OutboxRelay           messagingConn.OutboxRelayConfig
 	Topic                 string
+	ProfileTopic          string
 	MaterializationTopics registrymessaging.MaterializationTopics
 	Health                healthConfig
 }
@@ -129,6 +131,7 @@ func main() {
 		db.WithTransactionalOutbox(orderedOutbox, cfg.Topic),
 		db.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
+	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 
 	datasetUseCase := usecase.NewDatasetUseCase(datasetDB)
 	encoder := serializers.NewJSONSerializer()
@@ -199,6 +202,18 @@ func main() {
 		registrymessaging.ConfigureSubscriberErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, registrymessaging.NewEmbeddingSnapshotReadyEventListener(datasetUseCase))
 	})
+	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
+	})
+	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
+	})
+	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
+	})
 
 	go func() {
 		if err := healthCheck.Connect(ctx); err != nil {
@@ -251,7 +266,8 @@ func readRegistryConfig() registryConfig {
 			FailureBackoff: time.Duration(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
 			BatchSize:      int32(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
 		},
-		Topic: env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry"),
+		Topic:        env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry"),
+		ProfileTopic: env.WithDefaultString("DATA_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
 		MaterializationTopics: registrymessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC", "feature_materializer"),
 		},

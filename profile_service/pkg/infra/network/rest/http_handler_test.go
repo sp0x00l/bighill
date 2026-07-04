@@ -33,6 +33,7 @@ type profilesDTOAdapterMock struct {
 	FromPasswordDTOCalled           bool
 	FromPasswordValidationDTOCalled bool
 	FromEmailVerificationDTOCalled  bool
+	FromHuggingFaceTokenDTOCalled   bool
 	ToPasswordResultDTOCalled       bool
 	FromOAuthAuthorizeCalled        bool
 	ToOAuthAuthorizeCalled          bool
@@ -45,6 +46,7 @@ type profilesDTOAdapterMock struct {
 	NextProfileAccountBytes []byte
 	NextEmail               string
 	NextPassword            string
+	NextHuggingFaceToken    string
 	NextEmailVerifyToken    string
 	NextPasswordBytes       []byte
 	NextOAuthAuthorizeReq   *usecase.OAuthAuthorizeRequest
@@ -104,6 +106,12 @@ func (m *profilesDTOAdapterMock) FromEmailVerificationDTO(_ context.Context, ema
 	return m.NextEmailVerifyToken, m.NextError
 }
 
+func (m *profilesDTOAdapterMock) FromHuggingFaceTokenDTO(_ context.Context, tokenBytes []byte) (string, error) {
+	m.FromHuggingFaceTokenDTOCalled = true
+	m.LastPasswordBytes = tokenBytes
+	return m.NextHuggingFaceToken, m.NextError
+}
+
 func (m *profilesDTOAdapterMock) ToPasswordResultDTO(_ context.Context, isValid bool, token string) ([]byte, error) {
 	m.ToPasswordResultDTOCalled = true
 	m.LastToken = token
@@ -136,6 +144,7 @@ type profileUseCaseMock struct {
 	ReadProfileCalled              bool
 	DeleteProfileCalled            bool
 	ReplacePasswordCalled          bool
+	ReplaceHuggingFaceTokenCalled  bool
 	VerifyPasswordCalled           bool
 	VerifyEmailCalled              bool
 	CreateOAuthAuthorizationCalled bool
@@ -148,14 +157,15 @@ type profileUseCaseMock struct {
 	NextOAuthSession *usecase.OAuthSessionResult
 	NextError        error
 
-	LastProfile        *domain.Profile
-	LastProfileAccount *domain.ProfileAccount
-	LastIdempotencyKey uuid.UUID
-	LastUserID         uuid.UUID
-	LastEmail          string
-	LastToken          string
-	LastPassword       string
-	LastSessionID      string
+	LastProfile          *domain.Profile
+	LastProfileAccount   *domain.ProfileAccount
+	LastIdempotencyKey   uuid.UUID
+	LastUserID           uuid.UUID
+	LastEmail            string
+	LastToken            string
+	LastPassword         string
+	LastHuggingFaceToken string
+	LastSessionID        string
 }
 
 func (m *profileUseCaseMock) CreateProfile(_ context.Context, account *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
@@ -188,6 +198,13 @@ func (m *profileUseCaseMock) ReplacePassword(_ context.Context, userID uuid.UUID
 	m.ReplacePasswordCalled = true
 	m.LastUserID = userID
 	m.LastPassword = newPassword
+	return m.NextError
+}
+
+func (m *profileUseCaseMock) ReplaceHuggingFaceToken(_ context.Context, userID uuid.UUID, token string) error {
+	m.ReplaceHuggingFaceTokenCalled = true
+	m.LastUserID = userID
+	m.LastHuggingFaceToken = token
 	return m.NextError
 }
 
@@ -611,6 +628,50 @@ var _ = Describe("Profiles HTTP handlers", func() {
 					Expect(err).To(HaveOccurred())
 					Expect(status).To(Equal(http.StatusInternalServerError))
 				})
+			})
+		})
+	})
+
+	Describe("ReplaceHuggingFaceToken", func() {
+		Context("success", func() {
+			It("stores the token for the authenticated user", func() {
+				req = makeJSONReq([]byte(`{"token":"hf-token"}`))
+				req.Header.Set(userIDHeader, userID.String())
+				dtoProfileAdapter.NextHuggingFaceToken = "hf-token"
+
+				status, body, err := handlers.ReplaceHuggingFaceToken(ctx, req)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(status).To(Equal(http.StatusNoContent))
+				Expect(body).To(BeNil())
+				Expect(dtoProfileAdapter.FromHuggingFaceTokenDTOCalled).To(BeTrue())
+				Expect(profileUsecase.ReplaceHuggingFaceTokenCalled).To(BeTrue())
+				Expect(profileUsecase.LastUserID).To(Equal(userID))
+				Expect(profileUsecase.LastHuggingFaceToken).To(Equal("hf-token"))
+			})
+		})
+
+		Context("failure", func() {
+			It("returns 500 when the user header is missing", func() {
+				req = makeJSONReq([]byte(`{"token":"hf-token"}`))
+
+				status, _, err := handlers.ReplaceHuggingFaceToken(ctx, req)
+
+				Expect(err).To(HaveOccurred())
+				Expect(status).To(Equal(http.StatusInternalServerError))
+				Expect(profileUsecase.ReplaceHuggingFaceTokenCalled).To(BeFalse())
+			})
+
+			It("returns 400 when the token payload is invalid", func() {
+				req = makeJSONReq([]byte(`{bad`))
+				req.Header.Set(userIDHeader, userID.String())
+				dtoProfileAdapter.NextError = errors.New("validation failed")
+
+				status, _, err := handlers.ReplaceHuggingFaceToken(ctx, req)
+
+				Expect(err).To(HaveOccurred())
+				Expect(status).To(Equal(http.StatusBadRequest))
+				Expect(profileUsecase.ReplaceHuggingFaceTokenCalled).To(BeFalse())
 			})
 		})
 	})

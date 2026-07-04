@@ -14,6 +14,7 @@ import (
 	"model_registry_service/pkg/domain/model"
 
 	servedmodelstore "lib/shared_lib/servedmodel"
+	"lib/shared_lib/uuidutil"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -267,8 +268,8 @@ func (a *ServedModelAdapter) servedModelObject(name string, registeredModel *mod
 		},
 		"spec": map[string]any{
 			"modelID":          registeredModel.ModelID.String(),
-			"trainingRunID":    registeredModel.TrainingRunID.String(),
-			"datasetID":        registeredModel.DatasetID.String(),
+			"trainingRunID":    uuidutil.StringOrEmpty(registeredModel.TrainingRunID),
+			"datasetID":        uuidutil.StringOrEmpty(registeredModel.DatasetID),
 			"name":             registeredModel.Name,
 			"modelVersion":     int64(registeredModel.ModelVersion),
 			"baseModel":        registeredModel.BaseModel,

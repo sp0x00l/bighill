@@ -7,6 +7,7 @@ import (
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -14,7 +15,7 @@ import (
 )
 
 type EmbeddingSearchUsecase interface {
-	SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int) (*model.EmbeddingSearchResult, error)
+	SearchEmbeddings(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int) (*model.EmbeddingSearchResult, error)
 }
 
 type QueryEmbeddingProvider interface {
@@ -38,16 +39,18 @@ func NewEmbeddingSearchUsecase(repository EmbeddingSearchRepository, providerFac
 	}
 }
 
-func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int) (result *model.EmbeddingSearchResult, err error) {
+func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int) (result *model.EmbeddingSearchResult, err error) {
 	log.Trace("EmbeddingSearchUsecase SearchEmbeddings")
 
 	ctx, span := startFeatureMaterializerSpan(ctx, "feature_materializer_service/app", "embedding.search",
+		attribute.String("user_id", userID.String()),
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.Int("top_k", topK),
 	)
 	defer endFeatureMaterializerSpanOnReturn(ctx, span, &err)
 
-	activeSnapshot, err := u.repository.ReadActiveEmbeddingSnapshot(ctx, datasetID)
+	ctx = ctxutil.WithTenantID(ctx, userID)
+	activeSnapshot, err := u.repository.ReadActiveEmbeddingSnapshot(ctx, userID, datasetID)
 	if err != nil {
 		return nil, err
 	}

@@ -10,12 +10,12 @@ import (
 
 type InferenceModelRepository interface {
 	UpsertModel(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error)
-	ReadByID(ctx context.Context, modelID uuid.UUID) (*model.InferenceModel, error)
+	ReadByID(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
 }
 
 type InferenceDatasetRepository interface {
 	UpsertDataset(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error)
-	ReadDataset(ctx context.Context, datasetID uuid.UUID) (*model.InferenceDataset, error)
+	ReadDataset(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.InferenceDataset, error)
 }
 
 type InferenceRequestRepository interface {
@@ -33,7 +33,7 @@ type PreferenceDatasetWriter interface {
 }
 
 type RetrievalClient interface {
-	SearchEmbeddings(ctx context.Context, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error)
+	SearchEmbeddings(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error)
 	Close() error
 }
 

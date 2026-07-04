@@ -41,6 +41,7 @@ func ToTrainingRunStatus(value string) (TrainingRunStatus, error) {
 
 type TrainingRunRequest struct {
 	TrainingRunID        string
+	UserID               string
 	DatasetID            string
 	DatasetVersion       string
 	FeatureSnapshotID    string
@@ -149,6 +150,7 @@ type EvaluationJobSpec struct {
 
 type TrainingRunResult struct {
 	TrainingRunID     string
+	UserID            string
 	DatasetID         string
 	DatasetVersion    string
 	FeatureSnapshotID string

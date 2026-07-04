@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
 	coreDB "lib/shared_lib/db"
 
@@ -27,15 +28,16 @@ func (r *InferenceRequestRepository) RecordInferenceRequest(ctx context.Context,
 	log.Trace("InferenceRequestRepository RecordInferenceRequest")
 
 	query := `INSERT INTO ` + r.Name + `.inference_requests (
-		request_id, dataset_id, model_id, embedding_snapshot_id, query_text, top_k,
+		request_id, user_id, dataset_id, model_id, embedding_snapshot_id, query_text, top_k,
 		metadata_filters, retrieved_context_ids, retrieved_contexts, prompt_text, answer_text,
 		prompt_strategy_version, generation_provider, generation_model, latency_ms, status, error_message
 	) VALUES (
-		@request_id, @dataset_id, @model_id, @embedding_snapshot_id, @query_text, @top_k,
+		@request_id, @user_id, @dataset_id, @model_id, @embedding_snapshot_id, @query_text, @top_k,
 		@metadata_filters::jsonb, @retrieved_context_ids::jsonb, @retrieved_contexts::jsonb, @prompt_text, @answer_text,
 		@prompt_strategy_version, @generation_provider, @generation_model, @latency_ms, @status, @error_message
 	)
 	ON CONFLICT (request_id) DO UPDATE SET
+		user_id = EXCLUDED.user_id,
 		dataset_id = EXCLUDED.dataset_id,
 		model_id = EXCLUDED.model_id,
 		embedding_snapshot_id = EXCLUDED.embedding_snapshot_id,
@@ -55,6 +57,9 @@ func (r *InferenceRequestRepository) RecordInferenceRequest(ctx context.Context,
 
 	if _, err := r.Pool.Exec(ctx, query, inferenceRequestArgs(request)); err != nil {
 		r.LogPoolStatsOnError(ctx, "record inference request failed", err)
+		if coreDB.IsForeignKeyViolation(err) {
+			return domain.ErrValidationFailed.Extend("tenant projection is not ready")
+		}
 		return fmt.Errorf("record inference request: %w", err)
 	}
 	return nil
@@ -65,6 +70,7 @@ func inferenceRequestArgs(request *model.InferenceRequest) pgx.NamedArgs {
 
 	return pgx.NamedArgs{
 		"request_id":              nullableUUID(request.RequestID),
+		"user_id":                 nullableUUID(request.UserID),
 		"dataset_id":              nullableUUID(request.DatasetID),
 		"model_id":                nullableUUID(request.ModelID),
 		"embedding_snapshot_id":   nullableUUID(request.EmbeddingSnapshotID),

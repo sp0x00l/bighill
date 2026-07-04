@@ -21,6 +21,7 @@ func TestFeatureMaterializerGrpc(t *testing.T) {
 }
 
 type embeddingSearchUsecaseStub struct {
+	userID    uuid.UUID
 	datasetID uuid.UUID
 	queryText string
 	topK      int
@@ -28,7 +29,8 @@ type embeddingSearchUsecaseStub struct {
 	err       error
 }
 
-func (s *embeddingSearchUsecaseStub) SearchEmbeddings(_ context.Context, datasetID uuid.UUID, queryText string, topK int) (*model.EmbeddingSearchResult, error) {
+func (s *embeddingSearchUsecaseStub) SearchEmbeddings(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int) (*model.EmbeddingSearchResult, error) {
+	s.userID = userID
 	s.datasetID = datasetID
 	s.queryText = queryText
 	s.topK = topK
@@ -37,6 +39,7 @@ func (s *embeddingSearchUsecaseStub) SearchEmbeddings(_ context.Context, dataset
 
 var _ = Describe("FeatureMaterializerServer", func() {
 	It("maps search requests and responses", func() {
+		userID := uuid.New()
 		datasetID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		featureSnapshotID := uuid.New()
@@ -46,6 +49,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 				EmbeddingSnapshot: &model.EmbeddingSnapshot{
 					EmbeddingSnapshotID: embeddingSnapshotID,
 					FeatureSnapshotID:   featureSnapshotID,
+					UserID:              userID,
 					DatasetID:           datasetID,
 					VectorStore:         "pgvector",
 					CollectionName:      "movies",
@@ -73,11 +77,13 @@ var _ = Describe("FeatureMaterializerServer", func() {
 
 		response, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
 			DatasetId: datasetID.String(),
+			UserId:    userID.String(),
 			QueryText: " query ",
 			TopK:      9,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.userID).To(Equal(userID))
 		Expect(uc.datasetID).To(Equal(datasetID))
 		Expect(uc.queryText).To(Equal("query"))
 		Expect(uc.topK).To(Equal(9))
@@ -94,6 +100,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{})
 
 		_, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
+			UserId:    uuid.NewString(),
 			DatasetId: "not-a-uuid",
 			QueryText: "query",
 		})
@@ -105,6 +112,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{})
 
 		_, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
+			UserId:    uuid.NewString(),
 			DatasetId: uuid.NewString(),
 			QueryText: "query",
 		})

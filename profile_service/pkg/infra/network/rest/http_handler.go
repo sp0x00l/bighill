@@ -65,6 +65,12 @@ func (ph *HttpHandler) GetRoutes() []transport.Route {
 			SpanName: "replace-password",
 		},
 		{
+			Path:     "/private/v1/profiles/huggingface-token",
+			Handler:  ph.ReplaceHuggingFaceToken,
+			Method:   http.MethodPut,
+			SpanName: "replace-huggingface-token",
+		},
+		{
 			Path:     "/public/v1/profiles/password/verify",
 			Handler:  ph.VerifyPassword,
 			Method:   http.MethodPost,
@@ -96,6 +102,35 @@ func (ph *HttpHandler) GetRoutes() []transport.Route {
 		},
 	}
 	return routes
+}
+
+func (ph *HttpHandler) ReplaceHuggingFaceToken(ctx context.Context, r *http.Request) (int, []byte, error) {
+	log.Trace("HttpHandler ReplaceHuggingFaceToken")
+
+	userID, err := transport.ReadUserIDHeader(ctx, r)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Warn("failed to read user ID from header")
+		return http.StatusInternalServerError, nil, err
+	}
+	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+
+	reqBody, err := transport.ReadReqBody(ctx, r)
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+
+	token, err := ph.profilesDTOAdapter.FromHuggingFaceTokenDTO(ctx, reqBody)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Warn("parsing hugging face token payload failed")
+		return http.StatusBadRequest, nil, err
+	}
+
+	if err := ph.profilesUseCase.ReplaceHuggingFaceToken(ctx, userID, token); err != nil {
+		log.WithContext(ctx).WithError(err).Error("replace hugging face token failed")
+		return httpStatusFor(err), nil, err
+	}
+
+	return http.StatusNoContent, nil, nil
 }
 
 func (ph *HttpHandler) CreateProfile(ctx context.Context, r *http.Request) (int, []byte, error) {

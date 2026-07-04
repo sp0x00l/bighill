@@ -13,20 +13,21 @@ import (
 )
 
 type ProfileDAO struct {
-	ID            pgtype.UUID
-	Email         pgtype.Text
-	EmailVerified pgtype.Bool
-	FirstName     pgtype.Text
-	LastName      pgtype.Text
-	PhoneNumber   pgtype.Text
-	DateOfBirth   pgtype.Date
-	CountryCode   pgtype.Text
-	AddressLine1  pgtype.Text
-	AddressLine2  pgtype.Text
-	City          pgtype.Text
-	State         pgtype.Text
-	PostalCode    pgtype.Text
-	Country       pgtype.Text
+	ID                         pgtype.UUID
+	Email                      pgtype.Text
+	EmailVerified              pgtype.Bool
+	FirstName                  pgtype.Text
+	LastName                   pgtype.Text
+	PhoneNumber                pgtype.Text
+	DateOfBirth                pgtype.Date
+	CountryCode                pgtype.Text
+	AddressLine1               pgtype.Text
+	AddressLine2               pgtype.Text
+	City                       pgtype.Text
+	State                      pgtype.Text
+	PostalCode                 pgtype.Text
+	Country                    pgtype.Text
+	HuggingFaceTokenCiphertext pgtype.Text
 }
 
 type ProfileAccountDAO struct {
@@ -149,11 +150,12 @@ func FromDAOOAuthProfileID(dao *OAuthProfileIDDAO) uuid.UUID {
 func FromDAO(dao *ProfileDAO) (*domain.Profile, error) {
 	return &domain.Profile{
 		ProfileAccount: domain.ProfileAccount{
-			ID:            dao.ID.Bytes,
-			Email:         dao.Email.String,
-			PhoneNumber:   dao.PhoneNumber.String,
-			CountryCode:   dao.CountryCode.String,
-			EmailVerified: dao.EmailVerified.Bool,
+			ID:                         dao.ID.Bytes,
+			Email:                      dao.Email.String,
+			PhoneNumber:                dao.PhoneNumber.String,
+			CountryCode:                dao.CountryCode.String,
+			HuggingFaceTokenCiphertext: dao.HuggingFaceTokenCiphertext.String,
+			EmailVerified:              dao.EmailVerified.Bool,
 		},
 		FirstName:    dao.FirstName.String,
 		LastName:     dao.LastName.String,

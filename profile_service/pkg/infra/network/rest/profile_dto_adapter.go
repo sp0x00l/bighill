@@ -60,6 +60,10 @@ type emailVerificationDTO struct {
 	Token string `json:"token" validate:"required"`
 }
 
+type huggingFaceTokenDTO struct {
+	Token string `json:"token" validate:"required"`
+}
+
 type oauthAuthorizeRequestDTO struct {
 	RedirectURI   string `json:"redirectUri" validate:"required,url"`
 	CodeChallenge string `json:"codeChallenge" validate:"required,min=43,max=128"`
@@ -102,6 +106,7 @@ type ProfilesDTOAdapter interface {
 	FromPasswordDTO(ctx context.Context, passwordBytes []byte) (string, error)
 	FromPasswordValidationDTO(ctx context.Context, passwordValidationBytes []byte) (string, string, error)
 	FromEmailVerificationDTO(ctx context.Context, emailVerificationBytes []byte) (string, error)
+	FromHuggingFaceTokenDTO(ctx context.Context, tokenBytes []byte) (string, error)
 	FromProfileAccountDTO(ctx context.Context, profileAccountBytes []byte) (*domain.ProfileAccount, error)
 	FromOAuthAuthorizeRequestDTO(ctx context.Context, requestBytes []byte) (*usecase.OAuthAuthorizeRequest, error)
 	ToOAuthAuthorizeResultDTO(ctx context.Context, result *usecase.OAuthAuthorizeResult) ([]byte, error)
@@ -109,6 +114,24 @@ type ProfilesDTOAdapter interface {
 	ToOAuthSessionResultDTO(ctx context.Context, result *usecase.OAuthSessionResult) ([]byte, error)
 	ToProfileAccountDTO(ctx context.Context, profileAccount *domain.ProfileAccount) ([]byte, error)
 	ToPasswordResultDTO(ctx context.Context, isValid bool, token string) ([]byte, error)
+}
+
+func (a *profilesDTOAdapter) FromHuggingFaceTokenDTO(ctx context.Context, tokenBytes []byte) (string, error) {
+	log.Trace("profilesDTOAdapter FromHuggingFaceTokenDTO")
+
+	var tokenDTO huggingFaceTokenDTO
+	err := json.Unmarshal(tokenBytes, &tokenDTO)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("json unmarshalling hugging face token failed")
+		return "", fmt.Errorf("validation error. json unmarshalling hugging face token failed: %w", err)
+	}
+
+	if err := a.validator.Struct(&tokenDTO); err != nil {
+		log.WithContext(ctx).WithError(err).Warn("failed to validate hugging face token")
+		return "", fmt.Errorf("validation error. failed to validate hugging face token: %w", err)
+	}
+
+	return tokenDTO.Token, nil
 }
 
 func NewProfilesDTOAdapter() *profilesDTOAdapter {

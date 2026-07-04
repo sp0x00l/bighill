@@ -43,6 +43,7 @@ var _ = Describe("InferenceRequestRepository", func() {
 			args := namedArgs(pool.lastArgs)
 			Expect(args).To(SatisfyAll(
 				HaveKeyWithValue("request_id", pgtype.UUID{Bytes: request.RequestID, Valid: true}),
+				HaveKeyWithValue("user_id", pgtype.UUID{Bytes: request.UserID, Valid: true}),
 				HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: request.DatasetID, Valid: true}),
 				HaveKeyWithValue("model_id", pgtype.UUID{Bytes: request.ModelID, Valid: true}),
 				HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: request.EmbeddingSnapshotID, Valid: true}),
@@ -89,6 +90,7 @@ var _ = Describe("InferenceRequestRepository", func() {
 func validInferenceRequest() *model.InferenceRequest {
 	return &model.InferenceRequest{
 		RequestID:             uuid.New(),
+		UserID:                uuid.New(),
 		DatasetID:             uuid.New(),
 		ModelID:               uuid.New(),
 		EmbeddingSnapshotID:   uuid.New(),

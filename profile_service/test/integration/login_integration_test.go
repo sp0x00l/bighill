@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	auth "lib/shared_lib/auth"
@@ -73,15 +74,17 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		log.Info("Using DB connection string: ", dbConnectionStr)
 		database, err := dbConn.InitDatabase(ctx, dbConfig.GetName(), dbConnectionStr, log.StandardLogger())
 		Expect(err).ShouldNot(HaveOccurred())
+		Expect(purgeProfileDatabase(ctx, database)).To(Succeed())
 		profileDB = db.NewProfileDB(database)
 
-		port = env.WithDefaultInt("PROFILE_SERVICE_HTTP_PORT", "8082")
 		baseURL = fmt.Sprintf("http://localhost:%d", port)
 
 		dtoProfileAdapter = rest.NewProfilesDTOAdapter()
 	})
 
 	BeforeEach(func() {
+		port = freeProfileIntegrationPort()
+		baseURL = fmt.Sprintf("http://localhost:%d", port)
 		cancelCtxPublisher, cancelFtnPublisher = context.WithCancel(context.Background())
 		groupID := "profile-login-test-" + uuid.New().String()
 		messagingFactory = msgConn.NewMessenger(msgConn.MessengerConfig{
@@ -133,7 +136,10 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		httpServer = transport.NewHttpServer(tracer, routes, port, "login-integration-test")
 
 		go func() {
-			_ = httpServer.Connect()
+			defer GinkgoRecover()
+			if err := httpServer.Connect(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				Fail(fmt.Sprintf("login test server failed: %v", err))
+			}
 		}()
 
 		// Wait for server to start

@@ -31,20 +31,29 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 	log.Trace("InferenceModelRepository UpsertModel")
 
 	query := `INSERT INTO ` + r.Name + `.inference_models (
-		model_id, training_run_id, dataset_id, idempotency_key, name, model_version, base_model,
+		model_id, user_id, training_run_id, dataset_id, idempotency_key,
+		model_kind, source, source_uri, source_metadata,
+		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status,
 		metrics_metadata, status, failure_reason
 	) VALUES (
-		@model_id, @training_run_id, @dataset_id, @idempotency_key, @name, @model_version, @base_model,
+		@model_id, @user_id, @training_run_id, @dataset_id, @idempotency_key,
+		@model_kind, @source, @source_uri, @source_metadata::jsonb,
+		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @serving_target, @serving_model, @serving_load_status,
 		@metrics_metadata::jsonb, @status, @failure_reason
 	)
 	ON CONFLICT (model_id) DO UPDATE SET
 		training_run_id = EXCLUDED.training_run_id,
+		user_id = EXCLUDED.user_id,
 		dataset_id = EXCLUDED.dataset_id,
 		idempotency_key = EXCLUDED.idempotency_key,
+		model_kind = EXCLUDED.model_kind,
+		source = EXCLUDED.source,
+		source_uri = EXCLUDED.source_uri,
+		source_metadata = EXCLUDED.source_metadata,
 		name = EXCLUDED.name,
 		model_version = EXCLUDED.model_version,
 		base_model = EXCLUDED.base_model,
@@ -64,17 +73,21 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 	record, err := scanInferenceModel(r.Pool.QueryRow(ctx, query, modelArgs(inferenceModel, idempotencyKey)))
 	if err != nil {
 		r.LogPoolStatsOnError(ctx, "upsert inference model failed", err)
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
+		}
 		return nil, fmt.Errorf("upsert inference model: %w", err)
 	}
 	return record, nil
 }
 
-func (r *InferenceModelRepository) ReadByID(ctx context.Context, modelID uuid.UUID) (*model.InferenceModel, error) {
+func (r *InferenceModelRepository) ReadByID(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error) {
 	log.Trace("InferenceModelRepository ReadByID")
 
-	query := `SELECT ` + modelColumns() + ` FROM ` + r.Name + `.inference_models WHERE model_id = @model_id`
+	query := `SELECT ` + modelColumns() + ` FROM ` + r.Name + `.inference_models WHERE model_id = @model_id AND (user_id = @user_id OR user_id IS NULL)`
 	record, err := scanInferenceModel(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"model_id": pgtype.UUID{Bytes: modelID, Valid: true},
+		"user_id":  pgtype.UUID{Bytes: userID, Valid: true},
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -89,7 +102,9 @@ func (r *InferenceModelRepository) ReadByID(ctx context.Context, modelID uuid.UU
 func modelColumns() string {
 	log.Trace("modelColumns")
 
-	return `model_id::text, training_run_id::text, dataset_id::text, name, model_version, base_model,
+	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
+		model_kind::text, source::text, source_uri, source_metadata::text,
+		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status::text, metrics_metadata::text,
 		status::text, failure_reason`
@@ -100,9 +115,14 @@ func modelArgs(inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) p
 
 	return pgx.NamedArgs{
 		"model_id":            pgtype.UUID{Bytes: inferenceModel.ModelID, Valid: true},
-		"training_run_id":     pgtype.UUID{Bytes: inferenceModel.TrainingRunID, Valid: true},
-		"dataset_id":          pgtype.UUID{Bytes: inferenceModel.DatasetID, Valid: true},
+		"user_id":             nullableUUID(inferenceModel.UserID),
+		"training_run_id":     nullableUUID(inferenceModel.TrainingRunID),
+		"dataset_id":          nullableUUID(inferenceModel.DatasetID),
 		"idempotency_key":     pgtype.UUID{Bytes: idempotencyKey, Valid: true},
+		"model_kind":          inferenceModel.ModelKind.String(),
+		"source":              inferenceModel.Source.String(),
+		"source_uri":          inferenceModel.SourceURI,
+		"source_metadata":     jsonObjectOrDefault(inferenceModel.SourceMetadata),
 		"name":                inferenceModel.Name,
 		"model_version":       inferenceModel.ModelVersion,
 		"base_model":          inferenceModel.BaseModel,
@@ -124,15 +144,23 @@ func scanInferenceModel(row pgx.Row) (*model.InferenceModel, error) {
 	log.Trace("scanInferenceModel")
 
 	var modelID string
+	var userID string
 	var trainingRunID string
 	var datasetID string
+	var modelKindRaw string
+	var sourceRaw string
 	var statusRaw string
 	var servingLoadStatusRaw string
 	record := &model.InferenceModel{}
 	if err := row.Scan(
 		&modelID,
+		&userID,
 		&trainingRunID,
 		&datasetID,
+		&modelKindRaw,
+		&sourceRaw,
+		&record.SourceURI,
+		&record.SourceMetadata,
 		&record.Name,
 		&record.ModelVersion,
 		&record.BaseModel,
@@ -159,8 +187,11 @@ func scanInferenceModel(row pgx.Row) (*model.InferenceModel, error) {
 		return nil, err
 	}
 	record.ModelID = uuid.MustParse(modelID)
-	record.TrainingRunID = uuid.MustParse(trainingRunID)
-	record.DatasetID = uuid.MustParse(datasetID)
+	record.UserID = parseOptionalUUID(userID)
+	record.TrainingRunID = parseOptionalUUID(trainingRunID)
+	record.DatasetID = parseOptionalUUID(datasetID)
+	record.ModelKind = model.ToModelKind(modelKindRaw)
+	record.Source = model.ToModelSource(sourceRaw)
 	record.Status = status
 	record.ServingLoadStatus = servingLoadStatus
 	return record, nil

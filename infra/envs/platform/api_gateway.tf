@@ -78,8 +78,8 @@ module "api_gateway" {
 
   data_registry_service_http_domain  = var.data_registry_service_http_domain
   data_registry_service_http_port    = var.data_registry_service_http_port
-  data_ingestion_service_http_domain = var.data_ingestion_service_http_domain
-  data_ingestion_service_http_port   = var.data_ingestion_service_http_port
+  ingestion_service_http_domain = var.ingestion_service_http_domain
+  ingestion_service_http_port   = var.ingestion_service_http_port
   profile_service_http_domain        = var.profile_service_http_domain
   profile_service_http_port          = var.profile_service_http_port
 

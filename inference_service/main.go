@@ -28,6 +28,7 @@ import (
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
+	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
 
 	log "github.com/sirupsen/logrus"
@@ -43,6 +44,7 @@ type inferenceConfig struct {
 	OutboxBackend       string
 	OutboxRelay         messagingConn.OutboxRelayConfig
 	Topics              inferencemessaging.InferenceTopics
+	ProfileTopic        string
 	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
 	Generation          generationConfig
 	Reranker            rerankerConfig
@@ -171,6 +173,7 @@ func main() {
 		inferencedb.WithPreferenceDatasetOutbox(orderedOutbox, cfg.Topics.PreferenceDataset),
 		inferencedb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
+	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 	retrievalClient, err := inferencegrpc.NewFeatureMaterializerClient(cancelCtx, cfg.FeatureMaterializer)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create feature materializer client")
@@ -254,6 +257,18 @@ func main() {
 	startSubscriber("dataset-updated", []string{cfg.Topics.DataRegistry}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, inferencemessaging.NewDatasetUpdatedEventListener(inferenceUsecase))
 	})
+	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
+	})
+	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
+	})
+	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
+	})
 
 	go func() {
 		if err := healthCheck.Connect(cancelCtx); err != nil {
@@ -311,6 +326,7 @@ func readInferenceConfig() inferenceConfig {
 			DataRegistry:      env.WithDefaultString("INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 			PreferenceDataset: env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_TOPIC", "inference"),
 		},
+		ProfileTopic: env.WithDefaultString("INFERENCE_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
 		FeatureMaterializer: inferencegrpc.FeatureMaterializerClientConfig{
 			Address:       env.WithDefaultString("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS", "localhost:7072"),
 			DialTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_DIAL_TIMEOUT_MS", "500"),

@@ -140,6 +140,10 @@ func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetp
 	if datasetID != resourceKey {
 		return model.TrainingRunRequest{}, false, fmt.Errorf("dataset id %s does not match resource key %s", datasetID, resourceKey)
 	}
+	userID, err := msgConn.ParseUUID("user_id", payload.GetUserId())
+	if err != nil {
+		return model.TrainingRunRequest{}, false, err
+	}
 
 	state := strings.TrimSpace(payload.GetProcessingState())
 	if state != "FEATURE_MATERIALIZED" && state != "EMBEDDINGS_MATERIALIZED" {
@@ -167,6 +171,7 @@ func datasetUpdatedToTrainingRunRequest(resourceKey uuid.UUID, payload *datasetp
 	}
 	return model.TrainingRunRequest{
 		TrainingRunID:     trainingRunID.String(),
+		UserID:            userID.String(),
 		DatasetID:         datasetID.String(),
 		DatasetVersion:    fmt.Sprintf("%d", payload.GetDatasetVersion()),
 		FeatureSnapshotID: featureSnapshotID.String(),
@@ -268,6 +273,10 @@ func preferenceDatasetReadyToTrainingRunRequest(resourceKey uuid.UUID, payload *
 	if err != nil {
 		return model.TrainingRunRequest{}, err
 	}
+	userID, err := msgConn.ParseUUID("user_id", payload.GetUserId())
+	if err != nil {
+		return model.TrainingRunRequest{}, err
+	}
 	sourceRequestID, err := msgConn.ParseUUID("source_request_id", payload.GetSourceRequestId())
 	if err != nil {
 		return model.TrainingRunRequest{}, err
@@ -319,6 +328,7 @@ func preferenceDatasetReadyToTrainingRunRequest(resourceKey uuid.UUID, payload *
 	modelVersion := fmt.Sprintf("%d", parentModelVersion+1)
 	return model.TrainingRunRequest{
 		TrainingRunID:        trainingRunID.String(),
+		UserID:               userID.String(),
 		DatasetID:            datasetID.String(),
 		DatasetVersion:       "",
 		PreferenceDatasetID:  preferenceDatasetID.String(),

@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"feature_materializer_service/pkg/domain/model"
-	dataingestionpb "lib/data_contracts_lib/data_ingestion"
 	dataregistrypb "lib/data_contracts_lib/data_registry"
+	ingestionpb "lib/data_contracts_lib/ingestion"
 	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -68,13 +68,13 @@ func (l *datasetFileUploadedEventListener) MsgType() msgConn.MsgType {
 	return msgConn.MsgTypeDatasetFileUploaded
 }
 
-func (l *datasetFileUploadedEventListener) NewMessage() *dataingestionpb.DatasetFileUploadedEvent {
+func (l *datasetFileUploadedEventListener) NewMessage() *ingestionpb.DatasetFileUploadedEvent {
 	log.Trace("datasetFileUploadedEventListener NewMessage")
 
-	return &dataingestionpb.DatasetFileUploadedEvent{}
+	return &ingestionpb.DatasetFileUploadedEvent{}
 }
 
-func (l *datasetFileUploadedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *dataingestionpb.DatasetFileUploadedEvent) error {
+func (l *datasetFileUploadedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *ingestionpb.DatasetFileUploadedEvent) error {
 	log.Trace("datasetFileUploadedEventListener Handle")
 
 	if l.listener == nil {
@@ -87,7 +87,7 @@ func (l *datasetFileUploadedEventListener) Handle(ctx context.Context, resourceK
 	return l.listener.StartMaterializationWorkflow(ctx, datasetFile, idempotencyKey)
 }
 
-func eventToDatasetFile(resourceKey uuid.UUID, payload *dataingestionpb.DatasetFileUploadedEvent) (*model.DatasetFile, uuid.UUID, error) {
+func eventToDatasetFile(resourceKey uuid.UUID, payload *ingestionpb.DatasetFileUploadedEvent) (*model.DatasetFile, uuid.UUID, error) {
 	log.Trace("eventToDatasetFile")
 
 	if resourceKey == uuid.Nil {

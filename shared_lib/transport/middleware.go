@@ -29,7 +29,6 @@ func Middleware(tracer trace.Tracer, spanName string, next handlerFunc) http.Han
 		ctx := r.Context()
 		ctx, span := tracer.Start(ctx, spanName)
 		defer span.End()
-
 		statusCode, body, err := next(ctx, r)
 		statusLabel := strconv.Itoa(statusCode)
 		metrics.Default().RecordRequest(ctx, metrics.BoundaryHTTPServer, spanName, statusLabel)

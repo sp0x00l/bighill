@@ -9,6 +9,7 @@ import (
 
 type GenerateRequest struct {
 	RequestID       uuid.UUID
+	UserID          uuid.UUID
 	DatasetID       uuid.UUID
 	ModelID         uuid.UUID
 	QueryText       string
@@ -30,6 +31,7 @@ type GenerateResponse struct {
 
 type QueryTransformRequest struct {
 	RequestID       uuid.UUID
+	UserID          uuid.UUID
 	DatasetID       uuid.UUID
 	ModelID         uuid.UUID
 	QueryText       string
@@ -120,6 +122,7 @@ func ToInferenceRequestStatus(value string) (InferenceRequestStatus, error) {
 
 type InferenceRequest struct {
 	RequestID             uuid.UUID
+	UserID                uuid.UUID
 	DatasetID             uuid.UUID
 	ModelID               uuid.UUID
 	EmbeddingSnapshotID   uuid.UUID

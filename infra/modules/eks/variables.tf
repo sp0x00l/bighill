@@ -99,7 +99,7 @@ variable "object_store_service_accounts" {
   description = "Service accounts that need object-store access"
   type        = list(string)
   default = [
-    "data-ingestion-service",
+    "ingestion-service",
     "data-stream-service",
     "feature-materializer-service",
     "inference-service",

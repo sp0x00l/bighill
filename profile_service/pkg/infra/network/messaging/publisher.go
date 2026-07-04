@@ -42,11 +42,12 @@ func (b *userEventPublisher) PublishUserCreatedEvent(ctx context.Context, profil
 	}
 
 	userCreatedEvent := &profileeventpb.UserCreatedEvent{
-		UserId:                  profileAccount.ID.String(),
-		Email:                   profileAccount.Email,
-		PhoneNumber:             profileAccount.PhoneNumber,
-		CountryCode:             profileAccount.CountryCode,
-		EmailVerificationStatus: shared.EmailVerificationStatusToProfileEventProto(profileAccount.EmailVerified),
+		UserId:                     profileAccount.ID.String(),
+		Email:                      profileAccount.Email,
+		PhoneNumber:                profileAccount.PhoneNumber,
+		CountryCode:                profileAccount.CountryCode,
+		EmailVerificationStatus:    shared.EmailVerificationStatusToProfileEventProto(profileAccount.EmailVerified),
+		HuggingfaceTokenCiphertext: profileAccount.HuggingFaceTokenCiphertext,
 	}
 
 	message := shared.Message{
@@ -98,13 +99,14 @@ func (b *userEventPublisher) PublishUserUpdatedEvent(ctx context.Context, profil
 	}
 
 	userUpdatedEvent := &profileeventpb.UserUpdatedEvent{
-		UserId:                  profile.ID.String(),
-		Email:                   profile.Email,
-		FirstName:               profile.FirstName,
-		LastName:                profile.LastName,
-		PhoneNumber:             profile.PhoneNumber,
-		CountryCode:             profile.CountryCode,
-		EmailVerificationStatus: shared.EmailVerificationStatusToProfileEventProto(profile.EmailVerified),
+		UserId:                     profile.ID.String(),
+		Email:                      profile.Email,
+		FirstName:                  profile.FirstName,
+		LastName:                   profile.LastName,
+		PhoneNumber:                profile.PhoneNumber,
+		CountryCode:                profile.CountryCode,
+		EmailVerificationStatus:    shared.EmailVerificationStatusToProfileEventProto(profile.EmailVerified),
+		HuggingfaceTokenCiphertext: profile.HuggingFaceTokenCiphertext,
 	}
 
 	message := shared.Message{

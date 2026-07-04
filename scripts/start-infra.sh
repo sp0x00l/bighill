@@ -178,6 +178,11 @@ compose_wait_for_postgres_ready() {
 compose_start_polaris() {
     local COMPOSE_FILE="$1"
 
+    if ! check_docker; then
+        echo "Docker is not available; skipping Polaris catalog infra."
+        return
+    fi
+
     echo "Starting Polaris catalog infra..."
     cd "$PROJECT_ROOT"
     env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" up -d polaris-catalog

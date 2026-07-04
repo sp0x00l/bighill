@@ -17,6 +17,7 @@ import (
 
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	trainingpb "lib/data_contracts_lib/training"
+	"lib/shared_lib/ctxutil"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	sharedmessaging "lib/shared_lib/messaging"
@@ -72,7 +73,10 @@ var _ = Describe("Model registry integration", Ordered, func() {
 	})
 
 	It("persists and updates model registry records", func() {
-		registeredModel, err := modelsUse.RegisterModel(ctx, validIntegrationModel(), uuid.New())
+		modelRecord := validIntegrationModel()
+		Expect(upsertModelRegistryTenant(ctx, database, modelRecord.UserID)).To(Succeed())
+
+		registeredModel, err := modelsUse.RegisterModel(ctx, modelRecord, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(registeredModel.ModelID).NotTo(Equal(uuid.Nil))
 		Expect(registeredModel.Status).To(Equal(model.ModelStatusPending))
@@ -89,10 +93,15 @@ var _ = Describe("Model registry integration", Ordered, func() {
 
 	It("reports duplicate idempotency keys and missing models with domain errors", func() {
 		idempotencyKey := uuid.New()
-		_, err := modelsUse.RegisterModel(ctx, validIntegrationModel(), idempotencyKey)
+		modelRecord := validIntegrationModel()
+		Expect(upsertModelRegistryTenant(ctx, database, modelRecord.UserID)).To(Succeed())
+
+		_, err := modelsUse.RegisterModel(ctx, modelRecord, idempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = modelsUse.RegisterModel(ctx, validIntegrationModel(), idempotencyKey)
+		duplicate := validIntegrationModel()
+		duplicate.UserID = modelRecord.UserID
+		_, err = modelsUse.RegisterModel(ctx, duplicate, idempotencyKey)
 		Expect(errors.Is(err, domain.ErrModelExists)).To(BeTrue())
 
 		_, err = modelsUse.ReadModel(ctx, uuid.New())
@@ -169,13 +178,16 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		time.Sleep(750 * time.Millisecond)
 
 		datasetID := uuid.New()
+		userID := uuid.New()
 		trainingRunID := uuid.New()
 		modelID := uuid.New()
+		Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
 		Expect(relayPublisher.Publish(runCtx, topics.Training, sharedmessaging.Message{
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeModelTrainingCompleted,
 		}, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId:     trainingRunID.String(),
+			UserId:            userID.String(),
 			DatasetId:         datasetID.String(),
 			DatasetVersion:    "7",
 			FeatureSnapshotId: uuid.NewString(),
@@ -198,6 +210,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		Eventually(func(g Gomega) {
 			modelRecord, err := models.ReadByTrainingRunID(ctx, trainingRunID)
 			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(modelRecord.UserID).To(Equal(userID))
 			g.Expect(modelRecord.DatasetID).To(Equal(datasetID))
 			g.Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
 			g.Expect(modelRecord.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
@@ -213,8 +226,11 @@ var _ = Describe("Model registry integration", Ordered, func() {
 func validIntegrationModel() *model.Model {
 	return &model.Model{
 		ModelID:           uuid.New(),
+		UserID:            uuid.New(),
 		TrainingRunID:     uuid.New(),
 		DatasetID:         uuid.New(),
+		ModelKind:         model.ModelKindFineTuned,
+		Source:            model.ModelSourceTraining,
 		Name:              "movie-ranker",
 		ModelVersion:      1,
 		BaseModel:         "mistral-7b",
@@ -230,7 +246,8 @@ func validIntegrationModel() *model.Model {
 }
 
 func truncateModelRegistry(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"outbox_messages", "models"} {
+	ctx = ctxutil.WithSystemContext(ctx)
+	for _, table := range []string{"outbox_messages", "models", "tenants"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}
@@ -238,7 +255,18 @@ func truncateModelRegistry(ctx context.Context, database *dbconn.Database) error
 	return nil
 }
 
+func upsertModelRegistryTenant(ctx context.Context, database *dbconn.Database, userID uuid.UUID) error {
+	ctx = ctxutil.WithSystemContext(ctx)
+	_, err := database.Pool.Exec(ctx, `
+		INSERT INTO `+database.Name+`.tenants (id, email, deleted)
+		VALUES ($1, $2, false)
+		ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, deleted = false
+	`, userID, userID.String()+"@example.test")
+	return err
+}
+
 func outboxSentCount(ctx context.Context, database *dbconn.Database, modelID uuid.UUID) int {
+	ctx = ctxutil.WithSystemContext(ctx)
 	var count int
 	err := database.Pool.QueryRow(ctx, `
 		SELECT COUNT(*)

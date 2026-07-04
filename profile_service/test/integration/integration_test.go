@@ -202,14 +202,14 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			log.Info("Using DB connection string: ", dbConnectionStr)
 			database, err := dbConn.InitDatabase(ctx, dbConfig.GetName(), dbConnectionStr, log.StandardLogger())
 			Expect(err).ShouldNot(HaveOccurred())
+			Expect(purgeProfileDatabase(ctx, database)).To(Succeed())
 			profileDB = db.NewProfileDB(database)
-
-			port = env.WithDefaultInt("PROFILE_SERVICE_HTTP_PORT", "8082")
 
 			dtoProfileAdapter = rest.NewProfilesDTOAdapter()
 		})
 
 		BeforeEach(func() {
+			port = freeProfileIntegrationPort()
 			cancelCtxPublisher, cancelFtnPublisher = context.WithCancel(context.Background())
 			groupID := "profile-group" + uuid.New().String()
 			messagingFactory = msgConn.NewMessenger(msgConn.MessengerConfig{
@@ -262,7 +262,10 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 
 			server := httpServer
 			go func() {
-				_ = server.Connect()
+				defer GinkgoRecover()
+				if err := server.Connect(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					Fail(fmt.Sprintf("profile test server failed: %v", err))
+				}
 			}()
 
 			Eventually(func() error {
@@ -1070,4 +1073,20 @@ func purgeTopic(ctx context.Context, brokers, topic string) error {
 		Expect(r.TopicPartition.Error).Should(BeNil())
 	}
 	return nil
+}
+
+func purgeProfileDatabase(ctx context.Context, database *dbConn.Database) error {
+	for _, table := range []string{"oauth_identities", "profiles"} {
+		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func freeProfileIntegrationPort() int {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	Expect(err).NotTo(HaveOccurred())
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
 }

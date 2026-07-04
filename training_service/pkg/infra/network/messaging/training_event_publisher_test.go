@@ -33,6 +33,7 @@ func (s *trainingPublishClientStub) Close() {}
 var _ = Describe("TrainingEventPublisher", func() {
 	It("publishes completed model training facts to the training topic", func() {
 		datasetID := uuid.New()
+		userID := uuid.New()
 		modelID := uuid.New()
 		client := &trainingPublishClientStub{}
 		publisher := trainingmessaging.NewTrainingEventPublisher(client, trainingmessaging.TrainingTopics{
@@ -41,6 +42,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 
 		err := publisher.PublishModelTrainingCompleted(context.Background(), &model.TrainingRunResult{
 			TrainingRunID:     uuid.NewString(),
+			UserID:            userID.String(),
 			DatasetID:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotID: uuid.NewString(),
@@ -67,6 +69,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		Expect(client.message.MsgType).To(Equal(shared.MsgTypeModelTrainingCompleted))
 		event, ok := client.payload.(*trainingpb.ModelTrainingCompletedEvent)
 		Expect(ok).To(BeTrue())
+		Expect(event.UserId).To(Equal(userID.String()))
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.ModelName).To(Equal("movie-ranker"))
@@ -79,6 +82,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 
 	It("publishes failed model training facts to the training topic", func() {
 		datasetID := uuid.New()
+		userID := uuid.New()
 		modelID := uuid.New()
 		client := &trainingPublishClientStub{}
 		publisher := trainingmessaging.NewTrainingEventPublisher(client, trainingmessaging.TrainingTopics{
@@ -87,6 +91,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 
 		err := publisher.PublishModelTrainingFailed(context.Background(), &model.TrainingRunResult{
 			TrainingRunID:     uuid.NewString(),
+			UserID:            userID.String(),
 			DatasetID:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotID: uuid.NewString(),
@@ -104,6 +109,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		Expect(client.message.MsgType).To(Equal(shared.MsgTypeModelTrainingFailed))
 		event, ok := client.payload.(*trainingpb.ModelTrainingFailedEvent)
 		Expect(ok).To(BeTrue())
+		Expect(event.UserId).To(Equal(userID.String()))
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.ModelName).To(Equal("movie-ranker"))

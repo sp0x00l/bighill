@@ -55,6 +55,8 @@ spec:
               value: {{ .Values.env.oauthStateTtlMinutes | quote }}
             - name: PROFILE_SERVICE_USE_STAGING_TEST_EMAIL_TOKEN
               value: {{ .Values.env.useStagingTestEmailToken | quote }}
+            - name: PROFILE_SERVICE_HUGGINGFACE_TOKEN_ENCRYPTION_KEY
+              value: {{ .Values.env.huggingFaceTokenEncryptionKey | quote }}
             - name: PROFILE_SERVICE_OAUTH_GOOGLE_CLIENT_ID
 {{- if .Values.env.oauthCredentialsSecret.name }}
               valueFrom:

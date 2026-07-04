@@ -91,9 +91,6 @@ func (l *modelUpdatedEventListener) NewMessage() *modelregistrypb.ModelUpdatedEv
 func (l *modelUpdatedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *modelregistrypb.ModelUpdatedEvent) error {
 	log.Trace("modelUpdatedEventListener Handle")
 
-	if l.usecase == nil {
-		return msgConn.NonRetryable(fmt.Errorf("inference usecase is required"))
-	}
 	inferenceModel, idempotencyKey, err := modelUpdatedEventToModel(resourceKey, payload)
 	if err != nil {
 		return msgConn.NonRetryable(err)
@@ -129,9 +126,6 @@ func (l *datasetUpdatedEventListener) NewMessage() *datasetpb.DatasetUpdatedEven
 func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *datasetpb.DatasetUpdatedEvent) error {
 	log.Trace("datasetUpdatedEventListener Handle")
 
-	if l.usecase == nil {
-		return msgConn.NonRetryable(fmt.Errorf("inference usecase is required"))
-	}
 	dataset, idempotencyKey, err := datasetUpdatedEventToModel(resourceKey, payload)
 	if err != nil {
 		return msgConn.NonRetryable(err)
@@ -156,13 +150,21 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 	if modelID != resourceKey {
 		return nil, uuid.Nil, fmt.Errorf("model id %s does not match resource key %s", modelID, resourceKey)
 	}
-	trainingRunID, err := msgConn.ParseUUID("training_run_id", payload.GetTrainingRunId())
+	trainingRunID, err := msgConn.ParseOptionalUUID("training_run_id", payload.GetTrainingRunId())
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
-	datasetID, err := msgConn.ParseUUID("dataset_id", payload.GetDatasetId())
+	datasetID, err := msgConn.ParseOptionalUUID("dataset_id", payload.GetDatasetId())
 	if err != nil {
 		return nil, uuid.Nil, err
+	}
+	modelKind := modelKindFromEvent(payload.GetModelKind())
+	userID, err := msgConn.ParseOptionalUUID("user_id", payload.GetUserId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	if modelKind.String() != model.ModelKindBase.String() && userID == uuid.Nil {
+		return nil, uuid.Nil, fmt.Errorf("user id is required for non-base models")
 	}
 	status, err := model.ToModelStatus(strings.TrimSpace(payload.GetStatus()))
 	if err != nil {
@@ -174,8 +176,13 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 	}
 	inferenceModel := &model.InferenceModel{
 		ModelID:           modelID,
+		UserID:            userID,
 		TrainingRunID:     trainingRunID,
 		DatasetID:         datasetID,
+		ModelKind:         modelKind,
+		Source:            modelSourceFromEvent(payload.GetSource()),
+		SourceURI:         strings.TrimSpace(payload.GetSourceUri()),
+		SourceMetadata:    strings.TrimSpace(payload.GetSourceMetadata()),
 		Name:              strings.TrimSpace(payload.GetName()),
 		ModelVersion:      int(payload.GetModelVersion()),
 		BaseModel:         strings.TrimSpace(payload.GetBaseModel()),
@@ -187,7 +194,7 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		ServingTarget:     strings.TrimSpace(payload.GetServingTarget()),
 		ServingModel:      strings.TrimSpace(payload.GetServingModel()),
 		ServingLoadStatus: servingLoadStatus,
-		MetricsMetadata:   strings.TrimSpace(payload.GetMetricsMetadata()),
+		MetricsMetadata:   withDefaultJSON(payload.GetMetricsMetadata()),
 		Status:            status,
 		FailureReason:     strings.TrimSpace(payload.GetFailureReason()),
 	}
@@ -197,10 +204,25 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 	idempotencyKey := uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
 		modelID.String(),
 		trainingRunID.String(),
+		datasetID.String(),
+		inferenceModel.ModelKind.String(),
+		inferenceModel.Source.String(),
 		status.String(),
 		inferenceModel.ArtifactChecksum,
 	}, ":")))
 	return inferenceModel, idempotencyKey, nil
+}
+
+func modelKindFromEvent(value string) model.ModelKind {
+	log.Trace("modelKindFromEvent")
+
+	return model.ToModelKind(value)
+}
+
+func modelSourceFromEvent(value string) model.ModelSource {
+	log.Trace("modelSourceFromEvent")
+
+	return model.ToModelSource(value)
 }
 
 func validateModelUpdatedEvent(inferenceModel *model.InferenceModel) error {
@@ -215,6 +237,18 @@ func validateModelUpdatedEvent(inferenceModel *model.InferenceModel) error {
 	if inferenceModel.ModelVersion <= 0 {
 		return fmt.Errorf("model version is required")
 	}
+	if !model.IsKnownModelKind(inferenceModel.ModelKind) {
+		return fmt.Errorf("model kind is invalid")
+	}
+	if !model.IsKnownModelSource(inferenceModel.Source) {
+		return fmt.Errorf("model source is invalid")
+	}
+	if inferenceModel.Source.String() == model.ModelSourceTraining.String() && inferenceModel.ModelKind.String() != model.ModelKindBase.String() && inferenceModel.DatasetID == uuid.Nil {
+		return fmt.Errorf("dataset id is required for training-sourced fine tuned models")
+	}
+	if inferenceModel.Source.String() == model.ModelSourceTraining.String() && inferenceModel.TrainingRunID == uuid.Nil {
+		return fmt.Errorf("training run id is required for training-sourced models")
+	}
 	if strings.TrimSpace(inferenceModel.MetricsMetadata) == "" {
 		return fmt.Errorf("metrics metadata is required")
 	}
@@ -228,6 +262,15 @@ func validateModelUpdatedEvent(inferenceModel *model.InferenceModel) error {
 		return fmt.Errorf("failure reason is required for failed models")
 	}
 	return nil
+}
+
+func withDefaultJSON(value string) string {
+	log.Trace("withDefaultJSON")
+
+	if strings.TrimSpace(value) == "" {
+		return "{}"
+	}
+	return strings.TrimSpace(value)
 }
 
 func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.DatasetUpdatedEvent) (*model.InferenceDataset, uuid.UUID, error) {
@@ -254,15 +297,15 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
-	rawSnapshotID, err := parseOptionalEventUUID("raw_snapshot_id", payload.GetRawSnapshotId())
+	rawSnapshotID, err := msgConn.ParseOptionalUUID("raw_snapshot_id", payload.GetRawSnapshotId())
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
-	featureSnapshotID, err := parseOptionalEventUUID("feature_snapshot_id", payload.GetFeatureSnapshotId())
+	featureSnapshotID, err := msgConn.ParseOptionalUUID("feature_snapshot_id", payload.GetFeatureSnapshotId())
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
-	embeddingSnapshotID, err := parseOptionalEventUUID("embedding_snapshot_id", payload.GetEmbeddingSnapshotId())
+	embeddingSnapshotID, err := msgConn.ParseOptionalUUID("embedding_snapshot_id", payload.GetEmbeddingSnapshotId())
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -308,20 +351,6 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 		dataset.EmbeddingSnapshotID.String(),
 	}, ":")))
 	return dataset, idempotencyKey, nil
-}
-
-func parseOptionalEventUUID(field, value string) (uuid.UUID, error) {
-	log.Trace("parseOptionalEventUUID")
-
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return uuid.Nil, nil
-	}
-	parsed, err := msgConn.ParseUUID(field, value)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	return parsed, nil
 }
 
 func validateDatasetUpdatedEvent(dataset *model.InferenceDataset) error {

@@ -30,6 +30,7 @@ var (
 type ProfileDB interface {
 	Save(ctx context.Context, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error
 	Update(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error)
+	UpdateHuggingFaceToken(ctx context.Context, userID uuid.UUID, ciphertext string) (*domain.Profile, error)
 	UpdatePassword(ctx context.Context, userID uuid.UUID, newPassword string) error
 	VerifyEmail(ctx context.Context, token string) (*domain.Profile, error)
 	Read(ctx context.Context, userID uuid.UUID) (*domain.Profile, error)
@@ -101,14 +102,14 @@ func (db *profileDB) Update(ctx context.Context, userID uuid.UUID, profile *doma
 	date_of_birth = @date_of_birth, country_code = @country_code, address_line_1 = @address_line_1,
 	address_line_2 = @address_line_2, city = @city, state = @state, postal_code = @postal_code, country = @country
 	WHERE id = @id AND deleted = false RETURNING id, email, first_name, last_name, phone_number, date_of_birth, country_code,
-	address_line_1, address_line_2, city, state, postal_code, country, email_verified;`
+	address_line_1, address_line_2, city, state, postal_code, country, huggingface_token_ciphertext, email_verified;`
 
 	var updatedProfile ProfileDAO = ProfileDAO{}
 	row := db.Pool.QueryRow(ctx, sqlStatementProfile, dao)
 	switch err := row.Scan(&updatedProfile.ID, &updatedProfile.Email, &updatedProfile.FirstName, &updatedProfile.LastName,
 		&updatedProfile.PhoneNumber, &updatedProfile.DateOfBirth, &updatedProfile.CountryCode,
 		&updatedProfile.AddressLine1, &updatedProfile.AddressLine2, &updatedProfile.City, &updatedProfile.State,
-		&updatedProfile.PostalCode, &updatedProfile.Country, &updatedProfile.EmailVerified); err {
+		&updatedProfile.PostalCode, &updatedProfile.Country, &updatedProfile.HuggingFaceTokenCiphertext, &updatedProfile.EmailVerified); err {
 	case pgx.ErrNoRows:
 		return nil, ErrProfileNotFound
 	case nil:
@@ -128,6 +129,48 @@ func (db *profileDB) Update(ctx context.Context, userID uuid.UUID, profile *doma
 		return nil, fmt.Errorf("database error. Failed to update profile: %w", err)
 	}
 
+}
+
+func (db *profileDB) UpdateHuggingFaceToken(ctx context.Context, userID uuid.UUID, ciphertext string) (*domain.Profile, error) {
+	log.Trace("ProfileDB UpdateHuggingFaceToken")
+
+	var profileDAO ProfileDAO
+	err := db.Pool.QueryRow(ctx, `
+		UPDATE `+db.Name+`.profiles
+		SET huggingface_token_ciphertext = @huggingface_token_ciphertext
+		WHERE id = @id AND deleted = false
+		RETURNING id, email, first_name, last_name, phone_number, date_of_birth, country_code,
+			address_line_1, address_line_2, city, state, postal_code, country, huggingface_token_ciphertext, email_verified;`,
+		pgx.NamedArgs{
+			"id":                           pgtype.UUID{Bytes: userID, Valid: true},
+			"huggingface_token_ciphertext": pgtype.Text{String: ciphertext, Valid: true},
+		},
+	).Scan(
+		&profileDAO.ID,
+		&profileDAO.Email,
+		&profileDAO.FirstName,
+		&profileDAO.LastName,
+		&profileDAO.PhoneNumber,
+		&profileDAO.DateOfBirth,
+		&profileDAO.CountryCode,
+		&profileDAO.AddressLine1,
+		&profileDAO.AddressLine2,
+		&profileDAO.City,
+		&profileDAO.State,
+		&profileDAO.PostalCode,
+		&profileDAO.Country,
+		&profileDAO.HuggingFaceTokenCiphertext,
+		&profileDAO.EmailVerified,
+	)
+	switch err {
+	case pgx.ErrNoRows:
+		return nil, ErrProfileNotFound
+	case nil:
+		return FromDAO(&profileDAO)
+	default:
+		db.LogPoolStatsOnError(ctx, "database error. Failed to update hugging face token", err)
+		return nil, fmt.Errorf("database error. Failed to update hugging face token: %w", err)
+	}
 }
 
 func (db *profileDB) UpdatePassword(ctx context.Context, userID uuid.UUID, newPassword string) error {
@@ -171,7 +214,7 @@ func (db *profileDB) VerifyEmail(ctx context.Context, token string) (*domain.Pro
 		)
 		RETURNING id, email, first_name, last_name, phone_number,
 			date_of_birth, country_code, address_line_1, address_line_2, city, state,
-			postal_code, country, email_verified;`,
+			postal_code, country, huggingface_token_ciphertext, email_verified;`,
 		pgx.NamedArgs{
 			"email_verify_token_hash": pgtype.Text{String: hashVerificationToken(token), Valid: true},
 		},
@@ -189,6 +232,7 @@ func (db *profileDB) VerifyEmail(ctx context.Context, token string) (*domain.Pro
 		&profileDAO.State,
 		&profileDAO.PostalCode,
 		&profileDAO.Country,
+		&profileDAO.HuggingFaceTokenCiphertext,
 		&profileDAO.EmailVerified,
 	)
 	switch err {
@@ -208,7 +252,7 @@ func (db *profileDB) ReadByVerifyToken(ctx context.Context, token string) (*doma
 	err := db.Pool.QueryRow(ctx, `
 	SELECT id, email, first_name, last_name, phone_number,
 	date_of_birth, country_code, address_line_1, address_line_2, city, state,
-	postal_code, country, email_verified
+	postal_code, country, huggingface_token_ciphertext, email_verified
 	FROM `+db.Name+`.profiles
 	WHERE email_verify_token_hash = @email_verify_token_hash AND deleted = false;`,
 		pgx.NamedArgs{
@@ -228,6 +272,7 @@ func (db *profileDB) ReadByVerifyToken(ctx context.Context, token string) (*doma
 		&profileDAO.State,
 		&profileDAO.PostalCode,
 		&profileDAO.Country,
+		&profileDAO.HuggingFaceTokenCiphertext,
 		&profileDAO.EmailVerified,
 	)
 	switch err {
@@ -248,7 +293,7 @@ func (db *profileDB) Read(ctx context.Context, userID uuid.UUID) (*domain.Profil
 	var sqlStatementProfile = `
 	SELECT id, email, first_name, last_name, phone_number,
 	date_of_birth, country_code, address_line_1, address_line_2, city, state,
-	postal_code, country, email_verified
+	postal_code, country, huggingface_token_ciphertext, email_verified
 	FROM ` + db.Name + `.profiles WHERE id = @id AND deleted = false;`
 
 	switch err := db.Pool.QueryRow(ctx,
@@ -269,6 +314,7 @@ func (db *profileDB) Read(ctx context.Context, userID uuid.UUID) (*domain.Profil
 		&profileDao.State,
 		&profileDao.PostalCode,
 		&profileDao.Country,
+		&profileDao.HuggingFaceTokenCiphertext,
 		&profileDao.EmailVerified,
 	); err {
 	case pgx.ErrNoRows:

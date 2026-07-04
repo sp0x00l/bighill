@@ -347,17 +347,27 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(ipFamilyPolicy).To(Equal("SingleStack"))
 	})
 
-	It("fails when an adapter uri is missing", func() {
+	It("serves a base model without LoRA arguments when an adapter uri is missing", func() {
 		servedModel := validServedModel()
 		servedModel.AdapterURI = ""
-		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+		servedModel.ServingTarget = "http://vllm.test"
+		deployment := readyDeployment(servedModel)
+		service := serviceObject(servedModel)
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
+		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
 
-		Expect(state).To(BeNil())
-		Expect(err).To(MatchError(ContainSubstring("adapter uri is required")))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeTrue())
+		Expect(state.ServingModel).To(Equal("ranker-v1"))
+		updated, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingk8s.WorkloadName(servedModel), metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		containers, _, _ := unstructured.NestedSlice(updated.Object, "spec", "template", "spec", "containers")
+		container := containers[0].(map[string]any)
+		Expect(container["args"]).NotTo(ContainElement("--enable-lora"))
+		Expect(container["args"]).NotTo(ContainElement("--lora-modules"))
 	})
 })
 

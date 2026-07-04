@@ -12,10 +12,29 @@ CREATE TYPE dataset_processing_state_enum AS ENUM (
     'FAILED'
 );
 
+CREATE EXTENSION IF NOT EXISTS citext;
+
+CREATE OR REPLACE FUNCTION updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TABLE IF NOT EXISTS bighill_data_registry_db.tenants(
+    id uuid PRIMARY KEY,
+    email citext NOT NULL DEFAULT '',
+    huggingface_token_ciphertext text NOT NULL DEFAULT '',
+    deleted boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
     id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
     idempotency_key uuid UNIQUE NOT NULL,
-    user_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_data_registry_db.tenants(id),
     title VARCHAR(255) NOT NULL,
     description TEXT,
     origin origin_enum NOT NULL DEFAULT 'standard',
@@ -61,7 +80,7 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.connectors(
     -- It needs to be created before saving the db connector record.
     id uuid UNIQUE NOT NULL PRIMARY KEY,
     idempotency_key uuid UNIQUE NOT NULL,
-    user_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_data_registry_db.tenants(id),
     catalog_id uuid UNIQUE NOT NULL,
     storage_type storage_type_enum NOT NULL,
     config BYTEA NOT NULL,
@@ -74,6 +93,7 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.connectors(
 CREATE TABLE IF NOT EXISTS bighill_data_registry_db.metadata(
     id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
     dataset_id uuid NOT NULL REFERENCES bighill_data_registry_db.datasets(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    user_id uuid NOT NULL REFERENCES bighill_data_registry_db.tenants(id),
     schema_name VARCHAR(255) NOT NULL,
     schema_version INTEGER DEFAULT 1,
     metadata TEXT NOT NULL,
@@ -104,6 +124,7 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.outbox_messages (
 );
 
 CREATE INDEX index_user_id ON bighill_data_registry_db.datasets(user_id);
+CREATE INDEX index_tenants_deleted ON bighill_data_registry_db.tenants(deleted, updated_at);
 CREATE INDEX index_dataset_processing_state ON bighill_data_registry_db.datasets(processing_state);
 CREATE INDEX index_dataset_table_ref ON bighill_data_registry_db.datasets(catalog_provider, table_namespace, table_name);
 CREATE INDEX index_dataset_raw_snapshot_id ON bighill_data_registry_db.datasets(raw_snapshot_id);
@@ -112,6 +133,7 @@ CREATE INDEX index_dataset_embedding_snapshot_id ON bighill_data_registry_db.dat
 CREATE INDEX index_dataset_source_connector_id ON bighill_data_registry_db.datasets(source_connector_id);
 CREATE INDEX index_dataset_id_connectors ON bighill_data_registry_db.connectors(user_id);
 CREATE INDEX index_dataset_id_metadata ON bighill_data_registry_db.metadata(dataset_id);
+CREATE INDEX index_metadata_user_id ON bighill_data_registry_db.metadata(user_id);
 CREATE INDEX index_outbox_messages_pending
 ON bighill_data_registry_db.outbox_messages(status, next_attempt_at, created_at);
 CREATE INDEX index_outbox_messages_processing
@@ -122,3 +144,53 @@ ON bighill_data_registry_db.outbox_messages(resource_key, created_at);
 CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.datasets FOR EACH ROW EXECUTE FUNCTION updated_at_column();
 CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.connectors FOR EACH ROW EXECUTE FUNCTION updated_at_column();
 CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.metadata FOR EACH ROW EXECUTE FUNCTION updated_at_column();
+CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.tenants FOR EACH ROW EXECUTE FUNCTION updated_at_column();
+
+ALTER TABLE bighill_data_registry_db.tenants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_data_registry_db.tenants FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_projection_isolation ON bighill_data_registry_db.tenants
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = id
+);
+
+ALTER TABLE bighill_data_registry_db.datasets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_data_registry_db.datasets FORCE ROW LEVEL SECURITY;
+CREATE POLICY datasets_tenant_isolation ON bighill_data_registry_db.datasets
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR status = 'published'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);
+
+ALTER TABLE bighill_data_registry_db.connectors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_data_registry_db.connectors FORCE ROW LEVEL SECURITY;
+CREATE POLICY connectors_tenant_isolation ON bighill_data_registry_db.connectors
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);
+
+ALTER TABLE bighill_data_registry_db.metadata ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_data_registry_db.metadata FORCE ROW LEVEL SECURITY;
+CREATE POLICY metadata_tenant_isolation ON bighill_data_registry_db.metadata
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);

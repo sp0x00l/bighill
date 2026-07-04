@@ -25,6 +25,7 @@ env:
   kafkaAutoOffsetReset: "earliest"
   topic: "data_registry"
   featureMaterializerSubscriberTopic: "feature_materializer"
+  profileSubscriberTopic: "profile"
   dlq: "http://localhost:4566/data-registry-dev-env-queue/"
   outbox: "postgres"
   outboxRelayPollMs: "250"

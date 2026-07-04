@@ -36,6 +36,7 @@ func (s *recordingTrainingWorkflowStarter) StartTrainingWorkflow(_ context.Conte
 var _ = Describe("DatasetUpdatedEventListener", func() {
 	It("starts training when a parquet feature snapshot is ready", func() {
 		datasetID := uuid.New()
+		userID := uuid.New()
 		featureSnapshotID := uuid.New()
 		starter := &recordingTrainingWorkflowStarter{}
 		profile := trainingProfile()
@@ -44,7 +45,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:         datasetID.String(),
-			UserId:            uuid.NewString(),
+			UserId:            userID.String(),
 			DatasetVersion:    4,
 			ProcessingState:   "FEATURE_MATERIALIZED",
 			StorageLocation:   "s3://local-dev-bucket/features/data.parquet",
@@ -55,6 +56,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(starter.calls).To(Equal(1))
+		Expect(starter.request.UserID).To(Equal(userID.String()))
 		Expect(starter.request.DatasetID).To(Equal(datasetID.String()))
 		Expect(starter.request.DatasetVersion).To(Equal("4"))
 		Expect(starter.request.FeatureSnapshotID).To(Equal(featureSnapshotID.String()))
@@ -103,6 +105,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 	It("starts DPO training from a preference dataset artifact", func() {
 		datasetID := uuid.New()
+		userID := uuid.New()
 		modelID := uuid.New()
 		preferenceDatasetID := uuid.New()
 		sourceRequestID := uuid.New()
@@ -112,6 +115,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 
 		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
 			PreferenceDatasetId: preferenceDatasetID.String(),
+			UserId:              userID.String(),
 			DatasetId:           datasetID.String(),
 			ModelId:             modelID.String(),
 			SourceRequestId:     sourceRequestID.String(),
@@ -128,6 +132,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(starter.calls).To(Equal(1))
+		Expect(starter.request.UserID).To(Equal(userID.String()))
 		Expect(starter.request.DatasetID).To(Equal(datasetID.String()))
 		Expect(starter.request.DatasetVersion).To(Equal(""))
 		Expect(starter.request.FeatureSnapshotID).To(Equal(""))
@@ -150,6 +155,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 
 		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
 			PreferenceDatasetId: uuid.NewString(),
+			UserId:              uuid.NewString(),
 			DatasetId:           datasetID.String(),
 			ModelId:             uuid.NewString(),
 			SourceRequestId:     uuid.NewString(),
@@ -175,6 +181,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 
 		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
 			PreferenceDatasetId: uuid.NewString(),
+			UserId:              uuid.NewString(),
 			DatasetId:           datasetID.String(),
 			ModelId:             uuid.NewString(),
 			SourceRequestId:     uuid.NewString(),

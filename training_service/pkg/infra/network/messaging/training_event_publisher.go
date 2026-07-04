@@ -47,6 +47,10 @@ func (p *trainingEventPublisher) PublishModelTrainingCompleted(ctx context.Conte
 	if err != nil || modelID == uuid.Nil {
 		return msgConn.NonRetryable(fmt.Errorf("model id is invalid: %w", err))
 	}
+	userID, err := uuid.Parse(result.UserID)
+	if err != nil || userID == uuid.Nil {
+		return msgConn.NonRetryable(fmt.Errorf("user id is invalid: %w", err))
+	}
 	return p.publish(ctx, datasetID, msgConn.MsgTypeModelTrainingCompleted, &trainingpb.ModelTrainingCompletedEvent{
 		TrainingRunId:     result.TrainingRunID,
 		DatasetId:         result.DatasetID,
@@ -66,6 +70,7 @@ func (p *trainingEventPublisher) PublishModelTrainingCompleted(ctx context.Conte
 		ServingTarget:     result.ServingTarget,
 		ServingModel:      result.ServingModel,
 		ServingLoadStatus: result.ServingLoadStatus,
+		UserId:            userID.String(),
 	})
 }
 
@@ -83,6 +88,10 @@ func (p *trainingEventPublisher) PublishModelTrainingFailed(ctx context.Context,
 	if err != nil || modelID == uuid.Nil {
 		return msgConn.NonRetryable(fmt.Errorf("model id is invalid: %w", err))
 	}
+	userID, err := uuid.Parse(result.UserID)
+	if err != nil || userID == uuid.Nil {
+		return msgConn.NonRetryable(fmt.Errorf("user id is invalid: %w", err))
+	}
 	return p.publish(ctx, datasetID, msgConn.MsgTypeModelTrainingFailed, &trainingpb.ModelTrainingFailedEvent{
 		TrainingRunId:     result.TrainingRunID,
 		DatasetId:         result.DatasetID,
@@ -93,6 +102,7 @@ func (p *trainingEventPublisher) PublishModelTrainingFailed(ctx context.Context,
 		ModelVersion:      result.ModelVersion,
 		BaseModel:         result.BaseModel,
 		FailureReason:     result.FailureReason,
+		UserId:            userID.String(),
 	})
 }
 

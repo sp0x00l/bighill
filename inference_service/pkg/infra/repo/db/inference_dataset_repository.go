@@ -79,20 +79,24 @@ func (r *InferenceDatasetRepository) UpsertDataset(ctx context.Context, dataset 
 	record, err := scanInferenceDataset(r.Pool.QueryRow(ctx, query, datasetArgs(dataset, idempotencyKey)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return r.ReadDataset(ctx, dataset.DatasetID)
+			return r.ReadDataset(ctx, dataset.UserID, dataset.DatasetID)
 		}
 		r.LogPoolStatsOnError(ctx, "upsert inference dataset failed", err)
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
+		}
 		return nil, fmt.Errorf("upsert inference dataset: %w", err)
 	}
 	return record, nil
 }
 
-func (r *InferenceDatasetRepository) ReadDataset(ctx context.Context, datasetID uuid.UUID) (*model.InferenceDataset, error) {
+func (r *InferenceDatasetRepository) ReadDataset(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.InferenceDataset, error) {
 	log.Trace("InferenceDatasetRepository ReadDataset")
 
-	query := `SELECT ` + datasetColumns() + ` FROM ` + r.Name + `.inference_datasets WHERE dataset_id = @dataset_id`
+	query := `SELECT ` + datasetColumns() + ` FROM ` + r.Name + `.inference_datasets WHERE dataset_id = @dataset_id AND user_id = @user_id`
 	record, err := scanInferenceDataset(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"dataset_id": pgtype.UUID{Bytes: datasetID, Valid: true},
+		"user_id":    pgtype.UUID{Bytes: userID, Valid: true},
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

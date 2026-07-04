@@ -1,13 +1,47 @@
 CREATE TYPE inference_model_status_enum AS ENUM ('PENDING', 'CANDIDATE', 'EVALUATED', 'READY', 'FAILED');
 CREATE TYPE inference_model_load_status_enum AS ENUM ('NOT_LOADED', 'LOADED', 'FAILED');
+CREATE TYPE inference_model_kind_enum AS ENUM ('BASE', 'FINE_TUNED');
+CREATE TYPE inference_model_source_enum AS ENUM ('TRAINING', 'UPLOAD', 'HUGGING_FACE');
 CREATE TYPE inference_dataset_processing_state_enum AS ENUM ('PENDING', 'RAW_MATERIALIZED', 'FEATURE_MATERIALIZED', 'EMBEDDINGS_MATERIALIZED', 'FAILED');
 CREATE TYPE inference_request_status_enum AS ENUM ('COMPLETED', 'FAILED');
 
+CREATE EXTENSION IF NOT EXISTS citext;
+
+CREATE OR REPLACE FUNCTION updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.tenants (
+    id uuid PRIMARY KEY,
+    email citext NOT NULL DEFAULT '',
+    huggingface_token_ciphertext text NOT NULL DEFAULT '',
+    deleted boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS index_tenants_deleted
+ON bighill_inference_db.tenants(deleted, updated_at);
+
+CREATE TRIGGER tenants_updated_at
+BEFORE UPDATE ON bighill_inference_db.tenants
+FOR EACH ROW
+EXECUTE FUNCTION updated_at_column();
+
 CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     model_id uuid PRIMARY KEY,
-    training_run_id uuid NOT NULL,
-    dataset_id uuid NOT NULL,
+    user_id uuid REFERENCES bighill_inference_db.tenants(id),
+    training_run_id uuid,
+    dataset_id uuid,
     idempotency_key uuid NOT NULL,
+    model_kind inference_model_kind_enum NOT NULL DEFAULT 'FINE_TUNED',
+    source inference_model_source_enum NOT NULL DEFAULT 'TRAINING',
+    source_uri text NOT NULL DEFAULT '',
+    source_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     name text NOT NULL,
     model_version integer NOT NULL,
     base_model text NOT NULL,
@@ -23,11 +57,18 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     status inference_model_status_enum NOT NULL,
     failure_reason text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT inference_models_tenant_ownership_ck CHECK (
+        (model_kind = 'BASE' AND user_id IS NULL)
+        OR (model_kind <> 'BASE' AND user_id IS NOT NULL)
+    )
 );
 
 CREATE INDEX IF NOT EXISTS index_inference_models_training_run_id
 ON bighill_inference_db.inference_models(training_run_id);
+
+CREATE INDEX IF NOT EXISTS index_inference_models_user_id
+ON bighill_inference_db.inference_models(user_id);
 
 CREATE INDEX IF NOT EXISTS index_inference_models_dataset_id
 ON bighill_inference_db.inference_models(dataset_id);
@@ -42,7 +83,7 @@ EXECUTE FUNCTION updated_at_column();
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_datasets (
     dataset_id uuid PRIMARY KEY,
-    user_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
     idempotency_key uuid NOT NULL UNIQUE,
     dataset_version integer NOT NULL DEFAULT 1,
     processing_state inference_dataset_processing_state_enum NOT NULL DEFAULT 'PENDING',
@@ -85,6 +126,7 @@ EXECUTE FUNCTION updated_at_column();
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_requests (
     request_id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
     dataset_id uuid NOT NULL,
     model_id uuid,
     embedding_snapshot_id uuid,
@@ -107,6 +149,9 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_requests (
 CREATE INDEX IF NOT EXISTS index_inference_requests_dataset_id
 ON bighill_inference_db.inference_requests(dataset_id);
 
+CREATE INDEX IF NOT EXISTS index_inference_requests_user_id
+ON bighill_inference_db.inference_requests(user_id);
+
 CREATE INDEX IF NOT EXISTS index_inference_requests_embedding_snapshot_id
 ON bighill_inference_db.inference_requests(embedding_snapshot_id);
 
@@ -117,7 +162,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_feedback (
     feedback_id uuid PRIMARY KEY,
     idempotency_key uuid NOT NULL UNIQUE,
     request_id uuid NOT NULL REFERENCES bighill_inference_db.inference_requests(request_id),
-    user_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
     accepted boolean NOT NULL,
     rating integer NOT NULL,
     comment text NOT NULL DEFAULT '',
@@ -128,10 +173,14 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_feedback (
 CREATE INDEX IF NOT EXISTS index_inference_feedback_request_id
 ON bighill_inference_db.inference_feedback(request_id);
 
+CREATE INDEX IF NOT EXISTS index_inference_feedback_user_id
+ON bighill_inference_db.inference_feedback(user_id);
+
 CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_examples (
     preference_example_id uuid PRIMARY KEY,
     feedback_id uuid NOT NULL UNIQUE REFERENCES bighill_inference_db.inference_feedback(feedback_id),
     request_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
     dataset_id uuid NOT NULL,
     model_id uuid NOT NULL,
     prompt_text text NOT NULL,
@@ -145,11 +194,15 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_examples (
 CREATE INDEX IF NOT EXISTS index_preference_examples_dataset_id
 ON bighill_inference_db.preference_examples(dataset_id);
 
+CREATE INDEX IF NOT EXISTS index_preference_examples_user_id
+ON bighill_inference_db.preference_examples(user_id);
+
 CREATE INDEX IF NOT EXISTS index_preference_examples_model_id
 ON bighill_inference_db.preference_examples(model_id);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_dataset_snapshots (
     preference_dataset_id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
     dataset_id uuid NOT NULL,
     model_id uuid NOT NULL,
     parent_adapter_uri text NOT NULL,
@@ -169,6 +222,9 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_dataset_snapshots (
 
 CREATE INDEX IF NOT EXISTS index_preference_dataset_snapshots_dataset_id
 ON bighill_inference_db.preference_dataset_snapshots(dataset_id, created_at);
+
+CREATE INDEX IF NOT EXISTS index_preference_dataset_snapshots_user_id
+ON bighill_inference_db.preference_dataset_snapshots(user_id, created_at);
 
 CREATE INDEX IF NOT EXISTS index_preference_dataset_snapshots_model_id
 ON bighill_inference_db.preference_dataset_snapshots(model_id, created_at);
@@ -211,3 +267,89 @@ CREATE TRIGGER outbox_messages_updated_at
 BEFORE UPDATE ON bighill_inference_db.outbox_messages
 FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();
+
+ALTER TABLE bighill_inference_db.tenants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.tenants FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_projection_isolation ON bighill_inference_db.tenants
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = id
+);
+
+ALTER TABLE bighill_inference_db.inference_models ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.inference_models FORCE ROW LEVEL SECURITY;
+CREATE POLICY inference_models_tenant_isolation ON bighill_inference_db.inference_models
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR user_id IS NULL
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR (model_kind = 'BASE' AND user_id IS NULL)
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);
+
+ALTER TABLE bighill_inference_db.inference_datasets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.inference_datasets FORCE ROW LEVEL SECURITY;
+CREATE POLICY inference_datasets_tenant_isolation ON bighill_inference_db.inference_datasets
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);
+
+ALTER TABLE bighill_inference_db.inference_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.inference_requests FORCE ROW LEVEL SECURITY;
+CREATE POLICY inference_requests_tenant_isolation ON bighill_inference_db.inference_requests
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);
+
+ALTER TABLE bighill_inference_db.inference_feedback ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.inference_feedback FORCE ROW LEVEL SECURITY;
+CREATE POLICY inference_feedback_tenant_isolation ON bighill_inference_db.inference_feedback
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);
+
+ALTER TABLE bighill_inference_db.preference_examples ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.preference_examples FORCE ROW LEVEL SECURITY;
+CREATE POLICY preference_examples_tenant_isolation ON bighill_inference_db.preference_examples
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);
+
+ALTER TABLE bighill_inference_db.preference_dataset_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.preference_dataset_snapshots FORCE ROW LEVEL SECURITY;
+CREATE POLICY preference_dataset_snapshots_tenant_isolation ON bighill_inference_db.preference_dataset_snapshots
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+);

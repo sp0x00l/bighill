@@ -7,14 +7,15 @@ import (
 )
 
 type ProfileAccount struct {
-	ID                   uuid.UUID
-	Email                string
-	PhoneNumber          string
-	CountryCode          string
-	Password             string
-	EmailVerified        bool
-	EmailVerifyToken     string
-	EmailVerifyExpiresAt time.Time
+	ID                         uuid.UUID
+	Email                      string
+	PhoneNumber                string
+	CountryCode                string
+	Password                   string
+	EmailVerified              bool
+	HuggingFaceTokenCiphertext string
+	EmailVerifyToken           string
+	EmailVerifyExpiresAt       time.Time
 }
 
 type Profile struct {

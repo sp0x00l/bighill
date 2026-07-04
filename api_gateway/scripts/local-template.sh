@@ -25,8 +25,8 @@ yq "
   (.Resources.BighillAuthFunction.Properties.CodeUri) = \"./build/auth_binary\" |
   (.Parameters.DataRegistryServiceHttpDomain.Default) = \"${DATA_REGISTRY_SERVICE_HTTP_HOST}\" |
   (.Parameters.DataRegistryServiceHttpPort.Default) = \"${DATA_REGISTRY_SERVICE_HTTP_PORT}\" |
-  (.Parameters.DataIngestionServiceHttpDomain.Default) = \"${DATA_INGESTION_SERVICE_HTTP_HOST}\" |
-  (.Parameters.DataIngestionServiceHttpPort.Default) = \"${DATA_INGESTION_SERVICE_HTTP_PORT}\" |
+  (.Parameters.IngestionServiceHttpDomain.Default) = \"${INGESTION_SERVICE_HTTP_HOST}\" |
+  (.Parameters.IngestionServiceHttpPort.Default) = \"${INGESTION_SERVICE_HTTP_PORT}\" |
   (.Parameters.ProfileServiceHttpDomain.Default) = \"${PROFILE_SERVICE_HTTP_HOST}\" |
   (.Parameters.ProfileServiceHttpPort.Default) = \"${PROFILE_SERVICE_HTTP_PORT}\" |
   (.Parameters.RedisHost.Default) = \"${REDIS_HOST}\" |

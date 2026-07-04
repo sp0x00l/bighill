@@ -6,6 +6,7 @@ import (
 	"lib/shared_lib/ctxutil"
 	"testing"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -20,5 +21,23 @@ var _ = Describe("IsCanceled", func() {
 		Expect(ctxutil.IsCanceled(context.Canceled)).To(BeTrue())
 		Expect(ctxutil.IsCanceled(context.DeadlineExceeded)).To(BeTrue())
 		Expect(ctxutil.IsCanceled(errors.New("other"))).To(BeFalse())
+	})
+})
+
+var _ = Describe("TenantID", func() {
+	It("stores and reads a tenant id", func() {
+		tenantID := uuid.New()
+		ctx := ctxutil.WithTenantID(context.Background(), tenantID)
+
+		got, ok := ctxutil.TenantID(ctx)
+		Expect(ok).To(BeTrue())
+		Expect(got).To(Equal(tenantID))
+	})
+
+	It("does not store nil tenant ids", func() {
+		ctx := ctxutil.WithTenantID(context.Background(), uuid.Nil)
+
+		_, ok := ctxutil.TenantID(ctx)
+		Expect(ok).To(BeFalse())
 	})
 })

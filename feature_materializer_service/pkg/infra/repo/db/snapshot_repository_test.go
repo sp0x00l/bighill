@@ -741,7 +741,7 @@ var _ = Describe("SnapshotRepository", func() {
 			activeRow.ActiveForRetrieval = true
 			poolMock.NextRows = []pgx.Row{activeRow}
 
-			embeddingSnapshot, err := repository.ReadActiveEmbeddingSnapshot(ctx, datasetID)
+			embeddingSnapshot, err := repository.ReadActiveEmbeddingSnapshot(ctx, userID, datasetID)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
@@ -749,6 +749,7 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("active_for_retrieval = true"))
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
 		})
 	})
@@ -769,6 +770,7 @@ var _ = Describe("SnapshotRepository", func() {
 
 			records, err := repository.SearchEmbeddingRecords(ctx, &model.EmbeddingSnapshot{
 				EmbeddingSnapshotID: activeSnapshot.EmbeddingSnapshotID,
+				UserID:              activeSnapshot.UserID,
 				DatasetID:           activeSnapshot.DatasetID,
 				EmbeddingDimensions: activeSnapshot.EmbeddingDimensions,
 			}, make([]float32, activeSnapshot.EmbeddingDimensions), 3)
@@ -783,6 +785,7 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("double precision AS distance"))
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("limit", 3))
 		})

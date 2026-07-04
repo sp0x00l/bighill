@@ -51,6 +51,20 @@ var _ = Describe("ModelLoadStatus", func() {
 	})
 })
 
+var _ = Describe("InferenceModel", func() {
+	It("requires dataset matching for fine-tuned models with dataset lineage", func() {
+		inferenceModel := &model.InferenceModel{
+			ModelKind: model.ModelKindFineTuned,
+			DatasetID: uuid.New(),
+		}
+
+		Expect(inferenceModel.RequiresDatasetMatch()).To(BeTrue())
+
+		inferenceModel.ModelKind = model.ModelKindBase
+		Expect(inferenceModel.RequiresDatasetMatch()).To(BeFalse())
+	})
+})
+
 var _ = Describe("DatasetProcessingState", func() {
 	It("converts known dataset processing states", func() {
 		status, err := model.ToDatasetProcessingState("EMBEDDINGS_MATERIALIZED")

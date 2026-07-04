@@ -93,6 +93,9 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, dataset
 		if errors.Is(err, pgx.ErrNoRows) {
 			return r.resolveRawSnapshotIdempotencyConflict(ctx, idempotencyKey)
 		}
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
+		}
 		r.LogPoolStatsOnError(ctx, "insert raw snapshot failed", err)
 		return nil, fmt.Errorf("insert raw snapshot: %w", err)
 	}
@@ -261,6 +264,9 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, raw
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return r.resolveFeatureSnapshotIdempotencyConflict(ctx, idempotencyKey)
+		}
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
 		}
 		r.LogPoolStatsOnError(ctx, "insert feature snapshot failed", err)
 		return nil, fmt.Errorf("insert feature snapshot: %w", err)
@@ -443,6 +449,9 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, f
 		if errors.Is(err, pgx.ErrNoRows) {
 			return r.resolveEmbeddingSnapshotIdempotencyConflict(ctx, idempotencyKey)
 		}
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
+		}
 		r.LogPoolStatsOnError(ctx, "insert embedding snapshot failed", err)
 		return nil, fmt.Errorf("insert embedding snapshot: %w", err)
 	}
@@ -464,19 +473,23 @@ func (r *SnapshotRepository) SaveEmbeddingRecords(ctx context.Context, records [
 	defer tx.Rollback(ctx)
 
 	query := `INSERT INTO ` + r.Name + `.embedding_records (
-		embedding_snapshot_id, dataset_id, chunk_index, source_text, embedding
+		embedding_snapshot_id, dataset_id, user_id, chunk_index, source_text, embedding
 	) VALUES (
-		@embedding_snapshot_id, @dataset_id, @chunk_index, @source_text, @embedding
+		@embedding_snapshot_id, @dataset_id, @user_id, @chunk_index, @source_text, @embedding
 	)`
 
 	for _, record := range records {
 		if _, err := tx.Exec(ctx, query, pgx.NamedArgs{
 			"embedding_snapshot_id": pgtype.UUID{Bytes: record.EmbeddingSnapshotID, Valid: true},
 			"dataset_id":            pgtype.UUID{Bytes: record.DatasetID, Valid: true},
+			"user_id":               pgtype.UUID{Bytes: record.UserID, Valid: true},
 			"chunk_index":           record.ChunkIndex,
 			"source_text":           record.SourceText,
 			"embedding":             vectorLiteral(record.Vector),
 		}); err != nil {
+			if coreDB.IsForeignKeyViolation(err) {
+				return domain.ErrValidationFailed.Extend("tenant projection is not ready")
+			}
 			return fmt.Errorf("insert embedding record: %w", err)
 		}
 	}
@@ -628,17 +641,19 @@ func (r *SnapshotRepository) ReadEmbeddingByIdempotencyKey(ctx context.Context, 
 	return embeddingSnapshot, nil
 }
 
-func (r *SnapshotRepository) ReadActiveEmbeddingSnapshot(ctx context.Context, datasetID uuid.UUID) (*model.EmbeddingSnapshot, error) {
+func (r *SnapshotRepository) ReadActiveEmbeddingSnapshot(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.EmbeddingSnapshot, error) {
 	log.Trace("SnapshotRepository ReadActiveEmbeddingSnapshot")
 
 	query := `SELECT ` + embeddingSnapshotColumns() + ` FROM ` + r.Name + `.embedding_snapshots
 		WHERE dataset_id = @dataset_id
+			AND user_id = @user_id
 			AND active_for_retrieval = true
 			AND status = @status
 		ORDER BY updated_at DESC
 		LIMIT 1`
 	embeddingSnapshot, err := scanEmbeddingSnapshot(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"dataset_id": pgtype.UUID{Bytes: datasetID, Valid: true},
+		"user_id":    pgtype.UUID{Bytes: userID, Valid: true},
 		"status":     model.SnapshotStatusReady.String(),
 	}))
 	if err != nil {
@@ -670,6 +685,7 @@ func (r *SnapshotRepository) SearchEmbeddingRecords(ctx context.Context, embeddi
 		FROM `+r.Name+`.embedding_records
 		WHERE embedding_snapshot_id = @embedding_snapshot_id
 			AND dataset_id = @dataset_id
+			AND user_id = @user_id
 			AND vector_dims(embedding) = %d
 		ORDER BY embedding::vector(%d) <=> @query_embedding::vector(%d)
 		LIMIT @limit`, dimensions, dimensions, dimensions, dimensions, dimensions)
@@ -677,6 +693,7 @@ func (r *SnapshotRepository) SearchEmbeddingRecords(ctx context.Context, embeddi
 	rows, err := r.Pool.Query(ctx, query, pgx.NamedArgs{
 		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
 		"dataset_id":            pgtype.UUID{Bytes: embeddingSnapshot.DatasetID, Valid: true},
+		"user_id":               pgtype.UUID{Bytes: embeddingSnapshot.UserID, Valid: true},
 		"query_embedding":       vectorLiteral(queryVector),
 		"limit":                 topK,
 	})

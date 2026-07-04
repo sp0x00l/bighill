@@ -40,15 +40,15 @@ type HttpClient interface {
 type newRequestFunc func(method, url string, body io.Reader) (*http.Request, error)
 
 type Config struct {
-	DataRegistryServiceRoute  string
-	DataIngestionServiceRoute string
-	ProfileServiceRoute       string
+	DataRegistryServiceRoute string
+	IngestionServiceRoute    string
+	ProfileServiceRoute      string
 }
 
 type routeResolver struct {
-	dataRegistryServiceRoute  string
-	dataIngestionServiceRoute string
-	profileServiceRoute       string
+	dataRegistryServiceRoute string
+	ingestionServiceRoute    string
+	profileServiceRoute      string
 }
 
 type routeContext struct {
@@ -72,9 +72,9 @@ func (e *routeStatusError) Error() string {
 
 func DefaultConfig() Config {
 	return Config{
-		DataRegistryServiceRoute:  serviceBaseRoute("127.0.0.1", "8081"),
-		DataIngestionServiceRoute: serviceBaseRoute("127.0.0.1", "8086"),
-		ProfileServiceRoute:       serviceBaseRoute("127.0.0.1", "8082"),
+		DataRegistryServiceRoute: serviceBaseRoute("127.0.0.1", "8081"),
+		IngestionServiceRoute:    serviceBaseRoute("127.0.0.1", "8086"),
+		ProfileServiceRoute:      serviceBaseRoute("127.0.0.1", "8082"),
 	}
 }
 
@@ -86,16 +86,16 @@ func (cfg Config) resolver() (routeResolver, error) {
 	if cfg.DataRegistryServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing data registry service route")
 	}
-	if cfg.DataIngestionServiceRoute == "" {
-		return routeResolver{}, fmt.Errorf("missing data ingestion service route")
+	if cfg.IngestionServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing ingestion service route")
 	}
 	if cfg.ProfileServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing profile service route")
 	}
 	return routeResolver{
-		dataRegistryServiceRoute:  cfg.DataRegistryServiceRoute,
-		dataIngestionServiceRoute: cfg.DataIngestionServiceRoute,
-		profileServiceRoute:       cfg.ProfileServiceRoute,
+		dataRegistryServiceRoute: cfg.DataRegistryServiceRoute,
+		ingestionServiceRoute:    cfg.IngestionServiceRoute,
+		profileServiceRoute:      cfg.ProfileServiceRoute,
 	}, nil
 }
 
@@ -246,15 +246,19 @@ func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver)
 	case "profiles":
 		return fmt.Sprintf("%s%s", resolver.profileServiceRoute, routeCtx.path), nil
 	case "data":
+		if len(routeCtx.segments) > routeCtx.resourceIndex+1 &&
+			(routeCtx.segments[routeCtx.resourceIndex+1] == "store" || routeCtx.segments[routeCtx.resourceIndex+1] == "uploads") {
+			return fmt.Sprintf("%s%s", resolver.ingestionServiceRoute, routeCtx.path), nil
+		}
+		return fmt.Sprintf("%s%s", resolver.dataRegistryServiceRoute, routeCtx.path), nil
+	case "models":
+		if len(routeCtx.segments) > routeCtx.resourceIndex+1 && routeCtx.segments[routeCtx.resourceIndex+1] == "uploads" {
+			return fmt.Sprintf("%s%s", resolver.ingestionServiceRoute, routeCtx.path), nil
+		}
+		return "", fmt.Errorf("invalid model resource path: %s", routeCtx.path)
 	default:
 		return "", fmt.Errorf("invalid resource: %s", routeCtx.resource)
 	}
-
-	if len(routeCtx.segments) > routeCtx.resourceIndex+1 &&
-		(routeCtx.segments[routeCtx.resourceIndex+1] == "store" || routeCtx.segments[routeCtx.resourceIndex+1] == "uploads") {
-		return fmt.Sprintf("%s%s", resolver.dataIngestionServiceRoute, routeCtx.path), nil
-	}
-	return fmt.Sprintf("%s%s", resolver.dataRegistryServiceRoute, routeCtx.path), nil
 }
 
 func parseRouteContext(request events.APIGatewayProxyRequest) (routeContext, error) {

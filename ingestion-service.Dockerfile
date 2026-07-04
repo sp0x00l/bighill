@@ -1,0 +1,36 @@
+ARG TARGETARCH=amd64
+ARG BUILD_VERSION_REQUIRED=0.0.0
+
+FROM --platform=linux/${TARGETARCH} golang:alpine AS builder
+
+RUN addgroup -S ingestion_service_server_group && \
+    adduser -S ingestion_service_server_user -G ingestion_service_server_group 
+
+WORKDIR $GOPATH/src/shared_lib
+COPY ./shared_lib .
+
+WORKDIR $GOPATH/src/ingestion_service
+COPY ./ingestion_service .
+
+RUN rm -f go.mod && go mod init ingestion_service
+RUN go mod edit -replace lib/shared_lib=../shared_lib
+RUN go get -d -v
+
+RUN apk add --no-cache gcc musl-dev
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -tags musl -ldflags="-w -s" -o /go/bin/ingestion_service
+
+
+FROM --platform=linux/${TARGETARCH} golang:alpine
+LABEL bighill="services"
+
+COPY --from=builder /go/bin/ingestion_service /go/bin/ingestion_service
+COPY --from=builder /etc/group /etc/group
+COPY --from=builder /etc/passwd /etc/passwd
+
+WORKDIR /usr/local/src
+COPY ./scripts/docker/services/ingestion-service-entrypoint.sh .
+RUN apk update && apk add --no-cache bash postgresql-client curl && rm -rf /var/cache/apk/*
+
+USER ingestion_service_server_user
+
+ENTRYPOINT ["sh", "/usr/local/src/ingestion-service-entrypoint.sh"]

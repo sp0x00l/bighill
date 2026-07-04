@@ -8,6 +8,7 @@ import (
 	"model_registry_service/pkg/domain/model"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 
+	ingestionpb "lib/data_contracts_lib/ingestion"
 	trainingpb "lib/data_contracts_lib/training"
 	shared "lib/shared_lib/messaging"
 
@@ -24,6 +25,7 @@ func TestMessaging(t *testing.T) {
 type recordingModelRegistryUsecase struct {
 	completedModel    *model.Model
 	failedModel       *model.Model
+	ingestedModel     *model.Model
 	idempotencyKey    uuid.UUID
 	completedResponse *model.Model
 	failedResponse    *model.Model
@@ -64,6 +66,12 @@ func (r *recordingModelRegistryUsecase) RecordModelTrainingFailed(_ context.Cont
 	return failedModel, r.err
 }
 
+func (r *recordingModelRegistryUsecase) RecordModelArtifactIngested(_ context.Context, ingestedModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error) {
+	r.ingestedModel = ingestedModel
+	r.idempotencyKey = idempotencyKey
+	return ingestedModel, r.err
+}
+
 func (r *recordingModelRegistryUsecase) RecordModelServingStatus(context.Context, *model.ServedModelStatus, uuid.UUID) (*model.Model, error) {
 	return nil, nil
 }
@@ -71,12 +79,14 @@ func (r *recordingModelRegistryUsecase) RecordModelServingStatus(context.Context
 var _ = Describe("Training event listeners", func() {
 	It("maps completed training events into ready model registrations", func() {
 		datasetID := uuid.New()
+		userID := uuid.New()
 		trainingRunID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
 		listener := registrymessaging.NewModelTrainingCompletedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId:     trainingRunID.String(),
+			UserId:            userID.String(),
 			DatasetId:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotId: uuid.NewString(),
@@ -98,6 +108,7 @@ var _ = Describe("Training event listeners", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.idempotencyKey).To(Equal(trainingRunID))
+		Expect(uc.completedModel.UserID).To(Equal(userID))
 		Expect(uc.completedModel.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.completedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.completedModel.ModelVersion).To(Equal(4))
@@ -108,12 +119,14 @@ var _ = Describe("Training event listeners", func() {
 
 	It("maps failed training events into failed model registrations", func() {
 		datasetID := uuid.New()
+		userID := uuid.New()
 		trainingRunID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
 		listener := registrymessaging.NewModelTrainingFailedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingFailedEvent{
 			TrainingRunId:  trainingRunID.String(),
+			UserId:         userID.String(),
 			DatasetId:      datasetID.String(),
 			DatasetVersion: "5",
 			ModelId:        uuid.NewString(),
@@ -125,6 +138,7 @@ var _ = Describe("Training event listeners", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.idempotencyKey).To(Equal(trainingRunID))
+		Expect(uc.failedModel.UserID).To(Equal(userID))
 		Expect(uc.failedModel.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.failedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.failedModel.ModelVersion).To(Equal(5))
@@ -138,6 +152,7 @@ var _ = Describe("Training event listeners", func() {
 
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId: uuid.NewString(),
+			UserId:        uuid.NewString(),
 			DatasetId:     uuid.NewString(),
 			ModelId:       uuid.NewString(),
 			BaseModel:     "mistral-7b",
@@ -154,6 +169,7 @@ var _ = Describe("Training event listeners", func() {
 
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId:     uuid.NewString(),
+			UserId:            uuid.NewString(),
 			DatasetId:         datasetID.String(),
 			DatasetVersion:    "1",
 			ModelId:           uuid.NewString(),
@@ -169,5 +185,96 @@ var _ = Describe("Training event listeners", func() {
 		})
 
 		Expect(errors.Is(err, expectedErr)).To(BeTrue())
+	})
+})
+
+var _ = Describe("Model artifact ingested listener", func() {
+	It("maps uploaded base model artifacts into model registrations", func() {
+		artifactID := uuid.New()
+		uploadID := uuid.New()
+		uc := &recordingModelRegistryUsecase{}
+		listener := registrymessaging.NewModelArtifactIngestedEventListener(uc)
+
+		err := listener.Handle(context.Background(), artifactID, &ingestionpb.ModelArtifactIngestedEvent{
+			ArtifactId:        artifactID.String(),
+			UploadId:          uploadID.String(),
+			Source:            "upload",
+			StorageLocation:   "s3://local-dev-bucket/models/artifacts/base",
+			ArtifactType:      "BASE_MODEL",
+			ArtifactFormat:    "HF_MODEL",
+			ArtifactSizeBytes: 2048,
+			ArtifactChecksum:  "sha256:base",
+			FileName:          "model.safetensors",
+			ModelName:         "llama-local",
+			ModelVersion:      "1",
+			BaseModel:         "meta-llama/Llama-3.1-8B-Instruct",
+			ContentType:       "application/octet-stream",
+			SourceMetadata:    `{"upload_id":"` + uploadID.String() + `"}`,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.idempotencyKey).To(Equal(uploadID))
+		Expect(uc.ingestedModel.ModelID).To(Equal(artifactID))
+		Expect(uc.ingestedModel.UserID).To(Equal(uuid.Nil))
+		Expect(uc.ingestedModel.ModelKind).To(Equal(model.ModelKindBase))
+		Expect(uc.ingestedModel.Source).To(Equal(model.ModelSourceUpload))
+		Expect(uc.ingestedModel.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/artifacts/base"))
+		Expect(uc.ingestedModel.AdapterURI).To(Equal(""))
+		Expect(uc.ingestedModel.MetricsMetadata).To(Equal("{}"))
+	})
+
+	It("maps uploaded LoRA adapters to adapter-backed model registrations", func() {
+		artifactID := uuid.New()
+		uploadID := uuid.New()
+		datasetID := uuid.New()
+		userID := uuid.New()
+		uc := &recordingModelRegistryUsecase{}
+		listener := registrymessaging.NewModelArtifactIngestedEventListener(uc)
+
+		err := listener.Handle(context.Background(), artifactID, &ingestionpb.ModelArtifactIngestedEvent{
+			ArtifactId:        artifactID.String(),
+			UploadId:          uploadID.String(),
+			UserId:            userID.String(),
+			DatasetId:         datasetID.String(),
+			Source:            "upload",
+			StorageLocation:   "s3://local-dev-bucket/models/artifacts/adapter",
+			ArtifactType:      "LORA_ADAPTER",
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactSizeBytes: 1024,
+			ArtifactChecksum:  "sha256:adapter",
+			ModelName:         "movie-adapter",
+			ModelVersion:      "2",
+			BaseModel:         "mistral-7b",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.ingestedModel.UserID).To(Equal(userID))
+		Expect(uc.ingestedModel.ModelKind).To(Equal(model.ModelKindFineTuned))
+		Expect(uc.ingestedModel.DatasetID).To(Equal(datasetID))
+		Expect(uc.ingestedModel.AdapterURI).To(Equal("s3://local-dev-bucket/models/artifacts/adapter"))
+		Expect(uc.ingestedModel.ModelVersion).To(Equal(2))
+	})
+
+	It("rejects adapter artifacts without an owning user", func() {
+		artifactID := uuid.New()
+		uploadID := uuid.New()
+		uc := &recordingModelRegistryUsecase{}
+		listener := registrymessaging.NewModelArtifactIngestedEventListener(uc)
+
+		err := listener.Handle(context.Background(), artifactID, &ingestionpb.ModelArtifactIngestedEvent{
+			ArtifactId:        artifactID.String(),
+			UploadId:          uploadID.String(),
+			Source:            "upload",
+			StorageLocation:   "s3://local-dev-bucket/models/artifacts/adapter",
+			ArtifactType:      "LORA_ADAPTER",
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactSizeBytes: 1024,
+			ArtifactChecksum:  "sha256:adapter",
+			ModelName:         "movie-adapter",
+			ModelVersion:      "2",
+			BaseModel:         "mistral-7b",
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("user_id required")))
 	})
 })

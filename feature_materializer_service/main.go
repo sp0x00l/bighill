@@ -25,6 +25,7 @@ import (
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
+	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
 
 	log "github.com/sirupsen/logrus"
@@ -47,6 +48,7 @@ type materializerConfig struct {
 	GRPCPort             int
 	DatasetUploadedTopic string
 	DataRegistryTopic    string
+	ProfileTopic         string
 	PublishTopics        featuremessaging.MaterializationTopics
 	Health               healthConfig
 }
@@ -186,6 +188,7 @@ func main() {
 		featuredb.WithTransactionalOutbox(orderedOutbox, cfg.PublishTopics.FeatureMaterializer),
 		featuredb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
+	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 	artifactStore, err := materialization.NewObjectArtifactStore(cancelCtx, cfg.ArtifactBucket.Name, cfg.ArtifactBucket.Region, cfg.ArtifactBucket.UploadPartSize)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create artifact store")
@@ -265,6 +268,18 @@ func main() {
 	startSubscriber("dataset-updated", []string{cfg.DataRegistryTopic}, func(subscriber messagingConn.Subscriber) {
 		featuremessaging.ConfigureSubscriberErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, featuremessaging.NewDatasetUpdatedEventListener(workflowStarter))
+	})
+	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
+	})
+	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
+	})
+	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
+		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
 
 	go func() {
@@ -357,8 +372,9 @@ func readMaterializerConfig() materializerConfig {
 			TaskQueue: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_TASK_QUEUE", usecase.DefaultMaterializeWorkflowTaskQueue),
 		},
 		GRPCPort:             env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_API_GRPC_PORT", "7072"),
-		DatasetUploadedTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_INGESTION_SUBSCRIBER_TOPIC", "data_ingestion"),
+		DatasetUploadedTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_INGESTION_SUBSCRIBER_TOPIC", "ingestion"),
 		DataRegistryTopic:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
+		ProfileTopic:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
 		PublishTopics: featuremessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
 		},

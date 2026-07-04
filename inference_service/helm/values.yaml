@@ -39,6 +39,7 @@ env:
   kafkaAutoOffsetReset: "earliest"
   modelRegistrySubscriberTopic: "model_registry"
   dataRegistrySubscriberTopic: "data_registry"
+  profileSubscriberTopic: "profile"
   preferenceDatasetTopic: "inference"
   outbox: "postgres"
   outboxRelayPollMs: "250"

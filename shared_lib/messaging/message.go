@@ -30,6 +30,7 @@ const (
 	MsgTypeModelTrainingFailed
 	MsgTypeModelUpdated
 	MsgTypePreferenceDatasetReady
+	MsgTypeModelArtifactIngested
 )
 
 var msgType = map[MsgType]string{
@@ -48,6 +49,7 @@ var msgType = map[MsgType]string{
 	MsgTypeModelTrainingFailed:        "model_training_failed",
 	MsgTypeModelUpdated:               "model_updated",
 	MsgTypePreferenceDatasetReady:     "preference_dataset_ready",
+	MsgTypeModelArtifactIngested:      "model_artifact_ingested",
 }
 
 func (m MsgType) String() string {

@@ -59,9 +59,9 @@ func NewAPIHandler() APIHandler {
 			env.WithDefaultString("DATA_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
 			env.WithDefaultString("DATA_REGISTRY_SERVICE_HTTP_PORT", "8081"),
 		),
-		DataIngestionServiceRoute: serviceBaseRoute(
-			env.WithDefaultString("DATA_INGESTION_SERVICE_HTTP_HOST", "127.0.0.1"),
-			env.WithDefaultString("DATA_INGESTION_SERVICE_HTTP_PORT", "8086"),
+		IngestionServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("INGESTION_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("INGESTION_SERVICE_HTTP_PORT", "8086"),
 		),
 		ProfileServiceRoute: serviceBaseRoute(
 			env.WithDefaultString("PROFILE_SERVICE_HTTP_HOST", "127.0.0.1"),

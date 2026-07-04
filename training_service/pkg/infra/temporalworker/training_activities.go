@@ -135,9 +135,6 @@ func (a *TrainingActivities) PrepareTrainingDataset(_ context.Context, request m
 func (a *TrainingActivities) RunTrainingJob(ctx context.Context, prepared model.PreparedTrainingDataset, request model.TrainingRunRequest) (*model.TrainedModelArtifact, error) {
 	log.Trace("TrainingActivities RunTrainingJob")
 
-	if a.executor == nil {
-		return nil, domain.ErrTrainModel.Extend("training executor is required")
-	}
 	spec, err := a.trainingJobSpec(prepared, request)
 	if err != nil {
 		return nil, err
@@ -152,9 +149,6 @@ func (a *TrainingActivities) RunTrainingJob(ctx context.Context, prepared model.
 func (a *TrainingActivities) EvaluateTrainedModel(ctx context.Context, artifact model.TrainedModelArtifact, request model.TrainingRunRequest) (*model.EvaluationReport, error) {
 	log.Trace("TrainingActivities EvaluateTrainedModel")
 
-	if a.executor == nil {
-		return nil, domain.ErrEvaluateModel.Extend("training executor is required")
-	}
 	spec, err := a.evaluationJobSpec(artifact, request)
 	if err != nil {
 		return nil, err
@@ -398,9 +392,6 @@ func deterministicSubmissionID(prefix, trainingRunID, hash string) string {
 func (a *TrainingActivities) PublishModelTrainingCompleted(ctx context.Context, result model.TrainingRunResult) error {
 	log.Trace("TrainingActivities PublishModelTrainingCompleted")
 
-	if a.eventPublisher == nil {
-		return domain.ErrTrainModel.Extend("training event publisher is required")
-	}
 	if strings.TrimSpace(result.TrainingRunID) == "" {
 		return domain.ErrValidationFailed.Extend("training run id is required")
 	}
@@ -410,9 +401,6 @@ func (a *TrainingActivities) PublishModelTrainingCompleted(ctx context.Context, 
 func (a *TrainingActivities) PublishModelTrainingFailed(ctx context.Context, result model.TrainingRunResult) error {
 	log.Trace("TrainingActivities PublishModelTrainingFailed")
 
-	if a.eventPublisher == nil {
-		return domain.ErrTrainModel.Extend("training event publisher is required")
-	}
 	if strings.TrimSpace(result.TrainingRunID) == "" {
 		return domain.ErrValidationFailed.Extend("training run id is required")
 	}

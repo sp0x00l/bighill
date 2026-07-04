@@ -5,6 +5,7 @@ import (
 
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
 	"github.com/google/uuid"
@@ -41,6 +42,9 @@ func (u *sourceUsecase) CreateSourceConnector(ctx context.Context, sourceConnect
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "source_connector.create_source_connector", attrs...)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	if sourceConnector != nil {
+		ctx = ctxutil.WithTenantID(ctx, sourceConnector.UserID)
+	}
 	id := uuid.New()
 	name := id.String()
 	catalogID, err := u.catalogClient.CreateResource(ctx, name, sourceConnector.Config)
@@ -71,6 +75,7 @@ func (u *sourceUsecase) ReadSourceConnector(ctx context.Context, connectorID, us
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	return u.sourceRepository.ReadByID(ctx, connectorID, userID)
 }
 
@@ -87,6 +92,9 @@ func (u *sourceUsecase) ReplaceSourceConnector(ctx context.Context, sourceConnec
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "source_connector.replace_source_connector", attrs...)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	if sourceConnector != nil {
+		ctx = ctxutil.WithTenantID(ctx, sourceConnector.UserID)
+	}
 	originalSourceConn, err := u.sourceRepository.ReadByID(ctx, sourceConnector.ID, sourceConnector.UserID)
 	if err != nil {
 		return err
@@ -123,6 +131,7 @@ func (u *sourceUsecase) DeleteSourceConnector(ctx context.Context, connectorID, 
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	catalogID, err := u.getCatalogID(ctx, connectorID, userID)
 	if err != nil {
 		return err

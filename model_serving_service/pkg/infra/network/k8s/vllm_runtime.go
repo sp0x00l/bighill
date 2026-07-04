@@ -111,14 +111,15 @@ func (r *VLLMRuntime) EnsureServedModel(ctx context.Context, servedModel *model.
 	if strings.TrimSpace(servedModel.BaseModel) == "" {
 		return nil, domain.ErrValidationFailed.Extend("base model is required")
 	}
-	if strings.TrimSpace(servedModel.AdapterURI) == "" {
-		return nil, domain.ErrValidationFailed.Extend("adapter uri is required")
-	}
 	workloadName := r.workloadName(servedModel)
 	servingModel := ServingModelName(servedModel)
 	runtimeServingModel := servingModel
 	if r.multiTenant {
 		runtimeServingModel = SharedRuntimeServingModelName(servedModel)
+	}
+	loadedServingModel := servingModel
+	if strings.TrimSpace(servedModel.AdapterURI) == "" {
+		loadedServingModel = runtimeServingModel
 	}
 	servingTarget := strings.TrimSpace(servedModel.ServingTarget)
 	if servingTarget == "" {
@@ -137,14 +138,14 @@ func (r *VLLMRuntime) EnsureServedModel(ctx context.Context, servedModel *model.
 	state := &model.ServingRuntimeState{
 		Failed:        failed,
 		ServingTarget: servingTarget,
-		ServingModel:  servingModel,
+		ServingModel:  loadedServingModel,
 		FailureReason: failureReason,
 		ReadyReplicas: readyReplicas,
 	}
 	if failed || !deploymentReady {
 		return state, nil
 	}
-	confirmed, adapterFailed, failureReason := r.ensureServingModel(ctx, servingTarget, servingModel, servedModel.AdapterURI)
+	confirmed, adapterFailed, failureReason := r.ensureServingModel(ctx, servingTarget, loadedServingModel, servedModel.AdapterURI)
 	state.Ready = confirmed
 	state.Failed = adapterFailed
 	state.FailureReason = failureReason
@@ -180,6 +181,9 @@ func (r *VLLMRuntime) ensureServingModel(ctx context.Context, servingTarget stri
 	confirmed, failureReason := r.confirmServingModel(ctx, servingTarget, servingModel)
 	if confirmed {
 		return true, false, ""
+	}
+	if strings.TrimSpace(adapterURI) == "" {
+		return false, false, failureReason
 	}
 	if !r.multiTenant {
 		return false, false, failureReason
@@ -438,9 +442,11 @@ func (r *VLLMRuntime) podSpec(servedModel *model.ServedModel, servingModel strin
 	args := []any{
 		"--model", strings.TrimSpace(servedModel.BaseModel),
 		"--served-model-name", servingModel,
-		"--enable-lora",
 	}
-	if !r.multiTenant {
+	if strings.TrimSpace(servedModel.AdapterURI) != "" {
+		args = append(args, "--enable-lora")
+	}
+	if strings.TrimSpace(servedModel.AdapterURI) != "" && !r.multiTenant {
 		args = append(args, "--lora-modules", fmt.Sprintf("%s=%s", servingModel, strings.TrimSpace(servedModel.AdapterURI)))
 	}
 	spec := map[string]any{

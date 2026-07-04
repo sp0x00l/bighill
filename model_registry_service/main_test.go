@@ -31,6 +31,8 @@ var _ = Describe("readModelRegistryConfig", func() {
 		Expect(os.Setenv("ENVIRONMENT", "local-dev")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_INGESTION_SUBSCRIBER_TOPIC")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_OUTBOX")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_KAFKA_BASE_GROUP_ID")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED")).To(Succeed())
@@ -50,6 +52,8 @@ var _ = Describe("readModelRegistryConfig", func() {
 
 		Expect(cfg.Topics.ModelRegistry).To(Equal("model_registry"))
 		Expect(cfg.Topics.Training).To(Equal("training"))
+		Expect(cfg.Topics.Ingestion).To(Equal("ingestion"))
+		Expect(cfg.ProfileTopic).To(Equal("profile"))
 		Expect(cfg.OutboxBackend).To(Equal("postgres"))
 		Expect(cfg.Messaging.GroupID).To(Equal("model-registry"))
 		Expect(cfg.Messaging.Brokers).To(Equal("localhost:9092"))

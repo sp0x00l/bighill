@@ -40,6 +40,8 @@ env:
   kafkaAutoOffsetReset: "earliest"
   topic: "model_registry"
   trainingSubscriberTopic: "training"
+  ingestionSubscriberTopic: "ingestion"
+  profileSubscriberTopic: "profile"
   dlq: "http://localhost:4566/model-registry-dev-env-queue/"
   outbox: "postgres"
   outboxRelayPollMs: "250"

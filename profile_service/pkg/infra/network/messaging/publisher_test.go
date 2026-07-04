@@ -66,11 +66,12 @@ var _ = Describe("UserEventPublisher", func() {
 		When("the arguments are valid", func() {
 			It("publishes a user created event", func() {
 				err := publisher.PublishUserCreatedEvent(ctx, &domain.ProfileAccount{
-					ID:               userID,
-					Email:            "user@example.com",
-					PhoneNumber:      "+447700900123",
-					CountryCode:      "GB",
-					EmailVerifyToken: "token-1",
+					ID:                         userID,
+					Email:                      "user@example.com",
+					PhoneNumber:                "+447700900123",
+					CountryCode:                "GB",
+					EmailVerifyToken:           "token-1",
+					HuggingFaceTokenCiphertext: "ciphertext-1",
 				})
 
 				Expect(err).To(BeNil())
@@ -87,6 +88,7 @@ var _ = Describe("UserEventPublisher", func() {
 				Expect(payload.Email).To(Equal("user@example.com"))
 				Expect(payload.PhoneNumber).To(Equal("+447700900123"))
 				Expect(payload.CountryCode).To(Equal("GB"))
+				Expect(payload.HuggingfaceTokenCiphertext).To(Equal("ciphertext-1"))
 			})
 		})
 
@@ -145,11 +147,12 @@ var _ = Describe("UserEventPublisher", func() {
 			It("publishes a user updated event", func() {
 				err := publisher.PublishUserUpdatedEvent(ctx, &domain.Profile{
 					ProfileAccount: domain.ProfileAccount{
-						ID:            userID,
-						Email:         "user@example.com",
-						PhoneNumber:   "+447700900123",
-						CountryCode:   "GB",
-						EmailVerified: true,
+						ID:                         userID,
+						Email:                      "user@example.com",
+						PhoneNumber:                "+447700900123",
+						CountryCode:                "GB",
+						EmailVerified:              true,
+						HuggingFaceTokenCiphertext: "ciphertext-2",
 					},
 					FirstName: "Ada",
 					LastName:  "Lovelace",
@@ -168,6 +171,7 @@ var _ = Describe("UserEventPublisher", func() {
 				Expect(payload.Email).To(Equal("user@example.com"))
 				Expect(payload.FirstName).To(Equal("Ada"))
 				Expect(payload.LastName).To(Equal("Lovelace"))
+				Expect(payload.HuggingfaceTokenCiphertext).To(Equal("ciphertext-2"))
 				verified, err := shared.EmailVerificationStatusFromProfileEventProto("user updated", payload.EmailVerificationStatus)
 				Expect(err).To(BeNil())
 				Expect(verified).To(BeTrue())

@@ -1,9 +1,10 @@
 package main
 
 import (
+	"os"
 	"testing"
 
-	"feature_materializer_service/pkg/domain/model"
+	env "lib/shared_lib/env"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -14,41 +15,15 @@ func TestFeatureMaterializerMain(t *testing.T) {
 	RunSpecs(t, "Feature materializer main unit test suite")
 }
 
-var _ = Describe("postgresConnectionString", func() {
-	It("escapes credentials and includes connection options", func() {
-		connection := postgresConnectionString("feature user", "pa:ss/word", "localhost", "5432", "bighill_feature_materializer_db", "disable", 7)
-
-		Expect(connection).To(ContainSubstring("postgres://feature+user:pa%3Ass%2Fword@localhost:5432/bighill_feature_materializer_db?"))
-		Expect(connection).To(ContainSubstring("pool_max_conns=7"))
-		Expect(connection).To(ContainSubstring("sslmode=disable"))
+var _ = Describe("readMaterializerConfig", func() {
+	BeforeEach(func() {
+		env.ResetEnvironmentCache()
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_PROFILE_SUBSCRIBER_TOPIC")).To(Succeed())
 	})
-})
 
-var _ = Describe("newQueryEmbeddingProviderFactory", func() {
-	It("builds query providers from the active embedding strategy", func() {
-		factory := newQueryEmbeddingProviderFactory(embeddingConfig{
-			Provider:   "deterministic",
-			Dimensions: 2,
-		})
+	It("uses the profile service topic for tenant projections by default", func() {
+		cfg := readMaterializerConfig()
 
-		provider, err := factory(model.EmbeddingStrategy{
-			EmbeddingProvider:   "deterministic",
-			EmbeddingDimensions: 7,
-		})
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(provider.Dimensions()).To(Equal(7))
-	})
-})
-
-var _ = Describe("newEmbeddingProvider", func() {
-	It("uses the deterministic provider without requiring an HTTP endpoint", func() {
-		provider, err := newEmbeddingProvider(embeddingConfig{
-			Provider:   "deterministic",
-			Dimensions: 384,
-		})
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(provider.Dimensions()).To(Equal(384))
+		Expect(cfg.ProfileTopic).To(Equal("profile"))
 	})
 })

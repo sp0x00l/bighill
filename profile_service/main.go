@@ -8,6 +8,7 @@ import (
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
 	"lib/shared_lib/observability"
+	"lib/shared_lib/secret"
 	"lib/shared_lib/transport"
 	"time"
 
@@ -50,6 +51,7 @@ type runtimeConfig struct {
 	kafkaPublisherTopic     string
 	healthCheckConfig       healthcheck.HealthCheckConfig
 	useStagingTestToken     bool
+	huggingFaceTokenKey     string
 }
 
 func init() {
@@ -122,6 +124,10 @@ func main() {
 	}()
 
 	profilePublisher := messaging.NewUserEventPublisher(msgPublisher, cfg.kafkaPublisherTopic)
+	secretCodec, err := secret.NewAESGCMCodec(cfg.huggingFaceTokenKey)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Fatal("unable to create Hugging Face token codec")
+	}
 
 	// Initialize KMS and auth provider for JWT token creation
 	kmsClient, err := kms.NewKMSClient(ctx)
@@ -145,6 +151,7 @@ func main() {
 			MsgPublisher:       profilePublisher,
 			AuthStore:          authStore,
 			AuthProvider:       authProv,
+			SecretEncryptor:    secretCodec,
 		},
 		usecase.ProfilesUseCaseConfig{
 			AuthExpirationInMinutes: cfg.authExpirationInMinutes,
@@ -229,6 +236,7 @@ func loadConfig() runtimeConfig {
 		},
 		kafkaPublisherTopic: env.MustString("PROFILE_SERVICE_KAFKA_PUBLISHER_TOPIC"),
 		useStagingTestToken: env.WithDefaultBool("PROFILE_SERVICE_USE_STAGING_TEST_EMAIL_TOKEN", env.IsStaging()),
+		huggingFaceTokenKey: env.MustString("PROFILE_SERVICE_HUGGINGFACE_TOKEN_ENCRYPTION_KEY"),
 		healthCheckConfig: healthcheck.HealthCheckConfig{
 			CpuThresholdPercentage:           env.MustInt("PROFILE_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT"),
 			MemFreeThresholdPercentage:       env.MustInt("PROFILE_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT"),

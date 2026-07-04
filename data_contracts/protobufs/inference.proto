@@ -12,11 +12,12 @@ service InferenceService {
 
 message GenerateRequest {
   string dataset_id = 1;
-  string query_text = 2;
-  int32 top_k = 3;
-  string model_id = 4;
-  string request_id = 5;
-  map<string, string> metadata_filters = 6;
+  string user_id = 2;
+  string query_text = 3;
+  int32 top_k = 4;
+  string model_id = 5;
+  string request_id = 6;
+  map<string, string> metadata_filters = 7;
 }
 
 message GenerateResponse {
@@ -57,11 +58,12 @@ message RecordFeedbackResponse {
 
 message ExportPreferenceDatasetRequest {
   string request_id = 1;
-  string dataset_id = 2;
-  string model_id = 3;
-  string output_uri = 4;
-  int32 min_examples = 5;
-  int32 limit = 6;
+  string user_id = 2;
+  string dataset_id = 3;
+  string model_id = 4;
+  string output_uri = 5;
+  int32 min_examples = 6;
+  int32 limit = 7;
 }
 
 message ExportPreferenceDatasetResponse {
@@ -75,16 +77,17 @@ message ExportPreferenceDatasetResponse {
 
 message PreferenceDatasetReadyEvent {
   string preference_dataset_id = 1;
-  string dataset_id = 2;
-  string model_id = 3;
-  string source_request_id = 4;
-  string output_uri = 5;
-  int32 example_count = 6;
-  string format = 7;
-  int32 min_examples = 8;
-  int32 limit = 9;
-  string parent_adapter_uri = 10;
-  string parent_base_model = 11;
-  int32 parent_model_version = 12;
-  string evaluation_output_uri = 13;
+  string user_id = 2;
+  string dataset_id = 3;
+  string model_id = 4;
+  string source_request_id = 5;
+  string output_uri = 6;
+  int32 example_count = 7;
+  string format = 8;
+  int32 min_examples = 9;
+  int32 limit = 10;
+  string parent_adapter_uri = 11;
+  string parent_base_model = 12;
+  int32 parent_model_version = 13;
+  string evaluation_output_uri = 14;
 }

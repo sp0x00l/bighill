@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 declare -a search_paths=(
-  "data_ingestion_service"
+  "ingestion_service"
   "data_registry_service"
   "data_stream_service"
   "feature_materializer_service"
@@ -20,7 +20,7 @@ declare -a search_paths=(
 )
 
 declare -a patterns=(
-  "(?<![A-Z0-9_])DATA_INGESTION_(?!SERVICE_)"
+  "(?<![A-Z0-9_])INGESTION_(?!SERVICE_)"
   "(?<![A-Z0-9_])DATA_REGISTRY_(?!SERVICE_)"
   "(?<![A-Z0-9_])DATA_STREAM_(?!SERVICE_)"
   "(?<![A-Z0-9_])FEATURE_MATERIALIZER_(?!SERVICE_)"

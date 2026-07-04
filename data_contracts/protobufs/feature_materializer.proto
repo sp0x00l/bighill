@@ -10,8 +10,8 @@ service FeatureMaterializerService {
 
 message RawSnapshotReadyEvent {
   string raw_snapshot_id = 1;
-  string dataset_id = 2;
-  string user_id = 3;
+  string user_id = 2;
+  string dataset_id = 3;
   string storage_location = 4;
   string table_namespace = 5;
   string table_name = 6;
@@ -24,9 +24,9 @@ message RawSnapshotReadyEvent {
 
 message FeatureSnapshotReadyEvent {
   string feature_snapshot_id = 1;
-  string raw_snapshot_id = 2;
-  string dataset_id = 3;
-  string user_id = 4;
+  string user_id = 2;
+  string raw_snapshot_id = 3;
+  string dataset_id = 4;
   string storage_location = 5;
   string table_namespace = 6;
   string table_name = 7;
@@ -39,9 +39,9 @@ message FeatureSnapshotReadyEvent {
 
 message EmbeddingSnapshotReadyEvent {
   string embedding_snapshot_id = 1;
-  string feature_snapshot_id = 2;
-  string dataset_id = 3;
-  string user_id = 4;
+  string user_id = 2;
+  string feature_snapshot_id = 3;
+  string dataset_id = 4;
   string vector_store = 5;
   string collection_name = 6;
   int32 embedding_dimensions = 7;
@@ -57,9 +57,10 @@ message EmbeddingSnapshotReadyEvent {
 
 message SearchEmbeddingsRequest {
   string dataset_id = 1;
-  string query_text = 2;
-  int32 top_k = 3;
-  map<string, string> metadata_filters = 4;
+  string user_id = 2;
+  string query_text = 3;
+  int32 top_k = 4;
+  map<string, string> metadata_filters = 5;
 }
 
 message SearchEmbeddingsResponse {

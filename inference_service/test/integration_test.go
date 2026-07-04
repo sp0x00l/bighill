@@ -125,15 +125,21 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		time.Sleep(750 * time.Millisecond)
 
 		modelID := uuid.New()
+		userID := uuid.New()
 		trainingRunID := uuid.New()
 		datasetID := uuid.New()
+		Expect(upsertInferenceTenant(ctx, database, userID)).To(Succeed())
 		Expect(publisher.Publish(runCtx, topics.ModelRegistry, sharedmessaging.Message{
 			ResourceKey: modelID,
 			MsgType:     sharedmessaging.MsgTypeModelUpdated,
 		}, &modelregistrypb.ModelUpdatedEvent{
 			ModelId:           modelID.String(),
+			UserId:            userID.String(),
 			TrainingRunId:     trainingRunID.String(),
 			DatasetId:         datasetID.String(),
+			ModelKind:         model.ModelKindFineTuned.String(),
+			Source:            model.ModelSourceTraining.String(),
+			SourceMetadata:    "{}",
 			Name:              "movie-ranker",
 			ModelVersion:      3,
 			BaseModel:         "mistral-7b",
@@ -150,7 +156,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			record, err := models.ReadByID(ctx, modelID)
+			record, err := models.ReadByID(ctx, userID, modelID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(record.TrainingRunID).To(Equal(trainingRunID))
 			g.Expect(record.DatasetID).To(Equal(datasetID))
@@ -194,10 +200,15 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		userID := uuid.New()
 		modelID := uuid.New()
 		embeddingSnapshotID := uuid.New()
+		Expect(upsertInferenceTenant(ctx, database, userID)).To(Succeed())
 		_, err = models.UpsertModel(ctx, &model.InferenceModel{
 			ModelID:           modelID,
+			UserID:            userID,
 			TrainingRunID:     uuid.New(),
 			DatasetID:         datasetID,
+			ModelKind:         model.ModelKindFineTuned,
+			Source:            model.ModelSourceTraining,
+			SourceMetadata:    "{}",
 			Name:              "movie-ranker",
 			ModelVersion:      1,
 			BaseModel:         "mistral-7b",
@@ -246,7 +257,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			record, err := datasets.ReadDataset(ctx, datasetID)
+			record, err := datasets.ReadDataset(ctx, userID, datasetID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(record.UserID).To(Equal(userID))
 			g.Expect(record.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
@@ -270,6 +281,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 
 		response, err := client.Generate(ctx, &inferencepb.GenerateRequest{
 			RequestId: uuid.NewString(),
+			UserId:    userID.String(),
 			DatasetId: datasetID.String(),
 			ModelId:   modelID.String(),
 			QueryText: "what movie context is available?",
@@ -309,10 +321,15 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		modelID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		requestID := uuid.New()
+		Expect(upsertInferenceTenant(ctx, database, userID)).To(Succeed())
 		_, err := models.UpsertModel(ctx, &model.InferenceModel{
 			ModelID:           modelID,
+			UserID:            userID,
 			TrainingRunID:     uuid.New(),
 			DatasetID:         datasetID,
+			ModelKind:         model.ModelKindFineTuned,
+			Source:            model.ModelSourceTraining,
+			SourceMetadata:    "{}",
 			Name:              "movie-ranker",
 			ModelVersion:      1,
 			BaseModel:         "mistral-7b",
@@ -363,6 +380,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 
 		response, err := usecase.Generate(ctx, model.GenerateRequest{
 			RequestID: requestID,
+			UserID:    userID,
 			DatasetID: datasetID,
 			ModelID:   modelID,
 			QueryText: "which context wins?",
@@ -388,7 +406,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 
 type integrationRetrievalClient struct{}
 
-func (c *integrationRetrievalClient) SearchEmbeddings(context.Context, uuid.UUID, string, int, map[string]string) ([]model.RetrievedContext, error) {
+func (c *integrationRetrievalClient) SearchEmbeddings(context.Context, uuid.UUID, uuid.UUID, string, int, map[string]string) ([]model.RetrievedContext, error) {
 	return []model.RetrievedContext{{
 		EmbeddingRecordID:   uuid.New(),
 		EmbeddingSnapshotID: uuid.New(),
@@ -407,7 +425,7 @@ type rerankIntegrationRetrievalClient struct {
 	topK                int
 }
 
-func (c *rerankIntegrationRetrievalClient) SearchEmbeddings(_ context.Context, _ uuid.UUID, _ string, topK int, _ map[string]string) ([]model.RetrievedContext, error) {
+func (c *rerankIntegrationRetrievalClient) SearchEmbeddings(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ string, topK int, _ map[string]string) ([]model.RetrievedContext, error) {
 	c.topK = topK
 	contexts := make([]model.RetrievedContext, 0, topK)
 	for i := 0; i < topK; i++ {
@@ -440,12 +458,21 @@ func (r *rerankIntegrationReranker) Rerank(_ context.Context, _ string, candidat
 }
 
 func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"preference_examples", "inference_feedback", "inference_requests", "inference_models", "inference_datasets"} {
+	for _, table := range []string{"preference_dataset_snapshots", "preference_examples", "inference_feedback", "inference_requests", "inference_models", "inference_datasets", "tenants"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func upsertInferenceTenant(ctx context.Context, database *dbconn.Database, userID uuid.UUID) error {
+	_, err := database.Pool.Exec(ctx, `
+		INSERT INTO `+database.Name+`.tenants (id, email, deleted)
+		VALUES ($1, $2, false)
+		ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, deleted = false
+	`, userID, userID.String()+"@example.test")
+	return err
 }
 
 func testPostgresConnectionString(dbName string) string {

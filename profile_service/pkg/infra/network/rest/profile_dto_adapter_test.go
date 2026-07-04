@@ -527,6 +527,32 @@ var _ = Describe("ProfilesDTO Adapter", func() {
 		})
 	})
 
+	Describe("Hugging Face token DTO deserialization", func() {
+		It("deserialises a token", func() {
+			body, err := json.Marshal(map[string]any{
+				"token": "hf-token",
+			})
+			Expect(err).ShouldNot(HaveOccurred())
+
+			token, err := profilesDTOAdapter.FromHuggingFaceTokenDTO(ctx, body)
+
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(token).Should(Equal("hf-token"))
+		})
+
+		It("rejects a missing token", func() {
+			body, err := json.Marshal(map[string]any{
+				"token": "",
+			})
+			Expect(err).ShouldNot(HaveOccurred())
+
+			_, err = profilesDTOAdapter.FromHuggingFaceTokenDTO(ctx, body)
+
+			Expect(err).Should(HaveOccurred())
+			Expect(err.Error()).Should(ContainSubstring("huggingFaceTokenDTO.Token"))
+		})
+	})
+
 	Describe("OAuth authorize DTOs", func() {
 		It("deserialises an oauth authorization request", func() {
 			body, err := json.Marshal(map[string]any{

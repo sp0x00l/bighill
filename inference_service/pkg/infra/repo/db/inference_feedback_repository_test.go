@@ -99,26 +99,29 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		rawExamples := fmt.Sprintf(`[{
 			"preference_example_id": %q,
 			"feedback_id": %q,
-				"request_id": %q,
-				"dataset_id": %q,
-				"model_id": %q,
-					"split": "EVAL",
-				"prompt_text": "Prompt",
-				"accepted_answer": "Correct answer",
+			"request_id": %q,
+			"user_id": %q,
+			"dataset_id": %q,
+			"model_id": %q,
+			"split": "EVAL",
+			"prompt_text": "Prompt",
+			"accepted_answer": "Correct answer",
 			"rejected_answer": "Wrong answer",
 			"rating": -1,
 			"feedback_label": "REJECTED"
-		}]`, exampleID.String(), feedbackID.String(), requestID.String(), datasetID.String(), modelID.String())
-		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), modelID.String(), "s3://models/parent", "mistral-7b", 7, rawExamples}}}
+		}]`, exampleID.String(), feedbackID.String(), requestID.String(), userID.String(), datasetID.String(), modelID.String())
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), modelID.String(), "s3://models/parent", "mistral-7b", 7, rawExamples}}}
 
 		dataset, err := repository.ReadPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
 			RequestID: requestID,
+			UserID:    userID,
 			OutputURI: "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
 			Limit:     100,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dataset.RequestID).To(Equal(requestID))
+		Expect(dataset.UserID).To(Equal(userID))
 		Expect(dataset.DatasetID).To(Equal(datasetID))
 		Expect(dataset.ModelID).To(Equal(modelID))
 		Expect(dataset.ParentAdapterURI).To(Equal("s3://models/parent"))
@@ -138,6 +141,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		args := namedArgs(pool.lastArgs)
 		Expect(args).To(SatisfyAll(
 			HaveKeyWithValue("request_id", pgtype.UUID{Bytes: requestID, Valid: true}),
+			HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}),
 			HaveKeyWithValue("limit", 100),
 		))
 	})
@@ -156,6 +160,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		dataset := &model.PreferenceDataset{
 			PreferenceDatasetID: preferenceDatasetID,
 			RequestID:           requestID,
+			UserID:              userID,
 			DatasetID:           datasetID,
 			ModelID:             modelID,
 			ParentAdapterURI:    "s3://models/parent",
@@ -175,6 +180,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 
 		record, err := repository.RecordPreferenceDatasetSnapshot(ctx, dataset, model.PreferenceDatasetExportRequest{
 			RequestID:   requestID,
+			UserID:      userID,
 			MinExamples: 10,
 			Limit:       100,
 		})
@@ -195,6 +201,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		var payload inferencepb.PreferenceDatasetReadyEvent
 		Expect(proto.Unmarshal(outbox.message.Message.Payload, &payload)).To(Succeed())
 		Expect(payload.PreferenceDatasetId).To(Equal(preferenceDatasetID.String()))
+		Expect(payload.UserId).To(Equal(userID.String()))
 		Expect(payload.OutputUri).To(Equal("s3://local-dev-bucket/preferences/dpo.jsonl"))
 		Expect(payload.EvaluationOutputUri).To(Equal("s3://local-dev-bucket/preferences/dpo-eval.jsonl"))
 		Expect(payload.Format).To(Equal("DPO_JSONL"))

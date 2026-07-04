@@ -25,8 +25,8 @@ func NewRuntime(namespace string, port int32) *Runtime {
 func (r *Runtime) EnsureServedModel(ctx context.Context, servedModel *model.ServedModel) (*model.ServingRuntimeState, error) {
 	log.Trace("localserving Runtime EnsureServedModel")
 
-	if strings.TrimSpace(servedModel.AdapterURI) == "" {
-		return nil, domain.ErrValidationFailed.Extend("adapter uri is required")
+	if strings.TrimSpace(servedModel.BaseModel) == "" {
+		return nil, domain.ErrValidationFailed.Extend("base model is required")
 	}
 	servingModel := strings.TrimSpace(servedModel.ServingModel)
 	if servingModel == "" {

@@ -37,6 +37,9 @@ func (s *profileDBStub) Save(context.Context, *domain.ProfileAccount, uuid.UUID)
 func (s *profileDBStub) Update(context.Context, uuid.UUID, *domain.Profile) (*domain.Profile, error) {
 	return nil, nil
 }
+func (s *profileDBStub) UpdateHuggingFaceToken(context.Context, uuid.UUID, string) (*domain.Profile, error) {
+	return nil, nil
+}
 func (s *profileDBStub) UpdatePassword(context.Context, uuid.UUID, string) error {
 	return nil
 }

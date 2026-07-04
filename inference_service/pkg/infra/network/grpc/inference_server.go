@@ -12,6 +12,7 @@ import (
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
 	inferencepb "lib/data_contracts_lib/inference"
+	"lib/shared_lib/ctxutil"
 	rpcLib "lib/shared_lib/rpc"
 
 	"github.com/google/uuid"
@@ -96,6 +97,11 @@ func (s *InferenceServer) Generate(ctx context.Context, req *inferencepb.Generat
 	if err != nil || datasetID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid dataset_id")
 	}
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil || userID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	modelID, err := uuid.Parse(req.GetModelId())
 	if err != nil || modelID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid model_id")
@@ -115,6 +121,7 @@ func (s *InferenceServer) Generate(ctx context.Context, req *inferencepb.Generat
 
 	response, err := s.usecase.Generate(ctx, model.GenerateRequest{
 		RequestID:       requestID,
+		UserID:          userID,
 		DatasetID:       datasetID,
 		ModelID:         modelID,
 		QueryText:       queryText,
@@ -145,6 +152,7 @@ func (s *InferenceServer) RecordFeedback(ctx context.Context, req *inferencepb.R
 	if err != nil || userID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
 	}
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	rating := int(req.GetRating())
 	if rating < -1 || rating > 1 {
 		return nil, status.Error(codes.InvalidArgument, "rating must be between -1 and 1")
@@ -177,6 +185,11 @@ func (s *InferenceServer) ExportPreferenceDataset(ctx context.Context, req *infe
 	if err != nil || requestID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid request_id")
 	}
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil || userID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+	ctx = ctxutil.WithTenantID(ctx, userID)
 	var datasetID uuid.UUID
 	if strings.TrimSpace(req.GetDatasetId()) != "" {
 		datasetID, err = uuid.Parse(req.GetDatasetId())
@@ -205,6 +218,7 @@ func (s *InferenceServer) ExportPreferenceDataset(ctx context.Context, req *infe
 	}
 	dataset, err := s.usecase.ExportPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
 		RequestID:   requestID,
+		UserID:      userID,
 		DatasetID:   datasetID,
 		ModelID:     modelID,
 		OutputURI:   outputURI,

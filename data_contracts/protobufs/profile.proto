@@ -16,6 +16,7 @@ message UserCreatedEvent {
   string phone_number = 3;
   string country_code = 4;
   EmailVerificationStatus email_verification_status = 5;
+  string huggingface_token_ciphertext = 6;
 }
 
 message UserUpdatedEvent {
@@ -26,6 +27,7 @@ message UserUpdatedEvent {
   string phone_number = 5;
   string country_code = 6;
   EmailVerificationStatus email_verification_status = 7;
+  string huggingface_token_ciphertext = 8;
 }
 
 message UserDeletedEvent {

@@ -11,6 +11,7 @@ import (
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	coreDB "lib/shared_lib/db"
 	msgConn "lib/shared_lib/messaging"
+	"lib/shared_lib/uuidutil"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
@@ -69,12 +70,14 @@ func (r *ModelRepository) Create(ctx context.Context, registeredModel *model.Mod
 	}
 
 	query := `INSERT INTO ` + r.Name + `.models (
-		model_id, idempotency_key, training_run_id, dataset_id, name, model_version, base_model,
+		model_id, user_id, idempotency_key, training_run_id, dataset_id, model_kind, source, source_uri, source_metadata,
+		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status,
 		metrics_metadata, status, failure_reason
 	) VALUES (
-		@model_id, @idempotency_key, @training_run_id, @dataset_id, @name, @model_version, @base_model,
+		@model_id, @user_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind, @source, @source_uri, @source_metadata::jsonb,
+		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @serving_target, @serving_model, @serving_load_status,
 		@metrics_metadata::jsonb, @status, @failure_reason
@@ -85,6 +88,9 @@ func (r *ModelRepository) Create(ctx context.Context, registeredModel *model.Mod
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, domain.ErrModelExists
+		}
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, fmt.Errorf("%w: tenant projection is not ready", domain.ErrValidationFailed)
 		}
 		r.LogPoolStatsOnError(ctx, "insert model failed", err)
 		return nil, fmt.Errorf("insert model: %w", err)
@@ -102,12 +108,14 @@ func (r *ModelRepository) createTx(ctx context.Context, registeredModel *model.M
 	defer tx.Rollback(ctx)
 
 	query := `INSERT INTO ` + r.Name + `.models (
-		model_id, idempotency_key, training_run_id, dataset_id, name, model_version, base_model,
+		model_id, user_id, idempotency_key, training_run_id, dataset_id, model_kind, source, source_uri, source_metadata,
+		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status,
 		metrics_metadata, status, failure_reason
 	) VALUES (
-		@model_id, @idempotency_key, @training_run_id, @dataset_id, @name, @model_version, @base_model,
+		@model_id, @user_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind, @source, @source_uri, @source_metadata::jsonb,
+		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @serving_target, @serving_model, @serving_load_status,
 		@metrics_metadata::jsonb, @status, @failure_reason
@@ -118,6 +126,9 @@ func (r *ModelRepository) createTx(ctx context.Context, registeredModel *model.M
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, domain.ErrModelExists
+		}
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, fmt.Errorf("%w: tenant projection is not ready", domain.ErrValidationFailed)
 		}
 		return nil, fmt.Errorf("insert model: %w", err)
 	}
@@ -335,9 +346,14 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 
 	return pgx.NamedArgs{
 		"model_id":            pgtype.UUID{Bytes: registeredModel.ModelID, Valid: true},
+		"user_id":             pgtype.UUID{Bytes: registeredModel.UserID, Valid: registeredModel.UserID != uuid.Nil},
 		"idempotency_key":     pgtype.UUID{Bytes: idempotencyKey, Valid: true},
-		"training_run_id":     pgtype.UUID{Bytes: registeredModel.TrainingRunID, Valid: true},
-		"dataset_id":          pgtype.UUID{Bytes: registeredModel.DatasetID, Valid: true},
+		"training_run_id":     pgtype.UUID{Bytes: registeredModel.TrainingRunID, Valid: registeredModel.TrainingRunID != uuid.Nil},
+		"dataset_id":          pgtype.UUID{Bytes: registeredModel.DatasetID, Valid: registeredModel.DatasetID != uuid.Nil},
+		"model_kind":          registeredModel.ModelKind.String(),
+		"source":              registeredModel.Source.String(),
+		"source_uri":          registeredModel.SourceURI,
+		"source_metadata":     withDefaultJSON(registeredModel.SourceMetadata),
 		"name":                registeredModel.Name,
 		"model_version":       registeredModel.ModelVersion,
 		"base_model":          registeredModel.BaseModel,
@@ -372,7 +388,8 @@ func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadS
 func modelColumns() string {
 	log.Trace("modelColumns")
 
-	return `model_id::text, training_run_id::text, dataset_id::text, name, model_version, base_model,
+	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
+		model_kind::text, source::text, source_uri, source_metadata::text, name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status::text,
 		metrics_metadata::text, status::text, failure_reason`
@@ -381,12 +398,17 @@ func modelColumns() string {
 func scanModel(row pgx.Row) (*model.Model, error) {
 	log.Trace("scanModel")
 
-	var modelID, trainingRunID, datasetID, statusRaw, servingLoadStatusRaw string
+	var modelID, userID, trainingRunID, datasetID, modelKindRaw, modelSourceRaw, statusRaw, servingLoadStatusRaw string
 	modelRecord := &model.Model{}
 	if err := row.Scan(
 		&modelID,
+		&userID,
 		&trainingRunID,
 		&datasetID,
+		&modelKindRaw,
+		&modelSourceRaw,
+		&modelRecord.SourceURI,
+		&modelRecord.SourceMetadata,
 		&modelRecord.Name,
 		&modelRecord.ModelVersion,
 		&modelRecord.BaseModel,
@@ -413,8 +435,17 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 		return nil, err
 	}
 	modelRecord.ModelID = uuid.MustParse(modelID)
-	modelRecord.TrainingRunID = uuid.MustParse(trainingRunID)
-	modelRecord.DatasetID = uuid.MustParse(datasetID)
+	if userID != "" {
+		modelRecord.UserID = uuid.MustParse(userID)
+	}
+	if trainingRunID != "" {
+		modelRecord.TrainingRunID = uuid.MustParse(trainingRunID)
+	}
+	if datasetID != "" {
+		modelRecord.DatasetID = uuid.MustParse(datasetID)
+	}
+	modelRecord.ModelKind = model.ToModelKind(modelKindRaw)
+	modelRecord.Source = model.ToModelSource(modelSourceRaw)
 	modelRecord.Status = status
 	modelRecord.ServingLoadStatus = servingLoadStatus
 	return modelRecord, nil
@@ -448,8 +479,12 @@ func modelUpdatedMessage(topic string, modelRecord *model.Model) msgConn.Outboun
 
 	payload := mustMarshal(&modelregistrypb.ModelUpdatedEvent{
 		ModelId:           modelRecord.ModelID.String(),
-		TrainingRunId:     modelRecord.TrainingRunID.String(),
-		DatasetId:         modelRecord.DatasetID.String(),
+		TrainingRunId:     uuidutil.StringOrEmpty(modelRecord.TrainingRunID),
+		DatasetId:         uuidutil.StringOrEmpty(modelRecord.DatasetID),
+		ModelKind:         modelRecord.ModelKind.String(),
+		Source:            modelRecord.Source.String(),
+		SourceUri:         modelRecord.SourceURI,
+		SourceMetadata:    withDefaultJSON(modelRecord.SourceMetadata),
 		Name:              modelRecord.Name,
 		ModelVersion:      int32(modelRecord.ModelVersion),
 		BaseModel:         modelRecord.BaseModel,
@@ -464,6 +499,7 @@ func modelUpdatedMessage(topic string, modelRecord *model.Model) msgConn.Outboun
 		MetricsMetadata:   modelRecord.MetricsMetadata,
 		Status:            modelRecord.Status.String(),
 		FailureReason:     modelRecord.FailureReason,
+		UserId:            uuidutil.StringOrEmpty(modelRecord.UserID),
 	})
 	return msgConn.OutboundMessage{
 		Topic: topic,
@@ -474,6 +510,13 @@ func modelUpdatedMessage(topic string, modelRecord *model.Model) msgConn.Outboun
 		},
 		DispatchKey: fmt.Sprintf("model_updated:%s:%s:%d", modelRecord.ModelID, modelRecord.Status.String(), modelRecord.ModelVersion),
 	}
+}
+
+func withDefaultJSON(value string) string {
+	if value == "" {
+		return "{}"
+	}
+	return value
 }
 
 func mustMarshal(payload proto.Message) []byte {

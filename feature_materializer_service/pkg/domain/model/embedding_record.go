@@ -6,6 +6,7 @@ type EmbeddingRecord struct {
 	EmbeddingRecordID   uuid.UUID
 	EmbeddingSnapshotID uuid.UUID
 	DatasetID           uuid.UUID
+	UserID              uuid.UUID
 	ChunkIndex          int
 	SourceText          string
 	Vector              []float32

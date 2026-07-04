@@ -103,6 +103,8 @@ spec:
               value: {{ .Values.env.modelRegistrySubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
+            - name: INFERENCE_SERVICE_PROFILE_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.profileSubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_PREFERENCE_DATASET_TOPIC
               value: {{ .Values.env.preferenceDatasetTopic | quote }}
             - name: INFERENCE_SERVICE_OUTBOX

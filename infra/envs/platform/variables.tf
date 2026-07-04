@@ -139,7 +139,7 @@ variable "object_store_service_accounts" {
   description = "Service accounts granted object-store IRSA access"
   type        = list(string)
   default = [
-    "data-ingestion-service",
+    "ingestion-service",
     "data-stream-service",
     "feature-materializer-service",
     "inference-service",
@@ -335,14 +335,14 @@ variable "data_registry_service_http_port" {
   default     = "80"
 }
 
-variable "data_ingestion_service_http_domain" {
-  description = "Data ingestion service hostname reachable from API Lambda"
+variable "ingestion_service_http_domain" {
+  description = "Ingestion service hostname reachable from API Lambda"
   type        = string
-  default     = "data-ingestion-service.internal.bighill.example"
+  default     = "ingestion-service.internal.bighill.example"
 }
 
-variable "data_ingestion_service_http_port" {
-  description = "Data ingestion service HTTP port"
+variable "ingestion_service_http_port" {
+  description = "Ingestion service HTTP port"
   type        = string
   default     = "80"
 }

@@ -18,6 +18,7 @@ import (
 	usecase "data_registry_service/pkg/app"
 	domainErrors "data_registry_service/pkg/domain"
 	dataregistrypb "lib/data_contracts_lib/data_registry"
+	"lib/shared_lib/ctxutil"
 	rpcLib "lib/shared_lib/rpc"
 
 	log "github.com/sirupsen/logrus"
@@ -90,6 +91,7 @@ func (s *DataRegistryServer) ReadSourceConnector(ctx context.Context, req *datar
 	if err != nil || userID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
 	}
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	connector, err := s.sourceUsecase.ReadSourceConnector(ctx, connectorID, userID)
 	if err != nil {

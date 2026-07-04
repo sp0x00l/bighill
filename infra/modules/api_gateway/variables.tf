@@ -85,19 +85,19 @@ variable "data_registry_service_http_port" {
   default     = "8081"
 }
 
-variable "data_ingestion_service_http_domain" {
-  description = "Data ingestion service host"
+variable "ingestion_service_http_domain" {
+  description = "Ingestion service host"
   type        = string
   default     = ""
 
   validation {
-    condition     = length(trimspace(var.data_ingestion_service_http_domain)) > 0
-    error_message = "Set data_ingestion_service_http_domain to the reachable hostname for the data ingestion service."
+    condition     = length(trimspace(var.ingestion_service_http_domain)) > 0
+    error_message = "Set ingestion_service_http_domain to the reachable hostname for the ingestion service."
   }
 }
 
-variable "data_ingestion_service_http_port" {
-  description = "Data ingestion service port"
+variable "ingestion_service_http_port" {
+  description = "Ingestion service port"
   type        = string
   default     = "8086"
 }

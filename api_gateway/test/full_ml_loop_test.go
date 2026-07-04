@@ -27,9 +27,11 @@ import (
 	trainingmessaging "training_service/pkg/infra/network/messaging"
 	"training_service/pkg/infra/temporalworker"
 
+	ingestionpb "lib/data_contracts_lib/ingestion"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	trainingpb "lib/data_contracts_lib/training"
 	sharedmessaging "lib/shared_lib/messaging"
+	"lib/shared_lib/uuidutil"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -69,7 +71,7 @@ var _ = Describe("Full ML loop", func() {
 		userID := uuid.New()
 		servingModel := "rag-adapter-v1"
 
-		trainingEvent := runTrainingWorkflow(trainingRunID, datasetID, featureSnapshotID, servingModel)
+		trainingEvent := runTrainingWorkflow(trainingRunID, userID, datasetID, featureSnapshotID, servingModel)
 
 		k8sClient := newE2EK8sClient()
 		registryRepo := newRegistryMemoryRepository()
@@ -146,6 +148,7 @@ var _ = Describe("Full ML loop", func() {
 		requestID := uuid.New()
 		response, err := inferenceUsecase.Generate(ctx, inferencemodel.GenerateRequest{
 			RequestID: requestID,
+			UserID:    userID,
 			DatasetID: datasetID,
 			ModelID:   readyModel.ModelID,
 			QueryText: "What changed in the dataset?",
@@ -174,13 +177,117 @@ var _ = Describe("Full ML loop", func() {
 		Expect(feedbacks.records).To(HaveLen(1))
 
 		preferenceDatasetID := uuid.New()
-		dpoEvent := runDPOTrainingWorkflow(uuid.New(), datasetID, featureSnapshotID, readyModel, preferenceDatasetID, servingModel)
+		dpoEvent := runDPOTrainingWorkflow(uuid.New(), userID, datasetID, featureSnapshotID, readyModel, preferenceDatasetID, servingModel)
 		Expect(dpoEvent.GetModelId()).NotTo(BeEmpty())
 		Expect(dpoEvent.GetAdapterUri()).To(ContainSubstring("s3://models/"))
 	})
+
+	It("registers an uploaded base model, loads it, and serves RAG without dataset binding", func() {
+		ctx := context.Background()
+		datasetID := uuid.New()
+		embeddingSnapshotID := uuid.New()
+		userID := uuid.New()
+		modelID := uuid.New()
+		uploadID := uuid.New()
+
+		k8sClient := newE2EK8sClient()
+		registryRepo := newRegistryMemoryRepository()
+		servedModelAdapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), k8sClient)
+		Expect(err).NotTo(HaveOccurred())
+		registryUsecase := registryapp.NewModelRegistryUsecase(
+			registryRepo,
+			registryapp.WithModelServingDeployer(servedModelAdapter),
+		)
+		artifactListener := registrymessaging.NewModelArtifactIngestedEventListener(registryUsecase)
+		Expect(artifactListener.Handle(ctx, modelID, &ingestionpb.ModelArtifactIngestedEvent{
+			ArtifactId:        modelID.String(),
+			UploadId:          uploadID.String(),
+			UserId:            userID.String(),
+			Source:            "upload",
+			StorageLocation:   "s3://local-dev-bucket/models/artifacts/" + modelID.String() + "/snapshot",
+			ArtifactType:      "BASE_MODEL",
+			ArtifactFormat:    "HF_MODEL",
+			ArtifactSizeBytes: 1024,
+			ArtifactChecksum:  "sha256:base",
+			FileName:          "llama.zip",
+			ModelName:         "llama-local",
+			ModelVersion:      "1",
+			BaseModel:         "meta-llama/Llama-3.1-8B-Instruct",
+			ContentType:       "application/zip",
+			SourceMetadata:    `{"upload_id":"` + uploadID.String() + `"}`,
+		})).To(Succeed())
+
+		registeredModel, err := registryRepo.ReadByID(ctx, modelID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(registeredModel.ModelKind).To(Equal(registrymodel.ModelKindBase))
+		Expect(registeredModel.Status).To(Equal(registrymodel.ModelStatusEvaluated))
+		Expect(registeredModel.ServingLoadStatus).To(Equal(registrymodel.ModelLoadStatusNotLoaded))
+
+		expectedServingModel := ""
+		vllmHTTP := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || !strings.HasSuffix(req.URL.String(), "/v1/models") {
+				return nil, fmt.Errorf("unexpected vllm request %s %s", req.Method, req.URL.String())
+			}
+			return httpJSON(http.StatusOK, map[string]any{
+				"data": []map[string]string{{"id": expectedServingModel}},
+			}), nil
+		})}
+		store, err := servingk8s.NewServedModelStore(servingk8s.ServedModelStoreConfig{
+			Namespace: e2eNamespace,
+			Group:     servedModelGVR.Group,
+			Version:   servedModelGVR.Version,
+			Resource:  servedModelGVR.Resource,
+		}, k8sClient)
+		Expect(err).NotTo(HaveOccurred())
+		runtime, err := servingk8s.NewVLLMRuntime(servingk8s.VLLMRuntimeConfig{
+			Namespace:  e2eNamespace,
+			Image:      "vllm:test",
+			Replicas:   1,
+			Port:       8000,
+			HTTPClient: vllmHTTP,
+		}, k8sClient)
+		Expect(err).NotTo(HaveOccurred())
+		controller := servingk8s.NewServedModelController(
+			store,
+			servingapp.NewServedModelReconciler(runtime, store),
+			time.Second,
+		)
+		Expect(controller.ProcessOnce(ctx)).To(Succeed())
+		servedModels, err := store.List(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(servedModels).To(HaveLen(1))
+		expectedServingModel = servingk8s.ServingModelName(servedModels[0])
+		workloadName := servingk8s.WorkloadName(servedModels[0])
+		markDeploymentReady(ctx, k8sClient, workloadName)
+		Expect(controller.ProcessOnce(ctx)).To(Succeed())
+
+		statusObserver, err := registryk8s.NewServedModelStatusObserver(servedModelAdapter, registryUsecase, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(statusObserver.ProcessOnce(ctx)).To(Succeed())
+		readyModel, err := registryRepo.ReadByID(ctx, modelID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readyModel.Status).To(Equal(registrymodel.ModelStatusReady))
+		Expect(readyModel.ServingLoadStatus).To(Equal(registrymodel.ModelLoadStatusLoaded))
+		Expect(readyModel.DatasetID).To(Equal(uuid.Nil))
+
+		inferenceUsecase, _, _ := newInferenceUsecase(datasetID, userID, embeddingSnapshotID)
+		modelListener := inferencemessaging.NewModelUpdatedEventListener(inferenceUsecase)
+		Expect(modelListener.Handle(ctx, readyModel.ModelID, modelUpdatedEvent(readyModel))).To(Succeed())
+		response, err := inferenceUsecase.Generate(ctx, inferencemodel.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    userID,
+			DatasetID: datasetID,
+			ModelID:   readyModel.ModelID,
+			QueryText: "What can the uploaded base model answer with RAG?",
+			TopK:      2,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.ModelID).To(Equal(readyModel.ModelID))
+		Expect(response.Answer).To(Equal("generated from " + expectedServingModel))
+	})
 })
 
-func runTrainingWorkflow(trainingRunID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
+func runTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
 	GinkgoHelper()
 
 	var suite testsuite.WorkflowTestSuite
@@ -201,6 +308,7 @@ func runTrainingWorkflow(trainingRunID uuid.UUID, datasetID uuid.UUID, featureSn
 
 	request := trainingmodel.TrainingRunRequest{
 		TrainingRunID:     trainingRunID.String(),
+		UserID:            userID.String(),
 		DatasetID:         datasetID.String(),
 		DatasetVersion:    "1",
 		FeatureSnapshotID: featureSnapshotID.String(),
@@ -237,7 +345,7 @@ func runTrainingWorkflow(trainingRunID uuid.UUID, datasetID uuid.UUID, featureSn
 	return completed
 }
 
-func runDPOTrainingWorkflow(trainingRunID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, parent *registrymodel.Model, preferenceDatasetID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
+func runDPOTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, parent *registrymodel.Model, preferenceDatasetID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
 	GinkgoHelper()
 
 	var suite testsuite.WorkflowTestSuite
@@ -259,6 +367,7 @@ func runDPOTrainingWorkflow(trainingRunID uuid.UUID, datasetID uuid.UUID, featur
 	preferenceDatasetURI := "s3://local-dev-bucket/preferences/" + preferenceDatasetID.String() + ".jsonl"
 	request := trainingmodel.TrainingRunRequest{
 		TrainingRunID:        trainingRunID.String(),
+		UserID:               userID.String(),
 		DatasetID:            datasetID.String(),
 		DatasetVersion:       "2",
 		FeatureSnapshotID:    featureSnapshotID.String(),
@@ -487,14 +596,21 @@ func (r *registryMemoryRepository) Create(_ context.Context, registeredModel *re
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if existingID, ok := r.byTrainingID[registeredModel.TrainingRunID]; ok {
-		if existing, ok := r.byModelID[existingID]; ok {
-			return cloneRegistryModel(existing), registrydomain.ErrModelExists
+	if registeredModel.TrainingRunID != uuid.Nil {
+		if existingID, ok := r.byTrainingID[registeredModel.TrainingRunID]; ok {
+			if existing, ok := r.byModelID[existingID]; ok {
+				return cloneRegistryModel(existing), registrydomain.ErrModelExists
+			}
 		}
+	}
+	if _, ok := r.byModelID[registeredModel.ModelID]; ok {
+		return cloneRegistryModel(r.byModelID[registeredModel.ModelID]), registrydomain.ErrModelExists
 	}
 	record := cloneRegistryModel(registeredModel)
 	r.byModelID[record.ModelID] = record
-	r.byTrainingID[record.TrainingRunID] = record.ModelID
+	if record.TrainingRunID != uuid.Nil {
+		r.byTrainingID[record.TrainingRunID] = record.ModelID
+	}
 	return cloneRegistryModel(record), nil
 }
 
@@ -565,8 +681,13 @@ func cloneRegistryModel(in *registrymodel.Model) *registrymodel.Model {
 func modelUpdatedEvent(model *registrymodel.Model) *modelregistrypb.ModelUpdatedEvent {
 	return &modelregistrypb.ModelUpdatedEvent{
 		ModelId:           model.ModelID.String(),
-		TrainingRunId:     model.TrainingRunID.String(),
-		DatasetId:         model.DatasetID.String(),
+		UserId:            uuidutil.StringOrEmpty(model.UserID),
+		TrainingRunId:     uuidutil.StringOrEmpty(model.TrainingRunID),
+		DatasetId:         uuidutil.StringOrEmpty(model.DatasetID),
+		ModelKind:         model.ModelKind.String(),
+		Source:            model.Source.String(),
+		SourceUri:         model.SourceURI,
+		SourceMetadata:    model.SourceMetadata,
 		Name:              model.Name,
 		ModelVersion:      int32(model.ModelVersion),
 		BaseModel:         model.BaseModel,
@@ -648,12 +769,12 @@ func (r *inferenceModelMemoryRepository) UpsertModel(_ context.Context, inferenc
 	return &record, nil
 }
 
-func (r *inferenceModelMemoryRepository) ReadByID(_ context.Context, modelID uuid.UUID) (*inferencemodel.InferenceModel, error) {
+func (r *inferenceModelMemoryRepository) ReadByID(_ context.Context, userID uuid.UUID, modelID uuid.UUID) (*inferencemodel.InferenceModel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	record, ok := r.byModel[modelID]
-	if !ok {
+	if !ok || (record.UserID != uuid.Nil && record.UserID != userID) {
 		return nil, errors.New("inference model not found")
 	}
 	out := *record
@@ -674,8 +795,8 @@ func (r *inferenceDatasetMemoryRepository) UpsertDataset(_ context.Context, data
 	return &record, nil
 }
 
-func (r *inferenceDatasetMemoryRepository) ReadDataset(_ context.Context, datasetID uuid.UUID) (*inferencemodel.InferenceDataset, error) {
-	if r.dataset == nil || r.dataset.DatasetID != datasetID {
+func (r *inferenceDatasetMemoryRepository) ReadDataset(_ context.Context, userID uuid.UUID, datasetID uuid.UUID) (*inferencemodel.InferenceDataset, error) {
+	if r.dataset == nil || r.dataset.UserID != userID || r.dataset.DatasetID != datasetID {
 		return nil, errors.New("inference dataset not found")
 	}
 	out := *r.dataset
@@ -706,6 +827,7 @@ func (r *inferenceFeedbackMemoryRepository) RecordFeedback(_ context.Context, fe
 func (r *inferenceFeedbackMemoryRepository) ReadPreferenceDataset(_ context.Context, request inferencemodel.PreferenceDatasetExportRequest) (*inferencemodel.PreferenceDataset, error) {
 	return &inferencemodel.PreferenceDataset{
 		RequestID: request.RequestID,
+		UserID:    request.UserID,
 		DatasetID: request.DatasetID,
 		ModelID:   request.ModelID,
 		OutputURI: request.OutputURI,
@@ -722,7 +844,7 @@ type fakeRetrievalClient struct {
 	embeddingSnapshotID uuid.UUID
 }
 
-func (c *fakeRetrievalClient) SearchEmbeddings(_ context.Context, _ uuid.UUID, _ string, topK int, _ map[string]string) ([]inferencemodel.RetrievedContext, error) {
+func (c *fakeRetrievalClient) SearchEmbeddings(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ string, topK int, _ map[string]string) ([]inferencemodel.RetrievedContext, error) {
 	contexts := make([]inferencemodel.RetrievedContext, 0, topK)
 	for i := 0; i < topK; i++ {
 		contexts = append(contexts, inferencemodel.RetrievedContext{

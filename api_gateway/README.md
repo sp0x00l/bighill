@@ -17,7 +17,7 @@ The gateway is intentionally thin: it does not own domain state. Profile, data r
 
 - Authenticates and authorizes incoming API calls.
 - Routes profile/auth calls to `profile_service`.
-- Routes dataset/source/upload flows to `data_registry_service` and `data_ingestion_service`.
+- Routes dataset/source/upload flows to `data_registry_service` and `ingestion_service`.
 - Routes inference and feedback flows to `inference_service`.
 - Keeps orchestration and state transitions out of the edge layer.
 

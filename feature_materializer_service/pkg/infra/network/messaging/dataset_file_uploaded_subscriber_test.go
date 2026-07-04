@@ -6,8 +6,8 @@ import (
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	"testing"
 
-	dataingestionpb "lib/data_contracts_lib/data_ingestion"
 	dataregistrypb "lib/data_contracts_lib/data_registry"
+	ingestionpb "lib/data_contracts_lib/ingestion"
 	sharedMessaging "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -37,7 +37,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(&recordingRawSnapshotUsecase{})
 
 		Expect(listener.MsgType()).To(Equal(sharedMessaging.MsgTypeDatasetFileUploaded))
-		Expect(listener.NewMessage()).To(Equal(&dataingestionpb.DatasetFileUploadedEvent{}))
+		Expect(listener.NewMessage()).To(Equal(&ingestionpb.DatasetFileUploadedEvent{}))
 	})
 
 	It("maps the protobuf event into the materialization workflow starter", func() {
@@ -46,7 +46,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		uc := &recordingRawSnapshotUsecase{}
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(uc)
 
-		err := listener.Handle(context.Background(), datasetID, &dataingestionpb.DatasetFileUploadedEvent{
+		err := listener.Handle(context.Background(), datasetID, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
@@ -73,7 +73,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		uc := &recordingRawSnapshotUsecase{}
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(uc)
 
-		err := listener.Handle(context.Background(), datasetID, &dataingestionpb.DatasetFileUploadedEvent{
+		err := listener.Handle(context.Background(), datasetID, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
@@ -90,7 +90,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		datasetID := uuid.New()
 		first := &recordingRawSnapshotUsecase{}
 		second := &recordingRawSnapshotUsecase{}
-		event := &dataingestionpb.DatasetFileUploadedEvent{
+		event := &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
@@ -113,7 +113,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		datasetID := uuid.New()
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(&recordingRawSnapshotUsecase{})
 
-		err := listener.Handle(context.Background(), datasetID, &dataingestionpb.DatasetFileUploadedEvent{
+		err := listener.Handle(context.Background(), datasetID, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         uuid.NewString(),
 			UserId:            uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
@@ -134,7 +134,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		datasetID := uuid.New()
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(&recordingRawSnapshotUsecase{})
 
-		err := listener.Handle(context.Background(), datasetID, &dataingestionpb.DatasetFileUploadedEvent{
+		err := listener.Handle(context.Background(), datasetID, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId: datasetID.String(),
 			UserId:    uuid.NewString(),
 		})

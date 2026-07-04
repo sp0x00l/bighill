@@ -367,6 +367,11 @@ build_service_extra_args() {
   else
     echo "Warning: Comms service IAM role not found, IRSA disabled"
   fi
+
+  INGESTION_EXTRA_ARGS="${KMS_EXTRA_ARGS}"
+  INGESTION_EXTRA_ARGS="${INGESTION_EXTRA_ARGS} --set env.huggingFaceDownloadMode=kubernetes"
+  INGESTION_EXTRA_ARGS="${INGESTION_EXTRA_ARGS} --set env.huggingFaceJobNamespace=${NAMESPACE}"
+  INGESTION_EXTRA_ARGS="${INGESTION_EXTRA_ARGS} --set env.huggingFaceJobImage=${INGESTION_SERVICE_HUGGINGFACE_JOB_IMAGE:-training-jobs:0.0.1}"
 }
 
 deploy_services() {
@@ -389,6 +394,8 @@ deploy_services() {
       EXTRA_ARGS="${EVENT_EXTRA_ARGS}"
     elif [ "${SERVICE_DIR}" = "comms_service" ]; then
       EXTRA_ARGS="${COMMS_EXTRA_ARGS}"
+    elif [ "${SERVICE_DIR}" = "ingestion_service" ]; then
+      EXTRA_ARGS="${INGESTION_EXTRA_ARGS}"
     fi
 
     local REPLICA_ARGS

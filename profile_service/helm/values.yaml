@@ -68,6 +68,7 @@ env:
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"
+  huggingFaceTokenEncryptionKey: "01234567890123456789012345678901"
   authExpirationMinutes: "1440"
   emailValidationTtlMinutes: "60"
   oauthStateTtlMinutes: "10"

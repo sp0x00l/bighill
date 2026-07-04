@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"lib/shared_lib/ctxutil"
 	db "lib/shared_lib/db"
+	"os"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
@@ -18,6 +22,7 @@ type testConnectionPool struct {
 	QueryCalled         bool
 	ExecCalled          bool
 	ExecCalls           []string
+	ExecArgs            [][]any
 	PoolQueryCalled     bool
 	PoolQueryRowCalled  bool
 	TxQueryCalled       bool
@@ -79,6 +84,7 @@ func (p *testConnectionPool) Exec(_ context.Context, sql string, args ...any) (p
 	p.LastArgs = args
 	p.ExecCalledCount++
 	p.ExecCalls = append(p.ExecCalls, sql)
+	p.ExecArgs = append(p.ExecArgs, args)
 	nextErr := p.NextError
 	if nextErr == nil && len(p.NextExecErrors) > 0 {
 		nextErr = p.NextExecErrors[0]
@@ -126,6 +132,7 @@ func (tx *testTx) Rollback(ctx context.Context) error {
 func (tx *testTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	tx.pool.ExecCalled = true
 	tx.pool.ExecCalls = append(tx.pool.ExecCalls, sql)
+	tx.pool.ExecArgs = append(tx.pool.ExecArgs, args)
 	tx.pool.LastQuery = sql
 	tx.pool.LastArgs = args
 	tx.pool.ExecCalledCount++
@@ -160,6 +167,53 @@ func (tx *testTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 }
 func (tx *testTx) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
 	return nil, nil
+}
+
+type testRows struct {
+	closed bool
+	err    error
+	index  int
+	count  int
+}
+
+func (r *testRows) Close() {
+	r.closed = true
+}
+
+func (r *testRows) Err() error {
+	return r.err
+}
+
+func (r *testRows) CommandTag() pgconn.CommandTag {
+	return pgconn.NewCommandTag("SELECT 1")
+}
+
+func (r *testRows) FieldDescriptions() []pgconn.FieldDescription {
+	return nil
+}
+
+func (r *testRows) Next() bool {
+	if r.index >= r.count {
+		return false
+	}
+	r.index++
+	return true
+}
+
+func (r *testRows) Scan(...any) error {
+	return nil
+}
+
+func (r *testRows) Values() ([]any, error) {
+	return nil, nil
+}
+
+func (r *testRows) RawValues() [][]byte {
+	return nil
+}
+
+func (r *testRows) Conn() *pgx.Conn {
+	return nil
 }
 
 var _ = Describe("database intialization", func() {
@@ -288,5 +342,121 @@ var _ = Describe("UnitOfWork", func() {
 		Expect(pool.BeginTxCalledCount).To(Equal(2))
 		Expect(pool.CommitCalledCount).To(Equal(2))
 		Expect(pool.RollbackCalledCount).To(Equal(1))
+	})
+
+	It("sets the tenant context for row-level security when a tenant id is present", func() {
+		pool := &testConnectionPool{}
+		uow := db.NewUnitOfWork(pool)
+		tenantID := uuid.New()
+
+		err := uow.Do(ctxutil.WithTenantID(context.Background(), tenantID), func(ctx context.Context, tx pgx.Tx) error {
+			return nil
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pool.ExecCalls).To(ContainElement("SELECT set_config('app.current_user_id', $1, true)"))
+		Expect(pool.LastArgs).To(Equal([]any{tenantID.String()}))
+		Expect(pool.CommitCalled).To(BeTrue())
+	})
+})
+
+var _ = Describe("tenant context connection pool", func() {
+	It("uses the base pool directly when no tenant or system context is present", func() {
+		pool := &testConnectionPool{}
+		database := db.NewDatabase(pool, "test_db")
+
+		err := database.Pool.QueryRow(context.Background(), "SELECT 1").Scan()
+
+		Expect(err).To(Equal(pgx.ErrNoRows))
+		Expect(pool.PoolQueryRowCalled).To(BeTrue())
+		Expect(pool.BeginTxCalled).To(BeFalse())
+		Expect(pool.ExecCalls).To(BeEmpty())
+	})
+
+	It("scopes direct QueryRow calls with the tenant id from context", func() {
+		pool := &testConnectionPool{
+			NextTxRows: []pgx.Row{&testErrRow{}},
+		}
+		database := db.NewDatabase(pool, "test_db")
+		tenantID := uuid.New()
+
+		err := database.Pool.QueryRow(ctxutil.WithTenantID(context.Background(), tenantID), "SELECT 1").Scan()
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pool.BeginTxCalled).To(BeTrue())
+		Expect(pool.TxQueryRowCalled).To(BeTrue())
+		Expect(pool.ExecCalls).To(ContainElement("SELECT set_config('app.current_user_id', $1, true)"))
+		Expect(pool.ExecArgs).To(ContainElement([]any{tenantID.String()}))
+		Expect(pool.CommitCalled).To(BeTrue())
+		Expect(pool.RollbackCalled).To(BeFalse())
+	})
+
+	It("scopes direct Exec calls with system context", func() {
+		pool := &testConnectionPool{}
+		database := db.NewDatabase(pool, "test_db")
+
+		_, err := database.Pool.Exec(ctxutil.WithSystemContext(context.Background()), "INSERT INTO tenants VALUES ($1)", uuid.New())
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pool.BeginTxCalled).To(BeTrue())
+		Expect(pool.ExecCalls).To(ContainElement("SELECT set_config('app.system_context', 'true', true)"))
+		Expect(pool.CommitCalled).To(BeTrue())
+	})
+
+	It("closes the scoped transaction when Query rows are closed before drain", func() {
+		pool := &testConnectionPool{
+			NextRows: &testRows{count: 2},
+		}
+		database := db.NewDatabase(pool, "test_db")
+
+		rows, err := database.Pool.Query(ctxutil.WithTenantID(context.Background(), uuid.New()), "SELECT * FROM rows")
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(rows.Next()).To(BeTrue())
+		rows.Close()
+
+		Expect(pool.CommitCalled).To(BeTrue())
+		Expect(pool.RollbackCalled).To(BeFalse())
+	})
+
+	It("rolls back the scoped transaction when Query rows close with an error", func() {
+		rowErr := errors.New("scan failed")
+		pool := &testConnectionPool{
+			NextRows: &testRows{err: rowErr},
+		}
+		database := db.NewDatabase(pool, "test_db")
+
+		rows, err := database.Pool.Query(ctxutil.WithTenantID(context.Background(), uuid.New()), "SELECT * FROM rows")
+		Expect(err).ToNot(HaveOccurred())
+
+		rows.Close()
+
+		Expect(rows.Err()).To(MatchError(rowErr))
+		Expect(pool.RollbackCalled).To(BeTrue())
+		Expect(pool.CommitCalled).To(BeFalse())
+	})
+})
+
+var _ = Describe("tenant RLS migration policies", func() {
+	It("keeps tenant-scoped service policies fail-closed", func() {
+		paths := []string{
+			"../../data_registry_service/db/migrations/000001_init_schema.up.sql",
+			"../../feature_materializer_service/db/migrations/000001_init_schema.up.sql",
+			"../../inference_service/db/migrations/000001_init_schema.up.sql",
+			"../../ingestion_service/db/migrations/000001_init_schema.up.sql",
+			"../../model_registry_service/db/migrations/000001_init_schema.up.sql",
+		}
+
+		for _, path := range paths {
+			contentBytes, err := os.ReadFile(path)
+			Expect(err).ToNot(HaveOccurred(), path)
+			content := string(contentBytes)
+
+			Expect(content).To(ContainSubstring("FORCE ROW LEVEL SECURITY"), path)
+			Expect(content).To(ContainSubstring("current_setting('app.system_context', true) = 'true'"), path)
+			Expect(content).To(ContainSubstring("NULLIF(current_setting('app.current_user_id', true), '')::uuid"), path)
+			Expect(strings.Contains(content, "COALESCE(NULLIF(current_setting('app.current_user_id'")).To(BeFalse(), path)
+			Expect(strings.Contains(content, "user_id = user_id")).To(BeFalse(), path)
+		}
 	})
 })

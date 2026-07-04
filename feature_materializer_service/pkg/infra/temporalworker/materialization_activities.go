@@ -6,6 +6,7 @@ import (
 	usecase "feature_materializer_service/pkg/app"
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -33,6 +34,7 @@ func NewMaterializationActivities(
 func (a *MaterializationActivities) MaterializeRawSnapshot(ctx context.Context, input usecase.MaterializeRawSnapshotActivityInput) (*model.RawSnapshot, error) {
 	log.Trace("MaterializationActivities MaterializeRawSnapshot")
 
+	ctx = ctxutil.WithSystemContext(ctx)
 	rawSnapshot, err := a.rawSnapshotUsecase.MaterializeRawSnapshot(ctx, &input.DatasetFile, input.IdempotencyKey)
 	if err != nil {
 		if existing, ok := domain.IsRawSnapshotAlreadyMaterialized(err); ok {
@@ -46,6 +48,7 @@ func (a *MaterializationActivities) MaterializeRawSnapshot(ctx context.Context, 
 func (a *MaterializationActivities) BuildFeatureSnapshot(ctx context.Context, input usecase.BuildFeatureSnapshotActivityInput) (*model.FeatureSnapshot, error) {
 	log.Trace("MaterializationActivities BuildFeatureSnapshot")
 
+	ctx = ctxutil.WithSystemContext(ctx)
 	featureSnapshot, err := a.featureSnapshotUsecase.BuildFeatureSnapshot(ctx, input.RawSnapshotID, input.IdempotencyKey)
 	if err != nil {
 		if existing, ok := domain.IsFeatureSnapshotAlreadyBuilt(err); ok {
@@ -59,6 +62,7 @@ func (a *MaterializationActivities) BuildFeatureSnapshot(ctx context.Context, in
 func (a *MaterializationActivities) MaterializeEmbeddings(ctx context.Context, input usecase.MaterializeEmbeddingsActivityInput) (*model.EmbeddingSnapshot, error) {
 	log.Trace("MaterializationActivities MaterializeEmbeddings")
 
+	ctx = ctxutil.WithSystemContext(ctx)
 	embeddingSnapshot, err := a.embeddingUsecase.MaterializeEmbeddings(ctx, input.FeatureSnapshotID, input.IdempotencyKey, input.Strategy)
 	if err != nil {
 		if existing, ok := domain.IsEmbeddingsAlreadyMaterialized(err); ok {

@@ -92,6 +92,9 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 				return domainErrors.ErrResourceAlreadyExists
 			}
 		}
+		if coreDB.IsForeignKeyViolation(err) {
+			return domainErrors.ErrValidationFailed.Extend("tenant projection is not ready")
+		}
 		return fmt.Errorf("database error. Failed to insert dataset: %w", err)
 	}
 

@@ -19,7 +19,7 @@ import (
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	repo "feature_materializer_service/pkg/infra/repo/db"
 	featuretemporal "feature_materializer_service/pkg/infra/temporalworker"
-	datasetpb "lib/data_contracts_lib/data_ingestion"
+	ingestionpb "lib/data_contracts_lib/ingestion"
 	corebucket "lib/shared_lib/bucket"
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
@@ -83,6 +83,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 	It("persists raw, feature, and embedding snapshots with database idempotency", func() {
 		idempotencyKey := uuid.New()
 		datasetFile := validIntegrationDatasetFile()
+		Expect(upsertFeatureMaterializerTenant(ctx, database, datasetFile.UserID)).To(Succeed())
 
 		rawSnapshot, err := rawUsecase.MaterializeRawSnapshot(ctx, datasetFile, idempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
@@ -143,7 +144,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 	It("materializes an uploaded dataset file through Kafka", func() {
 		brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 		suffix := fmt.Sprintf("%d", rand.Int64())
-		datasetTopic := "data_ingestion"
+		datasetTopic := "ingestion"
 		featureMaterializerTopic := "feature_materializer"
 		taskQueue := "feature-materializer-integration-" + suffix
 
@@ -223,6 +224,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 
 		datasetID := uuid.New()
 		userID := uuid.New()
+		Expect(upsertFeatureMaterializerTenant(ctx, database, userID)).To(Succeed())
 		storageKey := fmt.Sprintf("raw/%s/upload.csv", datasetID)
 		bucket := corebucket.NewBucket(runCtx, "local-dev", 10*1024*1024)
 		Expect(bucket.Upload(runCtx, "local-dev-bucket", storageKey, "text/csv", strings.NewReader("title,views\nIntro,10\nNext,20\n"))).To(Succeed())
@@ -231,7 +233,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		err = publisher.Publish(runCtx, datasetTopic, sharedmessaging.Message{
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeDatasetFileUploaded,
-		}, &datasetpb.DatasetFileUploadedEvent{
+		}, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
 			StorageLocation:   storageLocation,
@@ -284,12 +286,21 @@ func integrationEmbeddingStrategy() model.EmbeddingStrategy {
 }
 
 func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"outbox_messages", "embedding_records", "embedding_snapshots", "feature_snapshots", "raw_snapshots"} {
+	for _, table := range []string{"outbox_messages", "embedding_records", "embedding_snapshots", "feature_snapshots", "raw_snapshots", "tenants"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func upsertFeatureMaterializerTenant(ctx context.Context, database *dbconn.Database, userID uuid.UUID) error {
+	_, err := database.Pool.Exec(ctx, `
+		INSERT INTO `+database.Name+`.tenants (id, email, deleted)
+		VALUES ($1, $2, false)
+		ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, deleted = false
+	`, userID, userID.String()+"@example.test")
+	return err
 }
 
 func materializationState(ctx context.Context, database *dbconn.Database, datasetID uuid.UUID) (string, string, string, int64) {

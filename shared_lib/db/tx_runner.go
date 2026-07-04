@@ -83,6 +83,11 @@ func (u *UnitOfWork) doOnce(ctx context.Context, fn func(ctx context.Context, tx
 		sharedtrace.RecordSpanError(span, err)
 		return fmt.Errorf("begin tx: %w", err)
 	}
+	if err := applySessionContext(ctx, tx); err != nil {
+		_ = u.rollback(tx)
+		sharedtrace.RecordSpanError(span, err)
+		return err
+	}
 
 	defer func() {
 		if p := recover(); p != nil {

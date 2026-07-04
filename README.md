@@ -38,7 +38,7 @@ the slow steps.** That's a cleaner way to run things than most LLM repos manage.
 ## What it does
 
 - Registers **datasets and where they come from**.
-- Ingests **PDF, HTML, Markdown, text, JSON, CSV, and Parquet**, with format detection and validation.
+- Ingests **dataset files and model artifacts** through presigned upload sessions; data files include PDF, HTML, Markdown, text, JSON, CSV, and Parquet with format detection and validation.
 - Extracts and chunks documents, including proper PDF extraction via `pdf_extractor_lib`.
 - Builds **feature and embedding snapshots**, keyed by content so re-runs don't duplicate work
   (content-addressed idempotency).
@@ -77,7 +77,7 @@ work stays in batch jobs behind clean boundaries.
 | Path | What it does |
 |------|--------------|
 | `data_registry_service/` | Dataset and source metadata |
-| `data_ingestion_service/` | File upload, format detection/validation, raw data landing |
+| `ingestion_service/` | Presigned upload sessions, file validation, raw data landing, model artifact landing |
 | `pdf_extractor_lib/` | PDF text/structure extraction |
 | `feature_materializer_service/` | Snapshots, chunking, embeddings, pgvector search |
 | `data_stream_service/` | Arrow Flight query gateway + DataFusion executor (`internal/`) |

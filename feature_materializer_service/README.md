@@ -19,7 +19,7 @@ This is the feature pipeline: raw artifacts in object storage become versioned r
 
 ## How It Fits
 
-- Consumes file-uploaded facts from `data_ingestion_service`.
+- Consumes file-uploaded facts from `ingestion_service`.
 - Produces feature and embedding snapshots.
 - Publishes materialization facts back to `data_registry_service`.
 - Exposes retrieval/search over gRPC for `inference_service`.

@@ -35,7 +35,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 		waitForRAGDatasetMaterialized(user, datasetID)
 
 		modelID := uuid.New()
-		publishReadyModelForInference(modelID, uuid.MustParse(datasetID))
+		publishReadyModelForInference(modelID, user.ID, uuid.MustParse(datasetID))
 
 		client, closeClient := newInferenceClient()
 		defer closeClient()
@@ -48,6 +48,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 			var err error
 			response, err = client.Generate(ctx, &inferencepb.GenerateRequest{
 				RequestId: uuid.NewString(),
+				UserId:    user.ID.String(),
 				DatasetId: datasetID,
 				ModelId:   modelID.String(),
 				QueryText: "What phrase identifies the embedded knowledge base?",
@@ -109,7 +110,7 @@ func waitForRAGDatasetMaterialized(user profileTestUser, datasetID string) {
 	}, 45*time.Second, 1*time.Second).Should(Succeed())
 }
 
-func publishReadyModelForInference(modelID uuid.UUID, datasetID uuid.UUID) {
+func publishReadyModelForInference(modelID uuid.UUID, userID uuid.UUID, datasetID uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -122,8 +123,12 @@ func publishReadyModelForInference(modelID uuid.UUID, datasetID uuid.UUID) {
 		MsgType:     sharedmessaging.MsgTypeModelUpdated,
 	}, &modelregistrypb.ModelUpdatedEvent{
 		ModelId:           modelID.String(),
+		UserId:            userID.String(),
 		TrainingRunId:     uuid.NewString(),
 		DatasetId:         datasetID.String(),
+		ModelKind:         "FINE_TUNED",
+		Source:            "TRAINING",
+		SourceMetadata:    "{}",
 		Name:              "rag-e2e-generator",
 		ModelVersion:      1,
 		BaseModel:         "deterministic",

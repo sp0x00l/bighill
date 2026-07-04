@@ -71,9 +71,6 @@ func (l *modelTrainingCompletedEventListener) NewMessage() *trainingpb.ModelTrai
 func (l *modelTrainingCompletedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *trainingpb.ModelTrainingCompletedEvent) error {
 	log.Trace("modelTrainingCompletedEventListener Handle")
 
-	if l.usecase == nil {
-		return msgConn.NonRetryable(fmt.Errorf("model registry usecase is required"))
-	}
 	trainedModel, idempotencyKey, err := completedEventToModel(resourceKey, payload)
 	if err != nil {
 		return msgConn.NonRetryable(err)
@@ -109,9 +106,6 @@ func (l *modelTrainingFailedEventListener) NewMessage() *trainingpb.ModelTrainin
 func (l *modelTrainingFailedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *trainingpb.ModelTrainingFailedEvent) error {
 	log.Trace("modelTrainingFailedEventListener Handle")
 
-	if l.usecase == nil {
-		return msgConn.NonRetryable(fmt.Errorf("model registry usecase is required"))
-	}
 	failedModel, idempotencyKey, err := failedEventToModel(resourceKey, payload)
 	if err != nil {
 		return msgConn.NonRetryable(err)
@@ -134,6 +128,10 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	userID, err := msgConn.ParseUUID("user_id", payload.GetUserId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	modelVersion, err := modelVersionFromEvent(payload.GetModelVersion())
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -148,6 +146,7 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 	}
 	trainedModel := &model.Model{
 		ModelID:           modelID,
+		UserID:            userID,
 		TrainingRunID:     trainingRunID,
 		DatasetID:         datasetID,
 		Name:              modelName,
@@ -186,6 +185,10 @@ func failedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTraining
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	userID, err := msgConn.ParseUUID("user_id", payload.GetUserId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	modelVersion, err := modelVersionFromEvent(payload.GetModelVersion())
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -196,6 +199,7 @@ func failedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTraining
 	}
 	failedModel := &model.Model{
 		ModelID:         modelID,
+		UserID:          userID,
 		TrainingRunID:   trainingRunID,
 		DatasetID:       datasetID,
 		Name:            modelName,

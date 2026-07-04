@@ -80,6 +80,7 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 
 	result := &model.TrainingRunResult{
 		TrainingRunID:     request.TrainingRunID,
+		UserID:            request.UserID,
 		DatasetID:         request.DatasetID,
 		DatasetVersion:    request.DatasetVersion,
 		FeatureSnapshotID: request.FeatureSnapshotID,

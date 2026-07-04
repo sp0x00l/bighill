@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	domainErrors "data_registry_service/pkg/domain"
+	"lib/shared_lib/ctxutil"
 	core "lib/shared_lib/transport"
 	"net/http"
 
@@ -149,6 +150,7 @@ func (h *DataRegistryHandlers) CreateDataset(ctx context.Context, req *http.Requ
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	dataset, err := h.requestToDataset(ctx, req)
 	if err != nil {
@@ -237,6 +239,7 @@ func (h *DataRegistryHandlers) ReadPublishedDatasetsByUserID(ctx context.Context
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid user ID")
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	pagination, filters, err := h.requestToPaginationAndFilters(ctx, req)
 	if err != nil {
@@ -273,6 +276,7 @@ func (h *DataRegistryHandlers) ReadDatasets(ctx context.Context, req *http.Reque
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	pagination, filters, err := h.requestToPaginationAndFilters(ctx, req)
 	if err != nil {
@@ -309,6 +313,7 @@ func (h *DataRegistryHandlers) ReadDatasetByID(ctx context.Context, req *http.Re
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, datasetID, err := h.readDatasetId(ctx, req)
 	if err != nil {
@@ -345,6 +350,7 @@ func (h *DataRegistryHandlers) DeleteDataset(ctx context.Context, req *http.Requ
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	if err := h.datasetsUsecase.DeleteDataset(ctx, datasetID, userID); err != nil {
 		if domainErrors.IsServiceError(err, domainErrors.ErrResourceNotFound) {
@@ -363,6 +369,7 @@ func (h *DataRegistryHandlers) PublishDataset(ctx context.Context, req *http.Req
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, datasetID, err := h.readDatasetId(ctx, req)
 	if err != nil {
@@ -387,6 +394,7 @@ func (h *DataRegistryHandlers) ReplaceDataset(ctx context.Context, req *http.Req
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, datasetID, err := h.readDatasetId(ctx, req)
 	if err != nil {
@@ -431,6 +439,7 @@ func (h *DataRegistryHandlers) CreateSourceConnector(ctx context.Context, req *h
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, storageType, err := h.readStorageType(ctx, req)
 	if err != nil {
@@ -472,6 +481,7 @@ func (h *DataRegistryHandlers) ReadSourceConnector(ctx context.Context, req *htt
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	connector, err := h.sourceUsecase.ReadSourceConnector(ctx, connectorID, userID)
 	if err != nil {
@@ -508,6 +518,7 @@ func (h *DataRegistryHandlers) ReplaceSourceConnector(ctx context.Context, req *
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	sourceConnector, err := h.fromSourceConnectorDTO(ctx, *storageType, req)
 	if err != nil {

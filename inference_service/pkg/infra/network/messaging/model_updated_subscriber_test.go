@@ -40,7 +40,7 @@ func (u *recordingInferenceUsecase) RecordDatasetUpdated(_ context.Context, data
 	return dataset, u.err
 }
 
-func (u *recordingInferenceUsecase) ReadModel(context.Context, uuid.UUID) (*model.InferenceModel, error) {
+func (u *recordingInferenceUsecase) ReadModel(context.Context, uuid.UUID, uuid.UUID) (*model.InferenceModel, error) {
 	return nil, nil
 }
 
@@ -75,6 +75,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 
 	It("maps a model updated event into the inference use case", func() {
 		modelID := uuid.New()
+		userID := uuid.New()
 		trainingRunID := uuid.New()
 		datasetID := uuid.New()
 		uc := &recordingInferenceUsecase{}
@@ -82,8 +83,12 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 
 		err := listener.Handle(context.Background(), modelID, &modelregistrypb.ModelUpdatedEvent{
 			ModelId:           modelID.String(),
+			UserId:            userID.String(),
 			TrainingRunId:     trainingRunID.String(),
 			DatasetId:         datasetID.String(),
+			ModelKind:         "FINE_TUNED",
+			Source:            "TRAINING",
+			SourceMetadata:    "{}",
 			Name:              "movie-ranker",
 			ModelVersion:      2,
 			BaseModel:         "base-model",
@@ -101,11 +106,52 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.model.ModelID).To(Equal(modelID))
+		Expect(uc.model.UserID).To(Equal(userID))
 		Expect(uc.model.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.model.DatasetID).To(Equal(datasetID))
+		Expect(uc.model.ModelKind).To(Equal(model.ModelKindFineTuned))
+		Expect(uc.model.Source).To(Equal(model.ModelSourceTraining))
 		Expect(uc.model.Status).To(Equal(model.ModelStatusReady))
 		Expect(uc.model.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 		Expect(uc.model.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/model-1"))
+		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
+	})
+
+	It("maps an ingested base model update without training or dataset ids", func() {
+		modelID := uuid.New()
+		userID := uuid.New()
+		uc := &recordingInferenceUsecase{}
+		listener := inferencemessaging.NewModelUpdatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), modelID, &modelregistrypb.ModelUpdatedEvent{
+			ModelId:           modelID.String(),
+			UserId:            userID.String(),
+			ModelKind:         "BASE",
+			Source:            "UPLOAD",
+			SourceUri:         "s3://local-dev-bucket/models/base-model",
+			SourceMetadata:    `{"upload_id":"u1"}`,
+			Name:              "uploaded-base",
+			ModelVersion:      1,
+			BaseModel:         "s3://local-dev-bucket/models/base-model",
+			ArtifactLocation:  "s3://local-dev-bucket/models/base-model",
+			ArtifactFormat:    "HF_FULL_WEIGHTS",
+			ArtifactChecksum:  "checksum",
+			ArtifactSizeBytes: 42,
+			ServingTarget:     "vllm-local",
+			ServingModel:      "uploaded-base-v1",
+			ServingLoadStatus: "LOADED",
+			Status:            "READY",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.model.ModelID).To(Equal(modelID))
+		Expect(uc.model.UserID).To(Equal(userID))
+		Expect(uc.model.TrainingRunID).To(Equal(uuid.Nil))
+		Expect(uc.model.DatasetID).To(Equal(uuid.Nil))
+		Expect(uc.model.ModelKind).To(Equal(model.ModelKindBase))
+		Expect(uc.model.Source).To(Equal(model.ModelSourceUpload))
+		Expect(uc.model.SourceURI).To(Equal("s3://local-dev-bucket/models/base-model"))
+		Expect(uc.model.SourceMetadata).To(MatchJSON(`{"upload_id":"u1"}`))
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 
@@ -116,6 +162,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 
 		err := listener.Handle(context.Background(), modelID, &modelregistrypb.ModelUpdatedEvent{
 			ModelId:       modelID.String(),
+			UserId:        uuid.NewString(),
 			TrainingRunId: uuid.NewString(),
 			DatasetId:     uuid.NewString(),
 			BaseModel:     "base-model",

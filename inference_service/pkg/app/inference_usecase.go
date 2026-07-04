@@ -10,6 +10,7 @@ import (
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -18,7 +19,7 @@ import (
 type InferenceUsecase interface {
 	RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error)
 	RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error)
-	ReadModel(ctx context.Context, modelID uuid.UUID) (*model.InferenceModel, error)
+	ReadModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
 	Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error)
 	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
 	ExportPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
@@ -155,24 +156,34 @@ func NewInferenceUsecase(repository InferenceModelRepository, opts ...InferenceO
 func (u *inferenceUsecase) RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error) {
 	log.Trace("InferenceUsecase RecordModelUpdated")
 
+	if inferenceModel != nil {
+		ctx = ctxutil.WithTenantID(ctx, inferenceModel.UserID)
+	}
 	return u.modelRepository.UpsertModel(ctx, inferenceModel, idempotencyKey)
 }
 
 func (u *inferenceUsecase) RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error) {
 	log.Trace("InferenceUsecase RecordDatasetUpdated")
 
+	if dataset != nil {
+		ctx = ctxutil.WithTenantID(ctx, dataset.UserID)
+	}
 	return u.datasetRepository.UpsertDataset(ctx, dataset, idempotencyKey)
 }
 
-func (u *inferenceUsecase) ReadModel(ctx context.Context, modelID uuid.UUID) (*model.InferenceModel, error) {
+func (u *inferenceUsecase) ReadModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error) {
 	log.Trace("InferenceUsecase ReadModel")
 
-	return u.modelRepository.ReadByID(ctx, modelID)
+	ctx = ctxutil.WithTenantID(ctx, userID)
+	return u.modelRepository.ReadByID(ctx, userID, modelID)
 }
 
 func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
 	log.Trace("InferenceUsecase RecordFeedback")
 
+	if feedback != nil {
+		ctx = ctxutil.WithTenantID(ctx, feedback.UserID)
+	}
 	record, err := u.feedbackRepository.RecordFeedback(ctx, feedback, idempotencyKey)
 	if err != nil {
 		return nil, err
@@ -183,6 +194,7 @@ func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.I
 func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
 	log.Trace("InferenceUsecase ExportPreferenceDataset")
 
+	ctx = ctxutil.WithTenantID(ctx, request.UserID)
 	dataset, err := u.feedbackRepository.ReadPreferenceDataset(ctx, request)
 	if err != nil {
 		return nil, err
@@ -216,6 +228,7 @@ func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request 
 func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateRequest) (response *model.GenerateResponse, err error) {
 	log.Trace("InferenceUsecase Generate")
 
+	ctx = ctxutil.WithTenantID(ctx, request.UserID)
 	startedAt := time.Now()
 
 	var dataset *model.InferenceDataset
@@ -224,11 +237,11 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	var promptText string
 	var answerText string
 
-	dataset, err = u.datasetRepository.ReadDataset(ctx, request.DatasetID)
+	dataset, err = u.datasetRepository.ReadDataset(ctx, request.UserID, request.DatasetID)
 	if err != nil {
 		return nil, err
 	}
-	inferenceModel, err = u.modelRepository.ReadByID(ctx, request.ModelID)
+	inferenceModel, err = u.modelRepository.ReadByID(ctx, request.UserID, request.ModelID)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +255,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		err = domain.ErrModelNotReady.Extend("model is not loaded by serving layer")
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
-	if inferenceModel.DatasetID != request.DatasetID {
+	if inferenceModel.RequiresDatasetMatch() && inferenceModel.DatasetID != request.DatasetID {
 		err = domain.ErrModelMismatch.Extend("model dataset does not match request dataset")
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
@@ -257,6 +270,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		transformCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		transformed, transformErr := u.queryTransformer.TransformQuery(transformCtx, model.QueryTransformRequest{
 			RequestID:       request.RequestID,
+			UserID:          request.UserID,
 			DatasetID:       request.DatasetID,
 			ModelID:         request.ModelID,
 			QueryText:       request.QueryText,
@@ -278,7 +292,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		candidateK = request.TopK * u.rerankCandidateMultiplier
 	}
 
-	contexts, err = u.retrievalClient.SearchEmbeddings(ctx, request.DatasetID, retrievalQuery, candidateK, retrievalFilters)
+	contexts, err = u.retrievalClient.SearchEmbeddings(ctx, request.UserID, request.DatasetID, retrievalQuery, candidateK, retrievalFilters)
 	if err != nil {
 		err = fmt.Errorf("%w: %w", domain.ErrRetrievalFailed, err)
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
@@ -477,6 +491,7 @@ func inferenceRequestRecord(request model.GenerateRequest, dataset *model.Infere
 	}
 	return &model.InferenceRequest{
 		RequestID:             request.RequestID,
+		UserID:                request.UserID,
 		DatasetID:             dataset.DatasetID,
 		ModelID:               inferenceModel.ModelID,
 		EmbeddingSnapshotID:   dataset.EmbeddingSnapshotID,

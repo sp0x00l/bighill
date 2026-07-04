@@ -7,7 +7,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	logrus "github.com/sirupsen/logrus"
 )
 
@@ -37,7 +36,7 @@ func NewDatabase(pool ConnectionPool, dbName string) *Database {
 	}
 
 	return &Database{
-		Pool: pool,
+		Pool: newTenantContextPool(pool),
 		Name: dbName,
 	}
 }
@@ -66,7 +65,7 @@ func (db *Database) Close() {
 }
 
 func (db *Database) LogPoolStats(ctx context.Context, msg string, err error) {
-	statsPool, ok := db.Pool.(*pgxpool.Pool)
+	statsPool, ok := unwrapPgxPool(db.Pool)
 	if !ok || statsPool == nil {
 		return
 	}

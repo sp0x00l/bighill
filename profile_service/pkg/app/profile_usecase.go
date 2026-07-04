@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -45,6 +46,7 @@ type ProfilesUseCase interface {
 	ReadProfile(ctx context.Context, userID uuid.UUID) (*domain.Profile, error)
 	DeleteProfile(ctx context.Context, userID uuid.UUID) error
 	ReplacePassword(ctx context.Context, userID uuid.UUID, newPassword string) error
+	ReplaceHuggingFaceToken(ctx context.Context, userID uuid.UUID, token string) error
 	VerifyPassword(ctx context.Context, email, newPassword string) (string, error)
 	VerifyEmail(ctx context.Context, token string) error
 	CreateOAuthAuthorization(ctx context.Context, provider string, req OAuthAuthorizeRequest) (*OAuthAuthorizeResult, error)
@@ -57,6 +59,7 @@ type profilesUseCase struct {
 	msgPublisher            UserEventPublisher
 	authProvider            auth.AuthProvider
 	authStore               auth.RevocationStore
+	secretEncryptor         SecretEncryptor
 	authExpirationInMinutes int
 	emailValidationTTL      time.Duration
 	oauthProviders          map[string]OAuthProviderClient
@@ -71,6 +74,7 @@ type ProfilesUseCaseDeps struct {
 	MsgPublisher       UserEventPublisher
 	AuthStore          auth.RevocationStore
 	AuthProvider       auth.AuthProvider
+	SecretEncryptor    SecretEncryptor
 }
 
 type ProfilesUseCaseConfig struct {
@@ -118,6 +122,7 @@ func NewProfilesUseCase(deps ProfilesUseCaseDeps, cfg ProfilesUseCaseConfig, opt
 		profilesRepository:      deps.ProfilesRepository,
 		msgPublisher:            deps.MsgPublisher,
 		authProvider:            deps.AuthProvider,
+		secretEncryptor:         deps.SecretEncryptor,
 		authStore:               deps.AuthStore,
 		authExpirationInMinutes: cfg.AuthExpirationInMinutes,
 		emailValidationTTL:      cfg.EmailValidationTTL,
@@ -127,6 +132,24 @@ func NewProfilesUseCase(deps ProfilesUseCaseDeps, cfg ProfilesUseCaseConfig, opt
 		useStagingTestToken:     cfg.UseStagingTestToken,
 		clock:                   clock,
 	}
+}
+
+func (u *profilesUseCase) ReplaceHuggingFaceToken(ctx context.Context, userID uuid.UUID, token string) (err error) {
+	log.Trace("profilesUseCase ReplaceHuggingFaceToken")
+	ctx, span := usecasetrace.StartSpan(ctx, "profile_service/app", "profile.replace_huggingface_token",
+		attribute.String("user_id", userID.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	ciphertext, err := u.secretEncryptor.Encrypt(ctx, token)
+	if err != nil {
+		return fmt.Errorf("encrypt hugging face token: %w", err)
+	}
+	updatedProfile, err := u.profilesRepository.UpdateHuggingFaceToken(ctx, userID, ciphertext)
+	if err != nil {
+		return err
+	}
+	return u.msgPublisher.PublishUserUpdatedEvent(ctx, updatedProfile)
 }
 
 func (u *profilesUseCase) CreateProfile(ctx context.Context, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) (err error) {
@@ -294,7 +317,8 @@ func (u *profilesUseCase) Logout(ctx context.Context, sessionID string) (err err
 
 func generateEmailVerifyToken(email string, useStagingTestToken bool) (string, error) {
 	if shouldUseStagingTestEmailToken(email, useStagingTestToken) {
-		return stagingTestEmailVerifyToken, nil
+		emailHash := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+		return stagingTestEmailVerifyToken + "-" + hex.EncodeToString(emailHash[:8]), nil
 	}
 
 	tokenBytes := make([]byte, 32)

@@ -188,8 +188,12 @@ func namedArgs(args []any) pgx.NamedArgs {
 func validInferenceModel() *model.InferenceModel {
 	return &model.InferenceModel{
 		ModelID:           uuid.New(),
+		UserID:            uuid.New(),
 		TrainingRunID:     uuid.New(),
 		DatasetID:         uuid.New(),
+		ModelKind:         model.ModelKindFineTuned,
+		Source:            model.ModelSourceTraining,
+		SourceMetadata:    "{}",
 		Name:              "fraud-rag-ranker",
 		ModelVersion:      7,
 		BaseModel:         "bge-small-en-v1.5",
@@ -210,8 +214,13 @@ func validInferenceModel() *model.InferenceModel {
 func inferenceModelRow(inferenceModel *model.InferenceModel) pgx.Row {
 	return &repositoryRow{values: []any{
 		inferenceModel.ModelID.String(),
-		inferenceModel.TrainingRunID.String(),
-		inferenceModel.DatasetID.String(),
+		inferenceModel.UserID.String(),
+		optionalInferenceModelUUIDString(inferenceModel.TrainingRunID),
+		optionalInferenceModelUUIDString(inferenceModel.DatasetID),
+		inferenceModel.ModelKind.String(),
+		inferenceModel.Source.String(),
+		inferenceModel.SourceURI,
+		inferenceModel.SourceMetadata,
 		inferenceModel.Name,
 		inferenceModel.ModelVersion,
 		inferenceModel.BaseModel,
@@ -227,6 +236,13 @@ func inferenceModelRow(inferenceModel *model.InferenceModel) pgx.Row {
 		inferenceModel.Status.String(),
 		inferenceModel.FailureReason,
 	}}
+}
+
+func optionalInferenceModelUUIDString(value uuid.UUID) string {
+	if value == uuid.Nil {
+		return ""
+	}
+	return value.String()
 }
 
 var _ = Describe("InferenceModelRepository", func() {
@@ -259,9 +275,13 @@ var _ = Describe("InferenceModelRepository", func() {
 			args := namedArgs(pool.lastArgs)
 			Expect(args).To(SatisfyAll(
 				HaveKeyWithValue("model_id", pgtype.UUID{Bytes: inferenceModel.ModelID, Valid: true}),
+				HaveKeyWithValue("user_id", pgtype.UUID{Bytes: inferenceModel.UserID, Valid: true}),
 				HaveKeyWithValue("training_run_id", pgtype.UUID{Bytes: inferenceModel.TrainingRunID, Valid: true}),
 				HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: inferenceModel.DatasetID, Valid: true}),
 				HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}),
+				HaveKeyWithValue("model_kind", model.ModelKindFineTuned.String()),
+				HaveKeyWithValue("source", model.ModelSourceTraining.String()),
+				HaveKeyWithValue("source_metadata", "{}"),
 				HaveKeyWithValue("name", inferenceModel.Name),
 				HaveKeyWithValue("model_version", inferenceModel.ModelVersion),
 				HaveKeyWithValue("adapter_uri", inferenceModel.AdapterURI),
@@ -270,6 +290,31 @@ var _ = Describe("InferenceModelRepository", func() {
 				HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()),
 				HaveKeyWithValue("metrics_metadata", inferenceModel.MetricsMetadata),
 				HaveKeyWithValue("status", model.ModelStatusReady.String()),
+			))
+		})
+
+		It("upserts a base model with nullable training and dataset ids", func() {
+			inferenceModel := validInferenceModel()
+			inferenceModel.TrainingRunID = uuid.Nil
+			inferenceModel.DatasetID = uuid.Nil
+			inferenceModel.ModelKind = model.ModelKindBase
+			inferenceModel.Source = model.ModelSourceUpload
+			inferenceModel.SourceURI = "s3://local-dev-bucket/models/base"
+			pool.nextRows = []pgx.Row{inferenceModelRow(inferenceModel)}
+
+			record, err := repository.UpsertModel(ctx, inferenceModel, uuid.New())
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(record.ModelKind).To(Equal(model.ModelKindBase))
+			Expect(record.TrainingRunID).To(Equal(uuid.Nil))
+			Expect(record.DatasetID).To(Equal(uuid.Nil))
+			args := namedArgs(pool.lastArgs)
+			Expect(args).To(SatisfyAll(
+				HaveKeyWithValue("training_run_id", pgtype.UUID{}),
+				HaveKeyWithValue("dataset_id", pgtype.UUID{}),
+				HaveKeyWithValue("model_kind", model.ModelKindBase.String()),
+				HaveKeyWithValue("source", model.ModelSourceUpload.String()),
+				HaveKeyWithValue("source_uri", "s3://local-dev-bucket/models/base"),
 			))
 		})
 
@@ -288,17 +333,38 @@ var _ = Describe("InferenceModelRepository", func() {
 			inferenceModel := validInferenceModel()
 			pool.nextRows = []pgx.Row{inferenceModelRow(inferenceModel)}
 
-			record, err := repository.ReadByID(ctx, inferenceModel.ModelID)
+			record, err := repository.ReadByID(ctx, inferenceModel.UserID, inferenceModel.ModelID)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(record).To(Equal(inferenceModel))
 			Expect(pool.lastQuery).To(ContainSubstring("SELECT model_id::text"))
-			Expect(pool.lastQuery).To(ContainSubstring("FROM test_db.inference_models WHERE model_id = @model_id"))
+			Expect(pool.lastQuery).To(ContainSubstring("FROM test_db.inference_models WHERE model_id = @model_id AND (user_id = @user_id OR user_id IS NULL)"))
 			Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: inferenceModel.ModelID, Valid: true}))
+			Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: inferenceModel.UserID, Valid: true}))
+		})
+
+		It("reads a shared base model for any tenant", func() {
+			inferenceModel := validInferenceModel()
+			inferenceModel.UserID = uuid.Nil
+			inferenceModel.TrainingRunID = uuid.Nil
+			inferenceModel.DatasetID = uuid.Nil
+			inferenceModel.ModelKind = model.ModelKindBase
+			row := inferenceModelRow(inferenceModel).(*repositoryRow)
+			row.values[1] = ""
+			pool.nextRows = []pgx.Row{row}
+
+			record, err := repository.ReadByID(ctx, uuid.New(), inferenceModel.ModelID)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(record.UserID).To(Equal(uuid.Nil))
+			Expect(record.ModelKind).To(Equal(model.ModelKindBase))
+			Expect(record.DatasetID).To(Equal(uuid.Nil))
+			Expect(record.TrainingRunID).To(Equal(uuid.Nil))
+			Expect(pool.lastQuery).To(ContainSubstring("user_id IS NULL"))
 		})
 
 		It("returns a domain not-found error when no model row exists", func() {
-			record, err := repository.ReadByID(ctx, uuid.New())
+			record, err := repository.ReadByID(ctx, uuid.New(), uuid.New())
 
 			Expect(record).To(BeNil())
 			Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
@@ -307,10 +373,10 @@ var _ = Describe("InferenceModelRepository", func() {
 		It("surfaces invalid persisted status values", func() {
 			inferenceModel := validInferenceModel()
 			row := inferenceModelRow(inferenceModel).(*repositoryRow)
-			row.values[15] = "BROKEN"
+			row.values[20] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
-			record, err := repository.ReadByID(ctx, inferenceModel.ModelID)
+			record, err := repository.ReadByID(ctx, inferenceModel.UserID, inferenceModel.ModelID)
 
 			Expect(record).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring(`invalid model status "BROKEN"`)))
@@ -319,10 +385,10 @@ var _ = Describe("InferenceModelRepository", func() {
 		It("surfaces invalid persisted serving load status values", func() {
 			inferenceModel := validInferenceModel()
 			row := inferenceModelRow(inferenceModel).(*repositoryRow)
-			row.values[13] = "BROKEN"
+			row.values[18] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
-			record, err := repository.ReadByID(ctx, inferenceModel.ModelID)
+			record, err := repository.ReadByID(ctx, inferenceModel.UserID, inferenceModel.ModelID)
 
 			Expect(record).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring(`invalid model load status "BROKEN"`)))
