@@ -22,6 +22,14 @@ var _ = Describe("ProcessingState", func() {
 		Expect(model.DatasetProcessingEmbeddingsMaterialized.String()).To(Equal("EMBEDDINGS_MATERIALIZED"))
 	})
 
+	It("defaults empty values and unknown string renderings to pending", func() {
+		state, err := model.ToProcessingState("")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state).To(Equal(model.DatasetProcessingPending))
+		Expect(model.ProcessingState(99).String()).To(Equal("PENDING"))
+	})
+
 	It("rejects unknown states", func() {
 		_, err := model.ToProcessingState("UNKNOWN")
 
@@ -43,6 +51,8 @@ var _ = Describe("ProcessingProfile", func() {
 		profile, err = model.ToProcessingProfile("TEXT_RAG")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(profile).To(Equal(model.TextRAGProfile))
+		Expect(model.InstructionTuningProfile.String()).To(Equal("INSTRUCTION_TUNING"))
+		Expect(model.ProcessingProfile(99).String()).To(Equal("GENERIC_PARQUET"))
 	})
 
 	It("rejects unknown profiles", func() {

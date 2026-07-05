@@ -11,6 +11,7 @@ import (
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
 	"data_registry_service/pkg/infra/network/adapter"
+	"lib/shared_lib/ctxutil"
 	serializers "lib/shared_lib/serializer"
 	transport "lib/shared_lib/transport"
 
@@ -121,6 +122,7 @@ type sourceUsecaseStub struct {
 
 	deleteConnectorID uuid.UUID
 	deleteUserID      uuid.UUID
+	deleteTenantID    uuid.UUID
 	deleteErr         error
 }
 
@@ -144,9 +146,12 @@ func (s *sourceUsecaseStub) ReplaceSourceConnector(_ context.Context, connector 
 	return s.replaceErr
 }
 
-func (s *sourceUsecaseStub) DeleteSourceConnector(_ context.Context, connectorID, userID uuid.UUID) error {
+func (s *sourceUsecaseStub) DeleteSourceConnector(ctx context.Context, connectorID, userID uuid.UUID) error {
 	s.deleteConnectorID = connectorID
 	s.deleteUserID = userID
+	if tenantID, ok := ctxutil.TenantID(ctx); ok {
+		s.deleteTenantID = tenantID
+	}
 	return s.deleteErr
 }
 
@@ -191,6 +196,14 @@ var _ = Describe("DataRegistryHandlers", func() {
 		Expect(datasets.createDataset.Category).To(Equal("rag"))
 	})
 
+	It("exposes all REST routes for the service router", func() {
+		routes := handlers.GetRoutes()
+
+		Expect(routes).To(HaveLen(10))
+		Expect(routeExists(routes, "/v1/data/registry", http.MethodPost)).To(BeTrue())
+		Expect(routeExists(routes, "/v1/data/registry/connector/{type}/{connectorId}", http.MethodDelete)).To(BeTrue())
+	})
+
 	It("rejects malformed dataset DTOs", func() {
 		req := newJSONRequest(http.MethodPost, "/v1/data/registry", `{"description":"missing title"}`, userID, requestID)
 
@@ -213,6 +226,75 @@ var _ = Describe("DataRegistryHandlers", func() {
 		Expect(httpErr.statusCode).To(Equal(http.StatusNotFound))
 		Expect(datasets.readDatasetID).To(Equal(datasetID))
 		Expect(datasets.readUserID).To(Equal(userID))
+	})
+
+	It("lists datasets for the authenticated user", func() {
+		datasets.readManyDatasets = []*model.Dataset{{
+			ID:     datasetID,
+			UserID: userID,
+			Title:  "Movies",
+		}}
+		datasets.readManyTotal = 1
+		req := newJSONRequest(http.MethodGet, "/v1/data/registry?page=1&limit=10", `{}`, userID, uuid.Nil)
+
+		res, err := handlers.ReadDatasets(ctx, req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		Expect(datasets.readManyUserID).To(Equal(userID))
+		Expect(datasets.readManyPagination.Page).To(Equal(1))
+		Expect(datasets.readManyPagination.Limit).To(Equal(10))
+		Expect(datasets.readManyFilters).To(BeEmpty())
+		Expect(res.Payload()).NotTo(BeEmpty())
+	})
+
+	It("maps missing dataset lists to not found", func() {
+		datasets.readManyErr = domainErrors.ErrResourceNotFound
+		req := newJSONRequest(http.MethodGet, "/v1/data/registry", `{}`, userID, uuid.Nil)
+
+		_, err := handlers.ReadDatasets(ctx, req)
+
+		var httpErr *HTTPError
+		Expect(errors.As(err, &httpErr)).To(BeTrue())
+		Expect(httpErr.statusCode).To(Equal(http.StatusNotFound))
+	})
+
+	It("replaces datasets from REST DTOs", func() {
+		datasets.replaceResult = &model.Dataset{ID: datasetID, UserID: userID, Title: "Updated", Category: "rag"}
+		req := newJSONRequest(http.MethodPut, "/v1/data/registry/"+datasetID.String(), `{"title":"Updated","category":"rag"}`, userID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"datasetId": datasetID.String()})
+
+		res, err := handlers.ReplaceDataset(ctx, req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		Expect(datasets.replaceDataset.ID).To(Equal(datasetID))
+		Expect(datasets.replaceDataset.UserID).To(Equal(userID))
+		Expect(datasets.replaceDataset.Title).To(Equal("Updated"))
+	})
+
+	It("publishes datasets for the authenticated user", func() {
+		req := newJSONRequest(http.MethodPatch, "/v1/data/registry/"+datasetID.String()+"/publish", `{}`, userID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"datasetId": datasetID.String()})
+
+		res, err := handlers.PublishDataset(ctx, req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		Expect(datasets.publishDatasetID).To(Equal(datasetID))
+		Expect(datasets.publishUserID).To(Equal(userID))
+	})
+
+	It("deletes datasets for the authenticated user", func() {
+		req := newJSONRequest(http.MethodDelete, "/v1/data/registry/"+datasetID.String(), `{}`, userID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"datasetId": datasetID.String()})
+
+		res, err := handlers.DeleteDataset(ctx, req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		Expect(datasets.deleteDatasetID).To(Equal(datasetID))
+		Expect(datasets.deleteUserID).To(Equal(userID))
 	})
 
 	It("creates source connectors from REST DTOs", func() {
@@ -238,6 +320,69 @@ var _ = Describe("DataRegistryHandlers", func() {
 		Expect(sources.createConnector.Config.GetStorageType()).To(Equal(model.Postgres))
 	})
 
+	It("reads source connectors for the authenticated user", func() {
+		connectorID := uuid.New()
+		sources.readConnector = &model.SourceConnector{
+			ID:     connectorID,
+			UserID: userID,
+			Config: &model.PostgresDBConnCfg{
+				Hostname:           "localhost",
+				Port:               5432,
+				DatabaseName:       "mlops",
+				Username:           "postgres",
+				Password:           "password",
+				AuthenticationType: model.Master,
+			},
+		}
+		req := newJSONRequest(http.MethodGet, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, userID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
+
+		res, err := handlers.ReadSourceConnector(ctx, req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		Expect(sources.readConnectorID).To(Equal(connectorID))
+		Expect(sources.readUserID).To(Equal(userID))
+	})
+
+	It("replaces source connectors for the authenticated user", func() {
+		connectorID := uuid.New()
+		body := `{
+			"config":{
+				"hostname":"localhost",
+				"port":5432,
+				"databaseName":"mlops",
+				"username":"postgres",
+				"password":"password",
+				"authenticationType":"MASTER"
+			}
+		}`
+		req := newJSONRequest(http.MethodPut, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), body, userID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
+
+		res, err := handlers.ReplaceSourceConnector(ctx, req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		Expect(sources.replaceConnector.ID).To(Equal(connectorID))
+		Expect(sources.replaceConnector.UserID).To(Equal(userID))
+		Expect(sources.replaceConnector.Config.GetStorageType()).To(Equal(model.Postgres))
+	})
+
+	It("deletes source connectors with tenant context", func() {
+		connectorID := uuid.New()
+		req := newJSONRequest(http.MethodDelete, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, userID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
+
+		res, err := handlers.DeleteSourceConnector(ctx, req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		Expect(sources.deleteConnectorID).To(Equal(connectorID))
+		Expect(sources.deleteUserID).To(Equal(userID))
+		Expect(sources.deleteTenantID).To(Equal(userID))
+	})
+
 	It("rejects invalid connector types", func() {
 		req := newJSONRequest(http.MethodPost, "/v1/data/registry/connector/not-a-type", `{"config":{}}`, userID, requestID)
 		req = mux.SetURLVars(req, map[string]string{"type": "not-a-type"})
@@ -247,6 +392,28 @@ var _ = Describe("DataRegistryHandlers", func() {
 		var httpErr *HTTPError
 		Expect(errors.As(err, &httpErr)).To(BeTrue())
 		Expect(httpErr.statusCode).To(Equal(http.StatusBadRequest))
+	})
+})
+
+var _ = Describe("REST support helpers", func() {
+	It("builds conflict and internal server errors with wrapping", func() {
+		cause := errors.New("database unavailable")
+
+		conflict := ErrConflict().WithMessage("duplicate").Wrap(cause)
+		internal := ErrInternalServer().Wrap(cause)
+
+		Expect(conflict.statusCode).To(Equal(http.StatusConflict))
+		Expect(conflict.Error()).To(Equal("duplicate"))
+		Expect(errors.Is(conflict, cause)).To(BeTrue())
+		Expect(internal.statusCode).To(Equal(http.StatusInternalServerError))
+		Expect(internal.Error()).To(Equal(http.StatusText(http.StatusInternalServerError)))
+		Expect(errors.Is(internal, cause)).To(BeTrue())
+	})
+
+	It("returns the standard status text for empty HTTP errors", func() {
+		err := (&HTTPError{statusCode: http.StatusTeapot}).Error()
+
+		Expect(err).To(Equal(http.StatusText(http.StatusTeapot)))
 	})
 })
 
@@ -260,4 +427,13 @@ func newJSONRequest(method, path, body string, userID, requestID uuid.UUID) *htt
 		req.Header.Set("X-Request-ID", requestID.String())
 	}
 	return req
+}
+
+func routeExists(routes []Route, path, method string) bool {
+	for _, route := range routes {
+		if route.Path == path && route.Method == method {
+			return true
+		}
+	}
+	return false
 }

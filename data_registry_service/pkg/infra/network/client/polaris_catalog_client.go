@@ -59,7 +59,7 @@ func NewPolarisCatalogClient(config PolarisCatalogConfig, client *http.Client) *
 }
 
 func (c *PolarisCatalogClient) CreateResource(ctx context.Context, name string, sourceConnCfg model.ConnectorConfig) (uuid.UUID, error) {
-	log.WithContext(ctx).WithField("catalog_resource_name", name).Trace("PolarisCatalogClient CreateResource")
+	log.Trace("PolarisCatalogClient CreateResource")
 
 	resourceID, err := parseLocalCatalogResourceName(name)
 	if err != nil {
@@ -75,10 +75,7 @@ func (c *PolarisCatalogClient) CreateResource(ctx context.Context, name string, 
 }
 
 func (c *PolarisCatalogClient) ReplaceResource(ctx context.Context, name string, catalogID uuid.UUID, sourceConnCfg model.ConnectorConfig) error {
-	log.WithContext(ctx).WithFields(log.Fields{
-		"catalog_resource_name": name,
-		"catalog_id":            catalogID.String(),
-	}).Trace("PolarisCatalogClient ReplaceResource")
+	log.Trace("PolarisCatalogClient ReplaceResource")
 
 	resourceID, err := parseLocalCatalogResourceName(name)
 	if err != nil {
@@ -94,7 +91,7 @@ func (c *PolarisCatalogClient) ReplaceResource(ctx context.Context, name string,
 }
 
 func (c *PolarisCatalogClient) DeleteResource(ctx context.Context, catalogID uuid.UUID) error {
-	log.WithContext(ctx).WithField("catalog_id", catalogID.String()).Trace("PolarisCatalogClient DeleteResource")
+	log.Trace("PolarisCatalogClient DeleteResource")
 
 	if catalogID == uuid.Nil {
 		return domainErrors.ErrValidationFailed.Extend("polaris catalog id is required")

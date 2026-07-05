@@ -48,7 +48,7 @@ func (db *sourceConnectorDB) Create(ctx context.Context, sourceConnector *model.
 				return domainErrors.ErrResourceAlreadyExists
 			}
 		}
-		if coreDB.IsForeignKeyViolation(err) {
+		if coreDB.IsForeignKeyViolation(err) || coreDB.IsRowLevelSecurityViolation(err) {
 			return domainErrors.ErrValidationFailed.Extend("tenant projection is not ready")
 		}
 		return fmt.Errorf("database error. Failed to insert connector: %w", err)
@@ -58,7 +58,7 @@ func (db *sourceConnectorDB) Create(ctx context.Context, sourceConnector *model.
 }
 
 func (db *sourceConnectorDB) ReadByUserID(ctx context.Context, userID uuid.UUID) ([]model.SourceConnector, error) {
-	log.Trace("SourceConnectorDB ReadByDatasetID")
+	log.Trace("SourceConnectorDB ReadByUserID")
 
 	sqlStatement := `SELECT id, user_id, storage_type, config FROM ` + db.Name + `.connectors 
 	WHERE user_id = @user_id AND deleted = false;`
@@ -190,6 +190,10 @@ func (db *sourceConnectorDB) scanRows(ctx context.Context, rows pgx.Rows) ([]mod
 			return []model.SourceConnector{}, err
 		}
 		sourceConnectors = append(sourceConnectors, sourceConnector)
+	}
+	if err := rows.Err(); err != nil {
+		log.WithContext(ctx).WithError(err).Error("database error. Failed to iterate connectors")
+		return []model.SourceConnector{}, fmt.Errorf("database error. Failed to iterate connectors: %w", err)
 	}
 
 	return sourceConnectors, nil

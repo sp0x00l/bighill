@@ -90,6 +90,34 @@ var _ = Describe("PolarisCatalogClient", func() {
 		Expect(requestLog).To(ContainElement(MatchRegexp(`DELETE /api/catalog/v1/bighill/namespaces/source_connector_`)))
 	})
 
+	It("ensures the Polaris namespace when replacing source catalog resources", func() {
+		resourceID := uuid.New()
+
+		err := client.ReplaceResource(ctx, resourceID.String(), resourceID, &model.PostgresDBConnCfg{})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(requestLog).To(ContainElement("GET /api/catalog/v1/config"))
+		Expect(requestLog).To(ContainElement(MatchRegexp(`HEAD /api/catalog/v1/bighill/namespaces/source_connector_`)))
+		Expect(requestLog).To(ContainElement("POST /api/catalog/v1/bighill/namespaces"))
+	})
+
+	It("rejects replace requests whose catalog id does not match the resource name", func() {
+		resourceID := uuid.New()
+
+		err := client.ReplaceResource(ctx, resourceID.String(), uuid.New(), &model.PostgresDBConnCfg{})
+
+		Expect(err).To(MatchError(ContainSubstring("polaris catalog id must match resource name")))
+		Expect(domainErrors.IsServiceError(err, domainErrors.ErrValidationFailed)).To(BeTrue())
+		Expect(requestLog).To(BeEmpty())
+	})
+
+	It("rejects replace requests with invalid resource names", func() {
+		err := client.ReplaceResource(ctx, "not-a-uuid", uuid.New(), &model.PostgresDBConnCfg{})
+
+		Expect(domainErrors.IsServiceError(err, domainErrors.ErrValidationFailed)).To(BeTrue())
+		Expect(requestLog).To(BeEmpty())
+	})
+
 	It("validates a materialized Polaris Iceberg table through the REST catalog", func() {
 		dataset := &model.Dataset{
 			ID:              uuid.New(),

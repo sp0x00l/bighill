@@ -241,6 +241,9 @@ func sourceConnectorStatusError(err error) error {
 		rpcLib.GRPCCode(codes.AlreadyExists, domainErrors.ErrResourceAlreadyExists),
 		rpcLib.GRPCCode(codes.InvalidArgument, domainErrors.ErrValidationFailed),
 	)
+	if code == codes.Unknown {
+		code = codes.Internal
+	}
 	return status.Error(code, err.Error())
 }
 
@@ -255,5 +258,8 @@ func datasetTableStatusError(err error) error {
 		rpcLib.GRPCCode(codes.NotFound, domainErrors.ErrResourceNotFound),
 		rpcLib.GRPCCode(codes.FailedPrecondition, domainErrors.ErrValidationFailed),
 	)
+	if code == codes.Unknown {
+		code = codes.Internal
+	}
 	return status.Error(code, err.Error())
 }

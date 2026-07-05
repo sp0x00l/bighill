@@ -436,6 +436,26 @@ var _ = Describe("tenant context connection pool", func() {
 	})
 })
 
+var _ = Describe("database error classifiers", func() {
+	It("detects row-level-security violations", func() {
+		err := &pgconn.PgError{
+			Code:    "42501",
+			Message: `new row violates row-level security policy for table "datasets"`,
+		}
+
+		Expect(db.IsRowLevelSecurityViolation(err)).To(BeTrue())
+	})
+
+	It("does not classify generic insufficient privilege as row-level-security", func() {
+		err := &pgconn.PgError{
+			Code:    "42501",
+			Message: `permission denied for table datasets`,
+		}
+
+		Expect(db.IsRowLevelSecurityViolation(err)).To(BeFalse())
+	})
+})
+
 var _ = Describe("tenant RLS migration policies", func() {
 	It("keeps tenant-scoped service policies fail-closed", func() {
 		paths := []string{

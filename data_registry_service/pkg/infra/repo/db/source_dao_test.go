@@ -2,16 +2,21 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
+	datasetpb "lib/data_contracts_lib/data_registry"
+	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestDB(t *testing.T) {
@@ -78,6 +83,24 @@ var _ = Describe("DatasetDAO", func() {
 		Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
 	})
 
+	It("maps scanned database rows to dataset DAOs", func() {
+		dao := validDatasetDAO(datasetID, userID)
+
+		got, err := toDatasetDAO(&datasetRowStub{dao: dao})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.ID).To(Equal(dao.ID))
+		Expect(got.UserID).To(Equal(dao.UserID))
+		Expect(got.Title).To(Equal(dao.Title))
+		Expect(got.ProcessingState).To(Equal(dao.ProcessingState))
+	})
+
+	It("maps row scan misses to resource-not-found domain errors", func() {
+		_, err := fromDatasetRow(ctx, &datasetRowStub{err: pgx.ErrNoRows})
+
+		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
+	})
+
 	It("rejects invalid database enum values", func() {
 		dao := validDatasetDAO(datasetID, userID)
 		dao.Status = pgtype.Text{String: "not-a-status", Valid: true}
@@ -93,6 +116,62 @@ var _ = Describe("SourceConnectorDAO", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+	})
+
+	It("maps domain source connectors to database arguments", func() {
+		connectorID := uuid.New()
+		userID := uuid.New()
+		catalogID := uuid.New()
+		idempotencyKey := uuid.New()
+		config := &model.PostgresDBConnCfg{
+			Hostname:           "localhost",
+			Port:               5432,
+			DatabaseName:       "mlops",
+			Username:           "postgres",
+			Password:           "password",
+			AuthenticationType: model.Master,
+		}
+
+		args, err := toSourceConnDAO(ctx, &model.SourceConnector{
+			ID:        connectorID,
+			UserID:    userID,
+			CatalogID: catalogID,
+			Config:    config,
+		}, idempotencyKey)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(args["id"]).To(Equal(pgtype.UUID{Bytes: connectorID, Valid: true}))
+		Expect(args["user_id"]).To(Equal(pgtype.UUID{Bytes: userID, Valid: true}))
+		Expect(args["catalog_id"]).To(Equal(pgtype.UUID{Bytes: catalogID, Valid: true}))
+		Expect(args["storage_type"]).To(Equal(pgtype.Text{String: model.Postgres.String(), Valid: true}))
+		Expect(args["idempotency_key"]).To(Equal(pgtype.UUID{Bytes: idempotencyKey, Valid: true}))
+
+		var decoded model.PostgresDBConnCfg
+		Expect(json.Unmarshal(args["config"].([]byte), &decoded)).To(Succeed())
+		Expect(decoded.DatabaseName).To(Equal("mlops"))
+	})
+
+	It("omits nil idempotency keys from source connector database arguments", func() {
+		args, err := toSourceConnDAO(ctx, &model.SourceConnector{
+			ID:        uuid.New(),
+			UserID:    uuid.New(),
+			CatalogID: uuid.New(),
+			Config:    &model.PostgresDBConnCfg{},
+		}, uuid.Nil)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(args).NotTo(HaveKey("idempotency_key"))
+	})
+
+	It("rejects unserializable source connector configs", func() {
+		_, err := toSourceConnDAO(ctx, &model.SourceConnector{
+			ID:        uuid.New(),
+			UserID:    uuid.New(),
+			CatalogID: uuid.New(),
+			Config:    unserializableConnectorConfig{},
+		}, uuid.New())
+
+		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
 	})
 
 	It("maps Postgres connector configs from DAO rows", func() {
@@ -118,6 +197,32 @@ var _ = Describe("SourceConnectorDAO", func() {
 		Expect(ok).To(BeTrue())
 		Expect(cfg.DatabaseName).To(Equal("mlops"))
 	})
+
+	DescribeTable("maps connector-specific configs from DAO rows",
+		func(storageType model.StorageType, config model.ConnectorConfig, expected any) {
+			payload, err := json.Marshal(config)
+			Expect(err).NotTo(HaveOccurred())
+
+			var connector model.SourceConnector
+			err = fromSourceConnDAO(ctx, &connector, SourceConnectorDAO{
+				ID:          pgtype.UUID{Bytes: uuid.New(), Valid: true},
+				UserID:      pgtype.UUID{Bytes: uuid.New(), Valid: true},
+				CatalogID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+				StorageType: pgtype.Text{String: storageType.String(), Valid: true},
+				Config:      payload,
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(connector.Config).To(BeAssignableToTypeOf(expected))
+		},
+		Entry("S3", model.S3, &model.AwsS3StorageConnCfg{RootPath: "s3://bucket"}, &model.AwsS3StorageConnCfg{}),
+		Entry("Azure", model.AzureStorage, &model.AzureStorageConnCfg{AccountName: "storage"}, &model.AzureStorageConnCfg{}),
+		Entry("GCS", model.GoogleCloudStorage, &model.GoogleCloudStorageConnCfg{ProjectID: "project"}, &model.GoogleCloudStorageConnCfg{}),
+		Entry("MySQL", model.MySQL, &model.MysqlDBConnCfg{Hostname: "mysql"}, &model.MysqlDBConnCfg{}),
+		Entry("Oracle", model.Oracle, &model.OracleDBConnCfg{Hostname: "oracle"}, &model.OracleDBConnCfg{}),
+		Entry("Mongo", model.MongoDB, &model.MongoDBConnCfg{HostList: []model.Host{{Hostname: "localhost", Port: 27017}}}, &model.MongoDBConnCfg{}),
+		Entry("ClickHouse", model.ClickHouse, &model.ClickHouseConnCfg{Hostname: "clickhouse"}, &model.ClickHouseConnCfg{}),
+	)
 
 	It("rejects invalid connector storage types", func() {
 		dao := SourceConnectorDAO{
@@ -148,6 +253,122 @@ var _ = Describe("SourceConnectorDAO", func() {
 	})
 })
 
+var _ = Describe("Dataset repository message builders", func() {
+	It("builds dataset-created outbox messages with tenant and source metadata", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		connectorID := uuid.New()
+		dataset := &model.Dataset{
+			ID:                datasetID,
+			UserID:            userID,
+			Location:          "s3://warehouse/raw/movies.parquet",
+			SourceType:        model.Postgres,
+			SourceConnectorID: connectorID,
+			SourceQuery:       "SELECT title FROM movies",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			TableFormat:       model.Iceberg,
+			CatalogProvider:   model.PolarisCatalog,
+			ProcessingProfile: model.TextRAGProfile,
+			SchemaVersion:     2,
+			SchemaMetadata:    `{"columns":["title"]}`,
+			ProcessingState:   model.DatasetProcessingRawMaterialized,
+			DatasetVersion:    7,
+		}
+
+		message := datasetCreatedMessage("data_registry", dataset)
+
+		Expect(message.Topic).To(Equal("data_registry"))
+		Expect(message.Message.ResourceKey).To(Equal(datasetID))
+		Expect(message.Message.MsgType).To(Equal(msgConn.MsgTypeDatasetCreated))
+		Expect(message.DispatchKey).To(Equal("dataset_created:" + datasetID.String() + ":7"))
+		var event datasetpb.DatasetCreatedEvent
+		Expect(proto.Unmarshal(message.Message.Payload, &event)).To(Succeed())
+		Expect(event.DatasetId).To(Equal(datasetID.String()))
+		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.SourceType).To(Equal(model.Postgres.String()))
+		Expect(event.SourceConnectorId).To(Equal(connectorID.String()))
+		Expect(event.TableFormat).To(Equal(model.Iceberg.String()))
+	})
+
+	It("builds dataset-updated messages with materialization metadata", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		rawSnapshotID := uuid.New()
+		featureSnapshotID := uuid.New()
+		embeddingSnapshotID := uuid.New()
+		dataset := &model.Dataset{
+			ID:                       datasetID,
+			UserID:                   userID,
+			Location:                 "s3://warehouse/features/movies",
+			TableNamespace:           "features",
+			TableName:                "movies",
+			TableFormat:              model.Iceberg,
+			CatalogProvider:          model.PolarisCatalog,
+			ProcessingProfile:        model.TextRAGProfile,
+			SchemaVersion:            2,
+			SchemaMetadata:           `{"columns":["title"]}`,
+			ProcessingState:          model.DatasetProcessingEmbeddingsMaterialized,
+			DatasetVersion:           8,
+			RawSnapshotID:            rawSnapshotID,
+			FeatureSnapshotID:        featureSnapshotID,
+			EmbeddingSnapshotID:      embeddingSnapshotID,
+			VectorStore:              "pgvector",
+			CollectionName:           "movies",
+			EmbeddingDimensions:      384,
+			EmbeddingCount:           12,
+			EmbeddingStrategyVersion: "v1",
+			EmbeddingChunkerName:     "structure-aware",
+			EmbeddingChunkerVersion:  "v2",
+			EmbeddingChunkSize:       512,
+			EmbeddingChunkOverlap:    64,
+			EmbeddingProvider:        "tei",
+			EmbeddingModel:           "bge-small",
+		}
+
+		message := datasetUpdatedMessage("data_registry", dataset)
+
+		Expect(message.Message.MsgType).To(Equal(msgConn.MsgTypeDatasetUpdated))
+		Expect(message.DispatchKey).To(Equal("dataset_updated:" + datasetID.String() + ":8"))
+		var event datasetpb.DatasetUpdatedEvent
+		Expect(proto.Unmarshal(message.Message.Payload, &event)).To(Succeed())
+		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.RawSnapshotId).To(Equal(rawSnapshotID.String()))
+		Expect(event.FeatureSnapshotId).To(Equal(featureSnapshotID.String()))
+		Expect(event.EmbeddingSnapshotId).To(Equal(embeddingSnapshotID.String()))
+		Expect(event.EmbeddingCount).To(Equal(int64(12)))
+	})
+
+	It("builds dataset-deleted messages with user ids", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+
+		message := datasetDeletedMessage("data_registry", datasetID, userID)
+
+		Expect(message.Message.MsgType).To(Equal(msgConn.MsgTypeDatasetDeleted))
+		Expect(message.DispatchKey).To(Equal("dataset_deleted:" + datasetID.String()))
+		var event datasetpb.DatasetDeletedEvent
+		Expect(proto.Unmarshal(message.Message.Payload, &event)).To(Succeed())
+		Expect(event.DatasetId).To(Equal(datasetID.String()))
+		Expect(event.UserId).To(Equal(userID.String()))
+	})
+
+	It("omits optional source and UUID metadata when unset", func() {
+		Expect(uuidToString(uuid.Nil)).To(BeEmpty())
+		Expect(datasetSourceType(nil)).To(BeEmpty())
+		Expect(datasetSourceType(&model.Dataset{})).To(BeEmpty())
+		Expect(processingStateRankSQL("@processing_state")).To(ContainSubstring("@processing_state::text"))
+	})
+})
+
+type unserializableConnectorConfig struct {
+	Callback func()
+}
+
+func (u unserializableConnectorConfig) GetStorageType() model.StorageType {
+	return model.Postgres
+}
+
 func validDatasetDAO(datasetID, userID uuid.UUID) *DatasetDAO {
 	return &DatasetDAO{
 		ID:                  pgtype.UUID{Bytes: datasetID, Valid: true},
@@ -170,4 +391,68 @@ func validDatasetDAO(datasetID, userID uuid.UUID) *DatasetDAO {
 		EmbeddingDimensions: pgtype.Int4{Int32: 384, Valid: true},
 		EmbeddingCount:      pgtype.Int8{Int64: 10, Valid: true},
 	}
+}
+
+type datasetRowStub struct {
+	dao *DatasetDAO
+	err error
+}
+
+func (r *datasetRowStub) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	values := []any{
+		r.dao.ID,
+		r.dao.UserID,
+		r.dao.Title,
+		r.dao.Description,
+		r.dao.Origin,
+		r.dao.Location,
+		r.dao.SourceType,
+		r.dao.SourceConnectorID,
+		r.dao.SourceQuery,
+		r.dao.SourceDatabase,
+		r.dao.SourceCollection,
+		r.dao.Status,
+		r.dao.Category,
+		r.dao.TableNamespace,
+		r.dao.TableName,
+		r.dao.TableFormat,
+		r.dao.CatalogProvider,
+		r.dao.ProcessingProfile,
+		r.dao.SchemaVersion,
+		r.dao.SchemaMetadata,
+		r.dao.ProcessingState,
+		r.dao.DatasetVersion,
+		r.dao.RawSnapshotID,
+		r.dao.FeatureSnapshotID,
+		r.dao.EmbeddingSnapshotID,
+		r.dao.VectorStore,
+		r.dao.CollectionName,
+		r.dao.EmbeddingDimensions,
+		r.dao.EmbeddingCount,
+		r.dao.EmbeddingStrategyVersion,
+		r.dao.EmbeddingChunkerName,
+		r.dao.EmbeddingChunkerVersion,
+		r.dao.EmbeddingChunkSize,
+		r.dao.EmbeddingChunkOverlap,
+		r.dao.EmbeddingProvider,
+		r.dao.EmbeddingModel,
+	}
+	for i := range dest {
+		switch target := dest[i].(type) {
+		case *pgtype.UUID:
+			*target = values[i].(pgtype.UUID)
+		case *pgtype.Text:
+			*target = values[i].(pgtype.Text)
+		case *pgtype.Int4:
+			*target = values[i].(pgtype.Int4)
+		case *pgtype.Int8:
+			*target = values[i].(pgtype.Int8)
+		default:
+			Fail("unexpected scan target")
+		}
+	}
+	return nil
 }

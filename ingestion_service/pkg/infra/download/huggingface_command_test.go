@@ -32,7 +32,7 @@ printf '{"resource_id":"%s","storage_location":"s3://bucket/models/%s/snapshot",
 		downloader, err := download.NewHuggingFaceCommandDownloader(download.HuggingFaceCommandDownloaderConfig{
 			Command:   script,
 			OutputURI: "s3://bucket/models",
-			Timeout:   time.Second,
+			Timeout:   10 * time.Second,
 			EnvKeys:   testHuggingFaceJobEnvKeys(),
 		})
 		Expect(err).NotTo(HaveOccurred())

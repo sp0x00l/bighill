@@ -4,10 +4,16 @@ import (
 	"context"
 	"data_registry_service/pkg/domain/model"
 	"lib/shared_lib/serializer"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestAdapter(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Data registry network adapter unit test suite")
+}
 
 var _ = Describe("Connector config DTO adapters", func() {
 	var (

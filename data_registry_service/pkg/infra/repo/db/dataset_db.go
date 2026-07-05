@@ -92,7 +92,7 @@ func (db *datasetDB) Create(ctx context.Context, dataset *model.Dataset, idempot
 				return domainErrors.ErrResourceAlreadyExists
 			}
 		}
-		if coreDB.IsForeignKeyViolation(err) {
+		if coreDB.IsForeignKeyViolation(err) || coreDB.IsRowLevelSecurityViolation(err) {
 			return domainErrors.ErrValidationFailed.Extend("tenant projection is not ready")
 		}
 		return fmt.Errorf("database error. Failed to insert dataset: %w", err)
@@ -143,7 +143,7 @@ func (db *datasetDB) ReadByID(ctx context.Context, datasetID uuid.UUID, userID u
 	whereClause := "id = @id AND user_id = @user_id AND deleted = false"
 	query := db.getSelectSQL(whereClause)
 	row := db.Pool.QueryRow(ctx, query, pgx.NamedArgs{"user_id": userID, "id": datasetID})
-	datasetModel, err := db.scanRow(ctx, row)
+	datasetModel, err := fromDatasetRow(ctx, row)
 	if err != nil {
 		return nil, err
 	}
@@ -171,60 +171,19 @@ func (db *datasetDB) Replace(ctx context.Context, dataset *model.Dataset) (*mode
 		catalog_provider = @catalog_provider, processing_profile = @processing_profile, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb,
 		dataset_version = dataset_version + 1
 		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
-		RETURNING title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
+		RETURNING id, user_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
 		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model;`
 	row := tx.QueryRow(ctx, sqlStatement, datasetDAO)
 
-	updatedDataset := DatasetDAO{
-		ID:     pgtype.UUID{Bytes: dataset.ID, Valid: true},
-		UserID: pgtype.UUID{Bytes: dataset.UserID, Valid: true},
-	}
-
-	switch err := row.Scan(&updatedDataset.Title,
-		&updatedDataset.Description,
-		&updatedDataset.Origin,
-		&updatedDataset.Location,
-		&updatedDataset.SourceType,
-		&updatedDataset.SourceConnectorID,
-		&updatedDataset.SourceQuery,
-		&updatedDataset.SourceDatabase,
-		&updatedDataset.SourceCollection,
-		&updatedDataset.Status,
-		&updatedDataset.Category,
-		&updatedDataset.TableNamespace,
-		&updatedDataset.TableName,
-		&updatedDataset.TableFormat,
-		&updatedDataset.CatalogProvider,
-		&updatedDataset.ProcessingProfile,
-		&updatedDataset.SchemaVersion,
-		&updatedDataset.SchemaMetadata,
-		&updatedDataset.ProcessingState,
-		&updatedDataset.DatasetVersion,
-		&updatedDataset.RawSnapshotID,
-		&updatedDataset.FeatureSnapshotID,
-		&updatedDataset.EmbeddingSnapshotID,
-		&updatedDataset.VectorStore,
-		&updatedDataset.CollectionName,
-		&updatedDataset.EmbeddingDimensions,
-		&updatedDataset.EmbeddingCount,
-		&updatedDataset.EmbeddingStrategyVersion,
-		&updatedDataset.EmbeddingChunkerName,
-		&updatedDataset.EmbeddingChunkerVersion,
-		&updatedDataset.EmbeddingChunkSize,
-		&updatedDataset.EmbeddingChunkOverlap,
-		&updatedDataset.EmbeddingProvider,
-		&updatedDataset.EmbeddingModel); err {
-	case pgx.ErrNoRows:
+	updated, err := fromDatasetRow(ctx, row)
+	switch {
+	case errors.Is(err, domainErrors.ErrResourceNotFound):
 		log.WithContext(ctx).Warnf("No dataset found in database for ID: %s", dataset.ID.String())
 		return nil, domainErrors.ErrResourceNotFound
-	case nil:
-		updated, err := fromDAO(ctx, &updatedDataset)
-		if err != nil {
-			return nil, err
-		}
+	case err == nil:
 		enqueued := false
 		if db.outbox != nil {
 			if err := db.outbox.EnqueueTx(ctx, tx, datasetUpdatedMessage(db.topic, updated)); err != nil {
@@ -302,7 +261,7 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, datasetID uuid.U
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
 		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model;`
 
-	updated, err := db.scanRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{
+	updated, err := fromDatasetRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{
 		"id":               datasetID,
 		"user_id":          userID,
 		"processing_state": state.String(),
@@ -449,7 +408,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 			d.embedding_dimensions, d.embedding_count, d.embedding_strategy_version, d.embedding_chunker_name, d.embedding_chunker_version,
 			d.embedding_chunk_size, d.embedding_chunk_overlap, d.embedding_provider, d.embedding_model`
 
-	updated, err := db.scanRow(ctx, tx.QueryRow(ctx, query, datasetDAO))
+	updated, err := fromDatasetRow(ctx, tx.QueryRow(ctx, query, datasetDAO))
 	if err == nil {
 		return updated, true, nil
 	}
@@ -491,7 +450,7 @@ func (db *datasetDB) readMaterializationDatasetTx(ctx context.Context, tx pgx.Tx
 
 	whereClause := "id = @id AND user_id = @user_id AND status != '" + model.Blacklisted.String() + "' AND deleted = false"
 	query := db.getSelectSQL(whereClause)
-	return db.scanRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{"user_id": userID, "id": datasetID}))
+	return fromDatasetRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{"user_id": userID, "id": datasetID}))
 }
 
 func (db *datasetDB) UpdatePublishedState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) error {
@@ -609,40 +568,18 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 
 	var datasets []*model.Dataset
 	for rows.Next() {
-		dataset, err := scanDatasetDAO(rows)
-		if err != nil {
-			log.WithContext(ctx).WithError(err).Error("Failed to read datasets")
-			wrappedErr := fmt.Errorf("failed to read datasets: %w", err)
-			return nil, wrappedErr
-		}
-		datasetModel, err := fromDAO(ctx, dataset)
+		datasetModel, err := fromDatasetRow(ctx, rows)
 		if err != nil {
 			return nil, err
 		}
 		datasets = append(datasets, datasetModel)
 	}
+	if err := rows.Err(); err != nil {
+		log.WithContext(ctx).WithError(err).Error("database error. Failed to iterate datasets")
+		return nil, fmt.Errorf("database error. Failed to iterate datasets: %w", err)
+	}
 
 	return datasets, nil
-}
-
-func (db *datasetDB) scanRow(ctx context.Context, row pgx.Row) (*model.Dataset, error) {
-	log.Trace("DatasetDB scanRow")
-
-	dataset, err := scanDatasetDAO(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domainErrors.ErrResourceNotFound
-		}
-		log.WithContext(ctx).WithError(err).Errorf("database error. Failed to read corrupt dataset.")
-		wrappedErr := fmt.Errorf("database error. Failed read dataset: %w", err)
-		return nil, wrappedErr
-	}
-
-	datasetModel, err := fromDAO(ctx, dataset)
-	if err != nil {
-		return nil, err
-	}
-	return datasetModel, nil
 }
 
 func processingStateRankSQL(expression string) string {

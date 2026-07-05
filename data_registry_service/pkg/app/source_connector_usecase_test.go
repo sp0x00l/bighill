@@ -34,6 +34,7 @@ type stubSourceRepository struct {
 
 	replaceConnectors []*model.SourceConnector
 	replaceErr        error
+	replaceErrs       []error
 }
 
 func (s *stubSourceRepository) Close() {}
@@ -68,6 +69,11 @@ func (s *stubSourceRepository) Delete(_ context.Context, connectorID, userID uui
 
 func (s *stubSourceRepository) Replace(_ context.Context, connector *model.SourceConnector) error {
 	s.replaceConnectors = append(s.replaceConnectors, connector)
+	if len(s.replaceErrs) > 0 {
+		err := s.replaceErrs[0]
+		s.replaceErrs = s.replaceErrs[1:]
+		return err
+	}
 	return s.replaceErr
 }
 
@@ -170,6 +176,89 @@ var _ = Describe("SourceUsecase", func() {
 		Expect(got).To(Equal(expected))
 		Expect(repo.readConnectorID).To(Equal(connectorID))
 		Expect(repo.readUserID).To(Equal(userID))
+	})
+
+	It("replaces the repository record and catalog resource", func() {
+		connectorID := uuid.New()
+		originalConfig := &mockSourceConfig{nextSourceType: model.Postgres}
+		updatedConfig := &mockSourceConfig{nextSourceType: model.MySQL}
+		repo.readConnector = &model.SourceConnector{
+			ID:        connectorID,
+			UserID:    userID,
+			CatalogID: catalogID,
+			Config:    originalConfig,
+		}
+		replacement := &model.SourceConnector{
+			ID:     connectorID,
+			UserID: userID,
+			Config: updatedConfig,
+		}
+
+		Expect(uc.ReplaceSourceConnector(ctx, replacement)).To(Succeed())
+
+		Expect(repo.readConnectorID).To(Equal(connectorID))
+		Expect(repo.readUserID).To(Equal(userID))
+		Expect(replacement.CatalogID).To(Equal(catalogID))
+		Expect(repo.replaceConnectors).To(HaveLen(2))
+		Expect(repo.replaceConnectors[0]).To(Equal(replacement))
+		Expect(repo.replaceConnectors[1]).To(Equal(replacement))
+		Expect(catalog.replaceName).To(Equal(connectorID.String()))
+		Expect(catalog.replaceCatalogID).To(Equal(catalogID))
+		Expect(catalog.replaceConfig).To(Equal(updatedConfig))
+	})
+
+	It("returns repository read errors before replacing source connectors", func() {
+		expectedErr := errors.New("read failed")
+		repo.readErr = expectedErr
+		replacement := &model.SourceConnector{ID: uuid.New(), UserID: userID, Config: config}
+
+		err := uc.ReplaceSourceConnector(ctx, replacement)
+
+		Expect(err).To(MatchError(expectedErr))
+		Expect(repo.replaceConnectors).To(BeEmpty())
+		Expect(catalog.replaceName).To(BeEmpty())
+	})
+
+	It("returns repository replace errors before replacing catalog resources", func() {
+		expectedErr := errors.New("replace failed")
+		connectorID := uuid.New()
+		repo.readConnector = &model.SourceConnector{ID: connectorID, UserID: userID, CatalogID: catalogID, Config: config}
+		repo.replaceErr = expectedErr
+
+		err := uc.ReplaceSourceConnector(ctx, &model.SourceConnector{ID: connectorID, UserID: userID, Config: config})
+
+		Expect(err).To(MatchError(expectedErr))
+		Expect(repo.replaceConnectors).To(HaveLen(1))
+		Expect(catalog.replaceName).To(BeEmpty())
+	})
+
+	It("rolls back the repository record when catalog replace fails", func() {
+		expectedErr := errors.New("catalog replace failed")
+		connectorID := uuid.New()
+		original := &model.SourceConnector{ID: connectorID, UserID: userID, CatalogID: catalogID, Config: config}
+		updatedConfig := &mockSourceConfig{nextSourceType: model.MySQL}
+		repo.readConnector = original
+		catalog.replaceErr = expectedErr
+
+		err := uc.ReplaceSourceConnector(ctx, &model.SourceConnector{ID: connectorID, UserID: userID, Config: updatedConfig})
+
+		Expect(err).To(MatchError(expectedErr))
+		Expect(repo.replaceConnectors).To(HaveLen(2))
+		Expect(repo.replaceConnectors[1]).To(Equal(original))
+	})
+
+	It("returns the catalog error when rollback also fails", func() {
+		catalogErr := errors.New("catalog replace failed")
+		connectorID := uuid.New()
+		original := &model.SourceConnector{ID: connectorID, UserID: userID, CatalogID: catalogID, Config: config}
+		repo.readConnector = original
+		repo.replaceErrs = []error{nil, errors.New("rollback failed")}
+		catalog.replaceErr = catalogErr
+
+		err := uc.ReplaceSourceConnector(ctx, &model.SourceConnector{ID: connectorID, UserID: userID, Config: config})
+
+		Expect(err).To(MatchError(catalogErr))
+		Expect(repo.replaceConnectors).To(HaveLen(2))
 	})
 
 	It("deletes the catalog source before deleting the repository record", func() {

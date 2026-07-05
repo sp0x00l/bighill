@@ -18,15 +18,12 @@ func NewLocalCatalogClient() *LocalCatalogClient {
 }
 
 func (c *LocalCatalogClient) CreateResource(ctx context.Context, name string, sourceConnCfg model.ConnectorConfig) (uuid.UUID, error) {
-	log.WithContext(ctx).WithField("catalog_resource_name", name).Trace("LocalCatalogClient CreateResource")
+	log.Trace("LocalCatalogClient CreateResource")
 	return parseLocalCatalogResourceName(name)
 }
 
 func (c *LocalCatalogClient) ReplaceResource(ctx context.Context, name string, catalogID uuid.UUID, sourceConnCfg model.ConnectorConfig) error {
-	log.WithContext(ctx).WithFields(log.Fields{
-		"catalog_resource_name": name,
-		"catalog_id":            catalogID.String(),
-	}).Trace("LocalCatalogClient ReplaceResource")
+	log.Trace("LocalCatalogClient ReplaceResource")
 	resourceID, err := parseLocalCatalogResourceName(name)
 	if err != nil {
 		return err
@@ -38,7 +35,7 @@ func (c *LocalCatalogClient) ReplaceResource(ctx context.Context, name string, c
 }
 
 func (c *LocalCatalogClient) DeleteResource(ctx context.Context, catalogID uuid.UUID) error {
-	log.WithContext(ctx).WithField("catalog_id", catalogID.String()).Trace("LocalCatalogClient DeleteResource")
+	log.Trace("LocalCatalogClient DeleteResource")
 	if catalogID == uuid.Nil {
 		return domainErrors.ErrValidationFailed.Extend("local catalog id is required")
 	}
@@ -46,7 +43,7 @@ func (c *LocalCatalogClient) DeleteResource(ctx context.Context, catalogID uuid.
 }
 
 func (c *LocalCatalogClient) ValidateDatasetTable(ctx context.Context, dataset *model.Dataset) error {
-	log.WithContext(ctx).Trace("LocalCatalogClient ValidateDatasetTable")
+	log.Trace("LocalCatalogClient ValidateDatasetTable")
 
 	if dataset == nil {
 		return nil

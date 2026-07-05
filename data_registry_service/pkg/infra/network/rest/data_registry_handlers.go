@@ -442,6 +442,8 @@ func (h *DataRegistryHandlers) DeleteSourceConnector(ctx context.Context, req *h
 	if err != nil {
 		return nil, err
 	}
+	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	if err := h.sourceUsecase.DeleteSourceConnector(ctx, connectorID, userID); err != nil {
 		if domainErrors.IsServiceError(err, domainErrors.ErrResourceNotFound) {

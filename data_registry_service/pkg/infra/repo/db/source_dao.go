@@ -4,6 +4,8 @@ import (
 	"context"
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
+	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -58,8 +60,8 @@ type datasetScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanDatasetDAO(row datasetScanner) (*DatasetDAO, error) {
-	log.Trace("DatasetDAO scanDatasetDAO")
+func toDatasetDAO(row datasetScanner) (*DatasetDAO, error) {
+	log.Trace("DatasetDAO toDatasetDAO")
 
 	var dataset DatasetDAO
 	err := row.Scan(
@@ -101,6 +103,20 @@ func scanDatasetDAO(row datasetScanner) (*DatasetDAO, error) {
 		&dataset.EmbeddingModel,
 	)
 	return &dataset, err
+}
+
+func fromDatasetRow(ctx context.Context, row datasetScanner) (*model.Dataset, error) {
+	log.Trace("DatasetDAO fromDatasetRow")
+
+	dataset, err := toDatasetDAO(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domainErrors.ErrResourceNotFound
+		}
+		log.WithContext(ctx).WithError(err).Error("database error. Failed to read corrupt dataset")
+		return nil, fmt.Errorf("database error. Failed read dataset: %w", err)
+	}
+	return fromDAO(ctx, dataset)
 }
 
 func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {

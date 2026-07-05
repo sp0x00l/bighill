@@ -261,11 +261,110 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(read.ID).To(Equal(createdID.String()))
 		Expect(read.Title).To(Equal("REST movies"))
 
+		listReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry?filter=category:in:movies", `{}`, userID, uuid.Nil)
+		listRes, err := handlers.ReadDatasets(ctx, listReq)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listRes.StatusCode()).To(Equal(http.StatusOK))
+		Expect(string(listRes.Payload())).To(ContainSubstring("REST movies"))
+
+		replaceReq := newIntegrationJSONRequest(http.MethodPut, "/v1/data/registry/"+createdID.String(), `{
+			"title":"REST movies updated",
+			"category":"movies",
+			"processingProfile":"TEXT_RAG"
+		}`, userID, uuid.Nil)
+		replaceReq = mux.SetURLVars(replaceReq, map[string]string{"datasetId": createdID.String()})
+		replaceRes, err := handlers.ReplaceDataset(ctx, replaceReq)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(replaceRes.StatusCode()).To(Equal(http.StatusOK))
+		Expect(string(replaceRes.Payload())).To(ContainSubstring("REST movies updated"))
+
+		publishReq := newIntegrationJSONRequest(http.MethodPatch, "/v1/data/registry/"+createdID.String()+"/publish", `{}`, userID, uuid.Nil)
+		publishReq = mux.SetURLVars(publishReq, map[string]string{"datasetId": createdID.String()})
+		publishRes, err := handlers.PublishDataset(ctx, publishReq)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(publishRes.StatusCode()).To(Equal(http.StatusOK))
+
 		crossTenantReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/"+createdID.String(), `{}`, otherUserID, uuid.Nil)
 		crossTenantReq = mux.SetURLVars(crossTenantReq, map[string]string{"datasetId": createdID.String()})
 		_, err = handlers.ReadDatasetByID(ctx, crossTenantReq)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(Equal("Dataset not found"))
+
+		deleteReq := newIntegrationJSONRequest(http.MethodDelete, "/v1/data/registry/"+createdID.String(), `{}`, userID, uuid.Nil)
+		deleteReq = mux.SetURLVars(deleteReq, map[string]string{"datasetId": createdID.String()})
+		deleteRes, err := handlers.DeleteDataset(ctx, deleteReq)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deleteRes.StatusCode()).To(Equal(http.StatusOK))
+
+		_, err = handlers.ReadDatasetByID(ctx, readReq)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(Equal("Dataset not found"))
+	})
+
+	It("serves source connector REST entry points through the actual Postgres repository", func() {
+		userID := uuid.New()
+		otherUserID := uuid.New()
+		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
+		Expect(upsertDataRegistryTenant(ctx, database, otherUserID)).To(Succeed())
+		handlers := newIntegrationHandlers(datasets, connectors)
+
+		createReq := newIntegrationJSONRequest(http.MethodPost, "/v1/data/registry/connector/POSTGRES", `{
+			"config":{
+				"hostname":"127.0.0.1",
+				"port":5432,
+				"databaseName":"mlops",
+				"username":"postgres",
+				"password":"password",
+				"authenticationType":"MASTER"
+			}
+		}`, userID, uuid.New())
+		createReq = mux.SetURLVars(createReq, map[string]string{"type": "POSTGRES"})
+		createRes, err := handlers.CreateSourceConnector(ctx, createReq)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(createRes.StatusCode()).To(Equal(http.StatusCreated))
+
+		var created adapter.RestSourceConnDTO
+		Expect(json.Unmarshal(createRes.Payload(), &created)).To(Succeed())
+		connectorID := uuid.MustParse(created.ID)
+
+		readReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, userID, uuid.Nil)
+		readReq = mux.SetURLVars(readReq, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
+		readRes, err := handlers.ReadSourceConnector(ctx, readReq)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readRes.StatusCode()).To(Equal(http.StatusOK))
+		Expect(string(readRes.Payload())).To(ContainSubstring(`"databaseName":"mlops"`))
+
+		crossTenantRead := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, otherUserID, uuid.Nil)
+		crossTenantRead = mux.SetURLVars(crossTenantRead, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
+		_, err = handlers.ReadSourceConnector(ctx, crossTenantRead)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(Equal("Source connector not found"))
+
+		replaceReq := newIntegrationJSONRequest(http.MethodPut, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{
+			"config":{
+				"hostname":"127.0.0.1",
+				"port":5432,
+				"databaseName":"mlops_updated",
+				"username":"postgres",
+				"password":"password",
+				"authenticationType":"MASTER"
+			}
+		}`, userID, uuid.Nil)
+		replaceReq = mux.SetURLVars(replaceReq, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
+		replaceRes, err := handlers.ReplaceSourceConnector(ctx, replaceReq)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(replaceRes.StatusCode()).To(Equal(http.StatusOK))
+		Expect(string(replaceRes.Payload())).To(ContainSubstring(`"databaseName":"mlops_updated"`))
+
+		deleteReq := newIntegrationJSONRequest(http.MethodDelete, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, userID, uuid.Nil)
+		deleteReq = mux.SetURLVars(deleteReq, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
+		deleteRes, err := handlers.DeleteSourceConnector(ctx, deleteReq)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deleteRes.StatusCode()).To(Equal(http.StatusOK))
+
+		_, err = handlers.ReadSourceConnector(ctx, readReq)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(Equal("Source connector not found"))
 	})
 
 	It("serves source-connector gRPC entry points through the actual Postgres repository", func() {
@@ -386,6 +485,41 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(total).To(BeNumerically(">", 0))
 		Expect(got).To(BeNil())
+	})
+
+	It("creates tenant projections on demand and rejects missing user ids", func() {
+		newTenant := uuid.New()
+		err := datasets.CreateDataset(ctx, &model.Dataset{
+			ID:     uuid.New(),
+			UserID: newTenant,
+			Title:  "on-demand-tenant",
+		}, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
+		var tenantCount int
+		Expect(database.Pool.QueryRow(ctxutil.WithSystemContext(ctx),
+			"SELECT COUNT(*) FROM "+database.Name+".tenants WHERE id = $1",
+			newTenant,
+		).Scan(&tenantCount)).To(Succeed())
+		Expect(tenantCount).To(Equal(1))
+
+		err = connectors.CreateSourceConnector(ctx, &model.SourceConnector{
+			UserID: uuid.New(),
+			Config: &model.PostgresDBConnCfg{
+				Hostname:           "127.0.0.1",
+				Port:               5432,
+				DatabaseName:       "mlops",
+				Username:           "postgres",
+				Password:           "password",
+				AuthenticationType: model.Master,
+			},
+		}, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
+
+		err = datasets.CreateDataset(ctx, &model.Dataset{
+			ID:    uuid.New(),
+			Title: "missing-user-id",
+		}, uuid.New())
+		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
 	})
 
 	It("updates dataset processing state from Kafka materialization events", func() {

@@ -132,6 +132,21 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(sub.policy.IsNonRetryableError(errors.New("transient"))).To(BeFalse())
 	})
 
+	It("exposes subscriber error policy configuration for service wiring", func() {
+		sub := newSubscriberStub()
+
+		registrymessaging.ConfigureSubscriberErrorPolicy(sub)
+
+		Expect(sub.policy).NotTo(BeNil())
+		Expect(sub.policy.IsNonRetryableError(domainErrors.ErrValidationFailed)).To(BeTrue())
+	})
+
+	It("creates empty protobuf messages for materialization listeners", func() {
+		Expect(registrymessaging.NewRawSnapshotReadyEventListener(&materializationUsecaseStub{}).NewMessage()).To(Equal(&featurepb.RawSnapshotReadyEvent{}))
+		Expect(registrymessaging.NewFeatureSnapshotReadyEventListener(&materializationUsecaseStub{}).NewMessage()).To(Equal(&featurepb.FeatureSnapshotReadyEvent{}))
+		Expect(registrymessaging.NewEmbeddingSnapshotReadyEventListener(&materializationUsecaseStub{}).NewMessage()).To(Equal(&featurepb.EmbeddingSnapshotReadyEvent{}))
+	})
+
 	It("wraps deserialization failures from registered listeners as non-retryable", func() {
 		sub := newSubscriberStub()
 		subscriber := registrymessaging.NewMaterializationSubscriber(sub, &materializationUsecaseStub{}, registrymessaging.MaterializationTopics{

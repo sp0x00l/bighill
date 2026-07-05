@@ -27,6 +27,11 @@ type stubDatasetRepository struct {
 	readDatasetID uuid.UUID
 	readUserID    uuid.UUID
 	readDataset   *model.Dataset
+	readManyUserID     uuid.UUID
+	readManyPagination core.Pagination
+	readManyFilters    []model.Filter
+	readManyDatasets   []*model.Dataset
+	readManyCount      int
 	readErr       error
 
 	deleteDatasetID uuid.UUID
@@ -72,8 +77,11 @@ func (s *stubDatasetRepository) Create(_ context.Context, dataset *model.Dataset
 	return s.createErr
 }
 
-func (s *stubDatasetRepository) Read(_ context.Context, _ uuid.UUID, _ core.Pagination, _ []model.Filter) ([]*model.Dataset, int, error) {
-	return nil, 0, s.readErr
+func (s *stubDatasetRepository) Read(_ context.Context, userID uuid.UUID, pagination core.Pagination, filters []model.Filter) ([]*model.Dataset, int, error) {
+	s.readManyUserID = userID
+	s.readManyPagination = pagination
+	s.readManyFilters = filters
+	return s.readManyDatasets, s.readManyCount, s.readErr
 }
 
 func (s *stubDatasetRepository) ReadByID(_ context.Context, datasetID, userID uuid.UUID) (*model.Dataset, error) {
@@ -155,6 +163,32 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(got).To(Equal(expected))
 		Expect(repo.readDatasetID).To(Equal(datasetID))
 		Expect(repo.readUserID).To(Equal(userID))
+	})
+
+	It("reads a user's datasets with pagination and filters", func() {
+		expected := []*model.Dataset{{ID: datasetID, UserID: userID, Title: "movies"}}
+		repo.readManyDatasets = expected
+		repo.readManyCount = 1
+		filter := model.CategoryFilter{Values: []string{"movies"}}
+		pagination := core.Pagination{Page: 2, Limit: 10}
+
+		got, total, err := uc.ReadDatasetsForUser(ctx, userID, pagination, []model.Filter{filter})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(expected))
+		Expect(total).To(Equal(1))
+		Expect(repo.readManyUserID).To(Equal(userID))
+		Expect(repo.readManyPagination).To(Equal(pagination))
+		Expect(repo.readManyFilters).To(Equal([]model.Filter{filter}))
+	})
+
+	It("returns repository read-many errors", func() {
+		expectedErr := errors.New("read failed")
+		repo.readErr = expectedErr
+
+		_, _, err := uc.ReadDatasetsForUser(ctx, userID, core.Pagination{Page: 1, Limit: 10}, nil)
+
+		Expect(err).To(MatchError(expectedErr))
 	})
 
 	It("reads materialized dataset table metadata", func() {

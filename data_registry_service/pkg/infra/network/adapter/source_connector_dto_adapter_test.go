@@ -71,6 +71,27 @@ var _ = Describe("RestSourceConnDTOAdapter", func() {
 		Expect(dto.Config).NotTo(BeEmpty())
 	})
 
+	It("rejects domain connectors with unsupported config types", func() {
+		unsupportedAdapter := NewRestSourceConnDTOAdapter(
+			func(context.Context, model.StorageType) ToDTOFunc { return nil },
+			GetConnCfgFromDTOFunc,
+			encoder,
+		)
+
+		_, err := unsupportedAdapter.ToDTO(ctx, &model.SourceConnector{
+			ID:     uuid.New(),
+			Config: &model.PostgresDBConnCfg{},
+		})
+
+		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
+	})
+
+	It("rejects malformed connector payloads", func() {
+		_, err := adapter.FromDTO(ctx, model.Postgres, []byte(`{"config":`))
+
+		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
+	})
+
 	It("rejects missing connector config", func() {
 		_, err := adapter.FromDTO(ctx, model.Postgres, []byte(`{}`))
 
