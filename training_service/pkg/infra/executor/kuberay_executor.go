@@ -41,6 +41,7 @@ type KubeRayExecutorConfig struct {
 	GPU                     string
 	TrainingEntrypoint      string
 	EvaluationEntrypoint    string
+	PromotionEntrypoint     string
 	PollInterval            time.Duration
 }
 
@@ -58,6 +59,7 @@ type KubeRayExecutor struct {
 	gpu                     string
 	trainingEntrypoint      string
 	evaluationEntrypoint    string
+	promotionEntrypoint     string
 	pollInterval            time.Duration
 	client                  dynamic.Interface
 	manifestReader          ManifestReader
@@ -93,6 +95,9 @@ func NewKubeRayExecutorWithClient(config KubeRayExecutorConfig, manifestReader M
 	if strings.TrimSpace(config.EvaluationEntrypoint) == "" {
 		return nil, domain.ErrValidationFailed.Extend("kuberay evaluation entrypoint is required")
 	}
+	if strings.TrimSpace(config.PromotionEntrypoint) == "" {
+		return nil, domain.ErrValidationFailed.Extend("kuberay promotion entrypoint is required")
+	}
 	if config.PollInterval <= 0 {
 		return nil, domain.ErrValidationFailed.Extend("kuberay poll interval is required")
 	}
@@ -122,6 +127,7 @@ func NewKubeRayExecutorWithClient(config KubeRayExecutorConfig, manifestReader M
 		gpu:                     strings.TrimSpace(config.GPU),
 		trainingEntrypoint:      strings.TrimSpace(config.TrainingEntrypoint),
 		evaluationEntrypoint:    strings.TrimSpace(config.EvaluationEntrypoint),
+		promotionEntrypoint:     strings.TrimSpace(config.PromotionEntrypoint),
 		pollInterval:            config.PollInterval,
 		client:                  client,
 		manifestReader:          manifestReader,
@@ -141,6 +147,18 @@ func (e *KubeRayExecutor) EvaluateModel(ctx context.Context, spec model.Evaluati
 
 	return waitForKubeRayJob(ctx, e, domain.ErrEvaluateModel, spec.SubmissionID, e.evaluationEntrypoint, evaluationEnv(spec), func(ctx context.Context) (*model.EvaluationReport, error) {
 		return readEvaluationReport(ctx, e.manifestReader, spec.ReportManifestURI, spec.TrainingRunID)
+	})
+}
+
+func (e *KubeRayExecutor) RunPromotionReport(ctx context.Context, spec model.PromotionReportJobSpec) (*model.PromotionReport, error) {
+	log.Trace("KubeRayExecutor RunPromotionReport")
+
+	entrypoint, err := promotionReportEntrypoint(e.promotionEntrypoint, spec)
+	if err != nil {
+		return nil, err
+	}
+	return waitForKubeRayJob(ctx, e, domain.ErrEvaluateModel, spec.SubmissionID, entrypoint, promotionReportEnv(spec), func(ctx context.Context) (*model.PromotionReport, error) {
+		return readPromotionReport(ctx, e.manifestReader, spec.ReportManifestURI, spec.ModelID)
 	})
 }
 

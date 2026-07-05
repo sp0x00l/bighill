@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -55,6 +56,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 	)
 
 	BeforeAll(func() {
+		requireDatasourceFixtures()
 		user = createVerifiedProfileAndLogin()
 	})
 
@@ -232,6 +234,25 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 		}), codes.InvalidArgument, "mongo source query returned no documents")
 	})
 })
+
+func requireDatasourceFixtures() {
+	if datasourcePortOpen(postgresDataSourceHost, postgresDataSourcePort) &&
+		datasourcePortOpen(mysqlDataSourceHost, mysqlDataSourcePort) &&
+		datasourcePortOpen(clickHouseDataSourceHost, clickHouseDataSourcePort) &&
+		datasourcePortOpen(mongoDataSourceHost, mongoDataSourcePort) {
+		return
+	}
+	Skip("external datasource fixtures are not running")
+}
+
+func datasourcePortOpen(host string, port int) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 250*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
 
 type flightQueryResult struct {
 	Columns  []string       `json:"columns"`

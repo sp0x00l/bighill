@@ -12,8 +12,37 @@ import (
 	"time"
 
 	"feature_materializer_service/pkg/domain"
+	domainmodel "feature_materializer_service/pkg/domain/model"
 
 	log "github.com/sirupsen/logrus"
+)
+
+const (
+	icebergStagingDirPattern  = "bighill-iceberg-write-*"
+	icebergStagingParquetFile = "data.parquet"
+	icebergSourceParquet      = "parquet"
+)
+
+const (
+	icebergArgMode              = "--mode"
+	icebergArgModeWrite         = "write-iceberg"
+	icebergArgSource            = "--source"
+	icebergArgDataRoot          = "--data-root"
+	icebergArgCatalog           = "--catalog"
+	icebergArgCatalogPolaris    = "polaris"
+	icebergArgCatalogURI        = "--catalog-uri"
+	icebergArgCatalogName       = "--catalog-name"
+	icebergArgWarehouse         = "--warehouse"
+	icebergArgNamespace         = "--namespace"
+	icebergArgTable             = "--table"
+	icebergArgCatalogCredential = "--catalog-credential"
+	icebergArgCatalogToken      = "--catalog-token"
+	icebergArgCatalogScope      = "--catalog-scope"
+	icebergArgS3Endpoint        = "--s3-endpoint"
+	icebergArgS3AccessKeyID     = "--s3-access-key-id"
+	icebergArgS3SecretAccessKey = "--s3-secret-access-key"
+	icebergArgS3Region          = "--s3-region"
+	icebergArgS3PathStyle       = "--s3-path-style"
 )
 
 type IcebergTableWriter interface {
@@ -68,13 +97,13 @@ func (w *ExternalIcebergTableWriter) WriteTable(ctx context.Context, request Ice
 		return nil, domain.ErrCatalogRegister.Extend("polaris credential or token is required")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "bighill-iceberg-write-*")
+	tmpDir, err := os.MkdirTemp("", icebergStagingDirPattern)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create iceberg staging dir: %w", domain.ErrCatalogRegister, err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	parquetPath := filepath.Join(tmpDir, "data.parquet")
+	parquetPath := filepath.Join(tmpDir, icebergStagingParquetFile)
 	if err := os.WriteFile(parquetPath, request.ParquetData, 0600); err != nil {
 		return nil, fmt.Errorf("%w: stage parquet for iceberg: %w", domain.ErrCatalogRegister, err)
 	}
@@ -87,23 +116,23 @@ func (w *ExternalIcebergTableWriter) WriteTable(ctx context.Context, request Ice
 	defer cancel()
 
 	args := []string{
-		"--mode", "write-iceberg",
-		"--source", "parquet",
-		"--data-root", parquetPath,
-		"--catalog", "polaris",
-		"--catalog-uri", w.config.PolarisBaseURL,
-		"--catalog-name", w.config.PolarisCatalog,
-		"--warehouse", w.config.PolarisWarehouse,
-		"--namespace", strings.TrimSpace(request.Namespace),
-		"--table", strings.TrimSpace(request.Table),
-		"--catalog-credential", w.config.PolarisCredential,
-		"--catalog-token", w.config.PolarisToken,
-		"--catalog-scope", w.config.PolarisScope,
-		"--s3-endpoint", w.config.S3Endpoint,
-		"--s3-access-key-id", w.config.S3AccessKeyID,
-		"--s3-secret-access-key", w.config.S3SecretAccessKey,
-		"--s3-region", w.config.S3Region,
-		"--s3-path-style", fmt.Sprintf("%t", w.config.S3PathStyle),
+		icebergArgMode, icebergArgModeWrite,
+		icebergArgSource, icebergSourceParquet,
+		icebergArgDataRoot, parquetPath,
+		icebergArgCatalog, icebergArgCatalogPolaris,
+		icebergArgCatalogURI, w.config.PolarisBaseURL,
+		icebergArgCatalogName, w.config.PolarisCatalog,
+		icebergArgWarehouse, w.config.PolarisWarehouse,
+		icebergArgNamespace, strings.TrimSpace(request.Namespace),
+		icebergArgTable, strings.TrimSpace(request.Table),
+		icebergArgCatalogCredential, w.config.PolarisCredential,
+		icebergArgCatalogToken, w.config.PolarisToken,
+		icebergArgCatalogScope, w.config.PolarisScope,
+		icebergArgS3Endpoint, w.config.S3Endpoint,
+		icebergArgS3AccessKeyID, w.config.S3AccessKeyID,
+		icebergArgS3SecretAccessKey, w.config.S3SecretAccessKey,
+		icebergArgS3Region, w.config.S3Region,
+		icebergArgS3PathStyle, fmt.Sprintf("%t", w.config.S3PathStyle),
 	}
 
 	cmd := exec.CommandContext(runCtx, w.config.BinaryPath, args...)
@@ -128,6 +157,6 @@ func (w *ExternalIcebergTableWriter) WriteTable(ctx context.Context, request Ice
 func isPolarisIceberg(catalogProvider, tableFormat string) bool {
 	log.Trace("isPolarisIceberg")
 
-	return strings.EqualFold(strings.TrimSpace(catalogProvider), "POLARIS") &&
-		strings.EqualFold(strings.TrimSpace(tableFormat), "ICEBERG")
+	return strings.EqualFold(strings.TrimSpace(catalogProvider), domainmodel.CatalogProviderPolaris) &&
+		strings.EqualFold(strings.TrimSpace(tableFormat), domainmodel.TableFormatIceberg)
 }

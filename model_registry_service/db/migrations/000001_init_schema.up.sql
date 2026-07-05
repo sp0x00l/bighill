@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     serving_load_status model_load_status_enum NOT NULL DEFAULT 'NOT_LOADED',
     serving_status_idempotency_key uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     metrics_metadata jsonb NOT NULL,
+    promotion_report_uri text NOT NULL DEFAULT '',
+    promotion_deltas jsonb NOT NULL DEFAULT '{}'::jsonb,
     status model_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -71,6 +73,10 @@ ON bighill_model_registry_db.models(user_id);
 
 CREATE INDEX IF NOT EXISTS index_models_dataset_id
 ON bighill_model_registry_db.models(dataset_id);
+
+CREATE INDEX IF NOT EXISTS index_models_champion_lookup
+ON bighill_model_registry_db.models(user_id, name, model_version DESC)
+WHERE status = 'READY' AND serving_load_status = 'LOADED';
 
 CREATE TRIGGER models_updated_at
 BEFORE UPDATE ON bighill_model_registry_db.models

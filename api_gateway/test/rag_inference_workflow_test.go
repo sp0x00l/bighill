@@ -79,7 +79,7 @@ func createRAGInferenceDataset(user profileTestUser) string {
 		"tableName":         "rag_inference_knowledge_upload",
 		"tableFormat":       "PARQUET",
 		"catalogProvider":   "LOCAL",
-		"processingProfile": "TEXT_RAG",
+		"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 	}
 
 	status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())

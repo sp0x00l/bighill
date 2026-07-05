@@ -13,6 +13,7 @@ It owns the data catalog boundary for the platform: other services publish facts
 - Postgres transactional outbox for atomic fact publication.
 - gRPC APIs used by query and materialization services.
 - Monotonic processing-state updates in the database for concurrent materialization facts.
+- Polaris REST catalog integration for lakehouse source/table identity when the Iceberg path is enabled.
 
 ## How It Fits
 
@@ -20,6 +21,8 @@ It owns the data catalog boundary for the platform: other services publish facts
 - Consumes materialization facts from `feature_materializer_service`.
 - Provides dataset/source metadata to `data_stream_service`.
 - Drives training trigger input by publishing dataset updates.
+
+For lakehouse-backed datasets, `data_registry_service` records the dataset and source connector metadata and registers the connector/table identity with Polaris. The actual bytes are still produced by `feature_materializer_service` and queried by `data_stream_service` through DataFusion/Arrow Flight; registry remains the metadata and lifecycle authority.
 
 ## Local Development
 

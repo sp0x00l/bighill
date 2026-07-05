@@ -6,15 +6,12 @@ import (
 	"time"
 
 	"ingestion_service/pkg/domain/model"
-	ingestionpb "lib/data_contracts_lib/ingestion"
-	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestDB(t *testing.T) {
@@ -34,7 +31,7 @@ var _ = Describe("Dataset DAO helpers", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 			SchemaVersion:     1,
 			SchemaMetadata:    "{}",
 		}
@@ -69,7 +66,7 @@ var _ = Describe("Dataset DAO helpers", func() {
 			"movies",
 			"PARQUET",
 			"LOCAL",
-			"TEXT_RAG",
+			"TEXT_RAG_PROCESSING_PROFILE",
 			1,
 			"{}",
 		}})
@@ -147,7 +144,7 @@ var _ = Describe("Upload session DAO helpers", func() {
 			"movies",
 			"PARQUET",
 			"LOCAL",
-			"TEXT_RAG",
+			"TEXT_RAG_PROCESSING_PROFILE",
 			"",
 			"",
 			"",
@@ -174,81 +171,6 @@ var _ = Describe("Upload session DAO helpers", func() {
 		_, err := scanUploadSession(uploadSessionRowStub{err: pgx.ErrNoRows})
 
 		Expect(errors.Is(err, pgx.ErrNoRows)).To(BeTrue())
-	})
-})
-
-var _ = Describe("Upload session outbox messages", func() {
-	It("builds dataset-file-uploaded events with user ids", func() {
-		session := &model.UploadSession{
-			UploadID:            uuid.New(),
-			DatasetID:           uuid.New(),
-			UserID:              uuid.New(),
-			StorageLocation:     "s3://bucket/raw/movies.csv",
-			DeclaredContentType: "text/csv",
-			DeclaredFormat:      "csv",
-			TableNamespace:      "raw",
-			TableName:           "movies",
-			TableFormat:         "PARQUET",
-			CatalogProvider:     "LOCAL",
-			ProcessingProfile:   "TEXT_RAG",
-		}
-
-		message := datasetFileUploadedMessage("ingestion", session)
-
-		Expect(message.Topic).To(Equal("ingestion"))
-		Expect(message.Message.MsgType).To(Equal(msgConn.MsgTypeDatasetFileUploaded))
-		Expect(message.DispatchKey).To(Equal("dataset_file_uploaded:" + session.UploadID.String()))
-		var event ingestionpb.DatasetFileUploadedEvent
-		Expect(proto.Unmarshal(message.Message.Payload, &event)).To(Succeed())
-		Expect(event.DatasetId).To(Equal(session.DatasetID.String()))
-		Expect(event.UserId).To(Equal(session.UserID.String()))
-		Expect(event.SourceType).To(Equal("upload"))
-	})
-
-	It("builds model-artifact-ingested events with user ids and source metadata", func() {
-		createdAt := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
-		session := &model.UploadSession{
-			UploadID:            uuid.New(),
-			ResourceID:          uuid.New(),
-			DatasetID:           uuid.New(),
-			UserID:              uuid.New(),
-			FileName:            "model.tar",
-			StorageLocation:     "s3://bucket/models/model.tar",
-			ManifestLocation:    "s3://bucket/models/manifest.json",
-			DeclaredFormat:      "HF_MODEL",
-			DeclaredContentType: "application/x-tar",
-			ActualSizeBytes:     1000,
-			Checksum:            "sha256",
-			ArtifactType:        "BASE_MODEL",
-			ModelName:           "llama",
-			ModelVersion:        "1",
-			BaseModel:           "meta-llama/Llama",
-			Source:              "hugging_face",
-			SourceURI:           "hf://meta-llama/Llama",
-			HFRepoID:            "meta-llama/Llama",
-			HFRevision:          "main",
-			HFCommitSHA:         "abc123",
-			CreatedAt:           createdAt,
-		}
-
-		message := modelArtifactIngestedMessage("ingestion", session)
-
-		Expect(message.Message.MsgType).To(Equal(msgConn.MsgTypeModelArtifactIngested))
-		Expect(message.DispatchKey).To(Equal("model_artifact_ingested:" + session.UploadID.String()))
-		var event ingestionpb.ModelArtifactIngestedEvent
-		Expect(proto.Unmarshal(message.Message.Payload, &event)).To(Succeed())
-		Expect(event.ArtifactId).To(Equal(session.ResourceID.String()))
-		Expect(event.UserId).To(Equal(session.UserID.String()))
-		Expect(event.DatasetId).To(Equal(session.DatasetID.String()))
-		Expect(event.Source).To(Equal("hugging_face"))
-		Expect(event.HfCommitSha).To(Equal("abc123"))
-		Expect(event.CreatedAt).To(Equal(createdAt.Format(time.RFC3339)))
-		Expect(event.SourceMetadata).To(ContainSubstring(session.UploadID.String()))
-	})
-
-	It("defaults empty model artifact source to upload", func() {
-		Expect(sourceOrDefault("")).To(Equal("upload"))
-		Expect(sourceOrDefault("hugging_face")).To(Equal("hugging_face"))
 	})
 })
 

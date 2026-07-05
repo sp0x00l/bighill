@@ -33,6 +33,10 @@ type closeableQueryEngine interface {
 	Close() error
 }
 
+type streamingQueryEngine interface {
+	Stream(context.Context, *flight.Ticket, flight.FlightService_DoGetServer) error
+}
+
 func NewFlightServer(authHandler flight.ServerAuthHandler, config infra.DataConfig, engine QueryEngine) *flightServer {
 	log.Trace("NewFlightServer")
 
@@ -155,6 +159,14 @@ func (fs *flightServer) GetFlightInfo(ctx context.Context, descriptor *flight.Fl
 
 func (fs *flightServer) DoGet(ticket *flight.Ticket, outStream flight.FlightService_DoGetServer) error {
 	log.Trace("flightServer DoGet")
+
+	if streamer, ok := fs.engine.(streamingQueryEngine); ok {
+		if err := streamer.Stream(outStream.Context(), ticket, outStream); err != nil {
+			log.WithContext(outStream.Context()).WithError(err).Error("query execution failed")
+			return status.Errorf(queryStatusCode(err), "query execution failed: %v", err)
+		}
+		return nil
+	}
 
 	result, err := fs.engine.Execute(outStream.Context(), ticket)
 	if err != nil {

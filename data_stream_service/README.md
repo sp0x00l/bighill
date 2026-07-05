@@ -23,3 +23,14 @@ The service does not own dataset state. It asks `data_registry_service` for cata
 ## Local Development
 
 Configuration is controlled by `DATA_STREAM_SERVICE_` env vars. The internal DataFusion binary path and query mode are configured through the standard local-dev config.
+
+## DataFusion IPC Boundary
+
+When `data_stream_service` runs the Rust DataFusion query engine, stdout is reserved for data only. The subprocess writes a small framed payload:
+
+1. `BHIPC001` magic header
+2. little-endian uint64 expected row count
+3. Arrow IPC stream
+4. `BHIPCEND` magic footer
+
+The Go gateway rejects missing headers, missing footers, row-count mismatches, and any extra stdout bytes. Logs and diagnostics must go to stderr. Flight `DoGet` streams the subprocess stdout through the Arrow decoder instead of buffering the whole result in memory.

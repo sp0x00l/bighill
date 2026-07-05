@@ -29,7 +29,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"tableName":         "movie_metrics_upload",
 			"tableFormat":       "PARQUET",
 			"catalogProvider":   "LOCAL",
-			"processingProfile": "TEXT_RAG",
+			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
 		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
@@ -70,7 +70,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"tableName":         "open_iris_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8],
 			"tableFormat":       "ICEBERG",
 			"catalogProvider":   "POLARIS",
-			"processingProfile": "GENERIC_PARQUET",
+			"processingProfile": "GENERIC_PARQUET_PROCESSING_PROFILE",
 		}
 
 		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
@@ -128,7 +128,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"tableName":         "presigned_movie_metrics_upload",
 			"tableFormat":       "PARQUET",
 			"catalogProvider":   "LOCAL",
-			"processingProfile": "TEXT_RAG",
+			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
 		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
@@ -195,7 +195,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"tableName":         "pdf_knowledge_upload",
 			"tableFormat":       "PARQUET",
 			"catalogProvider":   "LOCAL",
-			"processingProfile": "TEXT_RAG",
+			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
 		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
@@ -220,7 +220,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
 			g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
 			g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
-			g.Expect(read["processingProfile"]).To(Equal("TEXT_RAG"))
+			g.Expect(read["processingProfile"]).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
 			g.Expect(read["tableNamespace"]).To(Equal("features"))
 			g.Expect(read["tableName"]).To(Equal("pdf_knowledge_upload"))
 			g.Expect(read["schemaVersion"]).To(BeNumerically(">=", 1))
@@ -245,7 +245,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"tableName":         "html_knowledge_upload",
 			"tableFormat":       "PARQUET",
 			"catalogProvider":   "LOCAL",
-			"processingProfile": "TEXT_RAG",
+			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
 		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
@@ -268,7 +268,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
 			g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
 			g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
-			g.Expect(read["processingProfile"]).To(Equal("TEXT_RAG"))
+			g.Expect(read["processingProfile"]).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
 			g.Expect(read["tableName"]).To(Equal("html_knowledge_upload"))
 			g.Expect(read["schemaVersion"]).To(BeNumerically(">=", 1))
 			metadata := schemaMetadataObject(g, read)

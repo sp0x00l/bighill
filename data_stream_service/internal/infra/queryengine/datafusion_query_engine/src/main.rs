@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::env;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,6 +22,9 @@ use iceberg_catalog_rest::{
 use iceberg_datafusion::{IcebergCatalogProvider, IcebergStaticTableProvider};
 use iceberg_storage_opendal::OpenDalStorageFactory;
 use serde::Serialize;
+
+const IPC_HEADER: &[u8; 8] = b"BHIPC001";
+const IPC_FOOTER: &[u8; 8] = b"BHIPCEND";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -50,14 +53,25 @@ async fn query(config: &Config) -> Result<()> {
     let df = ctx.sql(&config.sql).await?;
     let schema = df.schema().as_arrow().clone();
     let batches = df.collect().await?;
+    let expected_rows: u64 = batches.iter().map(|batch| batch.num_rows() as u64).sum();
 
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
+    stdout
+        .write_all(IPC_HEADER)
+        .map_err(to_io_datafusion_error)?;
+    stdout
+        .write_all(&expected_rows.to_le_bytes())
+        .map_err(to_io_datafusion_error)?;
     let mut writer = StreamWriter::try_new(&mut stdout, &schema)?;
     for batch in batches {
         writer.write(&batch)?;
     }
     writer.finish()?;
+    stdout
+        .write_all(IPC_FOOTER)
+        .map_err(to_io_datafusion_error)?;
+    stdout.flush().map_err(to_io_datafusion_error)?;
     Ok(())
 }
 
@@ -157,7 +171,7 @@ async fn load_rest_catalog(config: &Config) -> Result<Arc<dyn Catalog>> {
         ),
         (
             REST_CATALOG_PROP_WAREHOUSE.to_string(),
-            config.warehouse.clone(),
+            rest_catalog_warehouse(config),
         ),
         ("prefix".to_string(), config.catalog_name.clone()),
     ]);
@@ -318,6 +332,13 @@ fn warehouse_bucket(warehouse: &str) -> Result<String> {
     Ok(bucket)
 }
 
+fn rest_catalog_warehouse(config: &Config) -> String {
+    if config.warehouse.trim().starts_with("s3://") {
+        return config.catalog_name.clone();
+    }
+    config.warehouse.clone()
+}
+
 fn normalize_catalog_uri(uri: &str) -> String {
     let uri = uri.trim().trim_end_matches('/');
     if uri.ends_with("/api/catalog") {
@@ -328,6 +349,10 @@ fn normalize_catalog_uri(uri: &str) -> String {
 }
 
 fn to_datafusion_error(err: iceberg::Error) -> DataFusionError {
+    DataFusionError::External(Box::new(err))
+}
+
+fn to_io_datafusion_error(err: io::Error) -> DataFusionError {
     DataFusionError::External(Box::new(err))
 }
 

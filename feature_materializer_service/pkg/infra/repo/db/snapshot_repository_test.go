@@ -346,6 +346,7 @@ var _ = Describe("SnapshotRepository", func() {
 	var (
 		ctx            context.Context
 		poolMock       *testConnectionPool
+		tx             pgx.Tx
 		repository     *featuredb.SnapshotRepository
 		datasetID      uuid.UUID
 		userID         uuid.UUID
@@ -359,6 +360,7 @@ var _ = Describe("SnapshotRepository", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		poolMock = &testConnectionPool{NextRowsAffected: 1}
+		tx = &testTx{pool: poolMock}
 		dbCore := coreDB.NewDatabase(poolMock, "test_db")
 		repository = featuredb.NewSnapshotRepository(dbCore)
 
@@ -386,7 +388,7 @@ var _ = Describe("SnapshotRepository", func() {
 		It("inserts a pending raw snapshot with named args", func() {
 			poolMock.NextRows = []pgx.Row{newRawSnapshotRow(rawSnapshotID, datasetID, userID)}
 
-			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
+			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, tx, datasetFile, idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rawSnapshot.RawSnapshotID).To(Equal(rawSnapshotID))
@@ -413,7 +415,7 @@ var _ = Describe("SnapshotRepository", func() {
 				readyRow,
 			}
 
-			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
+			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, tx, datasetFile, idempotencyKey)
 
 			Expect(rawSnapshot).To(BeNil())
 			existing, ok := domain.IsRawSnapshotAlreadyMaterialized(err)
@@ -436,7 +438,7 @@ var _ = Describe("SnapshotRepository", func() {
 				reopenedRow,
 			}
 
-			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
+			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, tx, datasetFile, idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rawSnapshot.RawSnapshotID).To(Equal(rawSnapshotID))
@@ -453,7 +455,7 @@ var _ = Describe("SnapshotRepository", func() {
 				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
 			}
 
-			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
+			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, tx, datasetFile, idempotencyKey)
 
 			Expect(rawSnapshot).To(BeNil())
 			Expect(errors.Is(err, domain.ErrRawSnapshotInProgress)).To(BeTrue())
@@ -464,7 +466,7 @@ var _ = Describe("SnapshotRepository", func() {
 			expectedErr := errors.New("database failed")
 			poolMock.NextRows = []pgx.Row{errorRow{err: expectedErr}}
 
-			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
+			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, tx, datasetFile, idempotencyKey)
 
 			Expect(rawSnapshot).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring("insert raw snapshot")))
@@ -486,7 +488,7 @@ var _ = Describe("SnapshotRepository", func() {
 
 	Describe("MarkRawReady", func() {
 		It("marks the raw snapshot ready", func() {
-			err := repository.MarkRawReady(ctx, &model.RawSnapshot{
+			err := repository.MarkRawReady(ctx, tx, &model.RawSnapshot{
 				RawSnapshotID:   rawSnapshotID,
 				StorageLocation: "s3://lakehouse/raw/snapshot.parquet",
 				TableFormat:     "PARQUET",
@@ -506,7 +508,7 @@ var _ = Describe("SnapshotRepository", func() {
 		It("returns raw snapshot not found when no row is updated", func() {
 			poolMock.NextRowsAffected = 0
 
-			err := repository.MarkRawReady(ctx, &model.RawSnapshot{RawSnapshotID: rawSnapshotID})
+			err := repository.MarkRawReady(ctx, tx, &model.RawSnapshot{RawSnapshotID: rawSnapshotID})
 
 			Expect(errors.Is(err, domain.ErrRawSnapshotNotFound)).To(BeTrue())
 		})
@@ -519,7 +521,7 @@ var _ = Describe("SnapshotRepository", func() {
 				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
 			}
 
-			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, rawSnapshotID, idempotencyKey)
+			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, tx, rawSnapshotID, idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(featureSnapshot.FeatureSnapshotID).To(Equal(featureID))
@@ -545,7 +547,7 @@ var _ = Describe("SnapshotRepository", func() {
 				readyRow,
 			}
 
-			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, rawSnapshotID, idempotencyKey)
+			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, tx, rawSnapshotID, idempotencyKey)
 
 			Expect(featureSnapshot).To(BeNil())
 			existing, ok := domain.IsFeatureSnapshotAlreadyBuilt(err)
@@ -569,7 +571,7 @@ var _ = Describe("SnapshotRepository", func() {
 				reopenedRow,
 			}
 
-			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, rawSnapshotID, idempotencyKey)
+			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, tx, rawSnapshotID, idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(featureSnapshot.FeatureSnapshotID).To(Equal(featureID))
@@ -582,7 +584,7 @@ var _ = Describe("SnapshotRepository", func() {
 		It("does not insert when the raw snapshot is missing", func() {
 			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
 
-			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, rawSnapshotID, idempotencyKey)
+			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, tx, rawSnapshotID, idempotencyKey)
 
 			Expect(featureSnapshot).To(BeNil())
 			Expect(errors.Is(err, domain.ErrRawSnapshotNotFound)).To(BeTrue())
@@ -592,7 +594,7 @@ var _ = Describe("SnapshotRepository", func() {
 
 	Describe("MarkFeatureFailed", func() {
 		It("marks the feature snapshot failed with a reason", func() {
-			err := repository.MarkFeatureFailed(ctx, featureID, "build failed")
+			err := repository.MarkFeatureFailed(ctx, tx, featureID, "build failed")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("UPDATE test_db.feature_snapshots"))
@@ -611,7 +613,7 @@ var _ = Describe("SnapshotRepository", func() {
 				newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID),
 			}
 
-			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey, strategy)
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, tx, featureID, idempotencyKey, strategy)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
@@ -652,7 +654,7 @@ var _ = Describe("SnapshotRepository", func() {
 				readyRow,
 			}
 
-			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey, model.EmbeddingStrategy{})
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, tx, featureID, idempotencyKey, model.EmbeddingStrategy{})
 
 			Expect(embeddingSnapshot).To(BeNil())
 			existing, ok := domain.IsEmbeddingsAlreadyMaterialized(err)
@@ -676,7 +678,7 @@ var _ = Describe("SnapshotRepository", func() {
 				reopenedRow,
 			}
 
-			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, featureID, idempotencyKey, model.EmbeddingStrategy{})
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, tx, featureID, idempotencyKey, model.EmbeddingStrategy{})
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
@@ -689,7 +691,7 @@ var _ = Describe("SnapshotRepository", func() {
 
 	Describe("MarkEmbeddingReady", func() {
 		It("marks the embedding snapshot ready", func() {
-			err := repository.MarkEmbeddingReady(ctx, &model.EmbeddingSnapshot{
+			err := repository.MarkEmbeddingReady(ctx, tx, &model.EmbeddingSnapshot{
 				EmbeddingSnapshotID: embeddingID,
 				DatasetID:           datasetID,
 				VectorStore:         "pgvector",
@@ -710,7 +712,6 @@ var _ = Describe("SnapshotRepository", func() {
 			})
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(poolMock.CommitCalled).To(BeTrue())
 			Expect(poolMock.ExecCalls).To(HaveLen(2))
 			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("active_for_retrieval = false"))
 			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("UPDATE test_db.embedding_snapshots"))
@@ -728,7 +729,7 @@ var _ = Describe("SnapshotRepository", func() {
 		It("returns embedding snapshot not found when no row is updated", func() {
 			poolMock.NextRowsAffected = 0
 
-			err := repository.MarkEmbeddingReady(ctx, &model.EmbeddingSnapshot{EmbeddingSnapshotID: embeddingID})
+			err := repository.MarkEmbeddingReady(ctx, tx, &model.EmbeddingSnapshot{EmbeddingSnapshotID: embeddingID})
 
 			Expect(errors.Is(err, domain.ErrEmbeddingSnapshotNotFound)).To(BeTrue())
 		})

@@ -31,9 +31,11 @@ import (
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	trainingpb "lib/data_contracts_lib/training"
 	sharedmessaging "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 	"lib/shared_lib/uuidutil"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.temporal.io/sdk/activity"
@@ -79,6 +81,8 @@ var _ = Describe("Full ML loop", func() {
 		Expect(err).NotTo(HaveOccurred())
 		registryUsecase := registryapp.NewModelRegistryUsecase(
 			registryRepo,
+			&e2eUnitOfWork{},
+			registrymessaging.NewModelEventBuilder("model_registry"),
 			registryapp.WithModelServingDeployer(servedModelAdapter),
 		)
 
@@ -87,6 +91,12 @@ var _ = Describe("Full ML loop", func() {
 
 		modelID := trainingRunID
 		registeredModel, err := registryRepo.ReadByID(ctx, modelID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(registeredModel.Status).To(Equal(registrymodel.ModelStatusCandidate))
+
+		promotionListener := registrymessaging.NewPromotionReportReadyEventListener(registryUsecase)
+		Expect(promotionListener.Handle(ctx, modelID, promotionReportReadyEvent(registeredModel))).To(Succeed())
+		registeredModel, err = registryRepo.ReadByID(ctx, modelID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(registeredModel.Status).To(Equal(registrymodel.ModelStatusEvaluated))
 		Expect(registeredModel.ServingLoadStatus).To(Equal(registrymodel.ModelLoadStatusNotLoaded))
@@ -196,6 +206,8 @@ var _ = Describe("Full ML loop", func() {
 		Expect(err).NotTo(HaveOccurred())
 		registryUsecase := registryapp.NewModelRegistryUsecase(
 			registryRepo,
+			&e2eUnitOfWork{},
+			registrymessaging.NewModelEventBuilder("model_registry"),
 			registryapp.WithModelServingDeployer(servedModelAdapter),
 		)
 		artifactListener := registrymessaging.NewModelArtifactIngestedEventListener(registryUsecase)
@@ -502,6 +514,21 @@ func (e *fakeTrainingExecutor) EvaluateModel(_ context.Context, spec trainingmod
 			"answer_relevancy":  0.8,
 			"context_precision": 0.8,
 		},
+		EvaluatorName:    "ragas",
+		EvaluatorVersion: "ragas-v1",
+		MetricSuite:      "rag",
+		EvalDatasetURI:   "s3://evals/full-ml-loop.jsonl",
+		EvalDatasetMode:  "labeled",
+	}, nil
+}
+
+func (e *fakeTrainingExecutor) RunPromotionReport(_ context.Context, spec trainingmodel.PromotionReportJobSpec) (*trainingmodel.PromotionReport, error) {
+	return &trainingmodel.PromotionReport{
+		UserID:             spec.UserID,
+		ModelID:            spec.ModelID,
+		TrainingRunID:      spec.TrainingRunID,
+		PromotionReportURI: spec.ReportURI,
+		Deltas:             map[string]float64{},
 	}, nil
 }
 
@@ -575,6 +602,17 @@ func assertServedModelStatus(ctx context.Context, client dynamic.Interface, load
 	Expect(gotServingModel).To(Equal(servingModel))
 }
 
+type e2eUnitOfWork struct {
+	messages []sharedmessaging.OutboundMessage
+}
+
+func (u *e2eUnitOfWork) Do(ctx context.Context, fn shareduow.TxFunc) error {
+	return fn(ctx, nil, func(message sharedmessaging.OutboundMessage) error {
+		u.messages = append(u.messages, message)
+		return nil
+	})
+}
+
 type registryMemoryRepository struct {
 	mu            sync.Mutex
 	byModelID     map[uuid.UUID]*registrymodel.Model
@@ -592,7 +630,7 @@ func newRegistryMemoryRepository() *registryMemoryRepository {
 
 func (r *registryMemoryRepository) Close() {}
 
-func (r *registryMemoryRepository) Create(_ context.Context, registeredModel *registrymodel.Model, _ uuid.UUID) (*registrymodel.Model, error) {
+func (r *registryMemoryRepository) Create(_ context.Context, _ pgx.Tx, registeredModel *registrymodel.Model, _ uuid.UUID) (*registrymodel.Model, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -636,7 +674,29 @@ func (r *registryMemoryRepository) ReadByTrainingRunID(_ context.Context, traini
 	return cloneRegistryModel(r.byModelID[modelID]), nil
 }
 
-func (r *registryMemoryRepository) UpdateStatus(_ context.Context, modelID uuid.UUID, status registrymodel.ModelStatus, artifactLocation string, failureReason string) (*registrymodel.Model, error) {
+func (r *registryMemoryRepository) ReadChampion(_ context.Context, lineage registrymodel.Lineage) (*registrymodel.Model, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var champion *registrymodel.Model
+	for _, record := range r.byModelID {
+		if record.UserID != lineage.UserID || record.Name != lineage.Name {
+			continue
+		}
+		if record.Status != registrymodel.ModelStatusReady || record.ServingLoadStatus != registrymodel.ModelLoadStatusLoaded {
+			continue
+		}
+		if champion == nil || record.ModelVersion > champion.ModelVersion {
+			champion = record
+		}
+	}
+	if champion == nil {
+		return nil, registrydomain.ErrModelNotFound
+	}
+	return cloneRegistryModel(champion), nil
+}
+
+func (r *registryMemoryRepository) UpdateStatus(_ context.Context, _ pgx.Tx, modelID uuid.UUID, status registrymodel.ModelStatus, artifactLocation string, failureReason string) (*registrymodel.Model, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -645,21 +705,23 @@ func (r *registryMemoryRepository) UpdateStatus(_ context.Context, modelID uuid.
 		return nil, registrydomain.ErrModelNotFound
 	}
 	record.Status = status
-	record.ArtifactLocation = artifactLocation
+	if artifactLocation != "" {
+		record.ArtifactLocation = artifactLocation
+	}
 	record.FailureReason = failureReason
 	return cloneRegistryModel(record), nil
 }
 
-func (r *registryMemoryRepository) UpdateServingStatus(_ context.Context, modelID uuid.UUID, status registrymodel.ModelStatus, servingLoadStatus registrymodel.ModelLoadStatus, servingTarget string, servingModel string, failureReason string, idempotencyKey uuid.UUID) (*registrymodel.Model, error) {
+func (r *registryMemoryRepository) UpdateServingStatus(_ context.Context, _ pgx.Tx, modelID uuid.UUID, status registrymodel.ModelStatus, servingLoadStatus registrymodel.ModelLoadStatus, servingTarget string, servingModel string, failureReason string, idempotencyKey uuid.UUID) (*registrymodel.Model, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.servingStatus[modelID] == idempotencyKey {
-		return cloneRegistryModel(r.byModelID[modelID]), nil
+		return cloneRegistryModel(r.byModelID[modelID]), false, nil
 	}
 	record, ok := r.byModelID[modelID]
 	if !ok {
-		return nil, registrydomain.ErrModelNotFound
+		return nil, false, registrydomain.ErrModelNotFound
 	}
 	record.Status = status
 	record.ServingLoadStatus = servingLoadStatus
@@ -667,6 +729,21 @@ func (r *registryMemoryRepository) UpdateServingStatus(_ context.Context, modelI
 	record.ServingModel = servingModel
 	record.FailureReason = failureReason
 	r.servingStatus[modelID] = idempotencyKey
+	return cloneRegistryModel(record), true, nil
+}
+
+func (r *registryMemoryRepository) UpdatePromotionDecision(_ context.Context, _ pgx.Tx, modelID uuid.UUID, status registrymodel.ModelStatus, promotionReportURI string, promotionDeltas string, failureReason string) (*registrymodel.Model, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	record, ok := r.byModelID[modelID]
+	if !ok {
+		return nil, registrydomain.ErrModelNotFound
+	}
+	record.Status = status
+	record.PromotionReportURI = promotionReportURI
+	record.PromotionDeltas = promotionDeltas
+	record.FailureReason = failureReason
 	return cloneRegistryModel(record), nil
 }
 
@@ -705,6 +782,16 @@ func modelUpdatedEvent(model *registrymodel.Model) *modelregistrypb.ModelUpdated
 	}
 }
 
+func promotionReportReadyEvent(model *registrymodel.Model) *trainingpb.PromotionReportReadyEvent {
+	return &trainingpb.PromotionReportReadyEvent{
+		UserId:             uuidutil.StringOrEmpty(model.UserID),
+		ModelId:            model.ModelID.String(),
+		TrainingRunId:      uuidutil.StringOrEmpty(model.TrainingRunID),
+		PromotionReportUri: "s3://local-dev-bucket/promotion/" + model.ModelID.String() + ".json",
+		PromotionDeltas:    "{}",
+	}
+}
+
 func newInferenceUsecase(datasetID uuid.UUID, userID uuid.UUID, embeddingSnapshotID uuid.UUID) (inferenceapp.InferenceUsecase, *inferenceRequestMemoryRepository, *inferenceFeedbackMemoryRepository) {
 	modelRepo := newInferenceModelMemoryRepository()
 	datasetRepo := newInferenceDatasetMemoryRepository(&inferencemodel.InferenceDataset{
@@ -717,7 +804,7 @@ func newInferenceUsecase(datasetID uuid.UUID, userID uuid.UUID, embeddingSnapsho
 		TableName:                "dataset_features",
 		TableFormat:              "PARQUET",
 		CatalogProvider:          "LOCAL",
-		ProcessingProfile:        "rag",
+		ProcessingProfile:        "TEXT_RAG_PROCESSING_PROFILE",
 		SchemaVersion:            1,
 		SchemaMetadata:           `{"columns":[]}`,
 		EmbeddingSnapshotID:      embeddingSnapshotID,
@@ -740,6 +827,7 @@ func newInferenceUsecase(datasetID uuid.UUID, userID uuid.UUID, embeddingSnapsho
 		inferenceapp.WithInferenceDatasetRepository(datasetRepo),
 		inferenceapp.WithInferenceRequestRepository(requestRepo),
 		inferenceapp.WithInferenceFeedbackRepository(feedbackRepo),
+		inferenceapp.WithInferenceUnitOfWork(&e2eUnitOfWork{}, inferencemessaging.NewPreferenceDatasetEventBuilder("inference")),
 		inferenceapp.WithRetrievalClient(&fakeRetrievalClient{embeddingSnapshotID: embeddingSnapshotID}),
 		inferenceapp.WithReranker(&fakeReranker{}),
 		inferenceapp.WithRerankCandidateMultiplier(3),
@@ -818,7 +906,7 @@ type inferenceFeedbackMemoryRepository struct {
 	snapshots []*inferencemodel.PreferenceDataset
 }
 
-func (r *inferenceFeedbackMemoryRepository) RecordFeedback(_ context.Context, feedback *inferencemodel.InferenceFeedback, _ uuid.UUID) (*inferencemodel.InferenceFeedback, error) {
+func (r *inferenceFeedbackMemoryRepository) RecordFeedback(_ context.Context, _ pgx.Tx, feedback *inferencemodel.InferenceFeedback, _ uuid.UUID) (*inferencemodel.InferenceFeedback, error) {
 	record := *feedback
 	r.records = append(r.records, &record)
 	return &record, nil
@@ -834,7 +922,7 @@ func (r *inferenceFeedbackMemoryRepository) ReadPreferenceDataset(_ context.Cont
 	}, nil
 }
 
-func (r *inferenceFeedbackMemoryRepository) RecordPreferenceDatasetSnapshot(_ context.Context, dataset *inferencemodel.PreferenceDataset, _ inferencemodel.PreferenceDatasetExportRequest) (*inferencemodel.PreferenceDataset, error) {
+func (r *inferenceFeedbackMemoryRepository) RecordPreferenceDatasetSnapshot(_ context.Context, _ pgx.Tx, dataset *inferencemodel.PreferenceDataset, _ inferencemodel.PreferenceDatasetExportRequest) (*inferencemodel.PreferenceDataset, error) {
 	record := *dataset
 	r.snapshots = append(r.snapshots, &record)
 	return &record, nil

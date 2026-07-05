@@ -3,8 +3,11 @@ package executor_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,6 +225,87 @@ var _ = Describe("RayExecutor", func() {
 		Expect(report.Passed).To(BeTrue())
 		Expect(report.ReportURI).To(Equal("s3://evals/run-4.json"))
 	})
+
+	It("submits promotion report jobs with an encoded job spec argument", func() {
+		var postBody []byte
+		statusCalls := 0
+		reader := &manifestReaderStub{payloads: map[string]string{
+			"s3://promotion/model-1.json": `{"user_id":"user-1","model_id":"model-1","training_run_id":"run-1","promotion_report_uri":"s3://promotion/model-1.json","deltas":{"faithfulness":0.1}}`,
+		}, stats: map[string]executor.ObjectInfo{
+			"s3://promotion/model-1.json": {Location: "s3://promotion/model-1.json", SizeBytes: 128},
+		}}
+		ray, err := executor.NewRayExecutorWithClient(rayConfig(), reader, &http.Client{
+			Transport: executorRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch req.Method + " " + req.URL.Path {
+				case "GET /api/jobs/promotion-model-1":
+					statusCalls++
+					if statusCalls == 1 {
+						return response(http.StatusNotFound, ""), nil
+					}
+					return response(http.StatusOK, `{"status":"SUCCEEDED"}`), nil
+				case "POST /api/jobs/":
+					var err error
+					postBody, err = io.ReadAll(req.Body)
+					Expect(err).NotTo(HaveOccurred())
+					return response(http.StatusOK, `{"job_id":"promotion-model-1"}`), nil
+				default:
+					Fail("unexpected request " + req.Method + " " + req.URL.Path)
+					return nil, nil
+				}
+			}),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		report, err := ray.RunPromotionReport(context.Background(), model.PromotionReportJobSpec{
+			UserID:                   "user-1",
+			ModelID:                  "model-1",
+			TrainingRunID:            "run-1",
+			CandidateReportURI:       "s3://evals/candidate.json",
+			CandidateMetricsMetadata: `{"metrics":{"faithfulness":0.9}}`,
+			ChampionModelID:          "champion-1",
+			ChampionReportURI:        "s3://evals/champion.json",
+			ChampionMetricsMetadata:  `{"metrics":{"faithfulness":0.8}}`,
+			PromotionProfile:         `{"promotion":{"require_deepchecks":true}}`,
+			ReportURI:                "s3://promotion/model-1.json",
+			ReportManifestURI:        "s3://promotion/model-1.json",
+			ArtifactBucketRegion:     "eu-west-1",
+			SubmissionID:             "promotion-model-1",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(report.ModelID).To(Equal("model-1"))
+		var submitted struct {
+			SubmissionID string `json:"submission_id"`
+			Entrypoint   string `json:"entrypoint"`
+			RuntimeEnv   struct {
+				EnvVars map[string]string `json:"env_vars"`
+			} `json:"runtime_env"`
+		}
+		Expect(json.Unmarshal(postBody, &submitted)).To(Succeed())
+		Expect(submitted.SubmissionID).To(Equal("promotion-model-1"))
+		Expect(submitted.RuntimeEnv.EnvVars).To(Equal(map[string]string{
+			"TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
+		}))
+		Expect(submitted.Entrypoint).To(HavePrefix("python -m promote --job-spec-b64 "))
+		encoded := strings.TrimPrefix(submitted.Entrypoint, "python -m promote --job-spec-b64 ")
+		raw, err := base64.RawURLEncoding.DecodeString(encoded)
+		Expect(err).NotTo(HaveOccurred())
+		var spec map[string]string
+		Expect(json.Unmarshal(raw, &spec)).To(Succeed())
+		Expect(spec).To(Equal(map[string]string{
+			"user_id":                    "user-1",
+			"model_id":                   "model-1",
+			"training_run_id":            "run-1",
+			"candidate_report_uri":       "s3://evals/candidate.json",
+			"candidate_metrics_metadata": `{"metrics":{"faithfulness":0.9}}`,
+			"champion_model_id":          "champion-1",
+			"champion_report_uri":        "s3://evals/champion.json",
+			"champion_metrics_metadata":  `{"metrics":{"faithfulness":0.8}}`,
+			"promotion_profile":          `{"promotion":{"require_deepchecks":true}}`,
+			"report_uri":                 "s3://promotion/model-1.json",
+			"report_manifest_uri":        "s3://promotion/model-1.json",
+		}))
+	})
 })
 
 func rayConfig() executor.RayExecutorConfig {
@@ -229,6 +313,7 @@ func rayConfig() executor.RayExecutorConfig {
 		URL:                  "http://ray.local",
 		TrainingEntrypoint:   "python -m train",
 		EvaluationEntrypoint: "python -m eval",
+		PromotionEntrypoint:  "python -m promote",
 		RequestTimeout:       time.Second,
 		PollInterval:         time.Millisecond,
 	}

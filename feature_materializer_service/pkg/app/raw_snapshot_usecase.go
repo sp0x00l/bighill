@@ -6,8 +6,10 @@ import (
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -17,21 +19,26 @@ type RawSnapshotUsecase interface {
 }
 
 type rawSnapshotUsecase struct {
-	repo   RawSnapshotRepository
-	writer RawSnapshotWriter
+	repo         RawSnapshotRepository
+	unitOfWork   SnapshotUnitOfWorkAdapter
+	eventBuilder SnapshotEventBuilder
+	writer       RawSnapshotWriter
 }
 
-func NewRawSnapshotUsecase(repo RawSnapshotRepository, writer RawSnapshotWriter) RawSnapshotUsecase {
+func NewRawSnapshotUsecase(repo RawSnapshotRepository, unitOfWork SnapshotUnitOfWorkAdapter, eventBuilder SnapshotEventBuilder, writer RawSnapshotWriter) RawSnapshotUsecase {
 	log.Trace("NewRawSnapshotUsecase")
 
 	return &rawSnapshotUsecase{
-		repo:   repo,
-		writer: writer,
+		repo:         repo,
+		unitOfWork:   unitOfWork,
+		eventBuilder: eventBuilder,
+		writer:       writer,
 	}
 }
 
 func (u *rawSnapshotUsecase) MaterializeRawSnapshot(ctx context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) (out *model.RawSnapshot, err error) {
 	log.Trace("RawSnapshotUsecase MaterializeRawSnapshot")
+
 	ctx, span := startFeatureMaterializerSpan(ctx, "feature_materializer_service/app", "raw_snapshot.materialize",
 		attribute.String("dataset_id", datasetFile.DatasetID.String()),
 		attribute.String("user_id", datasetFile.UserID.String()),
@@ -39,7 +46,7 @@ func (u *rawSnapshotUsecase) MaterializeRawSnapshot(ctx context.Context, dataset
 	)
 	defer endFeatureMaterializerSpanOnReturn(ctx, span, &err)
 
-	rawSnapshot, err := u.repo.SavePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
+	rawSnapshot, err := u.savePendingRawSnapshot(ctx, datasetFile, idempotencyKey)
 	if err != nil {
 		if existing, ok := domain.IsRawSnapshotAlreadyMaterialized(err); ok {
 			return existing, err
@@ -57,15 +64,52 @@ func (u *rawSnapshotUsecase) MaterializeRawSnapshot(ctx context.Context, dataset
 
 	written, err := u.writer.WriteRawSnapshot(ctx, datasetFile, rawSnapshot)
 	if err != nil {
-		_ = u.repo.MarkRawFailed(ctx, rawSnapshot.RawSnapshotID, err.Error())
+		_ = u.markRawFailed(ctx, rawSnapshot.RawSnapshotID, err.Error())
 		return nil, fmt.Errorf("%w: %w", domain.ErrRawSnapshotMaterialize, err)
 	}
 	if written == nil {
 		return nil, fmt.Errorf("%w: raw snapshot writer returned nil", domain.ErrRawSnapshotMaterialize)
 	}
 	written.RawSnapshotID = rawSnapshot.RawSnapshotID
-	if err := u.repo.MarkRawReady(ctx, written); err != nil {
+	if err := u.markRawReady(ctx, written); err != nil {
 		return nil, err
 	}
 	return written, nil
+}
+
+func (u *rawSnapshotUsecase) savePendingRawSnapshot(ctx context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) (*model.RawSnapshot, error) {
+	log.Trace("RawSnapshotUsecase savePendingRawSnapshot")
+
+	var rawSnapshot *model.RawSnapshot
+	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		out, err := u.repo.SavePendingRawSnapshot(ctx, tx, datasetFile, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		rawSnapshot = out
+		return nil
+	})
+	return rawSnapshot, err
+}
+
+func (u *rawSnapshotUsecase) markRawReady(ctx context.Context, rawSnapshot *model.RawSnapshot) error {
+	log.Trace("RawSnapshotUsecase markRawReady")
+
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		if err := u.repo.MarkRawReady(ctx, tx, rawSnapshot); err != nil {
+			return err
+		}
+		if err := enqueue(u.eventBuilder.RawSnapshotReadyMessage(rawSnapshot)); err != nil {
+			return fmt.Errorf("enqueue raw snapshot ready: %w", err)
+		}
+		return nil
+	})
+}
+
+func (u *rawSnapshotUsecase) markRawFailed(ctx context.Context, rawSnapshotID uuid.UUID, reason string) error {
+	log.Trace("RawSnapshotUsecase markRawFailed")
+
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.repo.MarkRawFailed(ctx, tx, rawSnapshotID, reason)
+	})
 }

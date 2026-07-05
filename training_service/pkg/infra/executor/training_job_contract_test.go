@@ -17,18 +17,23 @@ import (
 type trainingJobContract struct {
 	GoTrainingEnvKeys               []string `json:"go_training_env_keys"`
 	GoEvaluationEnvKeys             []string `json:"go_evaluation_env_keys"`
+	GoPromotionEnvKeys              []string `json:"go_promotion_env_keys"`
 	PythonTrainingRequiredEnvKeys   []string `json:"python_training_required_env_keys"`
 	PythonTrainingOptionalEnvKeys   []string `json:"python_training_optional_env_keys"`
 	PythonEvaluationRequiredEnvKeys []string `json:"python_evaluation_required_env_keys"`
 	PythonEvaluationOptionalEnvKeys []string `json:"python_evaluation_optional_env_keys"`
+	PythonPromotionRequiredEnvKeys  []string `json:"python_promotion_required_env_keys"`
+	PythonPromotionOptionalEnvKeys  []string `json:"python_promotion_optional_env_keys"`
 	EnvKeyContract                  map[string]struct {
 		Direction string `json:"direction"`
 		Type      string `json:"type"`
 	} `json:"env_key_contract"`
 	TrainingManifestKeys         []string          `json:"training_manifest_keys"`
 	EvaluationManifestKeys       []string          `json:"evaluation_manifest_keys"`
+	PromotionManifestKeys        []string          `json:"promotion_manifest_keys"`
 	TrainingManifestFieldTypes   map[string]string `json:"training_manifest_field_types"`
 	EvaluationManifestFieldTypes map[string]string `json:"evaluation_manifest_field_types"`
+	PromotionManifestFieldTypes  map[string]string `json:"promotion_manifest_field_types"`
 }
 
 var _ = Describe("Training job contract", func() {
@@ -37,11 +42,15 @@ var _ = Describe("Training job contract", func() {
 
 		Expect(sortedMapKeys(trainingEnv(model.TrainingJobSpec{}))).To(Equal(spec.GoTrainingEnvKeys))
 		Expect(sortedMapKeys(evaluationEnv(model.EvaluationJobSpec{}))).To(Equal(spec.GoEvaluationEnvKeys))
+		Expect(sortedMapKeys(promotionReportEnv(model.PromotionReportJobSpec{}))).To(Equal(spec.GoPromotionEnvKeys))
 		for _, key := range spec.PythonTrainingRequiredEnvKeys {
 			expectContains(spec.GoTrainingEnvKeys, key)
 		}
 		for _, key := range spec.PythonEvaluationRequiredEnvKeys {
 			expectContains(spec.GoEvaluationEnvKeys, key)
+		}
+		for _, key := range spec.PythonPromotionRequiredEnvKeys {
+			expectContains(spec.GoPromotionEnvKeys, key)
 		}
 		for _, key := range append(append([]string{}, spec.PythonTrainingRequiredEnvKeys...), spec.PythonTrainingOptionalEnvKeys...) {
 			expectEnvKeyContract(spec, key)
@@ -49,13 +58,18 @@ var _ = Describe("Training job contract", func() {
 		for _, key := range append(append([]string{}, spec.PythonEvaluationRequiredEnvKeys...), spec.PythonEvaluationOptionalEnvKeys...) {
 			expectEnvKeyContract(spec, key)
 		}
-		for _, key := range append(append([]string{}, spec.GoTrainingEnvKeys...), spec.GoEvaluationEnvKeys...) {
+		for _, key := range append(append([]string{}, spec.PythonPromotionRequiredEnvKeys...), spec.PythonPromotionOptionalEnvKeys...) {
+			expectEnvKeyContract(spec, key)
+		}
+		for _, key := range append(append(append([]string{}, spec.GoTrainingEnvKeys...), spec.GoEvaluationEnvKeys...), spec.GoPromotionEnvKeys...) {
 			expectEnvKeyContract(spec, key)
 		}
 		Expect(jsonFieldNames[model.TrainedModelArtifact]()).To(Equal(spec.TrainingManifestKeys))
 		Expect(jsonFieldNames[model.EvaluationReport]()).To(Equal(spec.EvaluationManifestKeys))
+		Expect(jsonFieldNames[model.PromotionReport]()).To(Equal(spec.PromotionManifestKeys))
 		Expect(jsonFieldTypes[model.TrainedModelArtifact]()).To(Equal(spec.TrainingManifestFieldTypes))
 		Expect(jsonFieldTypes[model.EvaluationReport]()).To(Equal(spec.EvaluationManifestFieldTypes))
+		Expect(jsonFieldTypes[model.PromotionReport]()).To(Equal(spec.PromotionManifestFieldTypes))
 	})
 })
 

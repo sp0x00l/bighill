@@ -8,8 +8,11 @@ import (
 	usecase "feature_materializer_service/pkg/app"
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	msgConn "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -27,7 +30,57 @@ type rawSnapshotRepoStub struct {
 	failure     string
 }
 
-func (s *rawSnapshotRepoStub) SavePendingRawSnapshot(_ context.Context, _ *model.DatasetFile, _ uuid.UUID) (*model.RawSnapshot, error) {
+type snapshotUnitOfWorkStub struct {
+	messages []msgConn.OutboundMessage
+	err      error
+}
+
+type snapshotEventBuilderStub struct{}
+
+func (snapshotEventBuilderStub) RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) msgConn.OutboundMessage {
+	return msgConn.OutboundMessage{
+		Topic: "feature_materializer",
+		Message: msgConn.Message{
+			ResourceKey: rawSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeRawSnapshotReady,
+		},
+		DispatchKey: "raw_snapshot_ready:" + rawSnapshot.RawSnapshotID.String(),
+	}
+}
+
+func (snapshotEventBuilderStub) FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) msgConn.OutboundMessage {
+	return msgConn.OutboundMessage{
+		Topic: "feature_materializer",
+		Message: msgConn.Message{
+			ResourceKey: featureSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeFeatureSnapshotReady,
+		},
+		DispatchKey: "feature_snapshot_ready:" + featureSnapshot.FeatureSnapshotID.String(),
+	}
+}
+
+func (snapshotEventBuilderStub) EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) msgConn.OutboundMessage {
+	return msgConn.OutboundMessage{
+		Topic: "feature_materializer",
+		Message: msgConn.Message{
+			ResourceKey: embeddingSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeEmbeddingSnapshotReady,
+		},
+		DispatchKey: "embedding_snapshot_ready:" + embeddingSnapshot.EmbeddingSnapshotID.String(),
+	}
+}
+
+func (s *snapshotUnitOfWorkStub) Do(ctx context.Context, fn shareduow.TxFunc) error {
+	if s.err != nil {
+		return s.err
+	}
+	return fn(ctx, nil, func(msg msgConn.OutboundMessage) error {
+		s.messages = append(s.messages, msg)
+		return nil
+	})
+}
+
+func (s *rawSnapshotRepoStub) SavePendingRawSnapshot(_ context.Context, _ pgx.Tx, _ *model.DatasetFile, _ uuid.UUID) (*model.RawSnapshot, error) {
 	if s.saveErr != nil {
 		return nil, s.saveErr
 	}
@@ -37,12 +90,12 @@ func (s *rawSnapshotRepoStub) SavePendingRawSnapshot(_ context.Context, _ *model
 	return validRawSnapshot(), nil
 }
 
-func (s *rawSnapshotRepoStub) MarkRawReady(_ context.Context, rawSnapshot *model.RawSnapshot) error {
+func (s *rawSnapshotRepoStub) MarkRawReady(_ context.Context, _ pgx.Tx, rawSnapshot *model.RawSnapshot) error {
 	s.readyID = rawSnapshot.RawSnapshotID
 	return nil
 }
 
-func (s *rawSnapshotRepoStub) MarkRawFailed(_ context.Context, rawSnapshotID uuid.UUID, reason string) error {
+func (s *rawSnapshotRepoStub) MarkRawFailed(_ context.Context, _ pgx.Tx, rawSnapshotID uuid.UUID, reason string) error {
 	s.failedID = rawSnapshotID
 	s.failure = reason
 	return nil
@@ -71,7 +124,7 @@ func (s *rawSnapshotWriterStub) WriteRawSnapshot(_ context.Context, _ *model.Dat
 var _ = Describe("RawSnapshotUsecase", func() {
 	It("saves a pending raw snapshot when no writer is configured", func() {
 		repo := &rawSnapshotRepoStub{}
-		uc := usecase.NewRawSnapshotUsecase(repo, nil)
+		uc := usecase.NewRawSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, nil)
 
 		rawSnapshot, err := uc.MaterializeRawSnapshot(context.Background(), validDatasetFile(), uuid.New())
 
@@ -82,7 +135,7 @@ var _ = Describe("RawSnapshotUsecase", func() {
 	It("writes and marks a raw snapshot ready", func() {
 		repo := &rawSnapshotRepoStub{rawSnapshot: validRawSnapshot()}
 		writer := &rawSnapshotWriterStub{}
-		uc := usecase.NewRawSnapshotUsecase(repo, writer)
+		uc := usecase.NewRawSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, writer)
 
 		rawSnapshot, err := uc.MaterializeRawSnapshot(context.Background(), validDatasetFile(), uuid.New())
 
@@ -94,7 +147,7 @@ var _ = Describe("RawSnapshotUsecase", func() {
 	It("returns replay records from repository idempotency errors", func() {
 		existing := validRawSnapshot()
 		repo := &rawSnapshotRepoStub{saveErr: &domain.RawSnapshotAlreadyMaterializedError{Record: existing}}
-		uc := usecase.NewRawSnapshotUsecase(repo, nil)
+		uc := usecase.NewRawSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, nil)
 
 		rawSnapshot, err := uc.MaterializeRawSnapshot(context.Background(), validDatasetFile(), uuid.New())
 
@@ -105,7 +158,7 @@ var _ = Describe("RawSnapshotUsecase", func() {
 	It("marks failed when the writer fails", func() {
 		expectedErr := errors.New("writer failed")
 		repo := &rawSnapshotRepoStub{rawSnapshot: validRawSnapshot()}
-		uc := usecase.NewRawSnapshotUsecase(repo, &rawSnapshotWriterStub{err: expectedErr})
+		uc := usecase.NewRawSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, &rawSnapshotWriterStub{err: expectedErr})
 
 		rawSnapshot, err := uc.MaterializeRawSnapshot(context.Background(), validDatasetFile(), uuid.New())
 

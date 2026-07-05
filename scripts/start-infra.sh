@@ -191,6 +191,20 @@ compose_start_polaris() {
     wait_for_port 9101 "Polaris object store console" 60 2
     wait_for_port 8181 "Polaris catalog" 60 2
     wait_for_port 8182 "Polaris health" 60 2
+    compose_bootstrap_polaris "$COMPOSE_FILE"
+}
+
+compose_bootstrap_polaris() {
+    local COMPOSE_FILE="$1"
+
+    if ! check_docker; then
+        echo "Docker is not available; skipping Polaris bootstrap."
+        return
+    fi
+
+    echo "Bootstrapping Polaris catalog..."
+    cd "$PROJECT_ROOT"
+    env ENVIRONMENT="$ENVIRONMENT" PROJECT_ROOT="$PROJECT_ROOT" docker compose -f "$COMPOSE_FILE" up polaris-bootstrap
 }
 
 
@@ -221,6 +235,7 @@ cicd_start_infra() {
     wait_for_port 9101 "Polaris object store console"
     wait_for_port 8181 "Polaris catalog"
     wait_for_port 8182 "Polaris health"
+    compose_bootstrap_polaris "$COMPOSE_FILE"
 
     compose_wait_for_postgres_ready "$COMPOSE_FILE"
     wait_for_kafka_ready 60 2

@@ -8,15 +8,12 @@ import (
 
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
-	datasetpb "lib/data_contracts_lib/data_registry"
-	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestDB(t *testing.T) {
@@ -64,7 +61,7 @@ var _ = Describe("DatasetDAO", func() {
 		Expect(args["user_id"]).To(Equal(pgtype.UUID{Bytes: userID, Valid: true}))
 		Expect(args["title"]).To(Equal(pgtype.Text{String: "Movies", Valid: true}))
 		Expect(args["table_format"]).To(Equal(pgtype.Text{String: "PARQUET", Valid: true}))
-		Expect(args["processing_profile"]).To(Equal(pgtype.Text{String: "TEXT_RAG", Valid: true}))
+		Expect(args["processing_profile"]).To(Equal(pgtype.Text{String: "TEXT_RAG_PROCESSING_PROFILE", Valid: true}))
 		Expect(args["raw_snapshot_id"]).To(Equal(pgtype.UUID{Bytes: rawSnapshotID, Valid: true}))
 	})
 
@@ -250,114 +247,6 @@ var _ = Describe("SourceConnectorDAO", func() {
 		err := fromSourceConnDAO(ctx, &connector, dao)
 
 		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
-	})
-})
-
-var _ = Describe("Dataset repository message builders", func() {
-	It("builds dataset-created outbox messages with tenant and source metadata", func() {
-		datasetID := uuid.New()
-		userID := uuid.New()
-		connectorID := uuid.New()
-		dataset := &model.Dataset{
-			ID:                datasetID,
-			UserID:            userID,
-			Location:          "s3://warehouse/raw/movies.parquet",
-			SourceType:        model.Postgres,
-			SourceConnectorID: connectorID,
-			SourceQuery:       "SELECT title FROM movies",
-			TableNamespace:    "features",
-			TableName:         "movies",
-			TableFormat:       model.Iceberg,
-			CatalogProvider:   model.PolarisCatalog,
-			ProcessingProfile: model.TextRAGProfile,
-			SchemaVersion:     2,
-			SchemaMetadata:    `{"columns":["title"]}`,
-			ProcessingState:   model.DatasetProcessingRawMaterialized,
-			DatasetVersion:    7,
-		}
-
-		message := datasetCreatedMessage("data_registry", dataset)
-
-		Expect(message.Topic).To(Equal("data_registry"))
-		Expect(message.Message.ResourceKey).To(Equal(datasetID))
-		Expect(message.Message.MsgType).To(Equal(msgConn.MsgTypeDatasetCreated))
-		Expect(message.DispatchKey).To(Equal("dataset_created:" + datasetID.String() + ":7"))
-		var event datasetpb.DatasetCreatedEvent
-		Expect(proto.Unmarshal(message.Message.Payload, &event)).To(Succeed())
-		Expect(event.DatasetId).To(Equal(datasetID.String()))
-		Expect(event.UserId).To(Equal(userID.String()))
-		Expect(event.SourceType).To(Equal(model.Postgres.String()))
-		Expect(event.SourceConnectorId).To(Equal(connectorID.String()))
-		Expect(event.TableFormat).To(Equal(model.Iceberg.String()))
-	})
-
-	It("builds dataset-updated messages with materialization metadata", func() {
-		datasetID := uuid.New()
-		userID := uuid.New()
-		rawSnapshotID := uuid.New()
-		featureSnapshotID := uuid.New()
-		embeddingSnapshotID := uuid.New()
-		dataset := &model.Dataset{
-			ID:                       datasetID,
-			UserID:                   userID,
-			Location:                 "s3://warehouse/features/movies",
-			TableNamespace:           "features",
-			TableName:                "movies",
-			TableFormat:              model.Iceberg,
-			CatalogProvider:          model.PolarisCatalog,
-			ProcessingProfile:        model.TextRAGProfile,
-			SchemaVersion:            2,
-			SchemaMetadata:           `{"columns":["title"]}`,
-			ProcessingState:          model.DatasetProcessingEmbeddingsMaterialized,
-			DatasetVersion:           8,
-			RawSnapshotID:            rawSnapshotID,
-			FeatureSnapshotID:        featureSnapshotID,
-			EmbeddingSnapshotID:      embeddingSnapshotID,
-			VectorStore:              "pgvector",
-			CollectionName:           "movies",
-			EmbeddingDimensions:      384,
-			EmbeddingCount:           12,
-			EmbeddingStrategyVersion: "v1",
-			EmbeddingChunkerName:     "structure-aware",
-			EmbeddingChunkerVersion:  "v2",
-			EmbeddingChunkSize:       512,
-			EmbeddingChunkOverlap:    64,
-			EmbeddingProvider:        "tei",
-			EmbeddingModel:           "bge-small",
-		}
-
-		message := datasetUpdatedMessage("data_registry", dataset)
-
-		Expect(message.Message.MsgType).To(Equal(msgConn.MsgTypeDatasetUpdated))
-		Expect(message.DispatchKey).To(Equal("dataset_updated:" + datasetID.String() + ":8"))
-		var event datasetpb.DatasetUpdatedEvent
-		Expect(proto.Unmarshal(message.Message.Payload, &event)).To(Succeed())
-		Expect(event.UserId).To(Equal(userID.String()))
-		Expect(event.RawSnapshotId).To(Equal(rawSnapshotID.String()))
-		Expect(event.FeatureSnapshotId).To(Equal(featureSnapshotID.String()))
-		Expect(event.EmbeddingSnapshotId).To(Equal(embeddingSnapshotID.String()))
-		Expect(event.EmbeddingCount).To(Equal(int64(12)))
-	})
-
-	It("builds dataset-deleted messages with user ids", func() {
-		datasetID := uuid.New()
-		userID := uuid.New()
-
-		message := datasetDeletedMessage("data_registry", datasetID, userID)
-
-		Expect(message.Message.MsgType).To(Equal(msgConn.MsgTypeDatasetDeleted))
-		Expect(message.DispatchKey).To(Equal("dataset_deleted:" + datasetID.String()))
-		var event datasetpb.DatasetDeletedEvent
-		Expect(proto.Unmarshal(message.Message.Payload, &event)).To(Succeed())
-		Expect(event.DatasetId).To(Equal(datasetID.String()))
-		Expect(event.UserId).To(Equal(userID.String()))
-	})
-
-	It("omits optional source and UUID metadata when unset", func() {
-		Expect(uuidToString(uuid.Nil)).To(BeEmpty())
-		Expect(datasetSourceType(nil)).To(BeEmpty())
-		Expect(datasetSourceType(&model.Dataset{})).To(BeEmpty())
-		Expect(processingStateRankSQL("@processing_state")).To(ContainSubstring("@processing_state::text"))
 	})
 })
 

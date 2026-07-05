@@ -81,7 +81,7 @@ var _ = Describe("Data file and dataset models", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
 		Expect(file.DatasetID).NotTo(Equal(uuid.Nil))
@@ -98,7 +98,7 @@ var _ = Describe("Data file and dataset models", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 			SchemaVersion:     1,
 			SchemaMetadata:    "{}",
 		}

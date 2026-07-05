@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -181,6 +182,8 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 	})
 
 	It("streams Arrow records from Postgres, MySQL, ClickHouse, and Mongo datasources", func() {
+		requireExternalDatasourceFixtures()
+
 		postgres := execute(ctx, queryEngine, command(userID, connectorIDs["postgres"], "postgres", "SELECT actor_id, first_name FROM public.actor ORDER BY actor_id LIMIT 3", "", "", 0))
 		Expect(postgres.TotalRecords).To(Equal(int64(3)))
 		Expect(postgres.Schema.Field(0).Name).To(Equal("actor_id"))
@@ -204,6 +207,8 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 	It("returns validation errors for malformed commands and source errors for bad datasource queries", func() {
 		_, err := queryEngine.GetSchema(ctx, &flight.FlightDescriptor{Type: flight.DescriptorCMD, Cmd: []byte("{")})
 		Expect(err).To(MatchError(ContainSubstring("registry query command must be JSON")))
+
+		requireExternalDatasourceFixtures()
 
 		_, err = queryEngine.GetSchema(ctx, &flight.FlightDescriptor{Type: flight.DescriptorCMD, Cmd: command(userID, connectorIDs["clickhouse"], "clickhouse", "SELECT missing_column FROM movies LIMIT 1", "", "", 0)})
 		Expect(err).To(MatchError(ContainSubstring("query clickhouse source")))
@@ -265,7 +270,70 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 		Expect(string(argsBytes)).To(ContainSubstring("--data-root\n" + tmpDir))
 		Expect(string(argsBytes)).To(ContainSubstring("SELECT title, year FROM dataset ORDER BY year LIMIT 2"))
 	})
+
+	It("rejects truncated lakehouse IPC from the DataFusion subprocess", func() {
+		tmpDir := GinkgoT().TempDir()
+		ipcPath := filepath.Join(tmpDir, "lakehouse-truncated.arrow")
+		binaryPath := filepath.Join(tmpDir, "fake-datafusion")
+		datasetID := uuid.New()
+
+		Expect(os.WriteFile(ipcPath, buildLakehouseIntegrationIPCWithoutFooter(), 0600)).To(Succeed())
+		Expect(os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\ncat \"$FAKE_DATAFUSION_IPC\"\n"), 0700)).To(Succeed())
+		Expect(os.Setenv("FAKE_DATAFUSION_IPC", ipcPath)).To(Succeed())
+		DeferCleanup(os.Unsetenv, "FAKE_DATAFUSION_IPC")
+
+		fixture.tables[datasetID.String()] = &dataregistrypb.ReadDatasetTableResponse{
+			DatasetId:       datasetID.String(),
+			UserId:          userID.String(),
+			DatasetVersion:  8,
+			ProcessingState: "FEATURE_MATERIALIZED",
+			StorageLocation: tmpDir,
+			TableNamespace:  "features",
+			TableName:       "bad_features",
+			TableFormat:     "PARQUET",
+			CatalogProvider: "LOCAL",
+			SchemaVersion:   3,
+		}
+
+		lakehouseEngine, err := data.NewQueryEngine(infra.QueryEngineConfig{
+			Mode:               "lakehouse",
+			BinaryPath:         binaryPath,
+			RegistryAddress:    listener.Addr().String(),
+			RegistryDialMs:     1000,
+			RegistryCallMs:     5000,
+			RegistryRetryCount: 1,
+			TimeoutSec:         20,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			if closer, ok := lakehouseEngine.(interface{ Close() error }); ok {
+				Expect(closer.Close()).To(Succeed())
+			}
+		})
+
+		_, err = lakehouseEngine.Execute(ctx, &flight.Ticket{Ticket: lakehouseIntegrationCommand(userID, datasetID, "SELECT title FROM dataset LIMIT 1")})
+		Expect(err).To(MatchError(ContainSubstring("read query engine envelope footer")))
+	})
 })
+
+func requireExternalDatasourceFixtures() {
+	fixtures := []struct {
+		host string
+		port int
+	}{
+		{host: "127.0.0.1", port: 5435},
+		{host: "127.0.0.1", port: 3306},
+		{host: "127.0.0.1", port: 19000},
+		{host: "127.0.0.1", port: 27017},
+	}
+	for _, fixture := range fixtures {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(fixture.host, fmt.Sprintf("%d", fixture.port)), 250*time.Millisecond)
+		if err != nil {
+			Skip("external datasource fixtures are not running")
+		}
+		_ = conn.Close()
+	}
+}
 
 func command(userID uuid.UUID, connectorID, sourceType, sql, databaseName, collection string, limit int64) []byte {
 	payload := map[string]any{
@@ -335,6 +403,32 @@ func firstValue(result *data.QueryResult, columnName string) any {
 }
 
 func buildLakehouseIntegrationIPC() []byte {
+	return frameLakehouseIntegrationIPC(buildRawLakehouseIntegrationIPC(), 2)
+}
+
+func buildLakehouseIntegrationIPCWithoutFooter() []byte {
+	raw := buildRawLakehouseIntegrationIPC()
+	var output bytes.Buffer
+	output.WriteString("BHIPC001")
+	var rowCount [8]byte
+	binary.LittleEndian.PutUint64(rowCount[:], 2)
+	output.Write(rowCount[:])
+	output.Write(raw)
+	return output.Bytes()
+}
+
+func frameLakehouseIntegrationIPC(raw []byte, rows uint64) []byte {
+	var output bytes.Buffer
+	output.WriteString("BHIPC001")
+	var rowCount [8]byte
+	binary.LittleEndian.PutUint64(rowCount[:], rows)
+	output.Write(rowCount[:])
+	output.Write(raw)
+	output.WriteString("BHIPCEND")
+	return output.Bytes()
+}
+
+func buildRawLakehouseIntegrationIPC() []byte {
 	allocator := memory.NewGoAllocator()
 	schema := arrow.NewSchema(
 		[]arrow.Field{

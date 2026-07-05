@@ -4,12 +4,9 @@ set -euo pipefail
 
 install()
 {
-    local CURRENT_DIR
-    CURRENT_DIR="$(pwd)"
-    local SCRIPT_DIR
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local PROJECT_ROOT
-    PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+    local CURRENT_DIR="$(pwd)"
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
     if [ ! -f "$PROJECT_ROOT/shared_lib/go.mod" ]; then
         cd "$PROJECT_ROOT/shared_lib"

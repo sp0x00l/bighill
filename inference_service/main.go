@@ -30,6 +30,7 @@ import (
 	messagingConn "lib/shared_lib/messaging"
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
+	shareduow "lib/shared_lib/uow"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -169,9 +170,10 @@ func main() {
 	modelRepository := inferencedb.NewInferenceModelRepository(database)
 	datasetRepository := inferencedb.NewInferenceDatasetRepository(database)
 	requestRepository := inferencedb.NewInferenceRequestRepository(database)
-	feedbackRepository := inferencedb.NewInferenceFeedbackRepository(database,
-		inferencedb.WithPreferenceDatasetOutbox(orderedOutbox, cfg.Topics.PreferenceDataset),
-		inferencedb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	feedbackRepository := inferencedb.NewInferenceFeedbackRepository(database)
+	inferenceUnitOfWork := shareduow.New(database.Pool,
+		shareduow.WithTransactionalOutbox(orderedOutbox),
+		shareduow.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
 	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 	retrievalClient, err := inferencegrpc.NewFeatureMaterializerClient(cancelCtx, cfg.FeatureMaterializer)
@@ -197,10 +199,12 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("invalid prompt strategy configuration")
 	}
+	preferenceEventBuilder := inferencemessaging.NewPreferenceDatasetEventBuilder(cfg.Topics.PreferenceDataset)
 	inferenceOptions := []app.InferenceOption{
 		app.WithInferenceDatasetRepository(datasetRepository),
 		app.WithInferenceRequestRepository(requestRepository),
 		app.WithInferenceFeedbackRepository(feedbackRepository),
+		app.WithInferenceUnitOfWork(inferenceUnitOfWork, preferenceEventBuilder),
 		app.WithRetrievalClient(retrievalClient),
 		app.WithGenerationAdapter(generator),
 		app.WithPromptStrategy(promptStrategy),
@@ -384,7 +388,7 @@ func newGenerationAdapter(cfg generationConfig) (app.GenerationAdapter, error) {
 	case "", "deterministic":
 		return generation.NewDeterministicGenerator(), nil
 	case "ollama", "vllm":
-		return generation.NewHTTPGenerator(strings.ToLower(strings.TrimSpace(cfg.Provider)), cfg.Endpoint, cfg.Model, cfg.RequestTimeout)
+		return generation.NewHTTPGenerator(strings.ToLower(strings.TrimSpace(cfg.Provider)), cfg.Endpoint, cfg.Model, cfg.RequestTimeout), nil
 	default:
 		return nil, fmt.Errorf("unsupported generation provider %q", cfg.Provider)
 	}

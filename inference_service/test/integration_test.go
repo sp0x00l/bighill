@@ -25,6 +25,7 @@ import (
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	sharedmessaging "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -74,6 +75,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			app.WithInferenceDatasetRepository(datasets),
 			app.WithInferenceRequestRepository(requests),
 			app.WithInferenceFeedbackRepository(feedbacks),
+			app.WithInferenceUnitOfWork(shareduow.New(database.Pool), inferencemessaging.NewPreferenceDatasetEventBuilder("inference")),
 			app.WithRetrievalClient(&integrationRetrievalClient{}),
 			app.WithGenerationAdapter(generation.NewDeterministicGenerator()),
 			app.WithPromptStrategy(promptStrategy),
@@ -109,21 +111,27 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			Brokers:         brokers,
 			GroupID:         "inference-integration-service-" + suffix,
 			DlqURL:          "http://localhost:4566/inference-dev-env-queue/",
-			AutoOffsetReset: "earliest",
+			AutoOffsetReset: "latest",
 		}, runCancel)
 		defer func() {
 			_ = serviceMessenger.Close(runCtx)
 		}()
 		serviceSubscriber, err := serviceMessenger.Subscriber(runCtx)
 		Expect(err).NotTo(HaveOccurred())
-		publisher, err := serviceMessenger.Publisher(runCtx)
+		publisher, err := sharedmessaging.NewPublisher(brokers)
 		Expect(err).NotTo(HaveOccurred())
+		defer publisher.Close()
 
 		modelUpdatedSubscriber := inferencemessaging.NewModelUpdatedSubscriber(serviceSubscriber, modelsUse, topics)
 		go func() {
 			_ = modelUpdatedSubscriber.Start(runCtx)
 		}()
-		time.Sleep(750 * time.Millisecond)
+		Eventually(func(g Gomega) {
+			g.Expect(sharedmessaging.CheckSubscriberHealth(runCtx, serviceSubscriber, sharedmessaging.SubscriberHealthCheckConfig{
+				RequireAssignment: true,
+				MaxPollSilence:    10 * time.Second,
+			})).To(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).Should(Succeed())
 
 		modelID := uuid.New()
 		userID := uuid.New()
@@ -157,7 +165,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			record, err := models.ReadByID(ctx, userID, modelID)
+			record, err := models.ReadByID(ctxutil.WithTenantID(ctx, userID), userID, modelID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(record.TrainingRunID).To(Equal(trainingRunID))
 			g.Expect(record.DatasetID).To(Equal(datasetID))
@@ -181,28 +189,34 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			Brokers:         brokers,
 			GroupID:         "inference-integration-dataset-service-" + suffix,
 			DlqURL:          "http://localhost:4566/inference-dev-env-queue/",
-			AutoOffsetReset: "earliest",
+			AutoOffsetReset: "latest",
 		}, runCancel)
 		defer func() {
 			_ = serviceMessenger.Close(runCtx)
 		}()
 		serviceSubscriber, err := serviceMessenger.Subscriber(runCtx)
 		Expect(err).NotTo(HaveOccurred())
-		publisher, err := serviceMessenger.Publisher(runCtx)
+		publisher, err := sharedmessaging.NewPublisher(brokers)
 		Expect(err).NotTo(HaveOccurred())
+		defer publisher.Close()
 
 		inferenceSubscriber := inferencemessaging.NewModelUpdatedSubscriber(serviceSubscriber, modelsUse, topics)
 		go func() {
 			_ = inferenceSubscriber.Start(runCtx)
 		}()
-		time.Sleep(750 * time.Millisecond)
+		Eventually(func(g Gomega) {
+			g.Expect(sharedmessaging.CheckSubscriberHealth(runCtx, serviceSubscriber, sharedmessaging.SubscriberHealthCheckConfig{
+				RequireAssignment: true,
+				MaxPollSilence:    10 * time.Second,
+			})).To(Succeed())
+		}, 10*time.Second, 250*time.Millisecond).Should(Succeed())
 
 		datasetID := uuid.New()
 		userID := uuid.New()
 		modelID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		Expect(upsertInferenceTenant(ctx, database, userID)).To(Succeed())
-		_, err = models.UpsertModel(ctx, &model.InferenceModel{
+		_, err = models.UpsertModel(ctxutil.WithTenantID(ctx, userID), &model.InferenceModel{
 			ModelID:           modelID,
 			UserID:            userID,
 			TrainingRunID:     uuid.New(),
@@ -258,7 +272,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			record, err := datasets.ReadDataset(ctx, userID, datasetID)
+			record, err := datasets.ReadDataset(ctxutil.WithTenantID(ctx, userID), userID, datasetID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(record.UserID).To(Equal(userID))
 			g.Expect(record.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
@@ -307,7 +321,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(feedback.GetFeedbackId()).To(Equal(feedbackID.String()))
 		var label string
 		var rejectedAnswer string
-		Expect(database.Pool.QueryRow(ctx, `
+		Expect(database.Pool.QueryRow(ctxutil.WithTenantID(ctx, userID), `
 			SELECT feedback_label, rejected_answer
 			FROM `+database.Name+`.preference_examples
 			WHERE feedback_id = $1
@@ -323,7 +337,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		embeddingSnapshotID := uuid.New()
 		requestID := uuid.New()
 		Expect(upsertInferenceTenant(ctx, database, userID)).To(Succeed())
-		_, err := models.UpsertModel(ctx, &model.InferenceModel{
+		_, err := models.UpsertModel(ctxutil.WithTenantID(ctx, userID), &model.InferenceModel{
 			ModelID:           modelID,
 			UserID:            userID,
 			TrainingRunID:     uuid.New(),
@@ -346,7 +360,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			Status:            model.ModelStatusReady,
 		}, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
-		_, err = datasets.UpsertDataset(ctx, &model.InferenceDataset{
+		_, err = datasets.UpsertDataset(ctxutil.WithTenantID(ctx, userID), &model.InferenceDataset{
 			DatasetID:                datasetID,
 			UserID:                   userID,
 			DatasetVersion:           1,
@@ -395,7 +409,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(response.Contexts[0].SourceText).To(Equal("highest relevance context"))
 		Expect(response.Answer).To(ContainSubstring("highest relevance context"))
 		var auditedContexts string
-		Expect(database.Pool.QueryRow(ctx, `
+		Expect(database.Pool.QueryRow(ctxutil.WithTenantID(ctx, userID), `
 			SELECT retrieved_contexts::text
 			FROM `+database.Name+`.inference_requests
 			WHERE request_id = $1

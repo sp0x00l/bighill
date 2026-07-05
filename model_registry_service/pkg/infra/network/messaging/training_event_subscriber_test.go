@@ -26,6 +26,7 @@ type recordingModelRegistryUsecase struct {
 	completedModel    *model.Model
 	failedModel       *model.Model
 	ingestedModel     *model.Model
+	promotionReport   model.PromotionReportResult
 	idempotencyKey    uuid.UUID
 	completedResponse *model.Model
 	failedResponse    *model.Model
@@ -76,8 +77,21 @@ func (r *recordingModelRegistryUsecase) RecordModelServingStatus(context.Context
 	return nil, nil
 }
 
+func (r *recordingModelRegistryUsecase) RecordPromotionReportReady(_ context.Context, report model.PromotionReportResult, idempotencyKey uuid.UUID) (*model.Model, error) {
+	r.promotionReport = report
+	r.idempotencyKey = idempotencyKey
+	return &model.Model{ModelID: report.ModelID}, r.err
+}
+
+func (r *recordingModelRegistryUsecase) PromoteCandidate(_ context.Context, modelID uuid.UUID) (*model.Model, error) {
+	if r.completedResponse != nil {
+		return r.completedResponse, r.err
+	}
+	return &model.Model{ModelID: modelID}, r.err
+}
+
 var _ = Describe("Training event listeners", func() {
-	It("maps completed training events into ready model registrations", func() {
+	It("maps completed training events into candidates and requests promotion", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
 		trainingRunID := uuid.New()
@@ -115,6 +129,32 @@ var _ = Describe("Training event listeners", func() {
 		Expect(uc.completedModel.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/run"))
 		Expect(uc.completedModel.AdapterURI).To(Equal("s3://local-dev-bucket/models/run"))
 		Expect(uc.completedModel.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
+	})
+
+	It("maps promotion report ready events into promotion decisions", func() {
+		modelID := uuid.New()
+		userID := uuid.New()
+		trainingRunID := uuid.New()
+		uc := &recordingModelRegistryUsecase{}
+		listener := registrymessaging.NewPromotionReportReadyEventListener(uc)
+
+		err := listener.Handle(context.Background(), modelID, &trainingpb.PromotionReportReadyEvent{
+			UserId:             userID.String(),
+			ModelId:            modelID.String(),
+			TrainingRunId:      trainingRunID.String(),
+			PromotionReportUri: "s3://local-dev-bucket/promotion/model.json",
+			DeepchecksPassed:   true,
+			EvidentlyPassed:    true,
+			PromotionDeltas:    `{"faithfulness":0.2}`,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.idempotencyKey).To(Equal(modelID))
+		Expect(uc.promotionReport.UserID).To(Equal(userID))
+		Expect(uc.promotionReport.ModelID).To(Equal(modelID))
+		Expect(uc.promotionReport.TrainingRunID).To(Equal(trainingRunID))
+		Expect(uc.promotionReport.PromotionReportURI).To(Equal("s3://local-dev-bucket/promotion/model.json"))
+		Expect(uc.promotionReport.Deltas).To(HaveKeyWithValue("faithfulness", 0.2))
 	})
 
 	It("maps failed training events into failed model registrations", func() {

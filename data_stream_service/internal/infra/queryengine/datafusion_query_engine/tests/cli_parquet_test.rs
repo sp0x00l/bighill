@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::Arc;
@@ -10,6 +10,9 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_writer::ArrowWriter;
+
+const IPC_HEADER: &[u8; 8] = b"BHIPC001";
+const IPC_FOOTER: &[u8; 8] = b"BHIPCEND";
 
 #[test]
 fn queries_parquet_and_emits_expected_arrow_ipc_rows() -> Result<(), Box<dyn Error>> {
@@ -345,7 +348,19 @@ fn assert_stderr_contains(output: &Output, expected: &str) {
 fn read_feature_value_ipc(
     bytes: Vec<u8>,
 ) -> Result<(Vec<String>, Vec<(String, i64)>), Box<dyn Error>> {
-    let mut reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    let mut cursor = Cursor::new(bytes);
+    let mut header = [0_u8; 8];
+    cursor.read_exact(&mut header)?;
+    assert_eq!(
+        &header, IPC_HEADER,
+        "query stdout must start with IPC header"
+    );
+
+    let mut row_count = [0_u8; 8];
+    cursor.read_exact(&mut row_count)?;
+    let expected_rows = u64::from_le_bytes(row_count);
+
+    let mut reader = StreamReader::try_new(&mut cursor, None)?;
     let fields = reader
         .schema()
         .fields()
@@ -370,6 +385,11 @@ fn read_feature_value_ipc(
             ));
         }
     }
+
+    let mut footer = [0_u8; 8];
+    cursor.read_exact(&mut footer)?;
+    assert_eq!(&footer, IPC_FOOTER, "query stdout must end with IPC footer");
+    assert_eq!(rows.len() as u64, expected_rows);
 
     Ok((fields, rows))
 }

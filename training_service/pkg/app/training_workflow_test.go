@@ -70,6 +70,10 @@ var _ = Describe("TrainModelWorkflow", func() {
 			JudgeProvider:        "openai",
 			JudgeModel:           "local-judge",
 			JudgeTemplateVersion: "judge-v1",
+			DeepchecksPassed:     true,
+			DeepchecksReportURI:  "s3://local-dev-bucket/evaluations/deepchecks.html",
+			EvidentlyPassed:      true,
+			EvidentlyReportURI:   "s3://local-dev-bucket/evaluations/evidently.html",
 		}
 
 		env.RegisterActivityWithOptions(func(model.TrainingRunRequest) (*model.PreparedTrainingDataset, error) {
@@ -105,7 +109,7 @@ var _ = Describe("TrainModelWorkflow", func() {
 		Expect(result.DatasetVersion).To(Equal("3"))
 		Expect(result.ModelURI).To(Equal(artifact.ModelURI))
 		Expect(result.ReportURI).To(Equal(report.ReportURI))
-		Expect(result.MetricsMetadata).To(MatchJSON(`{"passed":true,"metrics":{"faithfulness":0.91},"thresholds":{"faithfulness":0.8},"report_uri":"s3://local-dev-bucket/evaluations/training-run-1.json","evaluator_name":"ragas","evaluator_version":"ragas-v1","metric_suite":"rag","eval_dataset_uri":"s3://evals/run-1.jsonl","eval_dataset_mode":"labeled","judge_provider":"openai","judge_model":"local-judge","judge_template_version":"judge-v1"}`))
+		Expect(result.MetricsMetadata).To(MatchJSON(`{"passed":true,"metrics":{"faithfulness":0.91},"thresholds":{"faithfulness":0.8},"report_uri":"s3://local-dev-bucket/evaluations/training-run-1.json","evaluator_name":"ragas","evaluator_version":"ragas-v1","metric_suite":"rag","eval_dataset_uri":"s3://evals/run-1.jsonl","eval_dataset_mode":"labeled","judge_provider":"openai","judge_model":"local-judge","judge_template_version":"judge-v1","deepchecks_passed":true,"deepchecks_report_uri":"s3://local-dev-bucket/evaluations/deepchecks.html","evidently_passed":true,"evidently_report_uri":"s3://local-dev-bucket/evaluations/evidently.html"}`))
 		Expect(evaluationInfo.ActivityID).To(Equal("evaluate:training-run-1"))
 		Expect(evaluationInfo.StartToCloseTimeout).To(Equal(app.DefaultEvaluateTrainingActivityTimeout))
 		Expect(evaluationInfo.ScheduleToCloseTimeout).To(Equal(app.DefaultEvaluateTrainingActivityTimeout))
@@ -221,6 +225,7 @@ var _ = Describe("TrainModelWorkflow", func() {
 			URL:                  "http://ray.local",
 			TrainingEntrypoint:   "python -m training_jobs.train",
 			EvaluationEntrypoint: "python -m training_jobs.evaluate",
+			PromotionEntrypoint:  "python -m training_jobs.promotion_report",
 			RequestTimeout:       time.Second,
 			PollInterval:         time.Millisecond,
 		}, reader, &http.Client{Transport: workflowRoundTripFunc(func(req *http.Request) (*http.Response, error) {

@@ -3,6 +3,7 @@ package data_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 
@@ -60,9 +61,98 @@ var _ = Describe("DataFusion query engine adapter", func() {
 		Expect(engine).To(BeNil())
 		Expect(err).To(MatchError(ContainSubstring("unsupported query engine mode")))
 	})
+
+	It("rejects query results without the IPC footer", func() {
+		tmpDir := GinkgoT().TempDir()
+		ipcPath := filepath.Join(tmpDir, "result.arrow")
+		binaryPath := filepath.Join(tmpDir, "fake-datafusion")
+
+		Expect(os.WriteFile(ipcPath, buildArrowIPCWithoutFooter(), 0600)).To(Succeed())
+		Expect(os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\ncat \"$FAKE_DATAFUSION_IPC\"\n"), 0700)).To(Succeed())
+		Expect(os.Setenv("FAKE_DATAFUSION_IPC", ipcPath)).To(Succeed())
+		DeferCleanup(os.Unsetenv, "FAKE_DATAFUSION_IPC")
+
+		engine, err := data.NewDataFusionQueryEngine(infra.QueryEngineConfig{
+			BinaryPath: binaryPath,
+			DataRoot:   tmpDir,
+			TimeoutSec: 5,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = engine.Execute(context.Background(), &flight.Ticket{Ticket: []byte("SELECT * FROM dataset")})
+		Expect(err).To(MatchError(ContainSubstring("read query engine envelope footer")))
+	})
+
+	It("rejects query results when the decoded row count differs from the envelope", func() {
+		tmpDir := GinkgoT().TempDir()
+		ipcPath := filepath.Join(tmpDir, "result.arrow")
+		binaryPath := filepath.Join(tmpDir, "fake-datafusion")
+
+		Expect(os.WriteFile(ipcPath, frameArrowIPC(buildRawArrowIPC(), 3), 0600)).To(Succeed())
+		Expect(os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\ncat \"$FAKE_DATAFUSION_IPC\"\n"), 0700)).To(Succeed())
+		Expect(os.Setenv("FAKE_DATAFUSION_IPC", ipcPath)).To(Succeed())
+		DeferCleanup(os.Unsetenv, "FAKE_DATAFUSION_IPC")
+
+		engine, err := data.NewDataFusionQueryEngine(infra.QueryEngineConfig{
+			BinaryPath: binaryPath,
+			DataRoot:   tmpDir,
+			TimeoutSec: 5,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = engine.Execute(context.Background(), &flight.Ticket{Ticket: []byte("SELECT * FROM dataset")})
+		Expect(err).To(MatchError(ContainSubstring("query engine row count mismatch")))
+	})
+
+	It("rejects query results when stdout contains non-data bytes before the envelope", func() {
+		tmpDir := GinkgoT().TempDir()
+		ipcPath := filepath.Join(tmpDir, "result.arrow")
+		binaryPath := filepath.Join(tmpDir, "fake-datafusion")
+
+		Expect(os.WriteFile(ipcPath, buildArrowIPC(), 0600)).To(Succeed())
+		Expect(os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\nprintf 'debug log\\n'\ncat \"$FAKE_DATAFUSION_IPC\"\n"), 0700)).To(Succeed())
+		Expect(os.Setenv("FAKE_DATAFUSION_IPC", ipcPath)).To(Succeed())
+		DeferCleanup(os.Unsetenv, "FAKE_DATAFUSION_IPC")
+
+		engine, err := data.NewDataFusionQueryEngine(infra.QueryEngineConfig{
+			BinaryPath: binaryPath,
+			DataRoot:   tmpDir,
+			TimeoutSec: 5,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = engine.Execute(context.Background(), &flight.Ticket{Ticket: []byte("SELECT * FROM dataset")})
+		Expect(err).To(MatchError(ContainSubstring("invalid magic")))
+	})
 })
 
 func buildArrowIPC() []byte {
+	return frameArrowIPC(buildRawArrowIPC(), 2)
+}
+
+func buildArrowIPCWithoutFooter() []byte {
+	raw := buildRawArrowIPC()
+	var output bytes.Buffer
+	output.WriteString("BHIPC001")
+	var rowCount [8]byte
+	binary.LittleEndian.PutUint64(rowCount[:], 2)
+	output.Write(rowCount[:])
+	output.Write(raw)
+	return output.Bytes()
+}
+
+func frameArrowIPC(raw []byte, rows uint64) []byte {
+	var output bytes.Buffer
+	output.WriteString("BHIPC001")
+	var rowCount [8]byte
+	binary.LittleEndian.PutUint64(rowCount[:], rows)
+	output.Write(rowCount[:])
+	output.Write(raw)
+	output.WriteString("BHIPCEND")
+	return output.Bytes()
+}
+
+func buildRawArrowIPC() []byte {
 	allocator := memory.NewGoAllocator()
 	schema := arrow.NewSchema(
 		[]arrow.Field{

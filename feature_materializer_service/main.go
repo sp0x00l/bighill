@@ -20,6 +20,7 @@ import (
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	featuredb "feature_materializer_service/pkg/infra/repo/db"
 	featuretemporal "feature_materializer_service/pkg/infra/temporalworker"
+	coreBucket "lib/shared_lib/bucket"
 	coreDB "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
@@ -27,6 +28,7 @@ import (
 	messagingConn "lib/shared_lib/messaging"
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
+	shareduow "lib/shared_lib/uow"
 
 	log "github.com/sirupsen/logrus"
 	"go.temporal.io/sdk/client"
@@ -201,9 +203,10 @@ func main() {
 	}
 	defer temporalClient.Close()
 
-	snapshotRepo := featuredb.NewSnapshotRepository(database,
-		featuredb.WithTransactionalOutbox(orderedOutbox, cfg.PublishTopics.FeatureMaterializer),
-		featuredb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	snapshotRepo := featuredb.NewSnapshotRepository(database)
+	snapshotUnitOfWork := shareduow.New(database.Pool,
+		shareduow.WithTransactionalOutbox(orderedOutbox),
+		shareduow.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
 	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 	artifactStore, err := materialization.NewObjectArtifactStore(cancelCtx, cfg.ArtifactBucket.Name, cfg.ArtifactBucket.Region, cfg.ArtifactBucket.UploadPartSize)
@@ -249,14 +252,15 @@ func main() {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create embedding provider")
 	}
 	embeddingChunker := materialization.NewTokenWindowChunker(embeddingStrategy)
-	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepo, embeddingProvider, embeddingChunker, embeddingStrategy, "pgvector", cfg.Embedding.MaxRows)
+	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, embeddingProvider, embeddingChunker, embeddingStrategy, "pgvector", cfg.Embedding.MaxRows)
 	rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(dataStreamRawWriter, rawWriter)
 	featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 	embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
+	snapshotEventBuilder := featuremessaging.NewSnapshotEventBuilder(cfg.PublishTopics)
 
-	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, rawDispatcher)
-	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotRepo, featureDispatcher)
-	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotRepo, embeddingDispatcher)
+	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, rawDispatcher)
+	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, snapshotRepo, featureDispatcher)
+	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, snapshotRepo, embeddingDispatcher)
 	embeddingSearchUsecase := usecase.NewEmbeddingSearchUsecase(snapshotRepo, newQueryEmbeddingProviderFactory(cfg.Embedding))
 	activities := featuretemporal.NewMaterializationActivities(rawSnapshotUsecase, featureSnapshotUsecase, embeddingUsecase)
 	materializationWorker := featuretemporal.NewMaterializationWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
@@ -354,6 +358,10 @@ func readMaterializerConfig() materializerConfig {
 		env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_DB_MAX_CONNECTIONS", "20"),
 	)
 	uploadPartSizeMB := env.WithDefaultInt64("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_UPLOAD_PART_SIZE_MB", "10")
+	defaultArtifactBucketRegion := "eu-west-1"
+	if env.IsDevEnv() {
+		defaultArtifactBucketRegion = coreBucket.LocalDevS3Region
+	}
 	return materializerConfig{
 		ServiceName:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_NAME", "feature-materializer-service"),
 		DBName:             dbName,
@@ -372,7 +380,7 @@ func readMaterializerConfig() materializerConfig {
 		},
 		ArtifactBucket: artifactBucketConfig{
 			Name:           env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME", "local-dev-bucket"),
-			Region:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION", "eu-west-1"),
+			Region:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION", defaultArtifactBucketRegion),
 			UploadPartSize: uploadPartSizeMB * 1024 * 1024,
 		},
 		Embedding: embeddingConfig{

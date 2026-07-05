@@ -1,0 +1,117 @@
+package messaging
+
+import (
+	"feature_materializer_service/pkg/domain/model"
+
+	featurepb "lib/data_contracts_lib/feature_materializer"
+	msgConn "lib/shared_lib/messaging"
+
+	log "github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
+)
+
+type snapshotEventBuilder struct {
+	topics MaterializationTopics
+}
+
+func NewSnapshotEventBuilder(topics MaterializationTopics) *snapshotEventBuilder {
+	log.Trace("NewSnapshotEventBuilder")
+
+	return &snapshotEventBuilder{topics: topics}
+}
+
+func (b *snapshotEventBuilder) RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) msgConn.OutboundMessage {
+	log.Trace("snapshotEventBuilder RawSnapshotReadyMessage")
+
+	payload := marshalSnapshotEvent(&featurepb.RawSnapshotReadyEvent{
+		RawSnapshotId:     rawSnapshot.RawSnapshotID.String(),
+		DatasetId:         rawSnapshot.DatasetID.String(),
+		UserId:            rawSnapshot.UserID.String(),
+		StorageLocation:   rawSnapshot.StorageLocation,
+		TableNamespace:    rawSnapshot.TableNamespace,
+		TableName:         rawSnapshot.TableName,
+		TableFormat:       rawSnapshot.TableFormat,
+		CatalogProvider:   rawSnapshot.CatalogProvider,
+		SchemaVersion:     int32(rawSnapshot.SchemaVersion),
+		SchemaMetadata:    rawSnapshot.SchemaMetadata,
+		ProcessingProfile: rawSnapshot.ProcessingProfile.String(),
+	})
+	return msgConn.OutboundMessage{
+		Topic: b.topics.FeatureMaterializer,
+		Message: msgConn.Message{
+			ResourceKey: rawSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeRawSnapshotReady,
+			Payload:     payload,
+		},
+		DispatchKey: "raw_snapshot_ready:" + rawSnapshot.RawSnapshotID.String(),
+	}
+}
+
+func (b *snapshotEventBuilder) FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) msgConn.OutboundMessage {
+	log.Trace("snapshotEventBuilder FeatureSnapshotReadyMessage")
+
+	payload := marshalSnapshotEvent(&featurepb.FeatureSnapshotReadyEvent{
+		FeatureSnapshotId: featureSnapshot.FeatureSnapshotID.String(),
+		RawSnapshotId:     featureSnapshot.RawSnapshotID.String(),
+		DatasetId:         featureSnapshot.DatasetID.String(),
+		UserId:            featureSnapshot.UserID.String(),
+		StorageLocation:   featureSnapshot.StorageLocation,
+		TableNamespace:    featureSnapshot.TableNamespace,
+		TableName:         featureSnapshot.TableName,
+		TableFormat:       featureSnapshot.TableFormat,
+		CatalogProvider:   featureSnapshot.CatalogProvider,
+		SchemaVersion:     int32(featureSnapshot.SchemaVersion),
+		SchemaMetadata:    featureSnapshot.SchemaMetadata,
+		ProcessingProfile: featureSnapshot.ProcessingProfile.String(),
+	})
+	return msgConn.OutboundMessage{
+		Topic: b.topics.FeatureMaterializer,
+		Message: msgConn.Message{
+			ResourceKey: featureSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeFeatureSnapshotReady,
+			Payload:     payload,
+		},
+		DispatchKey: "feature_snapshot_ready:" + featureSnapshot.FeatureSnapshotID.String(),
+	}
+}
+
+func (b *snapshotEventBuilder) EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) msgConn.OutboundMessage {
+	log.Trace("snapshotEventBuilder EmbeddingSnapshotReadyMessage")
+
+	payload := marshalSnapshotEvent(&featurepb.EmbeddingSnapshotReadyEvent{
+		EmbeddingSnapshotId: embeddingSnapshot.EmbeddingSnapshotID.String(),
+		FeatureSnapshotId:   embeddingSnapshot.FeatureSnapshotID.String(),
+		DatasetId:           embeddingSnapshot.DatasetID.String(),
+		UserId:              embeddingSnapshot.UserID.String(),
+		VectorStore:         embeddingSnapshot.VectorStore,
+		CollectionName:      embeddingSnapshot.CollectionName,
+		EmbeddingDimensions: int32(embeddingSnapshot.EmbeddingDimensions),
+		EmbeddingCount:      embeddingSnapshot.EmbeddingCount,
+		StrategyVersion:     embeddingSnapshot.StrategyVersion,
+		ChunkerName:         embeddingSnapshot.ChunkerName,
+		ChunkerVersion:      embeddingSnapshot.ChunkerVersion,
+		ChunkSize:           int32(embeddingSnapshot.ChunkSize),
+		ChunkOverlap:        int32(embeddingSnapshot.ChunkOverlap),
+		EmbeddingProvider:   embeddingSnapshot.EmbeddingProvider,
+		EmbeddingModel:      embeddingSnapshot.EmbeddingModel,
+	})
+	return msgConn.OutboundMessage{
+		Topic: b.topics.FeatureMaterializer,
+		Message: msgConn.Message{
+			ResourceKey: embeddingSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeEmbeddingSnapshotReady,
+			Payload:     payload,
+		},
+		DispatchKey: "embedding_snapshot_ready:" + embeddingSnapshot.EmbeddingSnapshotID.String(),
+	}
+}
+
+func marshalSnapshotEvent(payload proto.Message) []byte {
+	log.Trace("marshalSnapshotEvent")
+
+	out, err := proto.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}

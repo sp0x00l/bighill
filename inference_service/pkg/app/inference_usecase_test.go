@@ -9,10 +9,16 @@ import (
 	"inference_service/pkg/app"
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
+	inferencemessaging "inference_service/pkg/infra/network/messaging"
+	inferencepb "lib/data_contracts_lib/inference"
+	msgConn "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestApp(t *testing.T) {
@@ -166,7 +172,7 @@ type inferenceFeedbackRepositoryStub struct {
 	err               error
 }
 
-func (s *inferenceFeedbackRepositoryStub) RecordFeedback(_ context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
+func (s *inferenceFeedbackRepositoryStub) RecordFeedback(_ context.Context, _ pgx.Tx, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
 	s.feedback = feedback
 	s.idempotencyKey = idempotencyKey
 	return feedback, s.err
@@ -180,10 +186,29 @@ func (s *inferenceFeedbackRepositoryStub) ReadPreferenceDataset(_ context.Contex
 	return &model.PreferenceDataset{RequestID: request.RequestID, UserID: request.UserID, DatasetID: request.DatasetID, ModelID: request.ModelID}, s.err
 }
 
-func (s *inferenceFeedbackRepositoryStub) RecordPreferenceDatasetSnapshot(_ context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+func (s *inferenceFeedbackRepositoryStub) RecordPreferenceDatasetSnapshot(_ context.Context, _ pgx.Tx, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
 	s.recordedSnapshot = dataset
 	s.snapshotRequest = request
 	return dataset, s.err
+}
+
+type inferenceUnitOfWorkStub struct {
+	messages []msgConn.OutboundMessage
+	err      error
+}
+
+func preferenceEventBuilder() app.PreferenceDatasetEventBuilder {
+	return inferencemessaging.NewPreferenceDatasetEventBuilder("inference")
+}
+
+func (s *inferenceUnitOfWorkStub) Do(ctx context.Context, fn shareduow.TxFunc) error {
+	if s.err != nil {
+		return s.err
+	}
+	return fn(ctx, nil, func(msg msgConn.OutboundMessage) error {
+		s.messages = append(s.messages, msg)
+		return nil
+	})
 }
 
 type preferenceDatasetWriterStub struct {
@@ -257,6 +282,7 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
 		)
 		idempotencyKey := uuid.New()
 		feedback := &model.InferenceFeedback{
@@ -288,6 +314,7 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 
@@ -332,6 +359,7 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 		dataset, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
@@ -379,9 +407,11 @@ var _ = Describe("InferenceUsecase", func() {
 			}},
 		}}
 		writer := &preferenceDatasetWriterStub{}
+		unitOfWork := &inferenceUnitOfWorkStub{}
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithInferenceUnitOfWork(unitOfWork, preferenceEventBuilder()),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 
@@ -405,6 +435,14 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(feedbackRepository.snapshotRequest.MinExamples).To(Equal(1))
 		Expect(feedbackRepository.snapshotRequest.UserID).To(Equal(userID))
 		Expect(feedbackRepository.snapshotRequest.Limit).To(Equal(100))
+		Expect(unitOfWork.messages).To(HaveLen(1))
+		Expect(unitOfWork.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypePreferenceDatasetReady))
+		var event inferencepb.PreferenceDatasetReadyEvent
+		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
+		Expect(event.PreferenceDatasetId).To(Equal(feedbackRepository.recordedSnapshot.PreferenceDatasetID.String()))
+		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OutputUri).To(Equal(feedbackRepository.recordedSnapshot.OutputURI))
+		Expect(event.ParentAdapterUri).To(Equal("s3://models/parent"))
 	})
 
 	It("does not write a preference dataset before the configured threshold is met", func() {
@@ -421,6 +459,7 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 
@@ -466,6 +505,7 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 

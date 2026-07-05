@@ -19,11 +19,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type ArtifactStore interface {
-	Read(ctx context.Context, storageLocation string) ([]byte, error)
-	Write(ctx context.Context, key, contentType string, body []byte) (string, error)
-}
-
 type s3Downloader interface {
 	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }

@@ -27,6 +27,27 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const (
+	flightCommandUserID            = "userId"
+	flightCommandSourceType        = "sourceType"
+	flightCommandSourceConnectorID = "sourceConnectorId"
+	flightCommandSQL               = "sql"
+	flightCommandDatabase          = "database"
+	flightCommandCollection        = "collection"
+	flightAuthTokenHeader          = "auth-token-bin"
+)
+
+const (
+	dataStreamSourceFormatKey      = "source_format"
+	dataStreamSourceFormatValue    = "data_stream"
+	dataStreamSourceTypeKey        = "source_type"
+	dataStreamSourceConnectorIDKey = "source_connector_id"
+	dataStreamSourceDatabaseKey    = "source_database"
+	dataStreamSourceCollectionKey  = "source_collection"
+	dataStreamSourceQueryKey       = "source_query"
+	dataStreamSourceReadAtKey      = "source_read_at"
+)
+
 type DataStreamReadRequest struct {
 	UserID            string
 	SourceType        string
@@ -96,12 +117,12 @@ func (r *FlightDataStreamReader) ReadParquet(ctx context.Context, request DataSt
 	defer cancel()
 
 	command, err := json.Marshal(map[string]any{
-		"userId":            strings.TrimSpace(request.UserID),
-		"sourceType":        strings.ToLower(strings.TrimSpace(request.SourceType)),
-		"sourceConnectorId": strings.TrimSpace(request.SourceConnectorID),
-		"sql":               strings.TrimSpace(request.SQL),
-		"database":          strings.TrimSpace(request.Database),
-		"collection":        strings.TrimSpace(request.Collection),
+		flightCommandUserID:            strings.TrimSpace(request.UserID),
+		flightCommandSourceType:        strings.ToLower(strings.TrimSpace(request.SourceType)),
+		flightCommandSourceConnectorID: strings.TrimSpace(request.SourceConnectorID),
+		flightCommandSQL:               strings.TrimSpace(request.SQL),
+		flightCommandDatabase:          strings.TrimSpace(request.Database),
+		flightCommandCollection:        strings.TrimSpace(request.Collection),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: marshal data stream command: %w", domain.ErrRawSnapshotMaterialize, err)
@@ -119,7 +140,7 @@ func (r *FlightDataStreamReader) ReadParquet(ctx context.Context, request DataSt
 	defer client.Close()
 
 	if r.authToken != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, "auth-token-bin", r.authToken)
+		ctx = metadata.AppendToOutgoingContext(ctx, flightAuthTokenHeader, r.authToken)
 	}
 
 	info, err := client.GetFlightInfo(ctx, &flight.FlightDescriptor{
@@ -172,13 +193,13 @@ func (r *FlightDataStreamReader) ReadParquet(ctx context.Context, request DataSt
 	}
 
 	schemaMetadata, err := schemaMetadataJSON(reader.Schema(), rows, map[string]any{
-		"source_format":       "data_stream",
-		"source_type":         strings.ToLower(strings.TrimSpace(request.SourceType)),
-		"source_connector_id": strings.TrimSpace(request.SourceConnectorID),
-		"source_database":     strings.TrimSpace(request.Database),
-		"source_collection":   strings.TrimSpace(request.Collection),
-		"source_query":        strings.TrimSpace(request.SQL),
-		"source_read_at":      time.Now().UTC().Format(time.RFC3339Nano),
+		dataStreamSourceFormatKey:      dataStreamSourceFormatValue,
+		dataStreamSourceTypeKey:        strings.ToLower(strings.TrimSpace(request.SourceType)),
+		dataStreamSourceConnectorIDKey: strings.TrimSpace(request.SourceConnectorID),
+		dataStreamSourceDatabaseKey:    strings.TrimSpace(request.Database),
+		dataStreamSourceCollectionKey:  strings.TrimSpace(request.Collection),
+		dataStreamSourceQueryKey:       strings.TrimSpace(request.SQL),
+		dataStreamSourceReadAtKey:      time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		return nil, err

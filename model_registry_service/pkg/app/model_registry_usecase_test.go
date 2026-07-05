@@ -2,13 +2,20 @@ package app_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	"model_registry_service/pkg/app"
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
+	registrymessaging "model_registry_service/pkg/infra/network/messaging"
+
+	msgConn "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -19,19 +26,24 @@ func TestApp(t *testing.T) {
 }
 
 type modelRepositoryStub struct {
-	createdModel *model.Model
-	readModel    *model.Model
-	status       model.ModelStatus
-	loadStatus   model.ModelLoadStatus
-	servingKey   uuid.UUID
-	createErr    error
-	readErr      error
-	updateErr    error
+	createdModel       *model.Model
+	readModel          *model.Model
+	champion           *model.Model
+	status             model.ModelStatus
+	loadStatus         model.ModelLoadStatus
+	failure            string
+	promotionReportURI string
+	promotionDeltas    string
+	servingKey         uuid.UUID
+	createErr          error
+	readErr            error
+	championErr        error
+	updateErr          error
 }
 
 func (s *modelRepositoryStub) Close() {}
 
-func (s *modelRepositoryStub) Create(_ context.Context, registeredModel *model.Model, _ uuid.UUID) (*model.Model, error) {
+func (s *modelRepositoryStub) Create(_ context.Context, _ pgx.Tx, registeredModel *model.Model, _ uuid.UUID) (*model.Model, error) {
 	s.createdModel = registeredModel
 	return registeredModel, s.createErr
 }
@@ -44,12 +56,21 @@ func (s *modelRepositoryStub) ReadByTrainingRunID(context.Context, uuid.UUID) (*
 	return s.readModel, s.readErr
 }
 
-func (s *modelRepositoryStub) UpdateStatus(_ context.Context, _ uuid.UUID, status model.ModelStatus, _, _ string) (*model.Model, error) {
+func (s *modelRepositoryStub) ReadChampion(context.Context, model.Lineage) (*model.Model, error) {
+	return s.champion, s.championErr
+}
+
+func (s *modelRepositoryStub) UpdateStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, _ string, failureReason string) (*model.Model, error) {
 	s.status = status
+	s.failure = failureReason
+	if s.readModel != nil {
+		s.readModel.Status = status
+		s.readModel.FailureReason = failureReason
+	}
 	return s.readModel, s.updateErr
 }
 
-func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _, _, _ string, idempotencyKey uuid.UUID) (*model.Model, error) {
+func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _, _, _ string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
 	s.status = status
 	s.loadStatus = loadStatus
 	s.servingKey = idempotencyKey
@@ -57,12 +78,45 @@ func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ uuid.UUID
 		s.readModel.Status = status
 		s.readModel.ServingLoadStatus = loadStatus
 	}
+	return s.readModel, true, s.updateErr
+}
+
+func (s *modelRepositoryStub) UpdatePromotionDecision(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, promotionReportURI string, promotionDeltas string, failureReason string) (*model.Model, error) {
+	s.status = status
+	s.promotionReportURI = promotionReportURI
+	s.promotionDeltas = promotionDeltas
+	s.failure = failureReason
+	if s.readModel != nil {
+		s.readModel.Status = status
+		s.readModel.PromotionReportURI = promotionReportURI
+		s.readModel.PromotionDeltas = promotionDeltas
+		s.readModel.FailureReason = failureReason
+	}
 	return s.readModel, s.updateErr
+}
+
+type modelUnitOfWorkStub struct {
+	messages []msgConn.OutboundMessage
+	err      error
+}
+
+func (s *modelUnitOfWorkStub) Do(ctx context.Context, fn shareduow.TxFunc) error {
+	if s.err != nil {
+		return s.err
+	}
+	return fn(ctx, nil, func(msg msgConn.OutboundMessage) error {
+		s.messages = append(s.messages, msg)
+		return nil
+	})
 }
 
 type modelServingDeployerStub struct {
 	servedModel *model.Model
 	err         error
+}
+
+func modelEventBuilder() app.ModelEventBuilder {
+	return registrymessaging.NewModelEventBuilder("model_registry")
 }
 
 func (s *modelServingDeployerStub) EnsureServedModel(_ context.Context, registeredModel *model.Model) error {
@@ -73,7 +127,8 @@ func (s *modelServingDeployerStub) EnsureServedModel(_ context.Context, register
 var _ = Describe("ModelRegistryUsecase", func() {
 	It("registers a model through the repository", func() {
 		repo := &modelRepositoryStub{}
-		uc := app.NewModelRegistryUsecase(repo)
+		uow := &modelUnitOfWorkStub{}
+		uc := app.NewModelRegistryUsecase(repo, uow, modelEventBuilder())
 		registeredModel := validModel()
 
 		result, err := uc.RegisterModel(context.Background(), registeredModel, uuid.New())
@@ -81,11 +136,12 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.ModelID).NotTo(Equal(uuid.Nil))
 		Expect(repo.createdModel).To(Equal(registeredModel))
+		Expect(uow.messages).To(HaveLen(1))
 	})
 
 	It("marks a model ready", func() {
 		repo := &modelRepositoryStub{readModel: validModel()}
-		uc := app.NewModelRegistryUsecase(repo)
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder())
 
 		result, err := uc.MarkModelReady(context.Background(), uuid.New(), "s3://models/run/model")
 
@@ -96,7 +152,7 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 	It("marks a model failed", func() {
 		repo := &modelRepositoryStub{readModel: validModel()}
-		uc := app.NewModelRegistryUsecase(repo)
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder())
 
 		_, err := uc.MarkModelFailed(context.Background(), uuid.New(), "training failed")
 
@@ -104,32 +160,34 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(repo.status).To(Equal(model.ModelStatusFailed))
 	})
 
-	It("records completed training as an evaluated model when it is not loaded for serving", func() {
+	It("records completed training as a candidate and does not deploy it", func() {
 		repo := &modelRepositoryStub{}
 		deployer := &modelServingDeployerStub{}
-		uc := app.NewModelRegistryUsecase(repo, app.WithModelServingDeployer(deployer))
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
 		trainedModel := validModel()
 		trainedModel.ArtifactLocation = "s3://models/run/model"
 
 		result, err := uc.RecordModelTrainingCompleted(context.Background(), trainedModel, uuid.New())
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
+		Expect(result.Status).To(Equal(model.ModelStatusCandidate))
+		Expect(result.ServingLoadStatus).To(Equal(model.ModelLoadStatusNotLoaded))
 		Expect(repo.createdModel.ArtifactLocation).To(Equal("s3://models/run/model"))
-		Expect(deployer.servedModel).To(Equal(result))
+		Expect(deployer.servedModel).To(BeNil())
 	})
 
-	It("records completed training as ready when the serving layer has loaded it", func() {
+	It("does not let a completed-training event mark the model ready", func() {
 		repo := &modelRepositoryStub{}
 		deployer := &modelServingDeployerStub{}
-		uc := app.NewModelRegistryUsecase(repo, app.WithModelServingDeployer(deployer))
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
 		trainedModel := validModel()
 		trainedModel.ServingLoadStatus = model.ModelLoadStatusLoaded
 
 		result, err := uc.RecordModelTrainingCompleted(context.Background(), trainedModel, uuid.New())
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Status).To(Equal(model.ModelStatusReady))
+		Expect(result.Status).To(Equal(model.ModelStatusCandidate))
+		Expect(result.ServingLoadStatus).To(Equal(model.ModelLoadStatusNotLoaded))
 		Expect(deployer.servedModel).To(BeNil())
 	})
 
@@ -137,7 +195,7 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		existing := validModel()
 		repo := &modelRepositoryStub{readModel: existing, createErr: domain.ErrModelExists}
 		deployer := &modelServingDeployerStub{}
-		uc := app.NewModelRegistryUsecase(repo, app.WithModelServingDeployer(deployer))
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
 		trainedModel := validModel()
 		trainedModel.ArtifactLocation = "s3://models/run/model"
 
@@ -145,13 +203,145 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal(existing))
-		Expect(deployer.servedModel).To(Equal(existing))
+		Expect(deployer.servedModel).To(BeNil())
+	})
+
+	It("promotes a first candidate that passes the gate and deploys it", func() {
+		candidate := validModel()
+		candidate.Status = model.ModelStatusCandidate
+		candidate.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		repo := &modelRepositoryStub{readModel: candidate}
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
+
+		result, err := uc.PromoteCandidate(context.Background(), candidate.ModelID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
+		Expect(repo.status).To(Equal(model.ModelStatusEvaluated))
+		Expect(deployer.servedModel).To(Equal(result))
+	})
+
+	It("records a promotion report and deploys a first candidate only after the gate passes", func() {
+		candidate := validModel()
+		candidate.Status = model.ModelStatusCandidate
+		candidate.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		repo := &modelRepositoryStub{readModel: candidate}
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
+
+		result, err := uc.RecordPromotionReportReady(context.Background(), model.PromotionReportResult{
+			UserID:             candidate.UserID,
+			ModelID:            candidate.ModelID,
+			TrainingRunID:      candidate.TrainingRunID,
+			PromotionReportURI: "s3://local-dev-bucket/promotion/model.json",
+			Deltas:             map[string]float64{"faithfulness": 0.1},
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
+		Expect(repo.promotionReportURI).To(Equal("s3://local-dev-bucket/promotion/model.json"))
+		Expect(repo.promotionDeltas).To(MatchJSON(`{}`))
+		Expect(deployer.servedModel).To(Equal(result))
+	})
+
+	It("records Go-computed promotion deltas for a champion comparison", func() {
+		candidate := validModel()
+		candidate.Status = model.ModelStatusCandidate
+		candidate.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		candidate.MetricsMetadata = metricsMetadata(0.84, 0.83, 0.82)
+		champion := validModel()
+		champion.ModelID = uuid.New()
+		champion.Status = model.ModelStatusReady
+		champion.ServingLoadStatus = model.ModelLoadStatusLoaded
+		champion.MetricsMetadata = metricsMetadata(0.80, 0.82, 0.81)
+		repo := &modelRepositoryStub{readModel: candidate, champion: champion}
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
+
+		result, err := uc.RecordPromotionReportReady(context.Background(), model.PromotionReportResult{
+			UserID:             candidate.UserID,
+			ModelID:            candidate.ModelID,
+			TrainingRunID:      candidate.TrainingRunID,
+			PromotionReportURI: "s3://local-dev-bucket/promotion/model.json",
+			Deltas:             map[string]float64{"faithfulness": -100},
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
+		var deltas map[string]float64
+		Expect(json.Unmarshal([]byte(repo.promotionDeltas), &deltas)).To(Succeed())
+		Expect(deltas).To(HaveKeyWithValue("faithfulness", BeNumerically("~", 0.04, 0.0001)))
+		Expect(deltas).To(HaveKeyWithValue("answer_relevancy", BeNumerically("~", 0.01, 0.0001)))
+		Expect(deltas).To(HaveKeyWithValue("context_precision", BeNumerically("~", 0.01, 0.0001)))
+		Expect(deployer.servedModel).To(Equal(result))
+	})
+
+	It("records a failed promotion report without deploying the candidate", func() {
+		candidate := validModel()
+		candidate.Status = model.ModelStatusCandidate
+		repo := &modelRepositoryStub{readModel: candidate}
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
+
+		result, err := uc.RecordPromotionReportReady(context.Background(), model.PromotionReportResult{
+			UserID:             candidate.UserID,
+			ModelID:            candidate.ModelID,
+			TrainingRunID:      candidate.TrainingRunID,
+			PromotionReportURI: "s3://local-dev-bucket/promotion/model.json",
+			FailureReason:      "evidently evidence requires champion and candidate score_rows_uri",
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusFailed))
+		Expect(result.FailureReason).To(ContainSubstring("PROMOTION_REJECTED"))
+		Expect(deployer.servedModel).To(BeNil())
+	})
+
+	It("promotes a candidate when required evidence is present in metrics metadata", func() {
+		candidate := validModel()
+		candidate.Status = model.ModelStatusCandidate
+		candidate.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		candidate.MetricsMetadata = evidenceMetricsMetadata()
+		repo := &modelRepositoryStub{readModel: candidate}
+		deployer := &modelServingDeployerStub{}
+		policy := model.DefaultGatePolicy()
+		policy.RequireDeepchecks = true
+		policy.RequireEvidently = true
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer), app.WithPromotionGatePolicy(policy))
+
+		result, err := uc.PromoteCandidate(context.Background(), candidate.ModelID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
+		Expect(deployer.servedModel).To(Equal(result))
+	})
+
+	It("rejects a candidate that regresses against the champion", func() {
+		candidate := validModel()
+		candidate.Status = model.ModelStatusCandidate
+		candidate.MetricsMetadata = metricsMetadata(0.70, 0.82, 0.81)
+		champion := validModel()
+		champion.ModelID = uuid.New()
+		champion.Status = model.ModelStatusReady
+		champion.ServingLoadStatus = model.ModelLoadStatusLoaded
+		champion.MetricsMetadata = metricsMetadata(0.90, 0.82, 0.81)
+		repo := &modelRepositoryStub{readModel: candidate, champion: champion}
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
+
+		result, err := uc.PromoteCandidate(context.Background(), candidate.ModelID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusFailed))
+		Expect(result.FailureReason).To(ContainSubstring("PROMOTION_REJECTED"))
+		Expect(deployer.servedModel).To(BeNil())
 	})
 
 	It("records serving loaded as a ready model", func() {
 		modelRecord := validModel()
 		repo := &modelRepositoryStub{readModel: modelRecord}
-		uc := app.NewModelRegistryUsecase(repo)
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder())
 		idempotencyKey := uuid.New()
 
 		result, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
@@ -168,10 +358,26 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(result.Status).To(Equal(model.ModelStatusReady))
 	})
 
+	It("does not let serving status make a candidate ready", func() {
+		modelRecord := validModel()
+		modelRecord.Status = model.ModelStatusCandidate
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder())
+
+		result, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(repo.status).To(Equal(model.ModelStatusCandidate))
+		Expect(result.Status).To(Equal(model.ModelStatusCandidate))
+	})
+
 	It("records serving failed as a failed model", func() {
 		modelRecord := validModel()
 		repo := &modelRepositoryStub{readModel: modelRecord}
-		uc := app.NewModelRegistryUsecase(repo)
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder())
 		idempotencyKey := uuid.New()
 
 		result, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
@@ -191,7 +397,7 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 	It("records failed training as a failed model", func() {
 		repo := &modelRepositoryStub{}
-		uc := app.NewModelRegistryUsecase(repo)
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder())
 		failedModel := validModel()
 		failedModel.FailureReason = "training failed"
 
@@ -219,6 +425,14 @@ func validModel() *model.Model {
 		AdapterURI:        "s3://local-dev-bucket/models/pending",
 		ServingTarget:     "vllm-local",
 		ServingModel:      "movie-ranker-v1",
-		MetricsMetadata:   `{"eval_loss":0.12}`,
+		MetricsMetadata:   metricsMetadata(0.91, 0.90, 0.89),
 	}
+}
+
+func metricsMetadata(faithfulness float64, answerRelevancy float64, contextPrecision float64) string {
+	return fmt.Sprintf(`{"passed":true,"metrics":{"faithfulness":%.2f,"answer_relevancy":%.2f,"context_precision":%.2f},"thresholds":{"faithfulness":0.8,"answer_relevancy":0.8,"context_precision":0.8},"report_uri":"s3://local-dev-bucket/evaluations/run.json","evaluator_name":"ragas","evaluator_version":"ragas-v1","metric_suite":"rag","eval_dataset_uri":"s3://evals/held-out.jsonl","eval_dataset_mode":"labeled"}`, faithfulness, answerRelevancy, contextPrecision)
+}
+
+func evidenceMetricsMetadata() string {
+	return `{"passed":true,"metrics":{"faithfulness":0.91,"answer_relevancy":0.90,"context_precision":0.89},"thresholds":{"faithfulness":0.8,"answer_relevancy":0.8,"context_precision":0.8},"report_uri":"s3://local-dev-bucket/evaluations/run.json","evaluator_name":"ragas","evaluator_version":"ragas-v1","metric_suite":"rag","eval_dataset_uri":"s3://evals/held-out.jsonl","eval_dataset_mode":"labeled","deepchecks_passed":true,"deepchecks_report_uri":"s3://evals/deepchecks.html","evidently_passed":true,"evidently_report_uri":"s3://evals/evidently.html"}`
 }

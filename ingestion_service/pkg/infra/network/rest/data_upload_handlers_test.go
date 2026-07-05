@@ -169,7 +169,7 @@ var _ = Describe("DataUploadHandlers", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 			SchemaVersion:     1,
 			SchemaMetadata:    "{}",
 		}}
@@ -202,7 +202,7 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(uploadUseCase.receivedUpload.TableName).To(Equal("movies"))
 		Expect(uploadUseCase.receivedUpload.TableFormat).To(Equal("PARQUET"))
 		Expect(uploadUseCase.receivedUpload.CatalogProvider).To(Equal("LOCAL"))
-		Expect(uploadUseCase.receivedUpload.ProcessingProfile).To(Equal("TEXT_RAG"))
+		Expect(uploadUseCase.receivedUpload.ProcessingProfile).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
 	})
 
 	It("initiates a presigned upload session after validating ownership", func() {

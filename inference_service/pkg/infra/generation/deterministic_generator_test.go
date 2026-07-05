@@ -1,12 +1,12 @@
 package generation_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"inference_service/pkg/domain/model"
 	"inference_service/pkg/infra/generation"
@@ -57,18 +57,14 @@ var _ = Describe("HTTPGenerator", func() {
 			Prompt string `json:"prompt"`
 			Stream bool   `json:"stream"`
 		}
-		generator, err := generation.NewHTTPGeneratorWithClient("ollama", "http://ollama.local", "llama3.1:8b", 0, &http.Client{
-			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				Expect(r.URL.String()).To(Equal("http://ollama.local/api/generate"))
-				Expect(json.NewDecoder(r.Body).Decode(&received)).To(Succeed())
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBufferString(`{"response":"generated from ollama"}`)),
-					Header:     make(http.Header),
-				}, nil
-			}),
-		})
-		Expect(err).NotTo(HaveOccurred())
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Expect(r.URL.Path).To(Equal("/api/generate"))
+			Expect(json.NewDecoder(r.Body).Decode(&received)).To(Succeed())
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"response":"generated from ollama"}`))
+		}))
+		defer server.Close()
+		generator := generation.NewHTTPGenerator("ollama", server.URL, "llama3.1:8b", time.Second)
 
 		answer, err := generator.Generate(context.Background(), model.GenerationRequest{
 			Query:  "question",
@@ -85,10 +81,9 @@ var _ = Describe("HTTPGenerator", func() {
 	})
 
 	It("rejects unsupported providers", func() {
-		generator, err := generation.NewHTTPGenerator("tei", "http://localhost:8080", "model", 0)
-		Expect(err).NotTo(HaveOccurred())
+		generator := generation.NewHTTPGenerator("tei", "http://localhost:8080", "model", time.Second)
 
-		_, err = generator.Generate(context.Background(), model.GenerationRequest{
+		_, err := generator.Generate(context.Background(), model.GenerationRequest{
 			Query: "question",
 		})
 
@@ -97,10 +92,9 @@ var _ = Describe("HTTPGenerator", func() {
 	})
 
 	It("requires callers to provide an already built prompt", func() {
-		generator, err := generation.NewHTTPGenerator("ollama", "http://ollama.local", "llama3.1:8b", 0)
-		Expect(err).NotTo(HaveOccurred())
+		generator := generation.NewHTTPGenerator("ollama", "http://ollama.local", "llama3.1:8b", time.Second)
 
-		_, err = generator.Generate(context.Background(), model.GenerationRequest{
+		_, err := generator.Generate(context.Background(), model.GenerationRequest{
 			Query: "question",
 			Contexts: []model.RetrievedContext{{
 				SourceText: "context",
@@ -119,18 +113,14 @@ var _ = Describe("HTTPGenerator", func() {
 			} `json:"messages"`
 			Temperature float64 `json:"temperature"`
 		}
-		generator, err := generation.NewHTTPGeneratorWithClient("vllm", "http://vllm.local", "base-model", 0, &http.Client{
-			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				Expect(r.URL.String()).To(Equal("http://vllm.local/v1/chat/completions"))
-				Expect(json.NewDecoder(r.Body).Decode(&received)).To(Succeed())
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBufferString(`{"choices":[{"message":{"content":"generated from vllm"}}]}`)),
-					Header:     make(http.Header),
-				}, nil
-			}),
-		})
-		Expect(err).NotTo(HaveOccurred())
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Expect(r.URL.Path).To(Equal("/v1/chat/completions"))
+			Expect(json.NewDecoder(r.Body).Decode(&received)).To(Succeed())
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"generated from vllm"}}]}`))
+		}))
+		defer server.Close()
+		generator := generation.NewHTTPGenerator("vllm", server.URL, "base-model", time.Second)
 
 		answer, err := generator.Generate(context.Background(), model.GenerationRequest{
 			Query:  "question",
@@ -152,23 +142,19 @@ var _ = Describe("HTTPGenerator", func() {
 	})
 
 	It("routes vLLM requests to the model serving target when present", func() {
-		generator, err := generation.NewHTTPGeneratorWithClient("vllm", "http://fallback-vllm.local", "base-model", 0, &http.Client{
-			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				Expect(r.URL.String()).To(Equal("http://served-model.default.svc.cluster.local:8000/v1/chat/completions"))
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewBufferString(`{"choices":[{"message":{"content":"generated from served model"}}]}`)),
-					Header:     make(http.Header),
-				}, nil
-			}),
-		})
-		Expect(err).NotTo(HaveOccurred())
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Expect(r.URL.Path).To(Equal("/v1/chat/completions"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"generated from served model"}}]}`))
+		}))
+		defer server.Close()
+		generator := generation.NewHTTPGenerator("vllm", "http://fallback-vllm.local", "base-model", time.Second)
 
 		answer, err := generator.Generate(context.Background(), model.GenerationRequest{
 			Query:  "question",
 			Prompt: "prompt text",
 			Model: &model.InferenceModel{
-				ServingTarget: "http://served-model.default.svc.cluster.local:8000",
+				ServingTarget: server.URL,
 				ServingModel:  "movie-ranker-lora",
 			},
 		})
@@ -177,9 +163,3 @@ var _ = Describe("HTTPGenerator", func() {
 		Expect(answer).To(Equal("generated from served model"))
 	})
 })
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}

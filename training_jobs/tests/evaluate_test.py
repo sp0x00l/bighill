@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
@@ -8,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from training_jobs import evaluate
+from training_jobs import evaluate, promotion_report
 
 
 class EnvPatch:
@@ -78,6 +79,8 @@ class EvaluationJobTests(unittest.TestCase):
             self.assertGreaterEqual(report["metrics"]["faithfulness"], 0.5)
             self.assertGreaterEqual(report["metrics"]["answer_relevancy"], 0.5)
             self.assertGreaterEqual(report["metrics"]["context_precision"], 0.5)
+            self.assertEqual(report["score_rows_uri"], "s3://evals/reports/run-1.scores.jsonl")
+            self.assertTrue((storage / "evals" / "reports" / "run-1.scores.jsonl").is_file())
 
     def test_external_evaluator_report_is_validated_and_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,6 +115,153 @@ class EvaluationJobTests(unittest.TestCase):
             self.assertFalse(report["passed"])
             self.assertEqual(report["failure_reason"], "low faithfulness")
             self.assertEqual(report["evaluator_name"], "external")
+
+    def test_promotion_evidence_command_fields_are_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            storage = root / "local_s3"
+            model_dir = storage / "models" / "run-promotion"
+            model_dir.mkdir(parents=True)
+            (model_dir / "adapter_model.safetensors").write_text("weights", encoding="utf-8")
+            eval_dataset = storage / "evals" / "run-promotion.jsonl"
+            eval_dataset.parent.mkdir(parents=True)
+            eval_dataset.write_text(
+                json.dumps(
+                    {
+                        "answer": "refund policy allows returns",
+                        "expected_answer": "refund policy",
+                        "contexts": ["the refund policy allows returns for thirty days"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            evidence = root / "write_evidence.py"
+            evidence.write_text(
+                "from pathlib import Path\n"
+                "import json\n"
+                "import sys\n"
+                "out = Path(sys.argv[sys.argv.index('--output') + 1])\n"
+                "out.write_text(json.dumps({'passed': True, 'report_uri': 's3://evals/reports/deepchecks.html'}), encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            profile = json.dumps(
+                {
+                    "dataset_uri": "s3://evals/run-promotion.jsonl",
+                    "min_faithfulness": 0.5,
+                    "min_answer_relevancy": 0.5,
+                    "min_context_precision": 0.5,
+                    "promotion": {
+                        "deepchecks_command": f"{sys.executable} {evidence} --output {{output}}",
+                    },
+                }
+            )
+            with EnvPatch(
+                {
+                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(storage),
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
+                    "TRAINING_RUN_ID": "run-promotion",
+                    "TRAINING_MODEL_URI": "s3://models/run-promotion",
+                    "TRAINING_EVALUATION_PROFILE": profile,
+                    "TRAINING_EVALUATION_REPORT_URI": "s3://evals/reports/run-promotion.json",
+                    "TRAINING_EVALUATION_MANIFEST_URI": "s3://evals/reports/run-promotion.json",
+                    "TRAINING_JOB_WORK_DIR": str(root / "work"),
+                }
+            ):
+                evaluate.main()
+
+            report = json.loads((storage / "evals" / "reports" / "run-promotion.json").read_text(encoding="utf-8"))
+            self.assertTrue(report["deepchecks_passed"])
+            self.assertEqual(report["deepchecks_report_uri"], "s3://evals/reports/deepchecks.html")
+
+    def test_promotion_report_job_persists_evidence_and_deltas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            storage = root / "local_s3"
+            reports = storage / "evals" / "reports"
+            reports.mkdir(parents=True)
+            candidate = {
+                "report_uri": "s3://evals/reports/candidate.json",
+                "passed": True,
+                "metrics": {"faithfulness": 0.9, "answer_relevancy": 0.8},
+                "score_rows_uri": "s3://evals/reports/candidate.scores.jsonl",
+            }
+            champion = {
+                "report_uri": "s3://evals/reports/champion.json",
+                "passed": True,
+                "metrics": {"faithfulness": 0.7, "answer_relevancy": 0.82},
+                "score_rows_uri": "s3://evals/reports/champion.scores.jsonl",
+            }
+            (reports / "candidate.json").write_text(json.dumps(candidate), encoding="utf-8")
+            (reports / "champion.json").write_text(json.dumps(champion), encoding="utf-8")
+            (reports / "candidate.scores.jsonl").write_text(json.dumps({"faithfulness": 0.9}) + "\n", encoding="utf-8")
+            (reports / "champion.scores.jsonl").write_text(json.dumps({"faithfulness": 0.7}) + "\n", encoding="utf-8")
+            evidence = root / "write_evidence.py"
+            evidence.write_text(
+                "from pathlib import Path\n"
+                "import json\n"
+                "import sys\n"
+                "out = Path(sys.argv[sys.argv.index('--output') + 1])\n"
+                "out.write_text(json.dumps({'passed': True, 'report_uri': 's3://evals/reports/evidence.html'}), encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            profile = json.dumps({"promotion": {"deepchecks_command": f"{sys.executable} {evidence} --output {{output}}"}})
+            job_spec = {
+                "user_id": "user-1",
+                "model_id": "model-1",
+                "training_run_id": "training-1",
+                "candidate_report_uri": "s3://evals/reports/candidate.json",
+                "candidate_metrics_metadata": json.dumps(candidate),
+                "champion_report_uri": "s3://evals/reports/champion.json",
+                "champion_metrics_metadata": json.dumps(champion),
+                "promotion_profile": profile,
+                "report_uri": "s3://evals/reports/promotion.json",
+                "report_manifest_uri": "s3://evals/reports/promotion.json",
+            }
+            encoded = base64.urlsafe_b64encode(json.dumps(job_spec).encode("utf-8")).decode("ascii").rstrip("=")
+            with EnvPatch(
+                {
+                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(storage),
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
+                    "TRAINING_JOB_WORK_DIR": str(root / "work"),
+                }
+            ):
+                promotion_report.main(["--job-spec-b64", encoded])
+
+            report = json.loads((reports / "promotion.json").read_text(encoding="utf-8"))
+            self.assertTrue(report["deepchecks_passed"])
+            self.assertEqual(report["deepchecks_report_uri"], "s3://evals/reports/evidence.html")
+            self.assertAlmostEqual(report["deltas"]["faithfulness"], 0.2)
+            self.assertAlmostEqual(report["deltas"]["answer_relevancy"], -0.02)
+
+    def test_required_promotion_evidence_fails_loudly_when_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            storage = root / "local_s3"
+            model_dir = storage / "models" / "run-required"
+            model_dir.mkdir(parents=True)
+            (model_dir / "adapter_model.safetensors").write_text("weights", encoding="utf-8")
+            profile = json.dumps(
+                {
+                    "promotion": {
+                        "require_deepchecks": True,
+                    },
+                }
+            )
+            with EnvPatch(
+                {
+                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(storage),
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
+                    "TRAINING_RUN_ID": "run-required",
+                    "TRAINING_MODEL_URI": "s3://models/run-required",
+                    "TRAINING_EVALUATION_PROFILE": profile,
+                    "TRAINING_EVALUATION_REPORT_URI": "s3://evals/reports/run-required.json",
+                    "TRAINING_EVALUATION_MANIFEST_URI": "s3://evals/reports/run-required.json",
+                    "TRAINING_JOB_WORK_DIR": str(root / "work"),
+                }
+            ):
+                with self.assertRaises(RuntimeError):
+                    evaluate.main()
 
     def test_ragas_evaluator_is_selected_by_profile_and_persists_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

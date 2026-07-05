@@ -48,15 +48,6 @@ func (s *memoryArtifactStore) Write(_ context.Context, key, _ string, body []byt
 	return location, nil
 }
 
-type recordingEmbeddingRecordRepository struct {
-	records []model.EmbeddingRecord
-}
-
-func (r *recordingEmbeddingRecordRepository) SaveEmbeddingRecords(_ context.Context, records []model.EmbeddingRecord) error {
-	r.records = records
-	return nil
-}
-
 type recordingRawSnapshotProcessor struct {
 	profile  model.ProcessingProfile
 	selected bool
@@ -81,11 +72,11 @@ func (p *recordingEmbeddingProcessor) SupportsEmbeddings(featureSnapshot *model.
 	return featureSnapshot != nil && featureSnapshot.ProcessingProfile == model.ProcessingProfileTextRAG
 }
 
-func (p *recordingEmbeddingProcessor) MaterializeEmbeddings(_ context.Context, _ *model.FeatureSnapshot, embeddingSnapshot *model.EmbeddingSnapshot) (*model.EmbeddingSnapshot, error) {
+func (p *recordingEmbeddingProcessor) MaterializeEmbeddings(_ context.Context, _ *model.FeatureSnapshot, embeddingSnapshot *model.EmbeddingSnapshot) (*model.EmbeddingSnapshot, []model.EmbeddingRecord, error) {
 	p.selected = true
 	out := *embeddingSnapshot
 	out.VectorStore = "pgvector"
-	return &out, nil
+	return &out, nil, nil
 }
 
 type recordingDataStreamReader struct {
@@ -455,7 +446,6 @@ var _ = Describe("Materialization adapters", func() {
 	It("materializes embeddings into the pgvector repository boundary", func() {
 		ctx := context.Background()
 		store := newMemoryArtifactStore()
-		repo := &recordingEmbeddingRecordRepository{}
 		provider := materialization.NewDeterministicEmbeddingProvider(8)
 		strategy := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
 			StrategyVersion:     "rag-v1",
@@ -467,7 +457,7 @@ var _ = Describe("Materialization adapters", func() {
 			EmbeddingModel:      "deterministic-test",
 			EmbeddingDimensions: 8,
 		})
-		writer := materialization.NewEmbeddingWriter(store, repo, provider, nil, strategy, "pgvector", 10)
+		writer := materialization.NewEmbeddingWriter(store, provider, nil, strategy, "pgvector", 10)
 		rawArtifact, err := materialization.NormalizeArtifactToParquet(ctx, []byte("title,views\nIntro,10\nNext,20\n"), "text/csv", "csv")
 		Expect(err).NotTo(HaveOccurred())
 		featureSnapshot := validFeatureSnapshot(validRawSnapshot(validDatasetFile()))
@@ -475,7 +465,7 @@ var _ = Describe("Materialization adapters", func() {
 		store.objects[featureSnapshot.StorageLocation] = rawArtifact.Data
 		embeddingSnapshot := &model.EmbeddingSnapshot{EmbeddingSnapshotID: uuid.New(), FeatureSnapshotID: featureSnapshot.FeatureSnapshotID}
 
-		result, err := writer.MaterializeEmbeddings(ctx, featureSnapshot, embeddingSnapshot)
+		result, records, err := writer.MaterializeEmbeddings(ctx, featureSnapshot, embeddingSnapshot)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal(model.SnapshotStatusReady))
@@ -484,10 +474,10 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(result.StrategyVersion).To(Equal(strategy.StrategyVersion))
 		Expect(result.EmbeddingProvider).To(Equal("deterministic"))
 		Expect(result.ChunkSize).To(Equal(512))
-		Expect(repo.records).To(HaveLen(2))
-		Expect(repo.records[0].Vector).To(HaveLen(8))
-		Expect(repo.records[0].ChunkIndex).To(Equal(0))
-		Expect(repo.records[1].ChunkIndex).To(Equal(1))
+		Expect(records).To(HaveLen(2))
+		Expect(records[0].Vector).To(HaveLen(8))
+		Expect(records[0].ChunkIndex).To(Equal(0))
+		Expect(records[1].ChunkIndex).To(Equal(1))
 	})
 
 	It("chunks feature rows with a Go token window", func() {
@@ -588,7 +578,7 @@ var _ = Describe("Materialization adapters", func() {
 		featureSnapshot := validFeatureSnapshot(validRawSnapshot(validDatasetFile()))
 		featureSnapshot.ProcessingProfile = model.ProcessingProfileGenericParquet
 
-		_, err := dispatcher.MaterializeEmbeddings(context.Background(), featureSnapshot, validEmbeddingSnapshot(featureSnapshot))
+		_, _, err := dispatcher.MaterializeEmbeddings(context.Background(), featureSnapshot, validEmbeddingSnapshot(featureSnapshot))
 
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, domain.ErrEmbeddingMaterialize)).To(BeTrue())

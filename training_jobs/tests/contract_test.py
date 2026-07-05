@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
-from training_jobs import evaluate, manifest, train
+from training_jobs import evaluate, manifest, promotion_report, train
 
 
 def contract() -> dict[str, list[str] | str]:
@@ -21,11 +21,24 @@ class TrainingJobContractTests(unittest.TestCase):
         self.assertEqual(list(train.OPTIONAL_ENV_KEYS), spec["python_training_optional_env_keys"])
         self.assertEqual(list(evaluate.REQUIRED_ENV_KEYS), spec["python_evaluation_required_env_keys"])
         self.assertEqual(list(evaluate.OPTIONAL_ENV_KEYS), spec["python_evaluation_optional_env_keys"])
+        self.assertEqual(list(promotion_report.REQUIRED_ENV_KEYS), spec["python_promotion_required_env_keys"])
+        self.assertEqual(list(promotion_report.OPTIONAL_ENV_KEYS), spec["python_promotion_optional_env_keys"])
+        self.assertEqual(list(promotion_report.JOB_SPEC_KEYS), spec["promotion_job_spec_keys"])
+        self.assertEqual(list(promotion_report.OPTIONAL_JOB_SPEC_KEYS), spec["promotion_optional_job_spec_keys"])
         self.assertEqual(sorted(manifest.TrainingArtifactManifest.__dataclass_fields__.keys()), spec["training_manifest_keys"])
         self.assertEqual(sorted(manifest.EvaluationReportManifest.__dataclass_fields__.keys()), spec["evaluation_manifest_keys"])
+        self.assertEqual(sorted(manifest.PromotionReportManifest.__dataclass_fields__.keys()), spec["promotion_manifest_keys"])
         self.assertEqual(field_types(manifest.TrainingArtifactManifest), spec["training_manifest_field_types"])
         self.assertEqual(field_types(manifest.EvaluationReportManifest), spec["evaluation_manifest_field_types"])
-        for key in list(train.REQUIRED_ENV_KEYS) + list(train.OPTIONAL_ENV_KEYS) + list(evaluate.REQUIRED_ENV_KEYS) + list(evaluate.OPTIONAL_ENV_KEYS):
+        self.assertEqual(field_types(manifest.PromotionReportManifest), spec["promotion_manifest_field_types"])
+        for key in (
+            list(train.REQUIRED_ENV_KEYS)
+            + list(train.OPTIONAL_ENV_KEYS)
+            + list(evaluate.REQUIRED_ENV_KEYS)
+            + list(evaluate.OPTIONAL_ENV_KEYS)
+            + list(promotion_report.REQUIRED_ENV_KEYS)
+            + list(promotion_report.OPTIONAL_ENV_KEYS)
+        ):
             self.assertIn(key, spec["env_key_contract"])
             self.assertEqual(spec["env_key_contract"][key]["type"], "string")
             self.assertTrue(spec["env_key_contract"][key]["direction"])

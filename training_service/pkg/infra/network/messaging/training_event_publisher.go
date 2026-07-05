@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"training_service/pkg/domain/model"
@@ -17,6 +18,7 @@ import (
 type TrainingEventPublisher interface {
 	PublishModelTrainingCompleted(ctx context.Context, result *model.TrainingRunResult) error
 	PublishModelTrainingFailed(ctx context.Context, result *model.TrainingRunResult) error
+	PublishPromotionReportReady(ctx context.Context, report *model.PromotionReport) error
 }
 
 type trainingEventPublisher struct {
@@ -104,6 +106,55 @@ func (p *trainingEventPublisher) PublishModelTrainingFailed(ctx context.Context,
 		FailureReason:     result.FailureReason,
 		UserId:            userID.String(),
 	})
+}
+
+func (p *trainingEventPublisher) PublishPromotionReportReady(ctx context.Context, report *model.PromotionReport) error {
+	log.Trace("trainingEventPublisher PublishPromotionReportReady")
+
+	if report == nil {
+		return msgConn.NonRetryable(fmt.Errorf("promotion report is required"))
+	}
+	modelID, err := uuid.Parse(report.ModelID)
+	if err != nil || modelID == uuid.Nil {
+		return msgConn.NonRetryable(fmt.Errorf("model id is invalid: %w", err))
+	}
+	userID, err := uuid.Parse(report.UserID)
+	if err != nil || userID == uuid.Nil {
+		return msgConn.NonRetryable(fmt.Errorf("user id is invalid: %w", err))
+	}
+	trainingRunID, err := uuid.Parse(report.TrainingRunID)
+	if err != nil || trainingRunID == uuid.Nil {
+		return msgConn.NonRetryable(fmt.Errorf("training run id is invalid: %w", err))
+	}
+	deltas, err := marshalDeltas(report.Deltas)
+	if err != nil {
+		return msgConn.NonRetryable(err)
+	}
+	return p.publish(ctx, modelID, msgConn.MsgTypePromotionReportReady, &trainingpb.PromotionReportReadyEvent{
+		UserId:              userID.String(),
+		ModelId:             modelID.String(),
+		TrainingRunId:       trainingRunID.String(),
+		PromotionReportUri:  report.PromotionReportURI,
+		DeepchecksPassed:    report.DeepchecksPassed,
+		DeepchecksReportUri: report.DeepchecksReportURI,
+		EvidentlyPassed:     report.EvidentlyPassed,
+		EvidentlyReportUri:  report.EvidentlyReportURI,
+		PromotionDeltas:     deltas,
+		FailureReason:       report.FailureReason,
+	})
+}
+
+func marshalDeltas(deltas map[string]float64) (string, error) {
+	log.Trace("marshalDeltas")
+
+	if len(deltas) == 0 {
+		return "{}", nil
+	}
+	raw, err := json.Marshal(deltas)
+	if err != nil {
+		return "", fmt.Errorf("marshal promotion deltas: %w", err)
+	}
+	return string(raw), nil
 }
 
 func (p *trainingEventPublisher) publish(ctx context.Context, resourceKey uuid.UUID, msgType msgConn.MsgType, payload proto.Message) error {

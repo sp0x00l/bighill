@@ -36,3 +36,16 @@ message ModelTrainingFailedEvent {
   string base_model = 9;
   string failure_reason = 10;
 }
+
+message PromotionReportReadyEvent {
+  string user_id = 1;
+  string model_id = 2;
+  string training_run_id = 3;
+  string promotion_report_uri = 4;
+  bool deepchecks_passed = 5;
+  string deepchecks_report_uri = 6;
+  bool evidently_passed = 7;
+  string evidently_report_uri = 8;
+  string promotion_deltas = 9;
+  string failure_reason = 10;
+}

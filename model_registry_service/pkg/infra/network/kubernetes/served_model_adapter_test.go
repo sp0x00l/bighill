@@ -1,4 +1,4 @@
-package k8s_test
+package kubernetes_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"model_registry_service/pkg/domain/model"
-	registryk8s "model_registry_service/pkg/infra/network/k8s"
+	registrykubernetes "model_registry_service/pkg/infra/network/kubernetes"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -28,13 +28,13 @@ func TestServedModelK8s(t *testing.T) {
 var _ = Describe("ServedModelAdapter", func() {
 	It("creates a ServedModel CR with model serving intent", func() {
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
-		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		adapter, err := registrykubernetes.NewServedModelAdapterWithClient(servedModelConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		modelRecord := validRegistryModel()
 
 		Expect(adapter.EnsureServedModel(context.Background(), modelRecord)).To(Succeed())
 
-		obj, err := client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion), metav1.GetOptions{})
+		obj, err := client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registrykubernetes.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(obj.GetLabels()).To(HaveKeyWithValue("bighill.io/model-id", modelRecord.ModelID.String()))
 		modelID, _, _ := unstructured.NestedString(obj.Object, "spec", "modelID")
@@ -49,13 +49,13 @@ var _ = Describe("ServedModelAdapter", func() {
 		modelRecord := validRegistryModel()
 		existing := servedModelObject(modelRecord)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
-		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		adapter, err := registrykubernetes.NewServedModelAdapterWithClient(servedModelConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		modelRecord.AdapterURI = "s3://models/updated"
 
 		Expect(adapter.EnsureServedModel(context.Background(), modelRecord)).To(Succeed())
 
-		obj, err := client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion), metav1.GetOptions{})
+		obj, err := client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registrykubernetes.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		adapterURI, _, _ := unstructured.NestedString(obj.Object, "spec", "adapterURI")
 		Expect(adapterURI).To(Equal("s3://models/updated"))
@@ -63,7 +63,7 @@ var _ = Describe("ServedModelAdapter", func() {
 
 	It("creates distinct ServedModel CRs for different versions of the same model", func() {
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
-		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		adapter, err := registrykubernetes.NewServedModelAdapterWithClient(servedModelConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		v1 := validRegistryModel()
 		v2 := *v1
@@ -73,11 +73,11 @@ var _ = Describe("ServedModelAdapter", func() {
 		Expect(adapter.EnsureServedModel(context.Background(), v1)).To(Succeed())
 		Expect(adapter.EnsureServedModel(context.Background(), &v2)).To(Succeed())
 
-		_, err = client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(v1.ModelID, v1.ModelVersion), metav1.GetOptions{})
+		_, err = client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registrykubernetes.ServedModelName(v1.ModelID, v1.ModelVersion), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		_, err = client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registryk8s.ServedModelName(v2.ModelID, v2.ModelVersion), metav1.GetOptions{})
+		_, err = client.Resource(servedModelGVR()).Namespace("ml").Get(context.Background(), registrykubernetes.ServedModelName(v2.ModelID, v2.ModelVersion), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(registryk8s.ServedModelName(v1.ModelID, v1.ModelVersion)).NotTo(Equal(registryk8s.ServedModelName(v2.ModelID, v2.ModelVersion)))
+		Expect(registrykubernetes.ServedModelName(v1.ModelID, v1.ModelVersion)).NotTo(Equal(registrykubernetes.ServedModelName(v2.ModelID, v2.ModelVersion)))
 	})
 
 	It("records loaded ServedModel status through the usecase boundary", func() {
@@ -85,10 +85,10 @@ var _ = Describe("ServedModelAdapter", func() {
 		existing := servedModelObject(modelRecord)
 		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
-		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		adapter, err := registrykubernetes.NewServedModelAdapterWithClient(servedModelConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		recorder := &servingStatusRecorderStub{}
-		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		observer, err := registrykubernetes.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
@@ -105,10 +105,10 @@ var _ = Describe("ServedModelAdapter", func() {
 		existing := servedModelObject(modelRecord)
 		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
-		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		adapter, err := registrykubernetes.NewServedModelAdapterWithClient(servedModelConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		recorder := &servingStatusRecorderStub{}
-		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		observer, err := registrykubernetes.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
@@ -136,10 +136,10 @@ var _ = Describe("ServedModelAdapter", func() {
 			},
 		}}
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), malformed, valid)
-		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		adapter, err := registrykubernetes.NewServedModelAdapterWithClient(servedModelConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		recorder := &servingStatusRecorderStub{}
-		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		observer, err := registrykubernetes.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
@@ -153,10 +153,10 @@ var _ = Describe("ServedModelAdapter", func() {
 		existing := servedModelObject(modelRecord)
 		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
-		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		adapter, err := registrykubernetes.NewServedModelAdapterWithClient(servedModelConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		recorder := &servingStatusRecorderStub{err: stderrors.New("database unavailable")}
-		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		observer, err := registrykubernetes.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(observer.ProcessOnce(context.Background())).To(Succeed())
@@ -169,10 +169,10 @@ var _ = Describe("ServedModelAdapter", func() {
 		existing := servedModelObject(modelRecord)
 		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
-		adapter, err := registryk8s.NewServedModelAdapterWithClient(servedModelConfig(), client)
+		adapter, err := registrykubernetes.NewServedModelAdapterWithClient(servedModelConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		recorder := &servingStatusRecorderStub{}
-		observer, err := registryk8s.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
+		observer, err := registrykubernetes.NewServedModelStatusObserver(adapter, recorder, time.Millisecond)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(observer.ProcessWatchEvent(context.Background(), watch.Event{
@@ -204,8 +204,8 @@ func (s *servingStatusRecorderStub) RecordModelServingStatus(_ context.Context, 
 	return &model.Model{ModelID: status.ModelID}, nil
 }
 
-func servedModelConfig() registryk8s.ServedModelConfig {
-	return registryk8s.ServedModelConfig{
+func servedModelConfig() registrykubernetes.ServedModelConfig {
+	return registrykubernetes.ServedModelConfig{
 		Namespace:    "ml",
 		Group:        "serving.bighill.io",
 		Version:      "v1alpha1",
@@ -244,7 +244,7 @@ func servedModelObject(modelRecord *model.Model) *unstructured.Unstructured {
 		"apiVersion": "serving.bighill.io/v1alpha1",
 		"kind":       "ServedModel",
 		"metadata": map[string]any{
-			"name":      registryk8s.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion),
+			"name":      registrykubernetes.ServedModelName(modelRecord.ModelID, modelRecord.ModelVersion),
 			"namespace": "ml",
 		},
 		"spec": map[string]any{

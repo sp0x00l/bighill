@@ -7,11 +7,17 @@ import (
 
 	usecase "data_registry_service/pkg/app"
 	"data_registry_service/pkg/domain/model"
+	registrymessaging "data_registry_service/pkg/infra/network/messaging"
+	datasetpb "lib/data_contracts_lib/data_registry"
+	msgConn "lib/shared_lib/messaging"
 	core "lib/shared_lib/transport"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestAppUseCases(t *testing.T) {
@@ -24,15 +30,15 @@ type stubDatasetRepository struct {
 	createIdempotencyKey uuid.UUID
 	createErr            error
 
-	readDatasetID uuid.UUID
-	readUserID    uuid.UUID
-	readDataset   *model.Dataset
+	readDatasetID      uuid.UUID
+	readUserID         uuid.UUID
+	readDataset        *model.Dataset
 	readManyUserID     uuid.UUID
 	readManyPagination core.Pagination
 	readManyFilters    []model.Filter
 	readManyDatasets   []*model.Dataset
 	readManyCount      int
-	readErr       error
+	readErr            error
 
 	deleteDatasetID uuid.UUID
 	deleteUserID    uuid.UUID
@@ -69,9 +75,26 @@ func (s *stubDatasetTableCatalog) ValidateDatasetTable(_ context.Context, datase
 	return s.err
 }
 
+type stubDatasetUnitOfWork struct {
+	calls      int
+	messages   []msgConn.OutboundMessage
+	enqueueErr error
+}
+
+func (s *stubDatasetUnitOfWork) Do(ctx context.Context, fn shareduow.TxFunc) error {
+	s.calls++
+	return fn(ctx, nil, func(message msgConn.OutboundMessage) error {
+		if s.enqueueErr != nil {
+			return s.enqueueErr
+		}
+		s.messages = append(s.messages, message)
+		return nil
+	})
+}
+
 func (s *stubDatasetRepository) Close() {}
 
-func (s *stubDatasetRepository) Create(_ context.Context, dataset *model.Dataset, idempotencyKey uuid.UUID) error {
+func (s *stubDatasetRepository) Create(_ context.Context, _ pgx.Tx, dataset *model.Dataset, idempotencyKey uuid.UUID) error {
 	s.createDataset = dataset
 	s.createIdempotencyKey = idempotencyKey
 	return s.createErr
@@ -90,32 +113,32 @@ func (s *stubDatasetRepository) ReadByID(_ context.Context, datasetID, userID uu
 	return s.readDataset, s.readErr
 }
 
-func (s *stubDatasetRepository) Delete(_ context.Context, datasetID, userID uuid.UUID) error {
+func (s *stubDatasetRepository) Delete(_ context.Context, _ pgx.Tx, datasetID, userID uuid.UUID) error {
 	s.deleteDatasetID = datasetID
 	s.deleteUserID = userID
 	return s.deleteErr
 }
 
-func (s *stubDatasetRepository) UpdatePublishedState(_ context.Context, datasetID, userID uuid.UUID) error {
+func (s *stubDatasetRepository) UpdatePublishedState(_ context.Context, _ pgx.Tx, datasetID, userID uuid.UUID) error {
 	s.publishDatasetID = datasetID
 	s.publishUserID = userID
 	return s.publishErr
 }
 
-func (s *stubDatasetRepository) UpdateProcessingState(_ context.Context, datasetID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, bool, error) {
+func (s *stubDatasetRepository) UpdateProcessingState(_ context.Context, _ pgx.Tx, datasetID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, bool, error) {
 	s.updateProcessingDatasetID = datasetID
 	s.updateProcessingUserID = userID
 	s.updateProcessingState = state
 	return s.updateProcessingResult, s.updateProcessingChanged, s.updateProcessingErr
 }
 
-func (s *stubDatasetRepository) RecordMaterialization(_ context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error) {
+func (s *stubDatasetRepository) RecordMaterialization(_ context.Context, _ pgx.Tx, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, bool, error) {
 	s.updateMaterializationDataset = dataset
 	s.updateMaterializationState = state
-	return s.updateMaterializationResult, s.updateMaterializationErr
+	return s.updateMaterializationResult, s.updateMaterializationResult != nil, s.updateMaterializationErr
 }
 
-func (s *stubDatasetRepository) Replace(_ context.Context, dataset *model.Dataset) (*model.Dataset, error) {
+func (s *stubDatasetRepository) Replace(_ context.Context, _ pgx.Tx, dataset *model.Dataset) (*model.Dataset, error) {
 	s.replaceDataset = dataset
 	return s.replaceResult, s.replaceErr
 }
@@ -124,6 +147,7 @@ var _ = Describe("DatasetUsecase", func() {
 	var (
 		ctx       context.Context
 		repo      *stubDatasetRepository
+		work      *stubDatasetUnitOfWork
 		uc        usecase.DatasetUsecase
 		datasetID uuid.UUID
 		userID    uuid.UUID
@@ -132,7 +156,8 @@ var _ = Describe("DatasetUsecase", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		repo = &stubDatasetRepository{}
-		uc = usecase.NewDatasetUseCase(repo)
+		work = &stubDatasetUnitOfWork{}
+		uc = usecase.NewDatasetUseCase(repo, work, registrymessaging.NewDatasetEventBuilder("data_registry"))
 		datasetID = uuid.New()
 		userID = uuid.New()
 	})
@@ -144,6 +169,15 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(uc.CreateDataset(ctx, dataset, idempotencyKey)).To(Succeed())
 		Expect(repo.createDataset).To(Equal(dataset))
 		Expect(repo.createIdempotencyKey).To(Equal(idempotencyKey))
+		Expect(work.calls).To(Equal(1))
+		Expect(work.messages).To(HaveLen(1))
+		Expect(work.messages[0].Topic).To(Equal("data_registry"))
+		Expect(work.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeDatasetCreated))
+		Expect(work.messages[0].Message.ResourceKey).To(Equal(dataset.ID))
+		var event datasetpb.DatasetCreatedEvent
+		Expect(proto.Unmarshal(work.messages[0].Message.Payload, &event)).To(Succeed())
+		Expect(event.DatasetId).To(Equal(dataset.ID.String()))
+		Expect(event.UserId).To(Equal(userID.String()))
 	})
 
 	It("returns repository create errors", func() {
@@ -236,6 +270,12 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(uc.DeleteDataset(ctx, datasetID, userID)).To(Succeed())
 		Expect(repo.deleteDatasetID).To(Equal(datasetID))
 		Expect(repo.deleteUserID).To(Equal(userID))
+		Expect(work.messages).To(HaveLen(1))
+		Expect(work.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeDatasetDeleted))
+		var event datasetpb.DatasetDeletedEvent
+		Expect(proto.Unmarshal(work.messages[0].Message.Payload, &event)).To(Succeed())
+		Expect(event.DatasetId).To(Equal(datasetID.String()))
+		Expect(event.UserId).To(Equal(userID.String()))
 	})
 
 	It("publishes a dataset through the repository", func() {
@@ -253,6 +293,12 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(replacement))
 		Expect(repo.replaceDataset).To(Equal(replacement))
+		Expect(work.messages).To(HaveLen(1))
+		Expect(work.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeDatasetUpdated))
+		var event datasetpb.DatasetUpdatedEvent
+		Expect(proto.Unmarshal(work.messages[0].Message.Payload, &event)).To(Succeed())
+		Expect(event.DatasetId).To(Equal(datasetID.String()))
+		Expect(event.UserId).To(Equal(userID.String()))
 	})
 
 	It("advances dataset processing state through the repository", func() {
@@ -269,6 +315,8 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.updateProcessingDatasetID).To(Equal(datasetID))
 		Expect(repo.updateProcessingUserID).To(Equal(userID))
 		Expect(repo.updateProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
+		Expect(work.messages).To(HaveLen(1))
+		Expect(work.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeDatasetUpdated))
 	})
 
 	It("does not downgrade dataset processing state for late events", func() {
@@ -280,6 +328,7 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(existing))
 		Expect(repo.updateProcessingDatasetID).To(Equal(datasetID))
+		Expect(work.messages).To(BeEmpty())
 	})
 
 	It("records feature materialization metadata and advances processing state", func() {
@@ -298,6 +347,11 @@ var _ = Describe("DatasetUsecase", func() {
 			RawSnapshotID:     uuid.New(),
 			FeatureSnapshotID: uuid.New(),
 		}
+		updated.RawSnapshotID = materialized.RawSnapshotID
+		updated.FeatureSnapshotID = materialized.FeatureSnapshotID
+		updated.TableNamespace = materialized.TableNamespace
+		updated.TableName = materialized.TableName
+		updated.Location = materialized.Location
 
 		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingFeatureMaterialized)
 
@@ -308,6 +362,15 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.updateMaterializationDataset.TableNamespace).To(Equal("features"))
 		Expect(repo.updateMaterializationDataset.RawSnapshotID).To(Equal(materialized.RawSnapshotID))
 		Expect(repo.updateMaterializationDataset.FeatureSnapshotID).To(Equal(materialized.FeatureSnapshotID))
+		Expect(work.messages).To(HaveLen(1))
+		Expect(work.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeDatasetUpdated))
+		var event datasetpb.DatasetUpdatedEvent
+		Expect(proto.Unmarshal(work.messages[0].Message.Payload, &event)).To(Succeed())
+		Expect(event.DatasetId).To(Equal(datasetID.String()))
+		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.RawSnapshotId).To(Equal(materialized.RawSnapshotID.String()))
+		Expect(event.FeatureSnapshotId).To(Equal(materialized.FeatureSnapshotID.String()))
+		Expect(event.TableNamespace).To(Equal("features"))
 	})
 
 	It("records materialization updates through the repository transaction boundary", func() {
@@ -330,7 +393,7 @@ var _ = Describe("DatasetUsecase", func() {
 
 	It("records catalog-backed materialization without synchronous catalog validation", func() {
 		tableCatalog := &stubDatasetTableCatalog{err: errors.New("catalog should not be consulted")}
-		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetTableCatalog(tableCatalog))
+		uc = usecase.NewDatasetUseCase(repo, work, registrymessaging.NewDatasetEventBuilder("data_registry"), usecase.WithDatasetTableCatalog(tableCatalog))
 		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingFeatureMaterialized}
 		repo.updateMaterializationResult = updated
 		materialized := &model.Dataset{
@@ -353,7 +416,7 @@ var _ = Describe("DatasetUsecase", func() {
 
 	It("does not validate catalog-backed table metadata for raw materialization events", func() {
 		tableCatalog := &stubDatasetTableCatalog{err: errors.New("catalog should not be consulted")}
-		uc = usecase.NewDatasetUseCase(repo, usecase.WithDatasetTableCatalog(tableCatalog))
+		uc = usecase.NewDatasetUseCase(repo, work, registrymessaging.NewDatasetEventBuilder("data_registry"), usecase.WithDatasetTableCatalog(tableCatalog))
 		updated := &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: model.DatasetProcessingRawMaterialized}
 		repo.updateMaterializationResult = updated
 		materialized := &model.Dataset{

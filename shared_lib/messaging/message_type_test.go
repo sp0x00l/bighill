@@ -24,6 +24,8 @@ var _ = Describe("MsgType", func() {
 			MsgTypeModelUpdated:           16,
 			MsgTypePreferenceDatasetReady: 17,
 			MsgTypeModelArtifactIngested:  18,
+			MsgTypePromotionRequested:     19,
+			MsgTypePromotionReportReady:   20,
 		}
 
 		for msgType, ordinal := range expect {
@@ -48,6 +50,8 @@ var _ = Describe("MsgType", func() {
 			MsgTypeModelUpdated,
 			MsgTypePreferenceDatasetReady,
 			MsgTypeModelArtifactIngested,
+			MsgTypePromotionRequested,
+			MsgTypePromotionReportReady,
 		} {
 			Expect(msgType.String()).NotTo(BeEmpty(), "missing string mapping for msg type ordinal %d", msgType)
 			Expect(MsgTypeFromString(msgType.String())).To(Equal(msgType))

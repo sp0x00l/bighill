@@ -9,6 +9,7 @@ import (
 	"feature_materializer_service/pkg/domain/model"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -21,7 +22,7 @@ type featureSnapshotRepoStub struct {
 	failure         string
 }
 
-func (s *featureSnapshotRepoStub) SavePendingFeatureSnapshot(_ context.Context, rawSnapshotID, _ uuid.UUID) (*model.FeatureSnapshot, error) {
+func (s *featureSnapshotRepoStub) SavePendingFeatureSnapshot(_ context.Context, _ pgx.Tx, rawSnapshotID, _ uuid.UUID) (*model.FeatureSnapshot, error) {
 	if s.saveErr != nil {
 		return nil, s.saveErr
 	}
@@ -31,12 +32,12 @@ func (s *featureSnapshotRepoStub) SavePendingFeatureSnapshot(_ context.Context, 
 	return validFeatureSnapshot(rawSnapshotID), nil
 }
 
-func (s *featureSnapshotRepoStub) MarkFeatureReady(_ context.Context, featureSnapshot *model.FeatureSnapshot) error {
+func (s *featureSnapshotRepoStub) MarkFeatureReady(_ context.Context, _ pgx.Tx, featureSnapshot *model.FeatureSnapshot) error {
 	s.readyID = featureSnapshot.FeatureSnapshotID
 	return nil
 }
 
-func (s *featureSnapshotRepoStub) MarkFeatureFailed(_ context.Context, featureSnapshotID uuid.UUID, reason string) error {
+func (s *featureSnapshotRepoStub) MarkFeatureFailed(_ context.Context, _ pgx.Tx, featureSnapshotID uuid.UUID, reason string) error {
 	s.failedID = featureSnapshotID
 	s.failure = reason
 	return nil
@@ -77,7 +78,7 @@ func (s featureSnapshotBuilderStub) BuildFeatureSnapshot(_ context.Context, _ *m
 var _ = Describe("FeatureSnapshotUsecase", func() {
 	It("saves a pending feature snapshot when no builder is configured", func() {
 		repo := &featureSnapshotRepoStub{}
-		uc := usecase.NewFeatureSnapshotUsecase(repo, nil, nil)
+		uc := usecase.NewFeatureSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, nil, nil)
 
 		featureSnapshot, err := uc.BuildFeatureSnapshot(context.Background(), uuid.New(), uuid.New())
 
@@ -89,7 +90,7 @@ var _ = Describe("FeatureSnapshotUsecase", func() {
 		rawSnapshot := validRawSnapshot()
 		featureSnapshot := validFeatureSnapshot(rawSnapshot.RawSnapshotID)
 		repo := &featureSnapshotRepoStub{featureSnapshot: featureSnapshot}
-		uc := usecase.NewFeatureSnapshotUsecase(repo, rawSnapshotReaderStub{rawSnapshot: rawSnapshot}, featureSnapshotBuilderStub{})
+		uc := usecase.NewFeatureSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, rawSnapshotReaderStub{rawSnapshot: rawSnapshot}, featureSnapshotBuilderStub{})
 
 		result, err := uc.BuildFeatureSnapshot(context.Background(), rawSnapshot.RawSnapshotID, uuid.New())
 
@@ -101,7 +102,7 @@ var _ = Describe("FeatureSnapshotUsecase", func() {
 	It("returns replay records from repository idempotency errors", func() {
 		existing := validFeatureSnapshot(uuid.New())
 		repo := &featureSnapshotRepoStub{saveErr: &domain.FeatureSnapshotAlreadyBuiltError{Record: existing}}
-		uc := usecase.NewFeatureSnapshotUsecase(repo, nil, nil)
+		uc := usecase.NewFeatureSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, nil, nil)
 
 		featureSnapshot, err := uc.BuildFeatureSnapshot(context.Background(), uuid.New(), uuid.New())
 
@@ -113,7 +114,7 @@ var _ = Describe("FeatureSnapshotUsecase", func() {
 		expectedErr := errors.New("builder failed")
 		rawSnapshot := validRawSnapshot()
 		repo := &featureSnapshotRepoStub{featureSnapshot: validFeatureSnapshot(rawSnapshot.RawSnapshotID)}
-		uc := usecase.NewFeatureSnapshotUsecase(repo, rawSnapshotReaderStub{rawSnapshot: rawSnapshot}, featureSnapshotBuilderStub{err: expectedErr})
+		uc := usecase.NewFeatureSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, rawSnapshotReaderStub{rawSnapshot: rawSnapshot}, featureSnapshotBuilderStub{err: expectedErr})
 
 		result, err := uc.BuildFeatureSnapshot(context.Background(), rawSnapshot.RawSnapshotID, uuid.New())
 

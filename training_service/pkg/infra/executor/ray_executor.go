@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,6 +42,7 @@ type RayExecutorConfig struct {
 	URL                  string
 	TrainingEntrypoint   string
 	EvaluationEntrypoint string
+	PromotionEntrypoint  string
 	RequestTimeout       time.Duration
 	PollInterval         time.Duration
 }
@@ -49,6 +51,7 @@ type RayExecutor struct {
 	url                  string
 	trainingEntrypoint   string
 	evaluationEntrypoint string
+	promotionEntrypoint  string
 	pollInterval         time.Duration
 	client               *http.Client
 	manifestReader       ManifestReader
@@ -73,6 +76,9 @@ func NewRayExecutorWithClient(config RayExecutorConfig, manifestReader ManifestR
 	if strings.TrimSpace(config.EvaluationEntrypoint) == "" {
 		return nil, domain.ErrValidationFailed.Extend("ray evaluation entrypoint is required")
 	}
+	if strings.TrimSpace(config.PromotionEntrypoint) == "" {
+		return nil, domain.ErrValidationFailed.Extend("ray promotion entrypoint is required")
+	}
 	if config.RequestTimeout <= 0 {
 		return nil, domain.ErrValidationFailed.Extend("ray request timeout is required")
 	}
@@ -92,6 +98,7 @@ func NewRayExecutorWithClient(config RayExecutorConfig, manifestReader ManifestR
 		url:                  rayURL,
 		trainingEntrypoint:   strings.TrimSpace(config.TrainingEntrypoint),
 		evaluationEntrypoint: strings.TrimSpace(config.EvaluationEntrypoint),
+		promotionEntrypoint:  strings.TrimSpace(config.PromotionEntrypoint),
 		pollInterval:         config.PollInterval,
 		client:               client,
 		manifestReader:       manifestReader,
@@ -111,6 +118,18 @@ func (e *RayExecutor) EvaluateModel(ctx context.Context, spec model.EvaluationJo
 
 	return waitForRayJob(ctx, e, domain.ErrEvaluateModel, spec.SubmissionID, e.evaluationEntrypoint, evaluationEnv(spec), func(ctx context.Context) (*model.EvaluationReport, error) {
 		return e.readEvaluationReport(ctx, spec.ReportManifestURI, spec.TrainingRunID)
+	})
+}
+
+func (e *RayExecutor) RunPromotionReport(ctx context.Context, spec model.PromotionReportJobSpec) (*model.PromotionReport, error) {
+	log.Trace("RayExecutor RunPromotionReport")
+
+	entrypoint, err := promotionReportEntrypoint(e.promotionEntrypoint, spec)
+	if err != nil {
+		return nil, err
+	}
+	return waitForRayJob(ctx, e, domain.ErrEvaluateModel, spec.SubmissionID, entrypoint, promotionReportEnv(spec), func(ctx context.Context) (*model.PromotionReport, error) {
+		return e.readPromotionReport(ctx, spec.ReportManifestURI, spec.ModelID)
 	})
 }
 
@@ -273,6 +292,12 @@ func (e *RayExecutor) readEvaluationReport(ctx context.Context, location string,
 	return readEvaluationReport(ctx, e.manifestReader, location, trainingRunID)
 }
 
+func (e *RayExecutor) readPromotionReport(ctx context.Context, location string, modelID string) (*model.PromotionReport, error) {
+	log.Trace("RayExecutor readPromotionReport")
+
+	return readPromotionReport(ctx, e.manifestReader, location, modelID)
+}
+
 func readEvaluationReport(ctx context.Context, manifestReader ManifestReader, location string, trainingRunID string) (*model.EvaluationReport, error) {
 	log.Trace("readEvaluationReport")
 
@@ -299,6 +324,33 @@ func readEvaluationReport(ctx context.Context, manifestReader ManifestReader, lo
 	}
 	if info.SizeBytes <= 0 {
 		return nil, domain.ErrEvaluateModel.Extend("evaluation report is empty")
+	}
+	return &report, nil
+}
+
+func readPromotionReport(ctx context.Context, manifestReader ManifestReader, location string, modelID string) (*model.PromotionReport, error) {
+	log.Trace("readPromotionReport")
+
+	raw, err := manifestReader.Read(ctx, location)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read promotion report manifest: %w", domain.ErrEvaluateModel, err)
+	}
+	var report model.PromotionReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return nil, fmt.Errorf("%w: decode promotion report manifest: %w", domain.ErrEvaluateModel, err)
+	}
+	if strings.TrimSpace(report.ModelID) != modelID {
+		return nil, domain.ErrEvaluateModel.Extend("promotion report manifest has mismatched model id")
+	}
+	if strings.TrimSpace(report.PromotionReportURI) == "" {
+		return nil, domain.ErrEvaluateModel.Extend("promotion report manifest is incomplete")
+	}
+	info, err := manifestReader.Stat(ctx, report.PromotionReportURI)
+	if err != nil {
+		return nil, fmt.Errorf("%w: verify promotion report: %w", domain.ErrEvaluateModel, err)
+	}
+	if info.SizeBytes <= 0 {
+		return nil, domain.ErrEvaluateModel.Extend("promotion report is empty")
 	}
 	return &report, nil
 }
@@ -337,6 +389,51 @@ func evaluationEnv(spec model.EvaluationJobSpec) map[string]string {
 		"TRAINING_EVALUATION_REPORT_URI":   spec.ReportURI,
 		"TRAINING_EVALUATION_MANIFEST_URI": spec.ReportManifestURI,
 	}
+}
+
+func promotionReportEnv(spec model.PromotionReportJobSpec) map[string]string {
+	log.Trace("promotionReportEnv")
+
+	return map[string]string{
+		"TRAINING_ARTIFACT_BUCKET_REGION": spec.ArtifactBucketRegion,
+	}
+}
+
+func promotionReportEntrypoint(entrypoint string, spec model.PromotionReportJobSpec) (string, error) {
+	log.Trace("promotionReportEntrypoint")
+
+	raw, err := json.Marshal(promotionReportJobRequest{
+		UserID:                   spec.UserID,
+		ModelID:                  spec.ModelID,
+		TrainingRunID:            spec.TrainingRunID,
+		CandidateReportURI:       spec.CandidateReportURI,
+		CandidateMetricsMetadata: spec.CandidateMetricsMetadata,
+		ChampionModelID:          spec.ChampionModelID,
+		ChampionReportURI:        spec.ChampionReportURI,
+		ChampionMetricsMetadata:  spec.ChampionMetricsMetadata,
+		PromotionProfile:         spec.PromotionProfile,
+		ReportURI:                spec.ReportURI,
+		ReportManifestURI:        spec.ReportManifestURI,
+	})
+	if err != nil {
+		return "", fmt.Errorf("%w: marshal promotion report job spec: %w", domain.ErrEvaluateModel, err)
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(raw)
+	return strings.TrimSpace(entrypoint) + " --job-spec-b64 " + encoded, nil
+}
+
+type promotionReportJobRequest struct {
+	UserID                   string `json:"user_id"`
+	ModelID                  string `json:"model_id"`
+	TrainingRunID            string `json:"training_run_id"`
+	CandidateReportURI       string `json:"candidate_report_uri"`
+	CandidateMetricsMetadata string `json:"candidate_metrics_metadata"`
+	ChampionModelID          string `json:"champion_model_id"`
+	ChampionReportURI        string `json:"champion_report_uri"`
+	ChampionMetricsMetadata  string `json:"champion_metrics_metadata"`
+	PromotionProfile         string `json:"promotion_profile"`
+	ReportURI                string `json:"report_uri"`
+	ReportManifestURI        string `json:"report_manifest_uri"`
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

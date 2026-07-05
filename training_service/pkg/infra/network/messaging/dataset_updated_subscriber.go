@@ -28,9 +28,10 @@ type DatasetUpdatedSubscriber interface {
 }
 
 type TrainingTopics struct {
-	DataRegistry string
-	Inference    string
-	Training     string
+	DataRegistry  string
+	Inference     string
+	ModelRegistry string
+	Training      string
 }
 
 type datasetUpdatedSubscriber struct {

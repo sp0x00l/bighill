@@ -48,11 +48,11 @@ var _ = Describe("ProcessingProfile", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(profile).To(Equal(model.GenericParquetProfile))
 
-		profile, err = model.ToProcessingProfile("TEXT_RAG")
+		profile, err = model.ToProcessingProfile("TEXT_RAG_PROCESSING_PROFILE")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(profile).To(Equal(model.TextRAGProfile))
-		Expect(model.InstructionTuningProfile.String()).To(Equal("INSTRUCTION_TUNING"))
-		Expect(model.ProcessingProfile(99).String()).To(Equal("GENERIC_PARQUET"))
+		Expect(model.InstructionTuningProfile.String()).To(Equal("INSTRUCTION_TUNING_PROCESSING_PROFILE"))
+		Expect(model.ProcessingProfile(99).String()).To(Equal("GENERIC_PARQUET_PROCESSING_PROFILE"))
 	})
 
 	It("rejects unknown profiles", func() {

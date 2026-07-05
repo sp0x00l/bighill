@@ -2,7 +2,6 @@ package integration_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/url"
@@ -25,8 +24,10 @@ import (
 	dbconn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	sharedmessaging "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	log "github.com/sirupsen/logrus"
@@ -40,11 +41,12 @@ func TestFeatureMaterializerIntegration(t *testing.T) {
 
 var _ = Describe("Feature materializer integration", Ordered, func() {
 	var (
-		ctx        context.Context
-		cancel     context.CancelFunc
-		database   *dbconn.Database
-		snapshots  *repo.SnapshotRepository
-		rawUsecase usecase.RawSnapshotUsecase
+		ctx         context.Context
+		cancel      context.CancelFunc
+		database    *dbconn.Database
+		snapshots   *repo.SnapshotRepository
+		snapshotUOW *shareduow.UnitOfWork
+		rawUsecase  usecase.RawSnapshotUsecase
 	)
 
 	BeforeAll(func() {
@@ -58,7 +60,14 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		snapshots = repo.NewSnapshotRepository(database)
-		rawUsecase = usecase.NewRawSnapshotUsecase(snapshots, nil)
+		outboxWriter, err := sharedmessaging.NewPostgresOutbox(database.Pool, database.Name, "")
+		Expect(err).NotTo(HaveOccurred())
+		orderedOutbox, ok := outboxWriter.(sharedmessaging.OrderedOutbox)
+		Expect(ok).To(BeTrue())
+		snapshotUOW = shareduow.New(database.Pool, shareduow.WithTransactionalOutbox(orderedOutbox))
+		rawUsecase = usecase.NewRawSnapshotUsecase(snapshots, snapshotUOW, featuremessaging.NewSnapshotEventBuilder(featuremessaging.MaterializationTopics{
+			FeatureMaterializer: "feature_materializer",
+		}), nil)
 	})
 
 	BeforeEach(func() {
@@ -85,38 +94,59 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		idempotencyKey := uuid.New()
 		datasetFile := validIntegrationDatasetFile()
 		Expect(upsertFeatureMaterializerTenant(ctx, database, datasetFile.UserID)).To(Succeed())
+		tenantCtx := ctxutil.WithTenantID(ctx, datasetFile.UserID)
 
-		rawSnapshot, err := rawUsecase.MaterializeRawSnapshot(ctx, datasetFile, idempotencyKey)
+		rawSnapshot, err := rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, idempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rawSnapshot.RawSnapshotID).NotTo(Equal(uuid.Nil))
 		Expect(rawSnapshot.Status).To(Equal(model.SnapshotStatusPending))
 
-		replayedRaw, err := rawUsecase.MaterializeRawSnapshot(ctx, datasetFile, idempotencyKey)
+		replayedRaw, err := rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, idempotencyKey)
 		Expect(err).To(HaveOccurred())
 		Expect(replayedRaw).To(BeNil())
-		Expect(errors.Is(err, domain.ErrRawSnapshotInProgress)).To(BeTrue())
+		Expect(domain.IsServiceError(err, domain.ErrRawSnapshotInProgress)).To(BeTrue(), err.Error())
 
 		rawSnapshot.SchemaVersion = 1
 		rawSnapshot.SchemaMetadata = "{}"
-		Expect(snapshots.MarkRawReady(ctx, rawSnapshot)).To(Succeed())
+		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			return snapshots.MarkRawReady(ctx, tx, rawSnapshot)
+		})).To(Succeed())
 
-		replayedRaw, err = rawUsecase.MaterializeRawSnapshot(ctx, datasetFile, idempotencyKey)
+		replayedRaw, err = rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, idempotencyKey)
 		Expect(err).To(HaveOccurred())
 		Expect(replayedRaw.RawSnapshotID).To(Equal(rawSnapshot.RawSnapshotID))
 		_, ok := domain.IsRawSnapshotAlreadyMaterialized(err)
 		Expect(ok).To(BeTrue())
 
-		featureSnapshot, err := snapshots.SavePendingFeatureSnapshot(ctx, rawSnapshot.RawSnapshotID, uuid.New())
+		var featureSnapshot *model.FeatureSnapshot
+		err = snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			out, err := snapshots.SavePendingFeatureSnapshot(ctx, tx, rawSnapshot.RawSnapshotID, uuid.New())
+			if err != nil {
+				return err
+			}
+			featureSnapshot = out
+			return nil
+		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(featureSnapshot.RawSnapshotID).To(Equal(rawSnapshot.RawSnapshotID))
 		featureSnapshot.StorageLocation = "s3://lakehouse/features/snapshot.parquet"
 		featureSnapshot.SchemaVersion = 1
 		featureSnapshot.SchemaMetadata = "{}"
-		Expect(snapshots.MarkFeatureReady(ctx, featureSnapshot)).To(Succeed())
+		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			return snapshots.MarkFeatureReady(ctx, tx, featureSnapshot)
+		})).To(Succeed())
 
 		embeddingStrategy := integrationEmbeddingStrategy()
 		embeddingIdempotencyKey := uuid.New()
-		embeddingSnapshot, err := snapshots.SavePendingEmbeddingSnapshot(ctx, featureSnapshot.FeatureSnapshotID, embeddingIdempotencyKey, embeddingStrategy)
+		var embeddingSnapshot *model.EmbeddingSnapshot
+		err = snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			out, err := snapshots.SavePendingEmbeddingSnapshot(ctx, tx, featureSnapshot.FeatureSnapshotID, embeddingIdempotencyKey, embeddingStrategy)
+			if err != nil {
+				return err
+			}
+			embeddingSnapshot = out
+			return nil
+		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(embeddingSnapshot.FeatureSnapshotID).To(Equal(featureSnapshot.FeatureSnapshotID))
 		Expect(embeddingSnapshot.StrategyVersion).To(Equal(embeddingStrategy.StrategyVersion))
@@ -131,13 +161,15 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		embeddingSnapshot.ChunkOverlap = embeddingStrategy.ChunkOverlap
 		embeddingSnapshot.EmbeddingProvider = embeddingStrategy.EmbeddingProvider
 		embeddingSnapshot.EmbeddingModel = embeddingStrategy.EmbeddingModel
-		Expect(snapshots.MarkEmbeddingReady(ctx, embeddingSnapshot)).To(Succeed())
+		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			return snapshots.MarkEmbeddingReady(ctx, tx, embeddingSnapshot)
+		})).To(Succeed())
 
-		readFeature, err := snapshots.ReadFeatureSnapshot(ctx, featureSnapshot.FeatureSnapshotID)
+		readFeature, err := snapshots.ReadFeatureSnapshot(tenantCtx, featureSnapshot.FeatureSnapshotID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readFeature.Status).To(Equal(model.SnapshotStatusReady))
 
-		readEmbedding, err := snapshots.ReadEmbeddingByIdempotencyKey(ctx, embeddingIdempotencyKey)
+		readEmbedding, err := snapshots.ReadEmbeddingByIdempotencyKey(tenantCtx, embeddingIdempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readEmbedding.VectorStore).To(Equal("pgvector"))
 	})
@@ -168,17 +200,23 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		subscriber, err := messenger.Subscriber(runCtx)
 		Expect(err).NotTo(HaveOccurred())
 
+		outboxSignal := make(chan struct{}, 1)
 		outboxWriter, err := sharedmessaging.NewPostgresOutbox(database.Pool, database.Name, "")
 		Expect(err).NotTo(HaveOccurred())
 		orderedOutbox, ok := outboxWriter.(sharedmessaging.OrderedOutbox)
 		Expect(ok).To(BeTrue())
-		relayOutbox, ok := outboxWriter.(sharedmessaging.RelayOutbox)
+		signaledOutbox := sharedmessaging.NewSignaledOutbox(outboxWriter, outboxSignal)
+		relayOutbox, ok := signaledOutbox.(sharedmessaging.RelayOutbox)
 		Expect(ok).To(BeTrue())
-		snapshotRepoWithOutbox := repo.NewSnapshotRepository(database, repo.WithTransactionalOutbox(orderedOutbox, featureMaterializerTopic))
+		workflowSnapshotUnitOfWork := shareduow.New(database.Pool,
+			shareduow.WithTransactionalOutbox(orderedOutbox),
+			shareduow.WithOutboxSignal(func() { sharedmessaging.NotifyOutboxSignal(outboxSignal) }),
+		)
 		outboxRelay := sharedmessaging.NewOutboxRelay(relayOutbox, relayPublisher, sharedmessaging.OutboxRelayConfig{
 			PollInterval:   100 * time.Millisecond,
 			FailureBackoff: 250 * time.Millisecond,
 			BatchSize:      10,
+			Signal:         outboxSignal,
 			InstanceID:     "feature-materializer-integration-" + suffix,
 			LeaseDuration:  time.Second,
 		})
@@ -191,10 +229,13 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
 		featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
 		embeddingStrategy := integrationEmbeddingStrategy()
-		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, snapshotRepoWithOutbox, materialization.NewDeterministicEmbeddingProvider(embeddingStrategy.EmbeddingDimensions), nil, embeddingStrategy, "pgvector", 10)
+		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, materialization.NewDeterministicEmbeddingProvider(embeddingStrategy.EmbeddingDimensions), nil, embeddingStrategy, "pgvector", 10)
 		rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(rawWriter)
 		featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 		embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
+		snapshotEventBuilder := featuremessaging.NewSnapshotEventBuilder(featuremessaging.MaterializationTopics{
+			FeatureMaterializer: featureMaterializerTopic,
+		})
 		temporalClient, err := client.Dial(client.Options{
 			HostPort:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
 			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
@@ -203,9 +244,9 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		defer temporalClient.Close()
 
 		activities := featuretemporal.NewMaterializationActivities(
-			usecase.NewRawSnapshotUsecase(snapshotRepoWithOutbox, rawDispatcher),
-			usecase.NewFeatureSnapshotUsecase(snapshotRepoWithOutbox, snapshotRepoWithOutbox, featureDispatcher),
-			usecase.NewEmbeddingMaterializationUsecase(snapshotRepoWithOutbox, snapshotRepoWithOutbox, embeddingDispatcher),
+			usecase.NewRawSnapshotUsecase(snapshots, workflowSnapshotUnitOfWork, snapshotEventBuilder, rawDispatcher),
+			usecase.NewFeatureSnapshotUsecase(snapshots, workflowSnapshotUnitOfWork, snapshotEventBuilder, snapshots, featureDispatcher),
+			usecase.NewEmbeddingMaterializationUsecase(snapshots, workflowSnapshotUnitOfWork, snapshotEventBuilder, snapshots, embeddingDispatcher),
 		)
 		worker := featuretemporal.NewMaterializationWorker(temporalClient, taskQueue, activities)
 		Expect(worker.Start()).To(Succeed())
@@ -244,12 +285,12 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(func(g Gomega) {
-			rawStatus, featureStatus, embeddingStatus, embeddingCount := materializationState(ctx, database, datasetID)
+			rawStatus, featureStatus, embeddingStatus, embeddingCount := materializationState(ctxutil.WithTenantID(ctx, userID), database, datasetID)
 			g.Expect(rawStatus).To(Equal(model.SnapshotStatusReady.String()))
 			g.Expect(featureStatus).To(Equal(model.SnapshotStatusReady.String()))
 			g.Expect(embeddingStatus).To(Equal(model.SnapshotStatusReady.String()))

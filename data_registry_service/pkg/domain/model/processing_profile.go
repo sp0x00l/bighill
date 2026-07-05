@@ -16,23 +16,23 @@ const (
 func (p ProcessingProfile) String() string {
 	switch p {
 	case GenericParquetProfile:
-		return "GENERIC_PARQUET"
+		return "GENERIC_PARQUET_PROCESSING_PROFILE"
 	case TextRAGProfile:
-		return "TEXT_RAG"
+		return "TEXT_RAG_PROCESSING_PROFILE"
 	case InstructionTuningProfile:
-		return "INSTRUCTION_TUNING"
+		return "INSTRUCTION_TUNING_PROCESSING_PROFILE"
 	default:
-		return "GENERIC_PARQUET"
+		return "GENERIC_PARQUET_PROCESSING_PROFILE"
 	}
 }
 
 func ToProcessingProfile(value string) (ProcessingProfile, error) {
 	switch strings.ToUpper(strings.TrimSpace(value)) {
-	case "", "GENERIC_PARQUET":
+	case "", "GENERIC_PARQUET_PROCESSING_PROFILE":
 		return GenericParquetProfile, nil
-	case "TEXT_RAG":
+	case "TEXT_RAG_PROCESSING_PROFILE":
 		return TextRAGProfile, nil
-	case "INSTRUCTION_TUNING":
+	case "INSTRUCTION_TUNING_PROCESSING_PROFILE":
 		return InstructionTuningProfile, nil
 	default:
 		return 0, errors.New("invalid ProcessingProfile")

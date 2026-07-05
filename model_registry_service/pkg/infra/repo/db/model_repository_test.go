@@ -10,9 +10,7 @@ import (
 	"model_registry_service/pkg/domain/model"
 	modeldb "model_registry_service/pkg/infra/repo/db"
 
-	modelregistrypb "lib/data_contracts_lib/model_registry"
 	coreDB "lib/shared_lib/db"
-	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
@@ -21,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestModelRepository(t *testing.T) {
@@ -135,28 +132,30 @@ func (r errorRow) Scan(...any) error {
 }
 
 type modelRow struct {
-	ModelID           uuid.UUID
-	UserID            uuid.UUID
-	TrainingRunID     uuid.UUID
-	DatasetID         uuid.UUID
-	ModelKind         string
-	Source            string
-	SourceURI         string
-	SourceMetadata    string
-	Name              string
-	ModelVersion      int
-	BaseModel         string
-	ArtifactLocation  string
-	ArtifactFormat    string
-	ArtifactChecksum  string
-	ArtifactSizeBytes int64
-	AdapterURI        string
-	ServingTarget     string
-	ServingModel      string
-	ServingLoadStatus string
-	MetricsMetadata   string
-	Status            string
-	FailureReason     string
+	ModelID            uuid.UUID
+	UserID             uuid.UUID
+	TrainingRunID      uuid.UUID
+	DatasetID          uuid.UUID
+	ModelKind          string
+	Source             string
+	SourceURI          string
+	SourceMetadata     string
+	Name               string
+	ModelVersion       int
+	BaseModel          string
+	ArtifactLocation   string
+	ArtifactFormat     string
+	ArtifactChecksum   string
+	ArtifactSizeBytes  int64
+	AdapterURI         string
+	ServingTarget      string
+	ServingModel       string
+	ServingLoadStatus  string
+	MetricsMetadata    string
+	PromotionReportURI string
+	PromotionDeltas    string
+	Status             string
+	FailureReason      string
 }
 
 func (r modelRow) Scan(dest ...any) error {
@@ -180,29 +179,18 @@ func (r modelRow) Scan(dest ...any) error {
 	*(dest[17].(*string)) = r.ServingModel
 	*(dest[18].(*string)) = r.ServingLoadStatus
 	*(dest[19].(*string)) = r.MetricsMetadata
-	*(dest[20].(*string)) = r.Status
-	*(dest[21].(*string)) = r.FailureReason
+	*(dest[20].(*string)) = r.PromotionReportURI
+	*(dest[21].(*string)) = r.PromotionDeltas
+	*(dest[22].(*string)) = r.Status
+	*(dest[23].(*string)) = r.FailureReason
 	return nil
-}
-
-type orderedOutboxStub struct {
-	tx      pgx.Tx
-	message msgConn.OutboundMessage
-	err     error
-	calls   int
-}
-
-func (s *orderedOutboxStub) EnqueueTx(_ context.Context, tx pgx.Tx, msg msgConn.OutboundMessage) error {
-	s.tx = tx
-	s.message = msg
-	s.calls++
-	return s.err
 }
 
 var _ = Describe("ModelRepository", func() {
 	var (
 		ctx            context.Context
 		poolMock       *testConnectionPool
+		tx             pgx.Tx
 		repository     *modeldb.ModelRepository
 		modelID        uuid.UUID
 		trainingRunID  uuid.UUID
@@ -214,6 +202,7 @@ var _ = Describe("ModelRepository", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		poolMock = &testConnectionPool{NextRowsAffected: 1}
+		tx = &testTx{pool: poolMock}
 		dbCore := coreDB.NewDatabase(poolMock, "test_db")
 		repository = modeldb.NewModelRepository(dbCore)
 
@@ -254,7 +243,7 @@ var _ = Describe("ModelRepository", func() {
 		It("inserts a model with named args", func() {
 			poolMock.NextRows = []pgx.Row{newModelRow(registered)}
 
-			modelRecord, err := repository.Create(ctx, registered, idempotencyKey)
+			modelRecord, err := repository.Create(ctx, tx, registered, idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.ModelID).To(Equal(modelID))
@@ -278,49 +267,19 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("serving_model", registered.ServingModel))
 			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
 			Expect(args).To(HaveKeyWithValue("metrics_metadata", registered.MetricsMetadata))
+			Expect(args).To(HaveKeyWithValue("promotion_deltas", "{}"))
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
 		})
 
 		It("returns the model-exists domain error for idempotency conflicts", func() {
 			poolMock.NextRows = []pgx.Row{errorRow{err: &pgconn.PgError{Code: pgerrcode.UniqueViolation}}}
 
-			modelRecord, err := repository.Create(ctx, registered, idempotencyKey)
+			modelRecord, err := repository.Create(ctx, tx, registered, idempotencyKey)
 
 			Expect(modelRecord).To(BeNil())
 			Expect(errors.Is(err, domain.ErrModelExists)).To(BeTrue())
 		})
 
-		It("enqueues model updates in the same transaction when an outbox is configured", func() {
-			outbox := &orderedOutboxStub{}
-			signalCount := 0
-			dbCore := coreDB.NewDatabase(poolMock, "test_db")
-			repository = modeldb.NewModelRepository(dbCore,
-				modeldb.WithTransactionalOutbox(outbox, "model_registry"),
-				modeldb.WithOutboxSignal(func() { signalCount++ }),
-			)
-			poolMock.NextRows = []pgx.Row{newModelRow(registered)}
-
-			modelRecord, err := repository.Create(ctx, registered, idempotencyKey)
-
-			Expect(err).NotTo(HaveOccurred())
-			Expect(modelRecord.ModelID).To(Equal(modelID))
-			Expect(poolMock.CommitCalled).To(BeTrue())
-			Expect(outbox.calls).To(Equal(1))
-			Expect(outbox.tx).NotTo(BeNil())
-			Expect(outbox.message.Topic).To(Equal("model_registry"))
-			Expect(outbox.message.Message.ResourceKey).To(Equal(modelID))
-			Expect(outbox.message.DispatchKey).To(ContainSubstring("model_updated:"))
-			var payload modelregistrypb.ModelUpdatedEvent
-			Expect(proto.Unmarshal(outbox.message.Message.Payload, &payload)).To(Succeed())
-			Expect(payload.GetUserId()).To(Equal(registered.UserID.String()))
-			Expect(payload.GetAdapterUri()).To(Equal(registered.AdapterURI))
-			Expect(payload.GetModelKind()).To(Equal(model.ModelKindFineTuned.String()))
-			Expect(payload.GetSource()).To(Equal(model.ModelSourceTraining.String()))
-			Expect(payload.GetServingTarget()).To(Equal(registered.ServingTarget))
-			Expect(payload.GetServingModel()).To(Equal(registered.ServingModel))
-			Expect(payload.GetServingLoadStatus()).To(Equal(model.ModelLoadStatusLoaded.String()))
-			Expect(signalCount).To(Equal(1))
-		})
 	})
 
 	Describe("ReadByID", func() {
@@ -345,6 +304,33 @@ var _ = Describe("ModelRepository", func() {
 		})
 	})
 
+	Describe("ReadChampion", func() {
+		It("reads the loaded ready model with the highest version for a lineage", func() {
+			poolMock.NextRows = []pgx.Row{newModelRow(registered)}
+
+			modelRecord, err := repository.ReadChampion(ctx, model.Lineage{UserID: registered.UserID, Name: registered.Name})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(modelRecord.ModelID).To(Equal(modelID))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY model_version DESC"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("LIMIT 1"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: registered.UserID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("name", registered.Name))
+			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
+			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
+		})
+
+		It("returns a domain not-found error when no champion exists", func() {
+			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
+
+			modelRecord, err := repository.ReadChampion(ctx, model.Lineage{UserID: registered.UserID, Name: registered.Name})
+
+			Expect(modelRecord).To(BeNil())
+			Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
+		})
+	})
+
 	Describe("UpdateStatus", func() {
 		It("updates model status and returns the updated model", func() {
 			ready := *registered
@@ -352,7 +338,7 @@ var _ = Describe("ModelRepository", func() {
 			ready.ArtifactLocation = "s3://local-dev-bucket/models/ready"
 			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
 
-			modelRecord, err := repository.UpdateStatus(ctx, modelID, model.ModelStatusReady, ready.ArtifactLocation, "")
+			modelRecord, err := repository.UpdateStatus(ctx, tx, modelID, model.ModelStatusReady, ready.ArtifactLocation, "")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
@@ -371,9 +357,10 @@ var _ = Describe("ModelRepository", func() {
 			ready.ServingLoadStatus = model.ModelLoadStatusLoaded
 			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
 
-			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "", idempotencyKey)
+			modelRecord, changed, err := repository.UpdateServingStatus(ctx, tx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "", idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).To(BeTrue())
 			Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
 			Expect(modelRecord.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("UPDATE test_db.models"))
@@ -387,83 +374,80 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("serving_status_idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}))
 		})
 
-		It("enqueues serving status changes in the same transaction", func() {
-			outbox := &orderedOutboxStub{}
-			signalCount := 0
-			dbCore := coreDB.NewDatabase(poolMock, "test_db")
-			repository = modeldb.NewModelRepository(dbCore,
-				modeldb.WithTransactionalOutbox(outbox, "model_registry"),
-				modeldb.WithOutboxSignal(func() { signalCount++ }),
-			)
-			ready := *registered
-			ready.Status = model.ModelStatusReady
-			ready.ServingLoadStatus = model.ModelLoadStatusLoaded
-			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
-
-			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "", idempotencyKey)
-
-			Expect(err).NotTo(HaveOccurred())
-			Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
-			Expect(poolMock.CommitCalled).To(BeTrue())
-			Expect(outbox.calls).To(Equal(1))
-			Expect(outbox.tx).NotTo(BeNil())
-			Expect(outbox.message.Topic).To(Equal("model_registry"))
-			var payload modelregistrypb.ModelUpdatedEvent
-			Expect(proto.Unmarshal(outbox.message.Message.Payload, &payload)).To(Succeed())
-			Expect(payload.GetUserId()).To(Equal(registered.UserID.String()))
-			Expect(payload.GetStatus()).To(Equal(model.ModelStatusReady.String()))
-			Expect(payload.GetServingLoadStatus()).To(Equal(model.ModelLoadStatusLoaded.String()))
-			Expect(signalCount).To(Equal(1))
-		})
-
-		It("does not enqueue an outbox message when serving status is unchanged", func() {
-			outbox := &orderedOutboxStub{}
-			dbCore := coreDB.NewDatabase(poolMock, "test_db")
-			repository = modeldb.NewModelRepository(dbCore,
-				modeldb.WithTransactionalOutbox(outbox, "model_registry"),
-			)
+		It("returns unchanged when serving status already matches", func() {
 			poolMock.NextRows = []pgx.Row{
 				errorRow{err: pgx.ErrNoRows},
 				newModelRow(registered),
 			}
 
-			modelRecord, err := repository.UpdateServingStatus(ctx, modelID, registered.Status, registered.ServingLoadStatus, registered.ServingTarget, registered.ServingModel, "", idempotencyKey)
+			modelRecord, changed, err := repository.UpdateServingStatus(ctx, tx, modelID, registered.Status, registered.ServingLoadStatus, registered.ServingTarget, registered.ServingModel, "", idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.ModelID).To(Equal(modelID))
-			Expect(poolMock.CommitCalled).To(BeTrue())
-			Expect(outbox.calls).To(Equal(0))
+			Expect(changed).To(BeFalse())
 			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
 			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("SELECT model_id::text"))
+		})
+	})
+
+	Describe("UpdatePromotionDecision", func() {
+		It("updates promotion evidence and returns the updated model", func() {
+			ready := *registered
+			ready.Status = model.ModelStatusEvaluated
+			ready.PromotionReportURI = "s3://local-dev-bucket/promotion/model.json"
+			ready.PromotionDeltas = `{"faithfulness":0.1}`
+			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
+
+			modelRecord, err := repository.UpdatePromotionDecision(ctx, tx, modelID, model.ModelStatusEvaluated, ready.PromotionReportURI, ready.PromotionDeltas, "")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(modelRecord.Status).To(Equal(model.ModelStatusEvaluated))
+			Expect(modelRecord.PromotionReportURI).To(Equal(ready.PromotionReportURI))
+			Expect(modelRecord.PromotionDeltas).To(MatchJSON(ready.PromotionDeltas))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("promotion_report_uri = @promotion_report_uri"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusEvaluated.String()))
+			Expect(args).To(HaveKeyWithValue("promotion_report_uri", ready.PromotionReportURI))
+			Expect(args).To(HaveKeyWithValue("promotion_deltas", ready.PromotionDeltas))
 		})
 	})
 })
 
 func newModelRow(modelRecord *model.Model) modelRow {
 	return modelRow{
-		ModelID:           modelRecord.ModelID,
-		UserID:            modelRecord.UserID,
-		TrainingRunID:     modelRecord.TrainingRunID,
-		DatasetID:         modelRecord.DatasetID,
-		ModelKind:         modelRecord.ModelKind.String(),
-		Source:            modelRecord.Source.String(),
-		SourceURI:         modelRecord.SourceURI,
-		SourceMetadata:    modelRecord.SourceMetadata,
-		Name:              modelRecord.Name,
-		ModelVersion:      modelRecord.ModelVersion,
-		BaseModel:         modelRecord.BaseModel,
-		ArtifactLocation:  modelRecord.ArtifactLocation,
-		ArtifactFormat:    modelRecord.ArtifactFormat,
-		ArtifactChecksum:  modelRecord.ArtifactChecksum,
-		ArtifactSizeBytes: modelRecord.ArtifactSizeBytes,
-		AdapterURI:        modelRecord.AdapterURI,
-		ServingTarget:     modelRecord.ServingTarget,
-		ServingModel:      modelRecord.ServingModel,
-		ServingLoadStatus: modelRecord.ServingLoadStatus.String(),
-		MetricsMetadata:   modelRecord.MetricsMetadata,
-		Status:            modelRecord.Status.String(),
-		FailureReason:     modelRecord.FailureReason,
+		ModelID:            modelRecord.ModelID,
+		UserID:             modelRecord.UserID,
+		TrainingRunID:      modelRecord.TrainingRunID,
+		DatasetID:          modelRecord.DatasetID,
+		ModelKind:          modelRecord.ModelKind.String(),
+		Source:             modelRecord.Source.String(),
+		SourceURI:          modelRecord.SourceURI,
+		SourceMetadata:     modelRecord.SourceMetadata,
+		Name:               modelRecord.Name,
+		ModelVersion:       modelRecord.ModelVersion,
+		BaseModel:          modelRecord.BaseModel,
+		ArtifactLocation:   modelRecord.ArtifactLocation,
+		ArtifactFormat:     modelRecord.ArtifactFormat,
+		ArtifactChecksum:   modelRecord.ArtifactChecksum,
+		ArtifactSizeBytes:  modelRecord.ArtifactSizeBytes,
+		AdapterURI:         modelRecord.AdapterURI,
+		ServingTarget:      modelRecord.ServingTarget,
+		ServingModel:       modelRecord.ServingModel,
+		ServingLoadStatus:  modelRecord.ServingLoadStatus.String(),
+		MetricsMetadata:    modelRecord.MetricsMetadata,
+		PromotionReportURI: modelRecord.PromotionReportURI,
+		PromotionDeltas:    withDefaultJSONForTest(modelRecord.PromotionDeltas),
+		Status:             modelRecord.Status.String(),
+		FailureReason:      modelRecord.FailureReason,
 	}
+}
+
+func withDefaultJSONForTest(value string) string {
+	if value == "" {
+		return "{}"
+	}
+	return value
 }
 
 func namedArgs(args []any) pgx.NamedArgs {

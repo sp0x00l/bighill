@@ -2,15 +2,19 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
 	"lib/shared_lib/ctxutil"
+	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -24,11 +28,16 @@ type ModelRegistryUsecase interface {
 	RecordModelTrainingFailed(ctx context.Context, failedModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
 	RecordModelArtifactIngested(ctx context.Context, ingestedModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
 	RecordModelServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, idempotencyKey uuid.UUID) (*model.Model, error)
+	RecordPromotionReportReady(ctx context.Context, report model.PromotionReportResult, idempotencyKey uuid.UUID) (*model.Model, error)
+	PromoteCandidate(ctx context.Context, modelID uuid.UUID) (*model.Model, error)
 }
 
 type modelRegistryUsecase struct {
 	repo            ModelRepository
+	unitOfWork      ModelUnitOfWorkAdapter
+	eventBuilder    ModelEventBuilder
 	servingDeployer ModelServingDeployer
+	gatePolicy      model.GatePolicy
 }
 
 type ModelRegistryOption func(*modelRegistryUsecase)
@@ -41,11 +50,22 @@ func WithModelServingDeployer(deployer ModelServingDeployer) ModelRegistryOption
 	}
 }
 
-func NewModelRegistryUsecase(repo ModelRepository, opts ...ModelRegistryOption) ModelRegistryUsecase {
+func WithPromotionGatePolicy(policy model.GatePolicy) ModelRegistryOption {
+	log.Trace("WithPromotionGatePolicy")
+
+	return func(u *modelRegistryUsecase) {
+		u.gatePolicy = policy
+	}
+}
+
+func NewModelRegistryUsecase(repo ModelRepository, unitOfWork ModelUnitOfWorkAdapter, eventBuilder ModelEventBuilder, opts ...ModelRegistryOption) ModelRegistryUsecase {
 	log.Trace("NewModelRegistryUsecase")
 
 	u := &modelRegistryUsecase{
-		repo: repo,
+		repo:         repo,
+		unitOfWork:   unitOfWork,
+		eventBuilder: eventBuilder,
+		gatePolicy:   model.DefaultGatePolicy(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -64,9 +84,9 @@ func (u *modelRegistryUsecase) RegisterModel(ctx context.Context, registeredMode
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if registeredModel != nil {
-		ctx = ctxutil.WithTenantID(ctx, registeredModel.UserID)
+		ctx = contextForModel(ctx, registeredModel)
 	}
-	out, err = u.repo.Create(ctx, registeredModel, idempotencyKey)
+	out, err = u.createModel(ctx, registeredModel, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +114,7 @@ func (u *modelRegistryUsecase) MarkModelReady(ctx context.Context, modelID uuid.
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	out, err = u.repo.UpdateStatus(ctx, modelID, model.ModelStatusReady, artifactLocation, "")
+	out, err = u.updateModelStatus(ctx, modelID, model.ModelStatusReady, artifactLocation, "")
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +130,7 @@ func (u *modelRegistryUsecase) MarkModelFailed(ctx context.Context, modelID uuid
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	out, err = u.repo.UpdateStatus(ctx, modelID, model.ModelStatusFailed, "", failureReason)
+	out, err = u.updateModelStatus(ctx, modelID, model.ModelStatusFailed, "", failureReason)
 	if err != nil {
 		return nil, err
 	}
@@ -125,25 +145,23 @@ func (u *modelRegistryUsecase) RecordModelTrainingCompleted(ctx context.Context,
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	trainedModel.Status = model.ModelStatusEvaluated
+	trainedModel.Status = model.ModelStatusCandidate
 	trainedModel.ModelKind = model.ModelKindFineTuned
 	trainedModel.Source = model.ModelSourceTraining
-	ctx = ctxutil.WithTenantID(ctx, trainedModel.UserID)
-	if trainedModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
-		trainedModel.Status = model.ModelStatusReady
+	trainedModel.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+	ctx = contextForModel(ctx, trainedModel)
+	champion, err := u.repo.ReadChampion(ctx, model.LineageForModel(trainedModel))
+	if err != nil && !errors.Is(err, domain.ErrModelNotFound) {
+		return nil, err
 	}
-	out, err = u.repo.Create(ctx, trainedModel, idempotencyKey)
+	out, err = u.createCandidateModel(ctx, trainedModel, champion, idempotencyKey)
 	if err != nil {
 		if errors.Is(err, domain.ErrModelExists) {
-			out, err = u.repo.ReadByTrainingRunID(ctx, trainedModel.TrainingRunID)
-			if err != nil {
-				return nil, err
-			}
-			return out, u.ensureServedModel(ctx, out)
+			return u.repo.ReadByTrainingRunID(ctx, trainedModel.TrainingRunID)
 		}
 		return nil, err
 	}
-	return out, u.ensureServedModel(ctx, out)
+	return out, nil
 }
 
 func (u *modelRegistryUsecase) RecordModelTrainingFailed(ctx context.Context, failedModel *model.Model, idempotencyKey uuid.UUID) (out *model.Model, err error) {
@@ -155,8 +173,8 @@ func (u *modelRegistryUsecase) RecordModelTrainingFailed(ctx context.Context, fa
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	failedModel.Status = model.ModelStatusFailed
-	ctx = ctxutil.WithTenantID(ctx, failedModel.UserID)
-	out, err = u.repo.Create(ctx, failedModel, idempotencyKey)
+	ctx = contextForModel(ctx, failedModel)
+	out, err = u.createModel(ctx, failedModel, idempotencyKey)
 	if err != nil {
 		if errors.Is(err, domain.ErrModelExists) {
 			return u.repo.ReadByTrainingRunID(ctx, failedModel.TrainingRunID)
@@ -177,8 +195,9 @@ func (u *modelRegistryUsecase) RecordModelArtifactIngested(ctx context.Context, 
 	ingestedModel.Status = model.ModelStatusEvaluated
 	if ingestedModel.ModelKind == model.ModelKindBase {
 		ingestedModel.UserID = uuid.Nil
+		ctx = ctxutil.WithSystemContext(ctx)
 	} else {
-		ctx = ctxutil.WithTenantID(ctx, ingestedModel.UserID)
+		ctx = contextForModel(ctx, ingestedModel)
 	}
 	if ingestedModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
 		ingestedModel.Status = model.ModelStatusReady
@@ -186,7 +205,7 @@ func (u *modelRegistryUsecase) RecordModelArtifactIngested(ctx context.Context, 
 	if ingestedModel.MetricsMetadata == "" {
 		ingestedModel.MetricsMetadata = "{}"
 	}
-	out, err = u.repo.Create(ctx, ingestedModel, idempotencyKey)
+	out, err = u.createModel(ctx, ingestedModel, idempotencyKey)
 	if err != nil {
 		if errors.Is(err, domain.ErrModelExists) {
 			out, err = u.repo.ReadByID(ctx, ingestedModel.ModelID)
@@ -211,6 +230,10 @@ func (u *modelRegistryUsecase) RecordModelServingStatus(ctx context.Context, ser
 
 	status := model.ModelStatusEvaluated
 	failureReason := ""
+	existing, readErr := u.repo.ReadByID(ctx, servedModelStatus.ModelID)
+	if readErr != nil && !errors.Is(readErr, domain.ErrModelNotFound) {
+		return nil, readErr
+	}
 	switch servedModelStatus.ServingLoadStatus {
 	case model.ModelLoadStatusLoaded:
 		status = model.ModelStatusReady
@@ -218,7 +241,129 @@ func (u *modelRegistryUsecase) RecordModelServingStatus(ctx context.Context, ser
 		status = model.ModelStatusFailed
 		failureReason = servedModelStatus.FailureReason
 	}
-	return u.repo.UpdateServingStatus(ctx, servedModelStatus.ModelID, status, servedModelStatus.ServingLoadStatus, servedModelStatus.ServingTarget, servedModelStatus.ServingModel, failureReason, idempotencyKey)
+	if existing != nil && existing.Status == model.ModelStatusCandidate && status != model.ModelStatusFailed {
+		status = model.ModelStatusCandidate
+	}
+	return u.updateServingStatus(ctx, servedModelStatus, status, failureReason, idempotencyKey)
+}
+
+func (u *modelRegistryUsecase) RecordPromotionReportReady(ctx context.Context, report model.PromotionReportResult, idempotencyKey uuid.UUID) (out *model.Model, err error) {
+	log.Trace("ModelRegistryUsecase RecordPromotionReportReady")
+
+	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.record_promotion_report_ready",
+		attribute.String("idempotency_key", idempotencyKey.String()),
+		attribute.String("model_id", report.ModelID.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	ctx = ctxutil.WithSystemContext(ctx)
+	candidate, err := u.repo.ReadByID(ctx, report.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	if report.UserID != uuid.Nil && candidate.UserID != report.UserID {
+		return nil, fmt.Errorf("%w: promotion report user id does not match candidate", domain.ErrValidationFailed)
+	}
+	if report.TrainingRunID != uuid.Nil && candidate.TrainingRunID != report.TrainingRunID {
+		return nil, fmt.Errorf("%w: promotion report training run id does not match candidate", domain.ErrValidationFailed)
+	}
+	if candidate.Status == model.ModelStatusEvaluated || candidate.Status == model.ModelStatusReady {
+		return candidate, u.ensureServedModel(contextForModel(ctx, candidate), candidate)
+	}
+	if candidate.Status == model.ModelStatusFailed {
+		return candidate, nil
+	}
+	if candidate.Status != model.ModelStatusCandidate {
+		return nil, fmt.Errorf("%w: model %s is not a candidate", domain.ErrValidationFailed, report.ModelID)
+	}
+	if report.FailureReason != "" {
+		return u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusFailed, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, report.FailureReason))
+	}
+
+	decision, err := u.evaluateCandidatePromotion(contextForModel(ctx, candidate), candidate, &report)
+	if err != nil {
+		return nil, err
+	}
+	if !decision.Promote {
+		return u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusFailed, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, decision.Reason))
+	}
+	report.Deltas = decision.Deltas
+	out, err = u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusEvaluated, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeAccepted, decision.Reason))
+	if err != nil {
+		return nil, err
+	}
+	return out, u.ensureServedModel(contextForModel(ctx, out), out)
+}
+
+func (u *modelRegistryUsecase) PromoteCandidate(ctx context.Context, modelID uuid.UUID) (out *model.Model, err error) {
+	log.Trace("ModelRegistryUsecase PromoteCandidate")
+
+	ctx = ctxutil.WithSystemContext(ctx)
+	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.promote_candidate",
+		attribute.String("model_id", modelID.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	candidate, err := u.repo.ReadByID(ctx, modelID)
+	if err != nil {
+		return nil, err
+	}
+	if candidate.Status == model.ModelStatusEvaluated || candidate.Status == model.ModelStatusReady {
+		return candidate, u.ensureServedModel(contextForModel(ctx, candidate), candidate)
+	}
+	if candidate.Status == model.ModelStatusFailed {
+		return candidate, nil
+	}
+	if candidate.Status != model.ModelStatusCandidate {
+		return nil, fmt.Errorf("%w: model %s is not a candidate", domain.ErrValidationFailed, modelID)
+	}
+
+	decision, err := u.evaluateCandidatePromotion(contextForModel(ctx, candidate), candidate, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !decision.Promote {
+		return u.rejectCandidate(ctx, candidate.ModelID, model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, decision.Reason))
+	}
+	out, err = u.updateModelStatus(contextForModel(ctx, candidate), candidate.ModelID, model.ModelStatusEvaluated, "", model.PromotionDecisionReason(model.PromotionDecisionOutcomeAccepted, decision.Reason))
+	if err != nil {
+		return nil, err
+	}
+	return out, u.ensureServedModel(contextForModel(ctx, out), out)
+}
+
+func (u *modelRegistryUsecase) evaluateCandidatePromotion(ctx context.Context, candidate *model.Model, report *model.PromotionReportResult) (model.GateDecision, error) {
+	log.Trace("ModelRegistryUsecase evaluateCandidatePromotion")
+
+	candidateMetrics, err := model.ParseEvalMetrics(candidate.MetricsMetadata)
+	if err != nil {
+		return model.GateDecision{Reason: err.Error(), Deltas: map[string]float64{}}, nil
+	}
+	champion, err := u.repo.ReadChampion(ctx, model.LineageForModel(candidate))
+	if err != nil && !errors.Is(err, domain.ErrModelNotFound) {
+		return model.GateDecision{}, err
+	}
+	var championMetrics *model.EvalMetrics
+	if champion != nil {
+		championMetrics, err = model.ParseEvalMetrics(champion.MetricsMetadata)
+		if err != nil {
+			return model.GateDecision{Reason: "champion metrics invalid: " + err.Error(), Deltas: map[string]float64{}}, nil
+		}
+	}
+	var evidence *model.PromotionReport
+	if report != nil {
+		evidence = &model.PromotionReport{
+			DeepchecksPassed: report.DeepchecksPassed,
+			EvidentlyPassed:  report.EvidentlyPassed,
+		}
+	}
+	return model.EvaluatePromotion(candidateMetrics, championMetrics, evidence, u.gatePolicy), nil
+}
+
+func (u *modelRegistryUsecase) rejectCandidate(ctx context.Context, modelID uuid.UUID, reason string) (*model.Model, error) {
+	log.Trace("ModelRegistryUsecase rejectCandidate")
+
+	return u.updateModelStatus(ctx, modelID, model.ModelStatusFailed, "", reason)
 }
 
 func (u *modelRegistryUsecase) ensureServedModel(ctx context.Context, registeredModel *model.Model) error {
@@ -228,4 +373,125 @@ func (u *modelRegistryUsecase) ensureServedModel(ctx context.Context, registered
 		return nil
 	}
 	return u.servingDeployer.EnsureServedModel(ctx, registeredModel)
+}
+
+func (u *modelRegistryUsecase) createModel(ctx context.Context, registeredModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error) {
+	log.Trace("ModelRegistryUsecase createModel")
+
+	var modelRecord *model.Model
+	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		created, err := u.repo.Create(ctx, tx, registeredModel, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(u.eventBuilder.ModelUpdatedMessage(created)); err != nil {
+			return fmt.Errorf("enqueue model updated: %w", err)
+		}
+		modelRecord = created
+		return nil
+	})
+	return modelRecord, err
+}
+
+func (u *modelRegistryUsecase) createCandidateModel(ctx context.Context, registeredModel *model.Model, champion *model.Model, idempotencyKey uuid.UUID) (*model.Model, error) {
+	log.Trace("ModelRegistryUsecase createCandidateModel")
+
+	var modelRecord *model.Model
+	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		created, err := u.repo.Create(ctx, tx, registeredModel, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(u.eventBuilder.ModelUpdatedMessage(created)); err != nil {
+			return fmt.Errorf("enqueue model updated: %w", err)
+		}
+		if err := enqueue(u.eventBuilder.PromotionRequestedMessage(created, champion)); err != nil {
+			return fmt.Errorf("enqueue promotion requested: %w", err)
+		}
+		modelRecord = created
+		return nil
+	})
+	return modelRecord, err
+}
+
+func (u *modelRegistryUsecase) recordPromotionDecision(ctx context.Context, candidate *model.Model, status model.ModelStatus, report model.PromotionReportResult, failureReason string) (*model.Model, error) {
+	log.Trace("ModelRegistryUsecase recordPromotionDecision")
+
+	deltas, err := promotionDeltasJSON(report.Deltas)
+	if err != nil {
+		return nil, err
+	}
+	var modelRecord *model.Model
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		updated, err := u.repo.UpdatePromotionDecision(ctx, tx, candidate.ModelID, status, report.PromotionReportURI, deltas, failureReason)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(u.eventBuilder.ModelUpdatedMessage(updated)); err != nil {
+			return fmt.Errorf("enqueue model updated: %w", err)
+		}
+		modelRecord = updated
+		return nil
+	})
+	return modelRecord, err
+}
+
+func (u *modelRegistryUsecase) updateModelStatus(ctx context.Context, modelID uuid.UUID, status model.ModelStatus, artifactLocation string, failureReason string) (*model.Model, error) {
+	log.Trace("ModelRegistryUsecase updateModelStatus")
+
+	var modelRecord *model.Model
+	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		updated, err := u.repo.UpdateStatus(ctx, tx, modelID, status, artifactLocation, failureReason)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(u.eventBuilder.ModelUpdatedMessage(updated)); err != nil {
+			return fmt.Errorf("enqueue model updated: %w", err)
+		}
+		modelRecord = updated
+		return nil
+	})
+	return modelRecord, err
+}
+
+func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, status model.ModelStatus, failureReason string, idempotencyKey uuid.UUID) (*model.Model, error) {
+	log.Trace("ModelRegistryUsecase updateServingStatus")
+
+	var modelRecord *model.Model
+	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		updated, changed, err := u.repo.UpdateServingStatus(ctx, tx, servedModelStatus.ModelID, status, servedModelStatus.ServingLoadStatus, servedModelStatus.ServingTarget, servedModelStatus.ServingModel, failureReason, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		if changed {
+			if err := enqueue(u.eventBuilder.ModelUpdatedMessage(updated)); err != nil {
+				return fmt.Errorf("enqueue model updated: %w", err)
+			}
+		}
+		modelRecord = updated
+		return nil
+	})
+	return modelRecord, err
+}
+
+func contextForModel(ctx context.Context, modelRecord *model.Model) context.Context {
+	log.Trace("contextForModel")
+
+	if modelRecord.UserID == uuid.Nil {
+		return ctxutil.WithSystemContext(ctx)
+	}
+	return ctxutil.WithTenantID(ctx, modelRecord.UserID)
+}
+
+func promotionDeltasJSON(deltas map[string]float64) (string, error) {
+	log.Trace("promotionDeltasJSON")
+
+	if len(deltas) == 0 {
+		return "{}", nil
+	}
+	raw, err := json.Marshal(deltas)
+	if err != nil {
+		return "", fmt.Errorf("%w: marshal promotion deltas: %w", domain.ErrValidationFailed, err)
+	}
+	return string(raw), nil
 }

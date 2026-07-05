@@ -25,4 +25,20 @@ message ModelUpdatedEvent {
   string source = 20;
   string source_uri = 21;
   string source_metadata = 22;
+  string promotion_report_uri = 23;
+  string promotion_deltas = 24;
+}
+
+message PromotionRequestedEvent {
+  string user_id = 1;
+  string model_id = 2;
+  string training_run_id = 3;
+  string dataset_id = 4;
+  string model_name = 5;
+  int32 model_version = 6;
+  string candidate_report_uri = 7;
+  string candidate_metrics_metadata = 8;
+  string champion_model_id = 9;
+  string champion_report_uri = 10;
+  string champion_metrics_metadata = 11;
 }

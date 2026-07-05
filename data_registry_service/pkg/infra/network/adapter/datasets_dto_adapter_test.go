@@ -20,7 +20,7 @@ var _ = Describe("DatasetDTOAdapter", func() {
 	})
 
 	It("maps processing profile from request DTOs", func() {
-		dataset, err := adapter.FromDTO(context.Background(), []byte(`{"title":"RAG corpus","processingProfile":"TEXT_RAG"}`))
+		dataset, err := adapter.FromDTO(context.Background(), []byte(`{"title":"RAG corpus","processingProfile":"TEXT_RAG_PROCESSING_PROFILE"}`))
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dataset.ProcessingProfile).To(Equal(model.TextRAGProfile))
@@ -109,7 +109,7 @@ var _ = Describe("DatasetDTOAdapter", func() {
 
 		dataset, err := adapter.FromDTO(context.Background(), []byte(`{
 			"title":"Warehouse movies",
-			"processingProfile":"TEXT_RAG",
+			"processingProfile":"TEXT_RAG_PROCESSING_PROFILE",
 			"sourceType":"POSTGRES",
 			"sourceConnectorId":"`+connectorID.String()+`",
 			"sourceQuery":"SELECT title FROM movies",

@@ -29,6 +29,7 @@ import (
 	sharedmessaging "lib/shared_lib/messaging"
 	serializers "lib/shared_lib/serializer"
 	"lib/shared_lib/transport"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
@@ -74,9 +75,10 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		orderedOutbox, ok := outboxWriter.(sharedmessaging.OrderedOutbox)
 		Expect(ok).To(BeTrue())
 
-		datasetDB = repo.NewDatasetDB(database, repo.WithTransactionalOutbox(orderedOutbox, "data_registry"))
+		datasetDB = repo.NewDatasetDB(database)
 		sourceDB = repo.NewSourceConnectorDB(database)
-		datasets = usecase.NewDatasetUseCase(datasetDB)
+		datasetUnitOfWork := shareduow.New(database.Pool, shareduow.WithTransactionalOutbox(orderedOutbox))
+		datasets = usecase.NewDatasetUseCase(datasetDB, datasetUnitOfWork, registrymessaging.NewDatasetEventBuilder("data_registry"))
 		connectors = usecase.NewSourceUsecase(sourceDB, catalogclient.NewLocalCatalogClient())
 	})
 
@@ -239,7 +241,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		createReq := newIntegrationJSONRequest(http.MethodPost, "/v1/data/registry", `{
 			"title":"REST movies",
 			"category":"movies",
-			"processingProfile":"TEXT_RAG"
+			"processingProfile":"TEXT_RAG_PROCESSING_PROFILE"
 		}`, userID, uuid.New())
 		createRes, err := handlers.CreateDataset(ctx, createReq)
 		Expect(err).NotTo(HaveOccurred())
@@ -270,7 +272,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		replaceReq := newIntegrationJSONRequest(http.MethodPut, "/v1/data/registry/"+createdID.String(), `{
 			"title":"REST movies updated",
 			"category":"movies",
-			"processingProfile":"TEXT_RAG"
+			"processingProfile":"TEXT_RAG_PROCESSING_PROFILE"
 		}`, userID, uuid.Nil)
 		replaceReq = mux.SetURLVars(replaceReq, map[string]string{"datasetId": createdID.String()})
 		replaceRes, err := handlers.ReplaceDataset(ctx, replaceReq)
@@ -581,7 +583,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			CatalogProvider:   "LOCAL",
 			SchemaVersion:     1,
 			SchemaMetadata:    "{}",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -606,7 +608,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			CatalogProvider:   "LOCAL",
 			SchemaVersion:     3,
 			SchemaMetadata:    `{"columns":["title"]}`,
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {

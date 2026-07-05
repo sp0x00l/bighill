@@ -13,6 +13,7 @@ import (
 	usecase "ingestion_service/pkg/app"
 	"ingestion_service/pkg/domain/model"
 	ingestionadapter "ingestion_service/pkg/infra/network/adapter"
+	ingestionmessaging "ingestion_service/pkg/infra/network/messaging"
 	resthandler "ingestion_service/pkg/infra/network/rest"
 	restsupport "ingestion_service/pkg/infra/network/restsupport"
 	"ingestion_service/pkg/infra/repo/bucket"
@@ -24,6 +25,7 @@ import (
 	env "lib/shared_lib/env"
 	messaging "lib/shared_lib/messaging"
 	serializers "lib/shared_lib/serializer"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
@@ -121,10 +123,10 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 			defer close(relayDone)
 			_ = relay.Run(relayCtx)
 		}()
-		uploadSessionRepo := repo.NewUploadSessionDB(
-			database,
-			repo.WithUploadSessionOutbox(orderedOutbox, topic),
-			repo.WithUploadSessionOutboxSignal(func() { messaging.NotifyOutboxSignal(outboxSignal) }),
+		uploadSessionRepo := repo.NewUploadSessionDB(database)
+		uploadSessionUOW := shareduow.New(database.Pool,
+			shareduow.WithTransactionalOutbox(orderedOutbox),
+			shareduow.WithOutboxSignal(func() { messaging.NotifyOutboxSignal(outboxSignal) }),
 		)
 		detector := resthandler.NewDetector(map[string]resthandler.FormatValidatorFunc{
 			resthandler.FileTypeCSV:      resthandler.IsCSV,
@@ -137,6 +139,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 		})
 		uploader = usecase.NewDataUploadUseCase(uploadBucket,
 			usecase.WithUploadSessionRepository(uploadSessionRepo),
+			usecase.WithUploadSessionUnitOfWork(uploadSessionUOW, ingestionmessaging.NewUploadEventBuilder(topic)),
 			usecase.WithUploadDatasetRepository(datasetDB),
 			usecase.WithUploadFileDetector(detector),
 			usecase.WithUploadPolicy(20*1000*1000, 15*time.Minute, 5*1000*1000),
@@ -181,7 +184,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		}
 		Expect(uploader.UploadFile(ctx, upload)).To(Succeed())
 
@@ -197,7 +200,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 		Expect(event.TableName).To(Equal("movies"))
 		Expect(event.TableFormat).To(Equal("PARQUET"))
 		Expect(event.CatalogProvider).To(Equal("LOCAL"))
-		Expect(event.ProcessingProfile).To(Equal("TEXT_RAG"))
+		Expect(event.ProcessingProfile).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
 	})
 
 	It("does not upload or publish when the dataset is blacklisted", func() {
@@ -248,7 +251,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 			TableName:           "large_parquet",
 			TableFormat:         "PARQUET",
 			CatalogProvider:     "LOCAL",
-			ProcessingProfile:   "TEXT_RAG",
+			ProcessingProfile:   "TEXT_RAG_PROCESSING_PROFILE",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		stagingKey := initiated.Fields["key"]
@@ -306,7 +309,7 @@ func validIngestionDataset(datasetID, userID uuid.UUID) *model.Dataset {
 		TableName:         "movies",
 		TableFormat:       "PARQUET",
 		CatalogProvider:   "LOCAL",
-		ProcessingProfile: "TEXT_RAG",
+		ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		SchemaVersion:     1,
 		SchemaMetadata:    "{}",
 	}

@@ -56,7 +56,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -79,7 +79,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
 			ContentType:       "text/csv",
 			FileExtension:     "csv",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).To(HaveOccurred())
@@ -100,7 +100,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
 		Expect(featuremessaging.NewDatasetFileUploadedEventListener(first).Handle(context.Background(), datasetID, event)).To(Succeed())
@@ -123,7 +123,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).To(HaveOccurred())
@@ -158,7 +158,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 			SourceType:        "POSTGRES",
 			SourceConnectorId: connectorID.String(),
 			SourceQuery:       "SELECT title FROM movies",
@@ -190,7 +190,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -210,7 +210,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 			SourceType:        "MONGO",
 			SourceConnectorId: connectorID.String(),
 			SourceDatabase:    "catalog",

@@ -8,57 +8,25 @@ import (
 
 	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
-	ingestionpb "lib/data_contracts_lib/ingestion"
 	coreDb "lib/shared_lib/db"
-	msgConn "lib/shared_lib/messaging"
-	"lib/shared_lib/uuidutil"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/proto"
 )
 
 type UploadSessionDB struct {
 	coreDb.Database
-	outbox       msgConn.OrderedOutbox
-	topic        string
-	outboxSignal func()
 }
 
-type UploadSessionDBOption func(*UploadSessionDB)
-
-func WithUploadSessionOutbox(outbox msgConn.OrderedOutbox, topic string) UploadSessionDBOption {
-	log.Trace("WithUploadSessionOutbox")
-
-	return func(db *UploadSessionDB) {
-		db.outbox = outbox
-		db.topic = topic
-	}
-}
-
-func WithUploadSessionOutboxSignal(signal func()) UploadSessionDBOption {
-	log.Trace("WithUploadSessionOutboxSignal")
-
-	return func(db *UploadSessionDB) {
-		db.outboxSignal = signal
-	}
-}
-
-func NewUploadSessionDB(db *coreDb.Database, opts ...UploadSessionDBOption) *UploadSessionDB {
+func NewUploadSessionDB(db *coreDb.Database) *UploadSessionDB {
 	log.Trace("NewUploadSessionDB")
 
-	repo := &UploadSessionDB{Database: *db}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(repo)
-		}
-	}
-	return repo
+	return &UploadSessionDB{Database: *db}
 }
 
-func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, tx pgx.Tx, session *model.UploadSession) (*model.UploadSession, error) {
 	log.Trace("UploadSessionDB CreateUploadSession")
 
 	query := `INSERT INTO ` + db.Name + `.upload_sessions (
@@ -93,7 +61,7 @@ func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, session *mod
 		base_model, source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
 		created_at, expires_at`
 
-	out, err := scanUploadSession(db.Pool.QueryRow(ctx, query, uploadSessionDAO(session)))
+	out, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionDAO(session)))
 	if err != nil {
 		if coreDb.IsForeignKeyViolation(err) {
 			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
@@ -124,14 +92,8 @@ func (db *UploadSessionDB) ReadUploadSessionForComplete(ctx context.Context, upl
 	return session, nil
 }
 
-func (db *UploadSessionDB) PromoteUploadSession(ctx context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+func (db *UploadSessionDB) PromoteUploadSession(ctx context.Context, tx pgx.Tx, session *model.UploadSession) (*model.UploadSession, bool, error) {
 	log.Trace("UploadSessionDB PromoteUploadSession")
-
-	tx, err := db.Pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("begin upload promotion transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
 
 	query := `UPDATE ` + db.Name + `.upload_sessions SET
 		storage_location = @storage_location,
@@ -151,53 +113,31 @@ func (db *UploadSessionDB) PromoteUploadSession(ctx context.Context, session *mo
 		if errors.Is(err, pgx.ErrNoRows) {
 			existing, readErr := db.readUploadSessionTx(ctx, tx, session.UploadID, session.UserID)
 			if readErr != nil {
-				return nil, readErr
+				return nil, false, readErr
 			}
 			if existing.Status == model.UploadSessionPromoted {
-				if err := tx.Commit(ctx); err != nil {
-					return nil, fmt.Errorf("commit already-promoted upload transaction: %w", err)
-				}
-				return existing, nil
+				return existing, false, nil
 			}
-			return nil, domain.ErrValidationFailed.Extend("upload session is not pending")
+			return nil, false, domain.ErrValidationFailed.Extend("upload session is not pending")
 		}
-		return nil, fmt.Errorf("promote upload session: %w", err)
+		return nil, false, fmt.Errorf("promote upload session: %w", err)
 	}
-	enqueued := false
-	if db.outbox != nil && promoted.ResourceType == model.UploadResourceDataFile {
-		if err := db.outbox.EnqueueTx(ctx, tx, datasetFileUploadedMessage(db.topic, promoted)); err != nil {
-			return nil, err
-		}
-		enqueued = true
-	}
-	if db.outbox != nil && promoted.ResourceType == model.UploadResourceModelArtifact {
-		if err := db.outbox.EnqueueTx(ctx, tx, modelArtifactIngestedMessage(db.topic, promoted)); err != nil {
-			return nil, err
-		}
-		enqueued = true
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit upload promotion transaction: %w", err)
-	}
-	if enqueued {
-		db.notifyOutbox()
-	}
-	return promoted, nil
+	return promoted, true, nil
 }
 
-func (db *UploadSessionDB) RejectUploadSession(ctx context.Context, uploadID, userID uuid.UUID) error {
+func (db *UploadSessionDB) RejectUploadSession(ctx context.Context, tx pgx.Tx, uploadID, userID uuid.UUID) error {
 	log.Trace("UploadSessionDB RejectUploadSession")
 
-	return db.setUploadSessionStatus(ctx, uploadID, userID, model.UploadSessionRejected)
+	return db.setUploadSessionStatus(ctx, tx, uploadID, userID, model.UploadSessionRejected)
 }
 
-func (db *UploadSessionDB) ExpireUploadSession(ctx context.Context, uploadID, userID uuid.UUID) error {
+func (db *UploadSessionDB) ExpireUploadSession(ctx context.Context, tx pgx.Tx, uploadID, userID uuid.UUID) error {
 	log.Trace("UploadSessionDB ExpireUploadSession")
 
-	return db.setUploadSessionStatus(ctx, uploadID, userID, model.UploadSessionExpired)
+	return db.setUploadSessionStatus(ctx, tx, uploadID, userID, model.UploadSessionExpired)
 }
 
-func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, upload *model.DataFile, storageLocation string, uploadID uuid.UUID) error {
+func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, tx pgx.Tx, upload *model.DataFile, storageLocation string, uploadID uuid.UUID) (*model.UploadSession, error) {
 	log.Trace("UploadSessionDB RecordUploadedFile")
 
 	if uploadID == uuid.Nil {
@@ -221,12 +161,6 @@ func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, upload *model
 		ProcessingProfile:   upload.ProcessingProfile,
 	}
 
-	tx, err := db.Pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin direct upload transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
 	query := `INSERT INTO ` + db.Name + `.upload_sessions (
 		upload_id, resource_type, resource_id, dataset_id, user_id, file_name, storage_location, declared_format,
 		declared_content_type, status, table_namespace, table_name, table_format,
@@ -239,27 +173,14 @@ func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, upload *model
 	ON CONFLICT (upload_id) DO UPDATE SET upload_id = EXCLUDED.upload_id`
 	if _, err := tx.Exec(ctx, query, uploadSessionDAO(session)); err != nil {
 		if coreDb.IsForeignKeyViolation(err) {
-			return domain.ErrValidationFailed.Extend("tenant projection is not ready")
+			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
 		}
-		return fmt.Errorf("record direct upload session: %w", err)
+		return nil, fmt.Errorf("record direct upload session: %w", err)
 	}
-	enqueued := false
-	if db.outbox != nil {
-		if err := db.outbox.EnqueueTx(ctx, tx, datasetFileUploadedMessage(db.topic, session)); err != nil {
-			return err
-		}
-		enqueued = true
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit direct upload transaction: %w", err)
-	}
-	if enqueued {
-		db.notifyOutbox()
-	}
-	return nil
+	return session, nil
 }
 
-func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, tx pgx.Tx, session *model.UploadSession) (*model.UploadSession, error) {
 	log.Trace("UploadSessionDB RecordModelArtifact")
 
 	if session.UploadID == uuid.Nil {
@@ -274,12 +195,6 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, session *mod
 	if session.ExpiresAt.IsZero() {
 		session.ExpiresAt = now
 	}
-	tx, err := db.Pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("begin model artifact transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
 	query := `INSERT INTO ` + db.Name + `.upload_sessions (
 		upload_id, resource_type, resource_id, dataset_id, user_id, client_nonce, file_name, storage_location,
 		declared_format, declared_content_type, declared_size_bytes, actual_size_bytes, checksum, status,
@@ -305,19 +220,6 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, session *mod
 		}
 		return nil, fmt.Errorf("record model artifact session: %w", err)
 	}
-	enqueued := false
-	if db.outbox != nil {
-		if err := db.outbox.EnqueueTx(ctx, tx, modelArtifactIngestedMessage(db.topic, recorded)); err != nil {
-			return nil, err
-		}
-		enqueued = true
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit model artifact transaction: %w", err)
-	}
-	if enqueued {
-		db.notifyOutbox()
-	}
 	return recorded, nil
 }
 
@@ -342,12 +244,12 @@ func (db *UploadSessionDB) readUploadSessionTx(ctx context.Context, tx pgx.Tx, u
 	return session, nil
 }
 
-func (db *UploadSessionDB) setUploadSessionStatus(ctx context.Context, uploadID, userID uuid.UUID, status model.UploadSessionStatus) error {
+func (db *UploadSessionDB) setUploadSessionStatus(ctx context.Context, tx pgx.Tx, uploadID, userID uuid.UUID, status model.UploadSessionStatus) error {
 	log.Trace("UploadSessionDB setUploadSessionStatus")
 
 	query := `UPDATE ` + db.Name + `.upload_sessions SET status = @status, updated_at = now()
 		WHERE upload_id = @upload_id AND user_id = @user_id AND status = 'PENDING'`
-	cmd, err := db.Pool.Exec(ctx, query, pgx.NamedArgs{
+	cmd, err := tx.Exec(ctx, query, pgx.NamedArgs{
 		"upload_id": pgtype.UUID{Bytes: uploadID, Valid: true},
 		"user_id":   pgtype.UUID{Bytes: userID, Valid: true},
 		"status":    string(status),
@@ -356,7 +258,7 @@ func (db *UploadSessionDB) setUploadSessionStatus(ctx context.Context, uploadID,
 		return fmt.Errorf("set upload session status: %w", err)
 	}
 	if cmd.RowsAffected() == 0 {
-		current, readErr := db.ReadUploadSessionForComplete(ctx, uploadID, userID)
+		current, readErr := db.readUploadSessionTx(ctx, tx, uploadID, userID)
 		if readErr != nil {
 			return readErr
 		}
@@ -366,14 +268,6 @@ func (db *UploadSessionDB) setUploadSessionStatus(ctx context.Context, uploadID,
 		return domain.ErrResourceNotFound
 	}
 	return nil
-}
-
-func (db *UploadSessionDB) notifyOutbox() {
-	log.Trace("UploadSessionDB notifyOutbox")
-
-	if db.outboxSignal != nil {
-		db.outboxSignal()
-	}
 }
 
 func uploadSessionDAO(session *model.UploadSession) pgx.NamedArgs {
@@ -484,96 +378,4 @@ func scanUploadSession(row pgx.Row) (*model.UploadSession, error) {
 	session.UserID = uuid.MustParse(userID)
 	session.Status = model.UploadSessionStatus(status)
 	return session, nil
-}
-
-func datasetFileUploadedMessage(topic string, session *model.UploadSession) msgConn.OutboundMessage {
-	log.Trace("datasetFileUploadedMessage")
-
-	payload := mustMarshalUpload(&ingestionpb.DatasetFileUploadedEvent{
-		DatasetId:         session.DatasetID.String(),
-		UserId:            session.UserID.String(),
-		StorageLocation:   session.StorageLocation,
-		ContentType:       session.DeclaredContentType,
-		FileExtension:     session.DeclaredFormat,
-		TableNamespace:    session.TableNamespace,
-		TableName:         session.TableName,
-		TableFormat:       session.TableFormat,
-		CatalogProvider:   session.CatalogProvider,
-		ProcessingProfile: session.ProcessingProfile,
-		SourceType:        "upload",
-	})
-	return msgConn.OutboundMessage{
-		Topic: topic,
-		Message: msgConn.Message{
-			ResourceKey: session.DatasetID,
-			MsgType:     msgConn.MsgTypeDatasetFileUploaded,
-			Payload:     payload,
-		},
-		DispatchKey: "dataset_file_uploaded:" + session.UploadID.String(),
-	}
-}
-
-func modelArtifactIngestedMessage(topic string, session *model.UploadSession) msgConn.OutboundMessage {
-	log.Trace("modelArtifactIngestedMessage")
-
-	sourceMetadata := fmt.Sprintf(
-		`{"upload_id":%q,"file_name":%q,"content_type":%q,"manifest_location":%q,"hf_repo_id":%q,"hf_revision":%q,"hf_commit_sha":%q}`,
-		session.UploadID.String(),
-		session.FileName,
-		session.DeclaredContentType,
-		session.ManifestLocation,
-		session.HFRepoID,
-		session.HFRevision,
-		session.HFCommitSHA,
-	)
-	payload := mustMarshalUpload(&ingestionpb.ModelArtifactIngestedEvent{
-		ArtifactId:        session.ResourceID.String(),
-		UploadId:          session.UploadID.String(),
-		UserId:            session.UserID.String(),
-		DatasetId:         uuidutil.StringOrEmpty(session.DatasetID),
-		Source:            sourceOrDefault(session.Source),
-		StorageLocation:   session.StorageLocation,
-		ManifestLocation:  session.ManifestLocation,
-		ArtifactType:      session.ArtifactType,
-		ArtifactFormat:    session.DeclaredFormat,
-		ArtifactSizeBytes: session.ActualSizeBytes,
-		ArtifactChecksum:  session.Checksum,
-		FileName:          session.FileName,
-		ModelName:         session.ModelName,
-		ModelVersion:      session.ModelVersion,
-		BaseModel:         session.BaseModel,
-		ContentType:       session.DeclaredContentType,
-		SourceUri:         session.SourceURI,
-		HfRepoId:          session.HFRepoID,
-		HfRevision:        session.HFRevision,
-		HfCommitSha:       session.HFCommitSHA,
-		CreatedAt:         session.CreatedAt.Format(time.RFC3339),
-		SourceMetadata:    sourceMetadata,
-	})
-	return msgConn.OutboundMessage{
-		Topic: topic,
-		Message: msgConn.Message{
-			ResourceKey: session.ResourceID,
-			MsgType:     msgConn.MsgTypeModelArtifactIngested,
-			Payload:     payload,
-		},
-		DispatchKey: "model_artifact_ingested:" + session.UploadID.String(),
-	}
-}
-
-func sourceOrDefault(value string) string {
-	if value == "" {
-		return "upload"
-	}
-	return value
-}
-
-func mustMarshalUpload(payload proto.Message) []byte {
-	log.Trace("mustMarshalUpload")
-
-	out, err := proto.Marshal(payload)
-	if err != nil {
-		panic(err)
-	}
-	return out
 }

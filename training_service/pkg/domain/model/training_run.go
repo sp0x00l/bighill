@@ -110,6 +110,11 @@ type EvaluationReport struct {
 	JudgeProvider        string             `json:"judge_provider,omitempty"`
 	JudgeModel           string             `json:"judge_model,omitempty"`
 	JudgeTemplateVersion string             `json:"judge_template_version,omitempty"`
+	DeepchecksPassed     bool               `json:"deepchecks_passed,omitempty"`
+	DeepchecksReportURI  string             `json:"deepchecks_report_uri,omitempty"`
+	EvidentlyPassed      bool               `json:"evidently_passed,omitempty"`
+	EvidentlyReportURI   string             `json:"evidently_report_uri,omitempty"`
+	ScoreRowsURI         string             `json:"score_rows_uri,omitempty"`
 	FailureReason        string             `json:"failure_reason,omitempty"`
 }
 
@@ -146,6 +151,35 @@ type EvaluationJobSpec struct {
 	ReportManifestURI    string
 	ArtifactBucketRegion string
 	SubmissionID         string
+}
+
+type PromotionReportJobSpec struct {
+	UserID                   string
+	ModelID                  string
+	TrainingRunID            string
+	CandidateReportURI       string
+	CandidateMetricsMetadata string
+	ChampionModelID          string
+	ChampionReportURI        string
+	ChampionMetricsMetadata  string
+	PromotionProfile         string
+	ReportURI                string
+	ReportManifestURI        string
+	ArtifactBucketRegion     string
+	SubmissionID             string
+}
+
+type PromotionReport struct {
+	UserID              string             `json:"user_id"`
+	ModelID             string             `json:"model_id"`
+	TrainingRunID       string             `json:"training_run_id"`
+	PromotionReportURI  string             `json:"promotion_report_uri"`
+	DeepchecksPassed    bool               `json:"deepchecks_passed,omitempty"`
+	DeepchecksReportURI string             `json:"deepchecks_report_uri,omitempty"`
+	EvidentlyPassed     bool               `json:"evidently_passed,omitempty"`
+	EvidentlyReportURI  string             `json:"evidently_report_uri,omitempty"`
+	Deltas              map[string]float64 `json:"deltas,omitempty"`
+	FailureReason       string             `json:"failure_reason,omitempty"`
 }
 
 type TrainingRunResult struct {

@@ -182,7 +182,7 @@ var _ = Describe("Materialization event listeners", func() {
 			CatalogProvider:   "LOCAL",
 			SchemaVersion:     1,
 			SchemaMetadata:    "{}",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -214,7 +214,7 @@ var _ = Describe("Materialization event listeners", func() {
 			CatalogProvider:   "LOCAL",
 			SchemaVersion:     2,
 			SchemaMetadata:    `{"columns":["title"]}`,
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -300,7 +300,7 @@ var _ = Describe("Materialization event listeners", func() {
 			CatalogProvider:   "NOT_A_CATALOG",
 			SchemaVersion:     1,
 			SchemaMetadata:    "{}",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).To(HaveOccurred())

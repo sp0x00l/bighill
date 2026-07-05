@@ -11,6 +11,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const rawSnapshotLakehouseKeyFormat = "lakehouse/raw/%s/%s/data.parquet"
+
 type RawSnapshotWriter struct {
 	store         ArtifactStore
 	icebergWriter IcebergTableWriter
@@ -57,7 +59,7 @@ func (w *RawSnapshotWriter) WriteRawSnapshot(ctx context.Context, datasetFile *m
 		return nil, err
 	}
 
-	key := fmt.Sprintf("lakehouse/raw/%s/%s/data.parquet", rawSnapshot.DatasetID.String(), rawSnapshot.RawSnapshotID.String())
+	key := fmt.Sprintf(rawSnapshotLakehouseKeyFormat, rawSnapshot.DatasetID.String(), rawSnapshot.RawSnapshotID.String())
 	location, err := w.store.Write(ctx, key, parquetContentType, artifact.Data)
 	if err != nil {
 		return nil, err

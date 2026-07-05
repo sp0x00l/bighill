@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 from training_jobs.config import read_storage_config
 from training_jobs.manifest import EvaluationReportManifest, parse_profile
+from training_jobs.promotion_report import add_promotion_evidence
 from training_jobs.storage import StorageConfig
 from training_jobs.storage import artifact_info, read_json_bytes, write_json_bytes
 
@@ -60,6 +61,8 @@ def main() -> None:
         report = run_ragas_evaluator(model_uri, profile, storage_config)
     else:
         report = built_in_evaluator(model_uri, profile, storage_config)
+    report = persist_score_rows(report, report_uri, storage_config)
+    report = add_promotion_evidence(report, profile, work_dir, storage_config)
 
     manifest = EvaluationReportManifest(
         training_run_id=training_run_id,
@@ -75,6 +78,11 @@ def main() -> None:
         judge_provider=str(report.get("judge_provider", profile.get("judge_provider", ""))),
         judge_model=str(report.get("judge_model", profile.get("judge_model", ""))),
         judge_template_version=str(report.get("judge_template_version", profile.get("judge_template_version", ""))),
+        deepchecks_passed=bool(report.get("deepchecks_passed", False)),
+        deepchecks_report_uri=str(report.get("deepchecks_report_uri", "")),
+        evidently_passed=bool(report.get("evidently_passed", False)),
+        evidently_report_uri=str(report.get("evidently_report_uri", "")),
+        score_rows_uri=str(report.get("score_rows_uri", "")),
         failure_reason=str(report.get("failure_reason", "")),
     )
     payload = manifest.to_json()
@@ -107,7 +115,8 @@ def built_in_evaluator(model_uri: str, profile: dict[str, Any], storage_config: 
     dataset_uri = str(profile.get("dataset_uri", "")).strip()
     if dataset_uri:
         rows = evaluation_rows(dataset_uri, storage_config)
-        metrics = rag_style_metrics(rows)
+        score_rows = rag_style_score_rows(rows)
+        metrics = aggregate_score_rows(score_rows)
     else:
         metrics = {
             "artifact_available": 1.0,
@@ -121,7 +130,7 @@ def built_in_evaluator(model_uri: str, profile: dict[str, Any], storage_config: 
         "context_precision": float(profile.get("min_context_precision", 0.0)),
     }
     failures = [name for name, threshold in thresholds.items() if metrics.get(name, 0.0) < threshold]
-    return {
+    report = {
         "passed": not failures,
         "metrics": metrics,
         "thresholds": thresholds,
@@ -135,6 +144,9 @@ def built_in_evaluator(model_uri: str, profile: dict[str, Any], storage_config: 
         "judge_template_version": str(profile.get("judge_template_version", "")),
         "failure_reason": ", ".join(failures),
     }
+    if dataset_uri:
+        report["score_rows"] = score_rows
+    return report
 
 
 def run_ragas_evaluator(model_uri: str, profile: dict[str, Any], storage_config: StorageConfig) -> dict[str, Any]:
@@ -148,9 +160,10 @@ def run_ragas_evaluator(model_uri: str, profile: dict[str, Any], storage_config:
     llm = ragas_llm(profile)
     result = call_ragas_evaluate(dataset, metrics, llm)
     metric_values = extract_ragas_metrics(result)
+    score_rows = extract_ragas_score_rows(result)
     thresholds = evaluation_thresholds(profile, metric_values.keys())
     failures = [name for name, threshold in thresholds.items() if metric_values.get(name, 0.0) < threshold]
-    return {
+    report = {
         "passed": not failures,
         "metrics": metric_values,
         "thresholds": thresholds,
@@ -164,6 +177,9 @@ def run_ragas_evaluator(model_uri: str, profile: dict[str, Any], storage_config:
         "judge_template_version": str(profile.get("judge_template_version", "")),
         "failure_reason": ", ".join(failures),
     }
+    if score_rows:
+        report["score_rows"] = score_rows
+    return report
 
 
 def evaluation_rows(dataset_uri: str, storage_config: StorageConfig) -> list[dict[str, Any]]:
@@ -282,6 +298,20 @@ def extract_ragas_metrics(result: Any) -> dict[str, float]:
     raise RuntimeError("unsupported ragas result shape")
 
 
+def extract_ragas_score_rows(result: Any) -> list[dict[str, float]]:
+    if hasattr(result, "to_pandas"):
+        frame = result.to_pandas()
+        rows: list[dict[str, float]] = []
+        for _, row in frame.iterrows():
+            numeric = {str(column): float(row[column]) for column in frame.columns if isinstance(row[column], (int, float))}
+            if numeric:
+                rows.append(numeric)
+        return rows
+    if hasattr(result, "scores") and isinstance(result.scores, list):
+        return [numeric_metrics(row) for row in result.scores if numeric_metrics(row)]
+    return []
+
+
 def numeric_metrics(raw: Any) -> dict[str, float]:
     if not isinstance(raw, dict):
         return {}
@@ -316,27 +346,52 @@ def evaluation_thresholds(profile: dict[str, Any], metric_names: Iterable[str]) 
     return resolved
 
 
-def rag_style_metrics(rows: list[dict[str, Any]]) -> dict[str, float]:
-    faithfulness: list[float] = []
-    relevancy: list[float] = []
-    precision: list[float] = []
+def rag_style_score_rows(rows: list[dict[str, Any]]) -> list[dict[str, float]]:
+    scores: list[dict[str, float]] = []
     for row in rows:
         answer = token_set(str(row.get("answer", "")))
         expected = token_set(str(row.get("expected_answer", row.get("ground_truth", ""))))
         contexts = token_set(" ".join(str(item) for item in row.get("contexts", [])))
         if not answer:
-            faithfulness.append(0.0)
-            relevancy.append(0.0)
-            precision.append(0.0)
+            scores.append({"faithfulness": 0.0, "answer_relevancy": 0.0, "context_precision": 0.0})
             continue
-        faithfulness.append(overlap(answer, contexts))
-        relevancy.append(overlap(answer, expected) if expected else 1.0)
-        precision.append(overlap(expected, contexts) if expected else overlap(answer, contexts))
-    return {
-        "faithfulness": average(faithfulness),
-        "answer_relevancy": average(relevancy),
-        "context_precision": average(precision),
-    }
+        scores.append(
+            {
+                "faithfulness": overlap(answer, contexts),
+                "answer_relevancy": overlap(answer, expected) if expected else 1.0,
+                "context_precision": overlap(expected, contexts) if expected else overlap(answer, contexts),
+            }
+        )
+    return scores
+
+
+def aggregate_score_rows(rows: list[dict[str, float]]) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    names = sorted({name for row in rows for name in row})
+    for name in names:
+        metrics[name] = average([float(row[name]) for row in rows if name in row])
+    return metrics
+
+
+def persist_score_rows(report: dict[str, Any], report_uri: str, storage_config: StorageConfig) -> dict[str, Any]:
+    rows = report.get("score_rows")
+    if report.get("score_rows_uri") or not rows:
+        return report
+    if not isinstance(rows, list):
+        raise RuntimeError("score_rows must be a list")
+    score_rows_uri = score_rows_uri_for_report(report_uri)
+    payload = "\n".join(json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows) + "\n"
+    write_json_bytes(score_rows_uri, payload.encode("utf-8"), storage_config)
+    persisted = dict(report)
+    persisted["score_rows_uri"] = score_rows_uri
+    persisted.pop("score_rows", None)
+    return persisted
+
+
+def score_rows_uri_for_report(report_uri: str) -> str:
+    if report_uri.endswith(".json"):
+        return report_uri[:-5] + ".scores.jsonl"
+    return report_uri.rstrip("/") + ".scores.jsonl"
 
 
 def token_set(value: str) -> set[str]:

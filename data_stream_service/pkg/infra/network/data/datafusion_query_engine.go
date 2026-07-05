@@ -1,12 +1,17 @@
 package data
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	domainErrors "data_stream_service/pkg/domain"
 	"data_stream_service/pkg/infra"
+	"encoding/binary"
 	"fmt"
+	"io"
+	"net/url"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +23,8 @@ import (
 )
 
 const defaultDataFusionBinaryPath = "internal/infra/queryengine/datafusion_query_engine/target/release/datafusion_query_engine"
+const queryEngineIPCHeader = "BHIPC001"
+const queryEngineIPCFooter = "BHIPCEND"
 
 type dataFusionQueryEngine struct {
 	allocator  memory.Allocator
@@ -96,6 +103,16 @@ func (e *dataFusionQueryEngine) Execute(ctx context.Context, ticket *flight.Tick
 	return e.executeSQL(ctx, query)
 }
 
+func (e *dataFusionQueryEngine) Stream(ctx context.Context, ticket *flight.Ticket, outStream flight.FlightService_DoGetServer) error {
+	log.Trace("dataFusionQueryEngine Stream")
+
+	query := ticketCommand(ticket)
+	if strings.TrimSpace(query) == "" {
+		return domainErrors.ErrValidationFailed.Extend("flight ticket requires query command")
+	}
+	return e.streamSQLWithDataRoot(ctx, query, e.dataRoot, outStream)
+}
+
 func (e *dataFusionQueryEngine) executeSQL(ctx context.Context, query string) (*QueryResult, error) {
 	log.Trace("dataFusionQueryEngine executeSQL")
 
@@ -105,11 +122,62 @@ func (e *dataFusionQueryEngine) executeSQL(ctx context.Context, query string) (*
 func (e *dataFusionQueryEngine) executeSQLWithDataRoot(ctx context.Context, query, dataRoot string) (*QueryResult, error) {
 	log.Trace("dataFusionQueryEngine executeSQLWithDataRoot")
 
+	args, err := sqlArgs(query, e.resolveDataRoot(dataRoot))
+	if err != nil {
+		return nil, err
+	}
+	return e.collectIPC(ctx, args, "run datafusion query engine")
+}
+
+func (e *dataFusionQueryEngine) streamSQLWithDataRoot(ctx context.Context, query, dataRoot string, outStream flight.FlightService_DoGetServer) error {
+	log.Trace("dataFusionQueryEngine streamSQLWithDataRoot")
+
+	args, err := sqlArgs(query, e.resolveDataRoot(dataRoot))
+	if err != nil {
+		return err
+	}
+	return e.streamIPC(ctx, args, "run datafusion query engine", outStream)
+}
+
+func (e *dataFusionQueryEngine) resolveDataRoot(dataRoot string) string {
+	log.Trace("dataFusionQueryEngine resolveDataRoot")
+
+	dataRoot = strings.TrimSpace(dataRoot)
+	if dataRoot == "" || e.dataRoot == "" {
+		return dataRoot
+	}
+	parsed, err := url.Parse(dataRoot)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "s3") {
+		return dataRoot
+	}
+	if parsed.Host != "local-dev-bucket" {
+		return dataRoot
+	}
+	key := strings.TrimPrefix(parsed.Path, "/")
+	if strings.TrimSpace(key) == "" {
+		return dataRoot
+	}
+	return filepath.Join(e.dataRoot, parsed.Host, filepath.FromSlash(key))
+}
+
+func sqlArgs(query, dataRoot string) ([]string, error) {
+	log.Trace("sqlArgs")
+
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, domainErrors.ErrValidationFailed.Extend("query command is required")
 	}
 	dataRoot = strings.TrimSpace(dataRoot)
+
+	args := []string{"--sql", query}
+	if dataRoot != "" {
+		args = append(args, "--data-root", dataRoot)
+	}
+	return args, nil
+}
+
+func (e *dataFusionQueryEngine) collectIPC(ctx context.Context, args []string, runLabel string) (*QueryResult, error) {
+	log.Trace("dataFusionQueryEngine collectIPC")
 
 	runCtx := ctx
 	cancel := func() {}
@@ -118,28 +186,111 @@ func (e *dataFusionQueryEngine) executeSQLWithDataRoot(ctx context.Context, quer
 	}
 	defer cancel()
 
-	args := []string{"--sql", query}
-	if dataRoot != "" {
-		args = append(args, "--data-root", dataRoot)
+	cmd := exec.CommandContext(runCtx, e.binaryPath, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("%s: stdout pipe: %w", runLabel, err)
 	}
+	if err := cmd.Start(); err != nil {
+		return nil, formatCommandError(runLabel, err, stderr.String())
+	}
+
+	var records []arrow.Record
+	schema, totalRecords, decodeErr := e.decodeIPC(stdout, nil, func(record arrow.Record) error {
+		record.Retain()
+		records = append(records, record)
+		return nil
+	})
+	if decodeErr != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	waitErr := cmd.Wait()
+	if decodeErr != nil {
+		releaseRecords(records)
+		return nil, formatCommandError(runLabel, decodeErr, stderr.String())
+	}
+	if waitErr != nil {
+		releaseRecords(records)
+		return nil, formatCommandError(runLabel, waitErr, stderr.String())
+	}
+
+	return &QueryResult{
+		Schema:       schema,
+		Records:      records,
+		TotalRecords: totalRecords,
+	}, nil
+}
+
+func (e *dataFusionQueryEngine) streamIPC(ctx context.Context, args []string, runLabel string, outStream flight.FlightService_DoGetServer) error {
+	log.Trace("dataFusionQueryEngine streamIPC")
+
+	runCtx := ctx
+	cancel := func() {}
+	if e.timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, e.timeout)
+	}
+	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, e.binaryPath, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		details := strings.TrimSpace(stderr.String())
-		if details != "" {
-			return nil, fmt.Errorf("run datafusion query engine: %w: %s", err, details)
-		}
-		return nil, fmt.Errorf("run datafusion query engine: %w", err)
+		return fmt.Errorf("%s: stdout pipe: %w", runLabel, err)
+	}
+	if err := cmd.Start(); err != nil {
+		return formatCommandError(runLabel, err, stderr.String())
 	}
 
-	return e.decodeIPC(output)
+	var writer *flight.Writer
+	_, _, decodeErr := e.decodeIPC(stdout, func(schema *arrow.Schema) error {
+		writer = flight.NewRecordWriter(outStream, ipc.WithSchema(schema), ipc.WithAllocator(e.allocator))
+		return nil
+	}, func(record arrow.Record) error {
+		return writer.Write(record)
+	})
+	if decodeErr != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	if writer != nil {
+		if err := writer.Close(); decodeErr == nil && err != nil {
+			decodeErr = fmt.Errorf("close flight stream writer: %w", err)
+		}
+	}
+	waitErr := cmd.Wait()
+	if decodeErr != nil {
+		return formatCommandError(runLabel, decodeErr, stderr.String())
+	}
+	if waitErr != nil {
+		return formatCommandError(runLabel, waitErr, stderr.String())
+	}
+	return nil
 }
 
 func (e *dataFusionQueryEngine) executeIceberg(ctx context.Context, query, namespace, table string) (*QueryResult, error) {
 	log.Trace("dataFusionQueryEngine executeIceberg")
+
+	args, err := e.icebergArgs(query, namespace, table)
+	if err != nil {
+		return nil, err
+	}
+	return e.collectIPC(ctx, args, "run datafusion iceberg query engine")
+}
+
+func (e *dataFusionQueryEngine) streamIceberg(ctx context.Context, query, namespace, table string, outStream flight.FlightService_DoGetServer) error {
+	log.Trace("dataFusionQueryEngine streamIceberg")
+
+	args, err := e.icebergArgs(query, namespace, table)
+	if err != nil {
+		return err
+	}
+	return e.streamIPC(ctx, args, "run datafusion iceberg query engine", outStream)
+}
+
+func (e *dataFusionQueryEngine) icebergArgs(query, namespace, table string) ([]string, error) {
+	log.Trace("dataFusionQueryEngine icebergArgs")
 
 	query = strings.TrimSpace(query)
 	namespace = strings.TrimSpace(namespace)
@@ -153,13 +304,6 @@ func (e *dataFusionQueryEngine) executeIceberg(ctx context.Context, query, names
 	if strings.TrimSpace(e.polaris.Credential) == "" && strings.TrimSpace(e.polaris.Token) == "" {
 		return nil, domainErrors.ErrValidationFailed.Extend("polaris credential or token is required")
 	}
-
-	runCtx := ctx
-	cancel := func() {}
-	if e.timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, e.timeout)
-	}
-	defer cancel()
 
 	args := []string{
 		"--source", "iceberg",
@@ -179,47 +323,88 @@ func (e *dataFusionQueryEngine) executeIceberg(ctx context.Context, query, names
 		"--s3-path-style", fmt.Sprintf("%t", e.polaris.S3PathStyle),
 		"--sql", query,
 	}
-	cmd := exec.CommandContext(runCtx, e.binaryPath, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
-	if err != nil {
-		details := strings.TrimSpace(stderr.String())
-		if details != "" {
-			return nil, fmt.Errorf("run datafusion iceberg query engine: %w: %s", err, details)
-		}
-		return nil, fmt.Errorf("run datafusion iceberg query engine: %w", err)
-	}
-	return e.decodeIPC(output)
+	return args, nil
 }
 
-func (e *dataFusionQueryEngine) decodeIPC(output []byte) (*QueryResult, error) {
+func (e *dataFusionQueryEngine) decodeIPC(input io.Reader, onSchema func(*arrow.Schema) error, onRecord func(arrow.Record) error) (*arrow.Schema, int64, error) {
 	log.Trace("dataFusionQueryEngine decodeIPC")
 
-	reader, err := ipc.NewReader(bytes.NewReader(output), ipc.WithAllocator(e.allocator))
+	buffered := bufio.NewReader(input)
+	header := make([]byte, len(queryEngineIPCHeader))
+	if _, err := io.ReadFull(buffered, header); err != nil {
+		return nil, 0, fmt.Errorf("read query engine envelope header: %w", err)
+	}
+	if string(header) != queryEngineIPCHeader {
+		return nil, 0, fmt.Errorf("read query engine envelope header: invalid magic %q", string(header))
+	}
+
+	rowCountBytes := make([]byte, 8)
+	if _, err := io.ReadFull(buffered, rowCountBytes); err != nil {
+		return nil, 0, fmt.Errorf("read query engine expected row count: %w", err)
+	}
+	expectedRows := int64(binary.LittleEndian.Uint64(rowCountBytes))
+
+	reader, err := ipc.NewReader(buffered, ipc.WithAllocator(e.allocator))
 	if err != nil {
-		return nil, fmt.Errorf("read query engine arrow stream: %w", err)
+		return nil, 0, fmt.Errorf("read query engine arrow stream: %w", err)
 	}
 	defer reader.Release()
 
-	var records []arrow.Record
+	schema := reader.Schema()
+	if onSchema != nil {
+		if err := onSchema(schema); err != nil {
+			return nil, 0, err
+		}
+	}
+
 	var totalRecords int64
 	for reader.Next() {
 		record := reader.Record()
-		record.Retain()
-		records = append(records, record)
 		totalRecords += record.NumRows()
+		if onRecord != nil {
+			if err := onRecord(record); err != nil {
+				return nil, 0, err
+			}
+		}
 	}
 	if err := reader.Err(); err != nil {
-		for _, record := range records {
-			record.Release()
-		}
-		return nil, fmt.Errorf("read query engine record batch: %w", err)
+		return nil, 0, fmt.Errorf("read query engine record batch: %w", err)
 	}
 
-	return &QueryResult{
-		Schema:       reader.Schema(),
-		Records:      records,
-		TotalRecords: totalRecords,
-	}, nil
+	footer := make([]byte, len(queryEngineIPCFooter))
+	if _, err := io.ReadFull(buffered, footer); err != nil {
+		return nil, 0, fmt.Errorf("read query engine envelope footer: %w", err)
+	}
+	if string(footer) != queryEngineIPCFooter {
+		return nil, 0, fmt.Errorf("read query engine envelope footer: invalid magic %q", string(footer))
+	}
+	if _, err := buffered.Peek(1); err != io.EOF {
+		if err == nil {
+			return nil, 0, fmt.Errorf("read query engine envelope footer: unexpected trailing stdout bytes")
+		}
+		return nil, 0, fmt.Errorf("read query engine envelope footer: %w", err)
+	}
+	if totalRecords != expectedRows {
+		return nil, 0, fmt.Errorf("query engine row count mismatch: expected %d records, decoded %d", expectedRows, totalRecords)
+	}
+
+	return schema, totalRecords, nil
+}
+
+func formatCommandError(runLabel string, err error, stderr string) error {
+	log.Trace("formatCommandError")
+
+	details := strings.TrimSpace(stderr)
+	if details != "" {
+		return fmt.Errorf("%s: %w: %s", runLabel, err, details)
+	}
+	return fmt.Errorf("%s: %w", runLabel, err)
+}
+
+func releaseRecords(records []arrow.Record) {
+	log.Trace("releaseRecords")
+
+	for _, record := range records {
+		record.Release()
+	}
 }

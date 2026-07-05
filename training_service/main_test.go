@@ -156,6 +156,7 @@ var _ = Describe("newTrainingExecutor", func() {
 			RayJobsURL:              "http://ray.local",
 			RayTrainingEntrypoint:   "python -m train",
 			RayEvaluationEntrypoint: "python -m eval",
+			RayPromotionEntrypoint:  "python -m promote",
 			RayRequestTimeout:       time.Second,
 			RayPollInterval:         time.Second,
 		}, manifestReaderStub{})
@@ -177,6 +178,7 @@ var _ = Describe("newTrainingExecutor", func() {
 			RayJobsURL:              "http://ray.local",
 			RayTrainingEntrypoint:   "python -m train",
 			RayEvaluationEntrypoint: "python -m eval",
+			RayPromotionEntrypoint:  "python -m promote",
 			RayRequestTimeout:       time.Second,
 			RayPollInterval:         2 * time.Minute,
 		}, manifestReaderStub{})
@@ -196,6 +198,7 @@ var _ = Describe("newTrainingExecutor", func() {
 			KubeRayMemory:           "4Gi",
 			RayTrainingEntrypoint:   "python -m training_jobs.train",
 			RayEvaluationEntrypoint: "python -m training_jobs.evaluate",
+			RayPromotionEntrypoint:  "python -m training_jobs.promotion_report",
 		}, manifestReaderStub{})
 
 		Expect(exec).To(BeNil())

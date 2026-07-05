@@ -3,6 +3,7 @@ package data
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,12 +52,16 @@ func (s *lakehouseRegistryClientStub) Close() error {
 var _ = Describe("lakehouse query engine", func() {
 	It("resolves a dataset table through data registry and runs local Parquet through DataFusion", func() {
 		tmpDir := GinkgoT().TempDir()
+		localS3Root := filepath.Join(tmpDir, "local_s3_storage")
+		localObjectPath := filepath.Join(localS3Root, "local-dev-bucket", "lakehouse", "features", "movies", "data.parquet")
 		ipcPath := filepath.Join(tmpDir, "result.arrow")
 		argsPath := filepath.Join(tmpDir, "args.txt")
 		binaryPath := filepath.Join(tmpDir, "fake-datafusion")
 		datasetID := uuid.New()
 		userID := uuid.New()
 
+		Expect(os.MkdirAll(filepath.Dir(localObjectPath), 0755)).To(Succeed())
+		Expect(os.WriteFile(localObjectPath, []byte("parquet"), 0600)).To(Succeed())
 		Expect(os.WriteFile(ipcPath, lakehouseArrowIPC(), 0600)).To(Succeed())
 		Expect(os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\nprintf '%s\\n' \"$@\" > \"$FAKE_DATAFUSION_ARGS\"\ncat \"$FAKE_DATAFUSION_IPC\"\n"), 0700)).To(Succeed())
 		Expect(os.Setenv("FAKE_DATAFUSION_IPC", ipcPath)).To(Succeed())
@@ -67,7 +72,7 @@ var _ = Describe("lakehouse query engine", func() {
 		client := &lakehouseRegistryClientStub{table: &dataregistrypb.ReadDatasetTableResponse{
 			DatasetId:       datasetID.String(),
 			UserId:          userID.String(),
-			StorageLocation: tmpDir,
+			StorageLocation: "s3://local-dev-bucket/lakehouse/features/movies/data.parquet",
 			TableNamespace:  "features",
 			TableName:       "movies",
 			TableFormat:     "PARQUET",
@@ -76,6 +81,7 @@ var _ = Describe("lakehouse query engine", func() {
 		engine := NewLakehouseQueryEngineWithClient(client, &dataFusionQueryEngine{
 			allocator:  memory.NewGoAllocator(),
 			binaryPath: binaryPath,
+			dataRoot:   localS3Root,
 			timeout:    time.Second,
 		}, time.Second)
 
@@ -94,7 +100,7 @@ var _ = Describe("lakehouse query engine", func() {
 
 		argsBytes, err := os.ReadFile(argsPath)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(string(argsBytes)).To(ContainSubstring("--data-root\n" + tmpDir))
+		Expect(string(argsBytes)).To(ContainSubstring("--data-root\n" + localObjectPath))
 		Expect(string(argsBytes)).To(ContainSubstring("SELECT * FROM dataset LIMIT 2"))
 	})
 
@@ -222,6 +228,21 @@ func lakehouseCommand(userID, datasetID uuid.UUID, sql, snapshotID string) []byt
 }
 
 func lakehouseArrowIPC() []byte {
+	return frameLakehouseArrowIPC(lakehouseRawArrowIPC(), 2)
+}
+
+func frameLakehouseArrowIPC(raw []byte, rows uint64) []byte {
+	var output bytes.Buffer
+	output.WriteString("BHIPC001")
+	var rowCount [8]byte
+	binary.LittleEndian.PutUint64(rowCount[:], rows)
+	output.Write(rowCount[:])
+	output.Write(raw)
+	output.WriteString("BHIPCEND")
+	return output.Bytes()
+}
+
+func lakehouseRawArrowIPC() []byte {
 	allocator := memory.NewGoAllocator()
 	schema := arrow.NewSchema(
 		[]arrow.Field{

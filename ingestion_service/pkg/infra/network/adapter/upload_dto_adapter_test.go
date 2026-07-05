@@ -80,7 +80,7 @@ var _ = Describe("UploadDTOAdapter", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
 		request, err := adapter.FromInitiateUploadDTO(context.Background(), []byte(`{

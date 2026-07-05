@@ -24,6 +24,9 @@ WAREHOUSE = env("POLARIS_WAREHOUSE", "s3://bighill-mlops-lakehouse/")
 STORAGE_ENDPOINT = env("POLARIS_STORAGE_ENDPOINT", "http://polaris-object-store:9000")
 STORAGE_REGION = env("POLARIS_STORAGE_REGION", "eu-west-1")
 STORAGE_PATH_STYLE = env("POLARIS_STORAGE_PATH_STYLE", "true").lower() in {"1", "true", "yes"}
+STORAGE_ROLE_ARN = env("POLARIS_STORAGE_ROLE_ARN", "arn:aws:iam::000000000000:role/bighill-polaris")
+STORAGE_USER_ARN = env("POLARIS_STORAGE_USER_ARN", "arn:aws:iam::000000000000:user/bighill-polaris")
+STORAGE_EXTERNAL_ID = env("POLARIS_STORAGE_EXTERNAL_ID", "bighill-local-polaris")
 SERVICE_PRINCIPAL = env("POLARIS_SERVICE_PRINCIPAL", "bighill-services")
 PRINCIPAL_ROLE = env("POLARIS_PRINCIPAL_ROLE", "bighill-services")
 CATALOG_ROLE = env("POLARIS_CATALOG_ROLE", "bighill-catalog-writer")
@@ -88,6 +91,9 @@ def ensure_catalog(token: str) -> None:
             "storageConfigInfo": {
                 "storageType": "S3",
                 "allowedLocations": [WAREHOUSE],
+                "roleArn": STORAGE_ROLE_ARN,
+                "userArn": STORAGE_USER_ARN,
+                "externalId": STORAGE_EXTERNAL_ID,
                 "region": STORAGE_REGION,
                 "endpoint": STORAGE_ENDPOINT,
                 "endpointInternal": STORAGE_ENDPOINT,

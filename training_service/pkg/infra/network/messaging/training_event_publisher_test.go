@@ -115,4 +115,36 @@ var _ = Describe("TrainingEventPublisher", func() {
 		Expect(event.ModelName).To(Equal("movie-ranker"))
 		Expect(event.FailureReason).To(Equal("model evaluation failed"))
 	})
+
+	It("publishes promotion report facts to the training topic", func() {
+		userID := uuid.New()
+		modelID := uuid.New()
+		trainingRunID := uuid.New()
+		client := &trainingPublishClientStub{}
+		publisher := trainingmessaging.NewTrainingEventPublisher(client, trainingmessaging.TrainingTopics{
+			Training: "training",
+		})
+
+		err := publisher.PublishPromotionReportReady(context.Background(), &model.PromotionReport{
+			UserID:             userID.String(),
+			ModelID:            modelID.String(),
+			TrainingRunID:      trainingRunID.String(),
+			PromotionReportURI: "s3://local-dev-bucket/promotion/model.json",
+			DeepchecksPassed:   true,
+			EvidentlyPassed:    true,
+			Deltas:             map[string]float64{"faithfulness": 0.1},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(client.topic).To(Equal("training"))
+		Expect(client.message.ResourceKey).To(Equal(modelID))
+		Expect(client.message.MsgType).To(Equal(shared.MsgTypePromotionReportReady))
+		event, ok := client.payload.(*trainingpb.PromotionReportReadyEvent)
+		Expect(ok).To(BeTrue())
+		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.ModelId).To(Equal(modelID.String()))
+		Expect(event.TrainingRunId).To(Equal(trainingRunID.String()))
+		Expect(event.PromotionReportUri).To(Equal("s3://local-dev-bucket/promotion/model.json"))
+		Expect(event.PromotionDeltas).To(MatchJSON(`{"faithfulness":0.1}`))
+	})
 })

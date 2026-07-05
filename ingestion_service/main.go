@@ -24,6 +24,7 @@ import (
 	serializers "lib/shared_lib/serializer"
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
+	shareduow "lib/shared_lib/uow"
 	"net"
 	"net/http"
 	"net/url"
@@ -189,10 +190,10 @@ func main() {
 			rest.FileTypeText:     rest.IsText,
 		},
 	)
-	uploadSessionDB := db.NewUploadSessionDB(
-		coreDb,
-		db.WithUploadSessionOutbox(orderedOutbox, cfg.DatasetUploadedTopic),
-		db.WithUploadSessionOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	uploadSessionDB := db.NewUploadSessionDB(coreDb)
+	uploadSessionUOW := shareduow.New(coreDb.Pool,
+		shareduow.WithTransactionalOutbox(orderedOutbox),
+		shareduow.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
 	tenantDB := sharedTenant.NewPostgresProjectionStore(coreDb)
 	huggingFaceTokenCodec, err := secret.NewAESGCMCodec(cfg.HuggingFaceTokenEncryptionKey)
@@ -233,9 +234,11 @@ func main() {
 	default:
 		log.WithContext(cancelCtx).Fatalf("invalid Hugging Face downloader mode %q", cfg.HuggingFaceDownloadMode)
 	}
+	uploadEventBuilder := ingestionmessaging.NewUploadEventBuilder(cfg.DatasetUploadedTopic)
 	uploadUseCase := usecase.NewDataUploadUseCase(
 		uploadBucket,
 		usecase.WithUploadSessionRepository(uploadSessionDB),
+		usecase.WithUploadSessionUnitOfWork(uploadSessionUOW, uploadEventBuilder),
 		usecase.WithUploadDatasetRepository(datasetDB),
 		usecase.WithUploadTenantsRepository(tenantDB),
 		usecase.WithHuggingFaceTokenDecryptor(huggingFaceTokenCodec),
@@ -341,6 +344,10 @@ func readIngestionConfig() ingestionConfig {
 	directMaxFileSizeMB := env.WithDefaultInt64("INGESTION_SERVICE_DIRECT_UPLOAD_MAX_SIZE_MB", "5")
 	validationReadMaxMB := env.WithDefaultInt64("INGESTION_SERVICE_UPLOAD_VALIDATION_READ_MAX_SIZE_MB", "5")
 	uploadPartSizeMB := env.WithDefaultInt64("INGESTION_SERVICE_FILES_UPLOAD_PART_SIZE_MB", "10")
+	defaultBucketRegion := "eu-west-1"
+	if env.IsDevEnv() {
+		defaultBucketRegion = coreBucket.LocalDevS3Region
+	}
 	return ingestionConfig{
 		ServiceName:                   env.WithDefaultString("INGESTION_SERVICE_NAME", "ingestion-service"),
 		HTTPPort:                      env.WithDefaultInt("INGESTION_SERVICE_API_HTTP_PORT", "8086"),
@@ -349,7 +356,7 @@ func readIngestionConfig() ingestionConfig {
 		UploadSessionTTL:              time.Duration(env.WithDefaultInt("INGESTION_SERVICE_UPLOAD_SESSION_TTL_SECONDS", "900")) * time.Second,
 		UploadValidationReadMaxBytes:  validationReadMaxMB * 1000 * 1000,
 		BucketName:                    env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_NAME", "local-dev-bucket"),
-		BucketRegion:                  env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_REGION", "eu-west-1"),
+		BucketRegion:                  env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_REGION", defaultBucketRegion),
 		BucketUploadPartSize:          uploadPartSizeMB * 1024 * 1024,
 		DBName:                        dbName,
 		DBConnectionString:            dbConnectionString,

@@ -40,6 +40,28 @@ class EvaluationReportManifest:
     judge_provider: str = ""
     judge_model: str = ""
     judge_template_version: str = ""
+    deepchecks_passed: bool = False
+    deepchecks_report_uri: str = ""
+    evidently_passed: bool = False
+    evidently_report_uri: str = ""
+    score_rows_uri: str = ""
+    failure_reason: str = ""
+
+    def to_json(self) -> bytes:
+        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class PromotionReportManifest:
+    user_id: str
+    model_id: str
+    training_run_id: str
+    promotion_report_uri: str
+    deepchecks_passed: bool = False
+    deepchecks_report_uri: str = ""
+    evidently_passed: bool = False
+    evidently_report_uri: str = ""
+    deltas: dict[str, float] = field(default_factory=dict)
     failure_reason: str = ""
 
     def to_json(self) -> bytes:

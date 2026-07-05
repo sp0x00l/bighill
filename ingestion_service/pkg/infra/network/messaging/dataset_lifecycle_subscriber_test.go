@@ -57,7 +57,7 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 			SchemaVersion:     1,
 			SchemaMetadata:    "{}",
 		})
@@ -66,7 +66,7 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 		Expect(uc.addDataset.DatasetID).To(Equal(datasetID))
 		Expect(uc.addDataset.UserID).To(Equal(userID))
 		Expect(uc.addDataset.TableNamespace).To(Equal("features"))
-		Expect(uc.addDataset.ProcessingProfile).To(Equal("TEXT_RAG"))
+		Expect(uc.addDataset.ProcessingProfile).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
 		Expect(listener.MsgType()).To(Equal(shared.MsgTypeDatasetCreated))
 	})
 
@@ -83,7 +83,7 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 			SchemaVersion:     2,
 			SchemaMetadata:    `{"columns":["title"]}`,
 		})
@@ -123,7 +123,7 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
 			CatalogProvider:   "LOCAL",
-			ProcessingProfile: "TEXT_RAG",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
 			SchemaVersion:     1,
 			SchemaMetadata:    "{}",
 		})

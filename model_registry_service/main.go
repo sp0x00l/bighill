@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"model_registry_service/pkg/app"
-	registryk8s "model_registry_service/pkg/infra/network/k8s"
-	localserving "model_registry_service/pkg/infra/network/localserving"
+	registrykubernetes "model_registry_service/pkg/infra/network/kubernetes"
+	localserving "model_registry_service/pkg/infra/network/kubernetes/localserving"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 	modeldb "model_registry_service/pkg/infra/repo/db"
 
@@ -27,6 +27,7 @@ import (
 	messagingConn "lib/shared_lib/messaging"
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
+	shareduow "lib/shared_lib/uow"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -140,9 +141,10 @@ func main() {
 		}
 	}()
 
-	modelRepository := modeldb.NewModelRepository(database,
-		modeldb.WithTransactionalOutbox(orderedOutbox, cfg.Topics.ModelRegistry),
-		modeldb.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	modelRepository := modeldb.NewModelRepository(database)
+	modelUnitOfWork := shareduow.New(database.Pool,
+		shareduow.WithTransactionalOutbox(orderedOutbox),
+		shareduow.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
 	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 	var servingObserver interface {
@@ -159,7 +161,8 @@ func main() {
 	} else {
 		log.WithContext(cancelCtx).Info("served model reconciliation disabled; model serving status will only change through explicit registry events")
 	}
-	modelUsecase := app.NewModelRegistryUsecase(modelRepository, modelUsecaseOptions...)
+	modelEventBuilder := registrymessaging.NewModelEventBuilder(cfg.Topics.ModelRegistry)
+	modelUsecase := app.NewModelRegistryUsecase(modelRepository, modelUnitOfWork, modelEventBuilder, modelUsecaseOptions...)
 	if cfg.Serving.Enabled {
 		servingObserver, err = newServingObserver(cfg.Serving, servingDeployer, modelUsecase)
 		if err != nil {
@@ -194,6 +197,9 @@ func main() {
 	})
 	startSubscriber("training-failed", []string{cfg.Topics.Training}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, registrymessaging.NewModelTrainingFailedEventListener(modelUsecase))
+	})
+	startSubscriber("promotion-report-ready", []string{cfg.Topics.Training}, func(subscriber messagingConn.Subscriber) {
+		messagingConn.AddListener(subscriber, registrymessaging.NewPromotionReportReadyEventListener(modelUsecase))
 	})
 	startSubscriber("model-artifact-ingested", []string{cfg.Topics.Ingestion}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, registrymessaging.NewModelArtifactIngestedEventListener(modelUsecase))
@@ -310,7 +316,7 @@ func newServingBackend(cfg servingConfig) (app.ModelServingDeployer, error) {
 	case "local":
 		return localserving.NewAdapter(cfg.Namespace, cfg.LocalStore)
 	case "kubernetes":
-		return registryk8s.NewServedModelAdapter(registryk8s.ServedModelConfig{
+		return registrykubernetes.NewServedModelAdapter(registrykubernetes.ServedModelConfig{
 			Namespace:    cfg.Namespace,
 			Group:        cfg.CRDGroup,
 			Version:      cfg.CRDVersion,
@@ -336,11 +342,11 @@ func newServingObserver(cfg servingConfig, deployer app.ModelServingDeployer, re
 		}
 		return localserving.NewStatusObserver(adapter, recorder, cfg.LocalResyncEvery)
 	case "kubernetes":
-		adapter, ok := deployer.(*registryk8s.ServedModelAdapter)
+		adapter, ok := deployer.(*registrykubernetes.ServedModelAdapter)
 		if !ok {
 			return nil, fmt.Errorf("kubernetes serving deployer has unexpected type")
 		}
-		return registryk8s.NewServedModelStatusObserver(adapter, recorder, cfg.StatusPollEvery)
+		return registrykubernetes.NewServedModelStatusObserver(adapter, recorder, cfg.StatusPollEvery)
 	default:
 		return nil, fmt.Errorf("unsupported model registry serving backend %q", cfg.Backend)
 	}

@@ -11,6 +11,20 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	featureSnapshotLakehouseKeyFormat = "lakehouse/features/%s/%s/data.parquet"
+	featureSnapshotParquetExtension   = "parquet"
+)
+
+const (
+	featureSnapshotIcebergCatalogKey    = "iceberg_catalog"
+	featureSnapshotIcebergNamespaceKey  = "iceberg_namespace"
+	featureSnapshotIcebergTableKey      = "iceberg_table"
+	featureSnapshotIcebergWarehouseKey  = "iceberg_warehouse"
+	featureSnapshotIcebergSourceRowsKey = "iceberg_source_rows"
+	featureSnapshotIcebergTableRowsKey  = "iceberg_table_rows"
+)
+
 type FeatureSnapshotBuilder struct {
 	store         ArtifactStore
 	icebergWriter IcebergTableWriter
@@ -54,7 +68,7 @@ func (b *FeatureSnapshotBuilder) BuildFeatureSnapshot(ctx context.Context, rawSn
 		return nil, err
 	}
 
-	artifact, err := NormalizeArtifactToParquet(ctx, data, parquetContentType, "parquet")
+	artifact, err := NormalizeArtifactToParquet(ctx, data, parquetContentType, featureSnapshotParquetExtension)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +77,7 @@ func (b *FeatureSnapshotBuilder) BuildFeatureSnapshot(ctx context.Context, rawSn
 		return nil, err
 	}
 
-	key := fmt.Sprintf("lakehouse/features/%s/%s/data.parquet", featureSnapshot.DatasetID.String(), featureSnapshot.FeatureSnapshotID.String())
+	key := fmt.Sprintf(featureSnapshotLakehouseKeyFormat, featureSnapshot.DatasetID.String(), featureSnapshot.FeatureSnapshotID.String())
 	location, err := b.store.Write(ctx, key, parquetContentType, artifact.Data)
 	if err != nil {
 		return nil, err
@@ -107,12 +121,12 @@ func mergeIcebergWriteMetadata(schemaMetadata string, result *IcebergTableWriteR
 	if schemaMetadata != "" {
 		_ = json.Unmarshal([]byte(schemaMetadata), &metadata)
 	}
-	metadata["iceberg_catalog"] = result.Catalog
-	metadata["iceberg_namespace"] = result.Namespace
-	metadata["iceberg_table"] = result.Table
-	metadata["iceberg_warehouse"] = result.Warehouse
-	metadata["iceberg_source_rows"] = result.SourceRows
-	metadata["iceberg_table_rows"] = result.TableRows
+	metadata[featureSnapshotIcebergCatalogKey] = result.Catalog
+	metadata[featureSnapshotIcebergNamespaceKey] = result.Namespace
+	metadata[featureSnapshotIcebergTableKey] = result.Table
+	metadata[featureSnapshotIcebergWarehouseKey] = result.Warehouse
+	metadata[featureSnapshotIcebergSourceRowsKey] = result.SourceRows
+	metadata[featureSnapshotIcebergTableRowsKey] = result.TableRows
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		return schemaMetadata

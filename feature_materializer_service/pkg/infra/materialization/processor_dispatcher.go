@@ -64,7 +64,7 @@ func (d *FeatureSnapshotBuilderDispatcher) BuildFeatureSnapshot(ctx context.Cont
 
 type EmbeddingProcessor interface {
 	SupportsEmbeddings(*model.FeatureSnapshot) bool
-	MaterializeEmbeddings(context.Context, *model.FeatureSnapshot, *model.EmbeddingSnapshot) (*model.EmbeddingSnapshot, error)
+	MaterializeEmbeddings(context.Context, *model.FeatureSnapshot, *model.EmbeddingSnapshot) (*model.EmbeddingSnapshot, []model.EmbeddingRecord, error)
 }
 
 type EmbeddingWriterDispatcher struct {
@@ -77,7 +77,7 @@ func NewEmbeddingWriterDispatcher(processors ...EmbeddingProcessor) *EmbeddingWr
 	return &EmbeddingWriterDispatcher{processors: processors}
 }
 
-func (d *EmbeddingWriterDispatcher) MaterializeEmbeddings(ctx context.Context, featureSnapshot *model.FeatureSnapshot, embeddingSnapshot *model.EmbeddingSnapshot) (*model.EmbeddingSnapshot, error) {
+func (d *EmbeddingWriterDispatcher) MaterializeEmbeddings(ctx context.Context, featureSnapshot *model.FeatureSnapshot, embeddingSnapshot *model.EmbeddingSnapshot) (*model.EmbeddingSnapshot, []model.EmbeddingRecord, error) {
 	log.Trace("EmbeddingWriterDispatcher MaterializeEmbeddings")
 
 	for _, processor := range d.processors {
@@ -85,7 +85,7 @@ func (d *EmbeddingWriterDispatcher) MaterializeEmbeddings(ctx context.Context, f
 			return processor.MaterializeEmbeddings(ctx, featureSnapshot, embeddingSnapshot)
 		}
 	}
-	return nil, fmt.Errorf("%w: embedding processing profile %s is not supported", domain.ErrEmbeddingMaterialize, featureSnapshotProfile(featureSnapshot))
+	return nil, nil, fmt.Errorf("%w: embedding processing profile %s is not supported", domain.ErrEmbeddingMaterialize, featureSnapshotProfile(featureSnapshot))
 }
 
 func datasetFileProfile(datasetFile *model.DatasetFile) string {

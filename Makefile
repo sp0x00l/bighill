@@ -27,6 +27,7 @@ test:
 	@$(MAKE) -C training_jobs test
 	@shared_lib/scripts/install.sh
 	@shared_lib/scripts/test.sh $(ENV)
+	@$(MAKE) build-query-engine
 
 	@set -e; \
 	cleanup() { cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; cd "$(CURDIR)" && scripts/stop-servers.sh || true; cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; }; \

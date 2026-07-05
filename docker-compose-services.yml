@@ -813,6 +813,30 @@ services:
     networks:
       - bighillnetwork
 
+  polaris-bootstrap:
+    image: python:3.12-alpine
+    depends_on:
+      polaris-catalog:
+        condition: service_healthy
+    environment:
+      POLARIS_BASE_URL: http://polaris-catalog:8181
+      POLARIS_ROOT_CLIENT_ID: ${POLARIS_ROOT_CLIENT_ID:-root}
+      POLARIS_ROOT_CLIENT_SECRET: ${POLARIS_ROOT_CLIENT_SECRET:-s3cr3t}
+      POLARIS_CATALOG: bighill
+      POLARIS_WAREHOUSE: s3://bighill-mlops-lakehouse/
+      POLARIS_STORAGE_ENDPOINT: http://polaris-object-store:9000
+      POLARIS_STORAGE_REGION: eu-west-1
+      POLARIS_STORAGE_PATH_STYLE: "true"
+      POLARIS_SERVICE_PRINCIPAL: bighill-services
+      POLARIS_PRINCIPAL_ROLE: bighill-services
+      POLARIS_CATALOG_ROLE: bighill-catalog-writer
+      POLARIS_SERVICE_CREDENTIAL: ${DATA_STREAM_SERVICE_POLARIS_CREDENTIAL:-root:s3cr3t}
+    volumes:
+      - ./infra/scripts/polaris_bootstrap.py:/bootstrap/polaris_bootstrap.py:ro
+    command: ["python", "/bootstrap/polaris_bootstrap.py"]
+    networks:
+      - bighillnetwork
+
   kafka:
     image: bitnami/kafka:latest
     container_name: kafka

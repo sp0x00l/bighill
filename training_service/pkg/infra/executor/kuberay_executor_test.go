@@ -240,6 +240,7 @@ func kubeRayConfig() executor.KubeRayExecutorConfig {
 		GPU:                     "1",
 		TrainingEntrypoint:      "python -m training_jobs.train",
 		EvaluationEntrypoint:    "python -m training_jobs.evaluate",
+		PromotionEntrypoint:     "python -m training_jobs.promotion_report",
 		PollInterval:            time.Millisecond,
 	}
 }

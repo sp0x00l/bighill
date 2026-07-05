@@ -12,6 +12,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	dataStreamRawSnapshotLakehouseKeyFormat = "lakehouse/raw/%s/%s/data.parquet"
+	dataStreamRawSnapshotParquetExtension   = "parquet"
+)
+
 type DataStreamRawSnapshotWriter struct {
 	store         ArtifactStore
 	reader        DataStreamReader
@@ -74,7 +79,7 @@ func (w *DataStreamRawSnapshotWriter) WriteRawSnapshot(ctx context.Context, data
 		return nil, err
 	}
 
-	key := fmt.Sprintf("lakehouse/raw/%s/%s/data.parquet", rawSnapshot.DatasetID.String(), rawSnapshot.RawSnapshotID.String())
+	key := fmt.Sprintf(dataStreamRawSnapshotLakehouseKeyFormat, rawSnapshot.DatasetID.String(), rawSnapshot.RawSnapshotID.String())
 	location, err := w.store.Write(ctx, key, parquetContentType, artifact.Data)
 	if err != nil {
 		return nil, err
@@ -83,7 +88,7 @@ func (w *DataStreamRawSnapshotWriter) WriteRawSnapshot(ctx context.Context, data
 	out := *rawSnapshot
 	out.StorageLocation = location
 	out.ContentType = parquetContentType
-	out.FileExtension = "parquet"
+	out.FileExtension = dataStreamRawSnapshotParquetExtension
 	out.TableFormat = datasetFile.TableFormat
 	out.CatalogProvider = datasetFile.CatalogProvider
 	out.ProcessingProfile = datasetFile.ProcessingProfile

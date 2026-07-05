@@ -19,6 +19,7 @@ import (
 	serializers "lib/shared_lib/serializer"
 	sharedTenant "lib/shared_lib/tenant"
 	"lib/shared_lib/trace"
+	shareduow "lib/shared_lib/uow"
 	"net"
 	"net/http"
 	"net/url"
@@ -144,16 +145,18 @@ func main() {
 	}()
 
 	sourceConnectorDB := db.NewSourceConnectorDB(database)
-	datasetDB := db.NewDatasetDB(database,
-		db.WithTransactionalOutbox(orderedOutbox, cfg.Topic),
-		db.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
+	datasetDB := db.NewDatasetDB(database)
+	datasetUnitOfWork := shareduow.New(database.Pool,
+		shareduow.WithTransactionalOutbox(orderedOutbox),
+		shareduow.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
 	)
 	tenantDB := sharedTenant.NewPostgresProjectionStore(database)
 
 	encoder := serializers.NewJSONSerializer()
 
 	catalogClient, tableCatalog := newCatalogAdapters(cfg.Catalog)
-	datasetUseCase := usecase.NewDatasetUseCase(datasetDB, usecase.WithDatasetTableCatalog(tableCatalog))
+	datasetEventBuilder := registrymessaging.NewDatasetEventBuilder(cfg.Topic)
+	datasetUseCase := usecase.NewDatasetUseCase(datasetDB, datasetUnitOfWork, datasetEventBuilder, usecase.WithDatasetTableCatalog(tableCatalog))
 	sourceConnectorUseCase := usecase.NewSourceUsecase(sourceConnectorDB, catalogClient)
 	connectorRestDTOAdapter := adapter.NewRestSourceConnDTOAdapter(adapter.GetConnCfgToDTOFunc, adapter.GetConnCfgFromDTOFunc, encoder)
 	filtersAdapter := adapter.NewFilterDTOAdapter()

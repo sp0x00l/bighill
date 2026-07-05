@@ -15,12 +15,18 @@ import (
 	usecase "ingestion_service/pkg/app"
 	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
+	ingestionmessaging "ingestion_service/pkg/infra/network/messaging"
 	servicerest "ingestion_service/pkg/infra/network/rest"
+	ingestionpb "lib/data_contracts_lib/ingestion"
 	sharedDomain "lib/shared_lib/domain"
+	msgConn "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestAppUseCases(t *testing.T) {
@@ -120,6 +126,25 @@ type stubUploadSessionRepository struct {
 	recordErr        error
 }
 
+type stubUploadSessionUnitOfWork struct {
+	messages []msgConn.OutboundMessage
+	err      error
+}
+
+func uploadEventBuilder() usecase.UploadEventBuilder {
+	return ingestionmessaging.NewUploadEventBuilder("ingestion")
+}
+
+func (s *stubUploadSessionUnitOfWork) Do(ctx context.Context, fn shareduow.TxFunc) error {
+	if s.err != nil {
+		return s.err
+	}
+	return fn(ctx, nil, func(msg msgConn.OutboundMessage) error {
+		s.messages = append(s.messages, msg)
+		return nil
+	})
+}
+
 type stubModelDownloader struct {
 	received model.OnboardHuggingFaceModelRequest
 	result   *model.OnboardedModelArtifact
@@ -177,7 +202,7 @@ func (s *stubModelDownloader) DownloadHuggingFaceModel(_ context.Context, reques
 	return s.result, s.err
 }
 
-func (s *stubUploadSessionRepository) CreateUploadSession(_ context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+func (s *stubUploadSessionRepository) CreateUploadSession(_ context.Context, _ pgx.Tx, session *model.UploadSession) (*model.UploadSession, error) {
 	s.created = session
 	return session, s.createErr
 }
@@ -201,36 +226,46 @@ func (s *stubUploadSessionRepository) ReadUploadSessionForComplete(_ context.Con
 			TableName:           "movies",
 			TableFormat:         "PARQUET",
 			CatalogProvider:     "LOCAL",
-			ProcessingProfile:   "TEXT_RAG",
+			ProcessingProfile:   "TEXT_RAG_PROCESSING_PROFILE",
 		}
 	}
 	return s.readSession, s.readErr
 }
 
-func (s *stubUploadSessionRepository) PromoteUploadSession(_ context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+func (s *stubUploadSessionRepository) PromoteUploadSession(_ context.Context, _ pgx.Tx, session *model.UploadSession) (*model.UploadSession, bool, error) {
 	s.completed = session
 	session.Status = model.UploadSessionPromoted
-	return session, s.promoteErr
+	return session, true, s.promoteErr
 }
 
-func (s *stubUploadSessionRepository) RejectUploadSession(context.Context, uuid.UUID, uuid.UUID) error {
+func (s *stubUploadSessionRepository) RejectUploadSession(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error {
 	s.rejected = true
 	return s.rejectErr
 }
 
-func (s *stubUploadSessionRepository) ExpireUploadSession(context.Context, uuid.UUID, uuid.UUID) error {
+func (s *stubUploadSessionRepository) ExpireUploadSession(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error {
 	s.expired = true
 	return s.expireErr
 }
 
-func (s *stubUploadSessionRepository) RecordUploadedFile(_ context.Context, upload *model.DataFile, location string, uploadID uuid.UUID) error {
+func (s *stubUploadSessionRepository) RecordUploadedFile(_ context.Context, _ pgx.Tx, upload *model.DataFile, location string, uploadID uuid.UUID) (*model.UploadSession, error) {
 	s.recordedUpload = upload
 	s.recordedLocation = location
 	s.recordedUploadID = uploadID
-	return s.recordErr
+	return &model.UploadSession{
+		UploadID:            uploadID,
+		ResourceType:        model.UploadResourceDataFile,
+		ResourceID:          upload.DatasetID,
+		DatasetID:           upload.DatasetID,
+		UserID:              upload.UserID,
+		DeclaredFormat:      upload.Extension,
+		DeclaredContentType: upload.ContentType,
+		StorageLocation:     location,
+		Status:              model.UploadSessionPromoted,
+	}, s.recordErr
 }
 
-func (s *stubUploadSessionRepository) RecordModelArtifact(_ context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+func (s *stubUploadSessionRepository) RecordModelArtifact(_ context.Context, _ pgx.Tx, session *model.UploadSession) (*model.UploadSession, error) {
 	s.recordedModel = session
 	return session, s.recordErr
 }
@@ -239,7 +274,11 @@ var _ = Describe("DataUploadUseCase", func() {
 	It("uploads a file through the blob repository", func() {
 		repo := &stubBlobRepository{}
 		sessions := &stubUploadSessionRepository{}
-		uc := usecase.NewDataUploadUseCase(repo, usecase.WithUploadSessionRepository(sessions))
+		unitOfWork := &stubUploadSessionUnitOfWork{}
+		uc := usecase.NewDataUploadUseCase(repo,
+			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(unitOfWork, uploadEventBuilder()),
+		)
 		upload := &model.DataFile{
 			DatasetID:   uuid.New(),
 			UserID:      uuid.New(),
@@ -252,12 +291,23 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(sessions.recordedUpload).To(Equal(upload))
 		Expect(sessions.recordedLocation).To(Equal("s3://local-dev-bucket/raw/file.csv"))
 		Expect(sessions.recordedUploadID).NotTo(Equal(uuid.Nil))
+		Expect(unitOfWork.messages).To(HaveLen(1))
+		Expect(unitOfWork.messages[0].Topic).To(Equal("ingestion"))
+		Expect(unitOfWork.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeDatasetFileUploaded))
+		var event ingestionpb.DatasetFileUploadedEvent
+		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
+		Expect(event.DatasetId).To(Equal(upload.DatasetID.String()))
+		Expect(event.UserId).To(Equal(upload.UserID.String()))
+		Expect(event.SourceType).To(Equal("upload"))
 	})
 
 	It("returns repository errors", func() {
 		expectedErr := errors.New("upload failed")
 		repo := &stubBlobRepository{saveErr: expectedErr}
-		uc := usecase.NewDataUploadUseCase(repo, usecase.WithUploadSessionRepository(&stubUploadSessionRepository{}))
+		uc := usecase.NewDataUploadUseCase(repo,
+			usecase.WithUploadSessionRepository(&stubUploadSessionRepository{}),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
+		)
 
 		Expect(uc.UploadFile(context.Background(), &model.DataFile{})).To(MatchError(expectedErr))
 	})
@@ -267,6 +317,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		sessions := &stubUploadSessionRepository{}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
 			usecase.WithUploadPolicy(1024, time.Minute, 512),
 		)
 		datasetID := uuid.New()
@@ -284,7 +335,7 @@ var _ = Describe("DataUploadUseCase", func() {
 			TableName:           "movies",
 			TableFormat:         "PARQUET",
 			CatalogProvider:     "LOCAL",
-			ProcessingProfile:   "TEXT_RAG",
+			ProcessingProfile:   "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -301,6 +352,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		sessions := &stubUploadSessionRepository{}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
 			usecase.WithUploadPolicy(2048, time.Minute, 512),
 		)
 		userID := uuid.New()
@@ -339,6 +391,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		sessions := &stubUploadSessionRepository{}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
 			usecase.WithUploadFileDetector(stubDetector{format: "csv"}),
 			usecase.WithUploadPolicy(1024, time.Minute, 512),
 		)
@@ -383,6 +436,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		}}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
 			usecase.WithUploadFileDetector(stubDetector{format: "unsupported"}),
 			usecase.WithUploadPolicy(8192, time.Minute, 512),
 		)
@@ -422,13 +476,14 @@ var _ = Describe("DataUploadUseCase", func() {
 			TableName:           "movies",
 			TableFormat:         "PARQUET",
 			CatalogProvider:     "LOCAL",
-			ProcessingProfile:   "TEXT_RAG",
+			ProcessingProfile:   "TEXT_RAG_PROCESSING_PROFILE",
 		}}
 		detector := servicerest.NewDetector(map[string]servicerest.FormatValidatorFunc{
 			servicerest.FileTypeParquet: servicerest.IsParquet,
 		})
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
 			usecase.WithUploadFileDetector(detector),
 			usecase.WithUploadPolicy(int64(len(object)), time.Minute, 5*1000*1000),
 		)
@@ -443,11 +498,13 @@ var _ = Describe("DataUploadUseCase", func() {
 	It("records a Hugging Face model artifact through the promoted model path", func() {
 		repo := &stubBlobRepository{}
 		sessions := &stubUploadSessionRepository{}
+		unitOfWork := &stubUploadSessionUnitOfWork{}
 		downloader := &stubModelDownloader{}
 		tenants := &stubTenantRepository{tenant: &sharedDomain.Tenant{HuggingFaceTokenCiphertext: "ciphertext-1"}}
 		decryptor := &stubSecretDecryptor{token: "hf-token"}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(unitOfWork, uploadEventBuilder()),
 			usecase.WithUploadTenantsRepository(tenants),
 			usecase.WithHuggingFaceTokenDecryptor(decryptor),
 			usecase.WithModelArtifactDownloader(downloader),
@@ -472,6 +529,14 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(downloader.received.UserID).To(Equal(userID))
 		Expect(downloader.received.HuggingFaceToken).To(Equal("hf-token"))
 		Expect(decryptor.ciphertext).To(Equal("ciphertext-1"))
+		Expect(unitOfWork.messages).To(HaveLen(1))
+		Expect(unitOfWork.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeModelArtifactIngested))
+		var event ingestionpb.ModelArtifactIngestedEvent
+		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
+		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.Source).To(Equal("hugging_face"))
+		Expect(event.HfCommitSha).To(Equal("abc123"))
+		Expect(event.SourceMetadata).To(ContainSubstring(session.UploadID.String()))
 	})
 
 	It("rejects a staged upload when actual bytes do not match the declared format", func() {
@@ -479,6 +544,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		sessions := &stubUploadSessionRepository{}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
 			usecase.WithUploadFileDetector(stubDetector{format: "json"}),
 			usecase.WithUploadPolicy(1024, time.Minute, 512),
 		)

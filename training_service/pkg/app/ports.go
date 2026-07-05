@@ -9,4 +9,5 @@ import (
 type TrainingExecutor interface {
 	RunTrainingJob(ctx context.Context, spec model.TrainingJobSpec) (*model.TrainedModelArtifact, error)
 	EvaluateModel(ctx context.Context, spec model.EvaluationJobSpec) (*model.EvaluationReport, error)
+	RunPromotionReport(ctx context.Context, spec model.PromotionReportJobSpec) (*model.PromotionReport, error)
 }

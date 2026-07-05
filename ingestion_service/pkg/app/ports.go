@@ -7,10 +7,10 @@ import (
 
 	"ingestion_service/pkg/domain/model"
 	sharedDomain "lib/shared_lib/domain"
-	messaging "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/proto"
+	"github.com/jackc/pgx/v5"
 )
 
 type BlobRepositoryAdapter interface {
@@ -23,13 +23,23 @@ type BlobRepositoryAdapter interface {
 }
 
 type UploadSessionRepositoryAdapter interface {
-	CreateUploadSession(context.Context, *model.UploadSession) (*model.UploadSession, error)
+	CreateUploadSession(context.Context, pgx.Tx, *model.UploadSession) (*model.UploadSession, error)
 	ReadUploadSessionForComplete(context.Context, uuid.UUID, uuid.UUID) (*model.UploadSession, error)
-	PromoteUploadSession(context.Context, *model.UploadSession) (*model.UploadSession, error)
-	RejectUploadSession(context.Context, uuid.UUID, uuid.UUID) error
-	ExpireUploadSession(context.Context, uuid.UUID, uuid.UUID) error
-	RecordUploadedFile(context.Context, *model.DataFile, string, uuid.UUID) error
-	RecordModelArtifact(context.Context, *model.UploadSession) (*model.UploadSession, error)
+	PromoteUploadSession(context.Context, pgx.Tx, *model.UploadSession) (*model.UploadSession, bool, error)
+	RejectUploadSession(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error
+	ExpireUploadSession(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error
+	RecordUploadedFile(context.Context, pgx.Tx, *model.DataFile, string, uuid.UUID) (*model.UploadSession, error)
+	RecordModelArtifact(context.Context, pgx.Tx, *model.UploadSession) (*model.UploadSession, error)
+}
+
+type UploadSessionUnitOfWorkAdapter interface {
+	Do(ctx context.Context, fn shareduow.TxFunc) error
+}
+
+type UploadEventBuilder interface {
+	DatasetFileUploadedMessage(session *model.UploadSession) shareduow.OutboundMessage
+	ModelArtifactIngestedMessage(session *model.UploadSession) shareduow.OutboundMessage
+	UploadSessionPromotedMessage(session *model.UploadSession) shareduow.OutboundMessage
 }
 
 type DatasetsRepositoryAdapter interface {
@@ -47,10 +57,6 @@ type TenantsRepositoryAdapter interface {
 
 type SecretDecryptor interface {
 	Decrypt(context.Context, string) (string, error)
-}
-
-type EventPublisher interface {
-	Publish(context.Context, string, messaging.Message, proto.Message) error
 }
 
 type FileDetector interface {

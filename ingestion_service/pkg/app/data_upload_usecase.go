@@ -16,9 +16,11 @@ import (
 	"ingestion_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
 	"lib/shared_lib/idem"
+	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -26,6 +28,8 @@ import (
 type dataUploadUseCase struct {
 	bucket                 BlobRepositoryAdapter
 	uploadSessions         UploadSessionRepositoryAdapter
+	uploadSessionUOW       UploadSessionUnitOfWorkAdapter
+	uploadEventBuilder     UploadEventBuilder
 	datasets               DatasetsRepositoryAdapter
 	tenants                TenantsRepositoryAdapter
 	huggingFaceTokenCodec  SecretDecryptor
@@ -41,6 +45,13 @@ type DataUploadOption func(*dataUploadUseCase)
 func WithUploadSessionRepository(repo UploadSessionRepositoryAdapter) DataUploadOption {
 	return func(u *dataUploadUseCase) {
 		u.uploadSessions = repo
+	}
+}
+
+func WithUploadSessionUnitOfWork(unitOfWork UploadSessionUnitOfWorkAdapter, eventBuilder UploadEventBuilder) DataUploadOption {
+	return func(u *dataUploadUseCase) {
+		u.uploadSessionUOW = unitOfWork
+		u.uploadEventBuilder = eventBuilder
 	}
 }
 
@@ -118,7 +129,7 @@ func (u *dataUploadUseCase) UploadFile(ctx context.Context, upload *model.DataFi
 	if err != nil {
 		return err
 	}
-	return u.uploadSessions.RecordUploadedFile(ctx, upload, storageLocation, uuid.New())
+	return u.recordUploadedFile(ctx, upload, storageLocation, uuid.New())
 }
 
 func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request model.InitiateUploadSessionRequest) (result *model.InitiatedUploadSession, err error) {
@@ -156,7 +167,7 @@ func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request m
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(u.uploadSessionTTL),
 	}
-	created, err := u.uploadSessions.CreateUploadSession(ctx, session)
+	created, err := u.createUploadSession(ctx, session)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +226,7 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(u.uploadSessionTTL),
 	}
-	created, err := u.uploadSessions.CreateUploadSession(ctx, session)
+	created, err := u.createUploadSession(ctx, session)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +302,7 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		CreatedAt:           now,
 		ExpiresAt:           now,
 	}
-	return u.uploadSessions.RecordModelArtifact(ctx, session)
+	return u.recordModelArtifact(ctx, session)
 }
 
 func (u *dataUploadUseCase) CompleteUploadSession(ctx context.Context, request model.CompleteUploadSessionRequest) (session *model.UploadSession, err error) {
@@ -332,7 +343,7 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 		return nil, domain.ErrValidationFailed.Extend("upload session is not pending")
 	}
 	if time.Now().UTC().After(session.ExpiresAt) {
-		_ = u.uploadSessions.ExpireUploadSession(ctx, session.UploadID, session.UserID)
+		_ = u.expireUploadSession(ctx, session.UploadID, session.UserID)
 		return nil, domain.ErrValidationFailed.Extend("upload session expired")
 	}
 	info, err := u.bucket.HeadStagingObject(ctx, session)
@@ -340,7 +351,7 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 		return nil, fmt.Errorf("head staged upload: %w", err)
 	}
 	if err := validateStagedObject(session, info, u.maxUploadSizeBytes); err != nil {
-		_ = u.uploadSessions.RejectUploadSession(ctx, session.UploadID, session.UserID)
+		_ = u.rejectUploadSession(ctx, session.UploadID, session.UserID)
 		_ = u.bucket.DeleteStagedObject(ctx, session)
 		return nil, err
 	}
@@ -351,7 +362,7 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 		}
 		detectedFormat := u.detector.DetectFileFormat(ctx, validationReader, safeIntFileSize(info.Size), []string{session.DeclaredFormat})
 		if detectedFormat != session.DeclaredFormat {
-			_ = u.uploadSessions.RejectUploadSession(ctx, session.UploadID, session.UserID)
+			_ = u.rejectUploadSession(ctx, session.UploadID, session.UserID)
 			_ = u.bucket.DeleteStagedObject(ctx, session)
 			return nil, domain.ErrValidationFailed.Extend("uploaded file format does not match the declared format")
 		}
@@ -361,7 +372,7 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 			return nil, err
 		}
 		if err := validateModelArtifactContents(validationReader, session, info.Size); err != nil {
-			_ = u.uploadSessions.RejectUploadSession(ctx, session.UploadID, session.UserID)
+			_ = u.rejectUploadSession(ctx, session.UploadID, session.UserID)
 			_ = u.bucket.DeleteStagedObject(ctx, session)
 			return nil, err
 		}
@@ -379,12 +390,96 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 	session.StorageLocation = storageLocation
 	session.ActualSizeBytes = info.Size
 	session.Checksum = checksum
-	promoted, err := u.uploadSessions.PromoteUploadSession(ctx, session)
+	promoted, err := u.promoteUploadSession(ctx, session)
 	if err != nil {
 		return nil, err
 	}
 	_ = u.bucket.DeleteStagedObject(ctx, session)
 	return promoted, nil
+}
+
+func (u *dataUploadUseCase) createUploadSession(ctx context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+	log.Trace("DataUploadUseCase createUploadSession")
+
+	var created *model.UploadSession
+	err := u.uploadSessionUOW.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		out, err := u.uploadSessions.CreateUploadSession(ctx, tx, session)
+		if err != nil {
+			return err
+		}
+		created = out
+		return nil
+	})
+	return created, err
+}
+
+func (u *dataUploadUseCase) recordUploadedFile(ctx context.Context, upload *model.DataFile, storageLocation string, uploadID uuid.UUID) error {
+	log.Trace("DataUploadUseCase recordUploadedFile")
+
+	return u.uploadSessionUOW.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		session, err := u.uploadSessions.RecordUploadedFile(ctx, tx, upload, storageLocation, uploadID)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(u.uploadEventBuilder.DatasetFileUploadedMessage(session)); err != nil {
+			return fmt.Errorf("enqueue dataset file uploaded: %w", err)
+		}
+		return nil
+	})
+}
+
+func (u *dataUploadUseCase) promoteUploadSession(ctx context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+	log.Trace("DataUploadUseCase promoteUploadSession")
+
+	var promoted *model.UploadSession
+	err := u.uploadSessionUOW.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		out, changed, err := u.uploadSessions.PromoteUploadSession(ctx, tx, session)
+		if err != nil {
+			return err
+		}
+		if changed {
+			if err := enqueue(u.uploadEventBuilder.UploadSessionPromotedMessage(out)); err != nil {
+				return fmt.Errorf("enqueue upload promoted: %w", err)
+			}
+		}
+		promoted = out
+		return nil
+	})
+	return promoted, err
+}
+
+func (u *dataUploadUseCase) rejectUploadSession(ctx context.Context, uploadID, userID uuid.UUID) error {
+	log.Trace("DataUploadUseCase rejectUploadSession")
+
+	return u.uploadSessionUOW.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.uploadSessions.RejectUploadSession(ctx, tx, uploadID, userID)
+	})
+}
+
+func (u *dataUploadUseCase) expireUploadSession(ctx context.Context, uploadID, userID uuid.UUID) error {
+	log.Trace("DataUploadUseCase expireUploadSession")
+
+	return u.uploadSessionUOW.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.uploadSessions.ExpireUploadSession(ctx, tx, uploadID, userID)
+	})
+}
+
+func (u *dataUploadUseCase) recordModelArtifact(ctx context.Context, session *model.UploadSession) (*model.UploadSession, error) {
+	log.Trace("DataUploadUseCase recordModelArtifact")
+
+	var recorded *model.UploadSession
+	err := u.uploadSessionUOW.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		out, err := u.uploadSessions.RecordModelArtifact(ctx, tx, session)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(u.uploadEventBuilder.ModelArtifactIngestedMessage(out)); err != nil {
+			return fmt.Errorf("enqueue model artifact ingested: %w", err)
+		}
+		recorded = out
+		return nil
+	})
+	return recorded, err
 }
 
 func (u *dataUploadUseCase) stagedValidationReader(ctx context.Context, session *model.UploadSession, objectSize int64) (io.ReadSeeker, error) {

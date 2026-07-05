@@ -40,8 +40,10 @@ func (p *recordingTrainingEventPublisher) PublishModelTrainingFailed(_ context.C
 type recordingTrainingExecutor struct {
 	trainingSpec   model.TrainingJobSpec
 	evaluationSpec model.EvaluationJobSpec
+	promotionSpec  model.PromotionReportJobSpec
 	artifact       *model.TrainedModelArtifact
 	report         *model.EvaluationReport
+	promotion      *model.PromotionReport
 	err            error
 }
 
@@ -59,6 +61,14 @@ func (e *recordingTrainingExecutor) EvaluateModel(_ context.Context, spec model.
 		return nil, e.err
 	}
 	return e.report, nil
+}
+
+func (e *recordingTrainingExecutor) RunPromotionReport(_ context.Context, spec model.PromotionReportJobSpec) (*model.PromotionReport, error) {
+	e.promotionSpec = spec
+	if e.err != nil {
+		return nil, e.err
+	}
+	return e.promotion, nil
 }
 
 var _ = Describe("TrainingActivities", func() {

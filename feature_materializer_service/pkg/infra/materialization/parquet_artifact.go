@@ -21,7 +21,51 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const parquetContentType = "application/vnd.apache.parquet"
+const (
+	parquetContentType = "application/vnd.apache.parquet"
+	pdfContentType     = "application/pdf"
+)
+
+const (
+	parquetFileExtension  = "parquet"
+	csvFileExtension      = "csv"
+	jsonFileExtension     = "json"
+	pdfFileExtension      = "pdf"
+	htmlFileExtension     = "html"
+	htmFileExtension      = "htm"
+	markdownFileExtension = "md"
+	textFileExtension     = "txt"
+)
+
+const (
+	arrowSourceFormat      = "arrow"
+	csvSourceFormat        = "csv"
+	jsonSourceFormat       = "json"
+	pdfSourceFormat        = "pdf"
+	htmlSourceFormat       = "html"
+	markdownSourceFormat   = "markdown"
+	textSourceFormat       = "text"
+	csvContentTypeToken    = "csv"
+	jsonContentTypeToken   = "json"
+	htmlContentTypePrefix  = "text/html"
+	mdContentTypePrefix    = "text/markdown"
+	textContentTypePrefix  = "text/plain"
+)
+
+const (
+	schemaMetadataKeyFormat           = "format"
+	schemaMetadataKeyRows             = "rows"
+	schemaMetadataKeyFields           = "fields"
+	schemaMetadataKeyName             = "name"
+	schemaMetadataKeyType             = "type"
+	schemaMetadataKeySourceFormat     = "source_format"
+	schemaMetadataKeySourcePageCount  = "source_page_count"
+	schemaMetadataKeyExtractorName    = "extractor_name"
+	schemaMetadataKeyExtractorVersion = "extractor_version"
+	schemaMetadataKeyCleanerName      = "cleaner_name"
+	schemaMetadataKeyCleanerVersion   = "cleaner_version"
+	schemaMetadataKeyStructureAware   = "structure_aware"
+)
 
 type ParquetArtifact struct {
 	Data           []byte
@@ -110,7 +154,7 @@ func ExtractTextRowsFromParquet(ctx context.Context, data []byte, maxRows int) (
 func isParquet(data []byte, contentType, extension string) bool {
 	extension = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(extension)), ".")
 	contentType = strings.ToLower(strings.TrimSpace(contentType))
-	return extension == "parquet" ||
+	return extension == parquetFileExtension ||
 		contentType == parquetContentType ||
 		(len(data) >= 8 && string(data[:4]) == "PAR1" && string(data[len(data)-4:]) == "PAR1")
 }
@@ -121,20 +165,20 @@ func artifactRows(ctx context.Context, data []byte, contentType, extension strin
 	extension = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(extension)), ".")
 	contentType = strings.ToLower(strings.TrimSpace(contentType))
 	switch {
-	case extension == "csv" || strings.Contains(contentType, "csv"):
+	case extension == csvFileExtension || strings.Contains(contentType, csvContentTypeToken):
 		rows, fields, err := csvRows(data)
-		return rows, fields, map[string]any{"source_format": "csv"}, err
-	case extension == "json" || strings.Contains(contentType, "json"):
+		return rows, fields, map[string]any{schemaMetadataKeySourceFormat: csvSourceFormat}, err
+	case extension == jsonFileExtension || strings.Contains(contentType, jsonContentTypeToken):
 		rows, fields, err := jsonRows(data)
-		return rows, fields, map[string]any{"source_format": "json"}, err
-	case extension == "pdf" || contentType == "application/pdf":
+		return rows, fields, map[string]any{schemaMetadataKeySourceFormat: jsonSourceFormat}, err
+	case extension == pdfFileExtension || contentType == pdfContentType:
 		return pdfRows(ctx, data, pdfExtractor, cleaner)
-	case strings.HasPrefix(contentType, "text/html") || extension == "html" || extension == "htm":
+	case strings.HasPrefix(contentType, htmlContentTypePrefix) || extension == htmlFileExtension || extension == htmFileExtension:
 		return htmlRows(ctx, data, NewHTMLDocumentExtractor(), cleaner)
-	case strings.HasPrefix(contentType, "text/markdown") || extension == "md" || extension == "markdown":
-		return textRows(ctx, data, cleaner, "markdown")
-	case strings.HasPrefix(contentType, "text/plain") || extension == "txt" || extension == "text":
-		return textRows(ctx, data, cleaner, "text")
+	case strings.HasPrefix(contentType, mdContentTypePrefix) || extension == markdownFileExtension || extension == markdownSourceFormat:
+		return textRows(ctx, data, cleaner, markdownSourceFormat)
+	case strings.HasPrefix(contentType, textContentTypePrefix) || extension == textFileExtension || extension == textSourceFormat:
+		return textRows(ctx, data, cleaner, textSourceFormat)
 	default:
 		return nil, nil, nil, domain.ErrValidationFailed.Extend("unsupported raw artifact format")
 	}
@@ -161,13 +205,13 @@ func pdfRows(ctx context.Context, data []byte, extractor DocumentExtractor, clea
 		return nil, nil, nil, domain.ErrValidationFailed.Extend("pdf text is empty")
 	}
 	metadata := map[string]any{
-		"source_format":     "pdf",
-		"source_page_count": extraction.PageCount,
-		"extractor_name":    extractor.Name(),
-		"extractor_version": extractor.Version(),
-		"cleaner_name":      cleaner.Name(),
-		"cleaner_version":   cleaner.Version(),
-		"structure_aware":   true,
+		schemaMetadataKeySourceFormat:     pdfSourceFormat,
+		schemaMetadataKeySourcePageCount:  extraction.PageCount,
+		schemaMetadataKeyExtractorName:    extractor.Name(),
+		schemaMetadataKeyExtractorVersion: extractor.Version(),
+		schemaMetadataKeyCleanerName:      cleaner.Name(),
+		schemaMetadataKeyCleanerVersion:   cleaner.Version(),
+		schemaMetadataKeyStructureAware:   true,
 	}
 	return sourceTextRows(cleanedRows), []string{sourceTextField}, metadata, nil
 }
@@ -193,12 +237,12 @@ func htmlRows(ctx context.Context, data []byte, extractor DocumentExtractor, cle
 		return nil, nil, nil, domain.ErrValidationFailed.Extend("html text is empty")
 	}
 	metadata := map[string]any{
-		"source_format":     "html",
-		"extractor_name":    extractor.Name(),
-		"extractor_version": extractor.Version(),
-		"cleaner_name":      cleaner.Name(),
-		"cleaner_version":   cleaner.Version(),
-		"structure_aware":   true,
+		schemaMetadataKeySourceFormat:     htmlSourceFormat,
+		schemaMetadataKeyExtractorName:    extractor.Name(),
+		schemaMetadataKeyExtractorVersion: extractor.Version(),
+		schemaMetadataKeyCleanerName:      cleaner.Name(),
+		schemaMetadataKeyCleanerVersion:   cleaner.Version(),
+		schemaMetadataKeyStructureAware:   true,
 	}
 	return sourceTextRows(cleanedRows), []string{sourceTextField}, metadata, nil
 }
@@ -211,7 +255,7 @@ func textRows(ctx context.Context, data []byte, cleaner TextCleaner, sourceForma
 	}
 	rawText := string(data)
 	var rows []string
-	if sourceFormat == "markdown" {
+	if sourceFormat == markdownSourceFormat {
 		rows = markdownSections(rawText)
 	} else {
 		rows = plainTextSections(rawText)
@@ -224,10 +268,10 @@ func textRows(ctx context.Context, data []byte, cleaner TextCleaner, sourceForma
 		return nil, nil, nil, domain.ErrValidationFailed.Extend("text artifact is empty")
 	}
 	metadata := map[string]any{
-		"source_format":   sourceFormat,
-		"cleaner_name":    cleaner.Name(),
-		"cleaner_version": cleaner.Version(),
-		"structure_aware": sourceFormat == "markdown",
+		schemaMetadataKeySourceFormat:   sourceFormat,
+		schemaMetadataKeyCleanerName:    cleaner.Name(),
+		schemaMetadataKeyCleanerVersion: cleaner.Version(),
+		schemaMetadataKeyStructureAware: sourceFormat == markdownSourceFormat,
 	}
 	return sourceTextRows(cleanedRows), []string{sourceTextField}, metadata, nil
 }
@@ -412,14 +456,14 @@ func schemaMetadataJSON(schema *arrow.Schema, rows int64, extraMetadata map[stri
 	fields := make([]map[string]string, schema.NumFields())
 	for i, field := range schema.Fields() {
 		fields[i] = map[string]string{
-			"name": field.Name,
-			"type": field.Type.String(),
+			schemaMetadataKeyName: field.Name,
+			schemaMetadataKeyType: field.Type.String(),
 		}
 	}
 	metadata := map[string]any{
-		"format": "arrow",
-		"rows":   rows,
-		"fields": fields,
+		schemaMetadataKeyFormat: arrowSourceFormat,
+		schemaMetadataKeyRows:   rows,
+		schemaMetadataKeyFields: fields,
 	}
 	for key, value := range extraMetadata {
 		metadata[key] = value
@@ -449,12 +493,12 @@ func MergeSourceSchemaMetadata(schemaMetadata, sourceMetadata string) (string, e
 	}
 
 	for _, key := range []string{
-		"source_format",
-		"source_page_count",
-		"extractor_name",
-		"extractor_version",
-		"cleaner_name",
-		"cleaner_version",
+		schemaMetadataKeySourceFormat,
+		schemaMetadataKeySourcePageCount,
+		schemaMetadataKeyExtractorName,
+		schemaMetadataKeyExtractorVersion,
+		schemaMetadataKeyCleanerName,
+		schemaMetadataKeyCleanerVersion,
 	} {
 		if value, ok := source[key]; ok {
 			target[key] = value

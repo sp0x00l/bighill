@@ -8,74 +8,34 @@ import (
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
-	inferencepb "lib/data_contracts_lib/inference"
 	coreDB "lib/shared_lib/db"
-	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/proto"
 )
 
 type InferenceFeedbackRepository struct {
 	coreDB.Database
-	unitOfWork   *coreDB.UnitOfWork
-	outbox       msgConn.OrderedOutbox
-	topic        string
-	outboxSignal func()
 }
 
-type InferenceFeedbackRepositoryOption func(*InferenceFeedbackRepository)
-
-func WithPreferenceDatasetOutbox(outbox msgConn.OrderedOutbox, topic string) InferenceFeedbackRepositoryOption {
-	log.Trace("WithPreferenceDatasetOutbox")
-
-	return func(r *InferenceFeedbackRepository) {
-		r.outbox = outbox
-		r.topic = topic
-	}
-}
-
-func WithOutboxSignal(signal func()) InferenceFeedbackRepositoryOption {
-	log.Trace("WithOutboxSignal")
-
-	return func(r *InferenceFeedbackRepository) {
-		r.outboxSignal = signal
-	}
-}
-
-func NewInferenceFeedbackRepository(db *coreDB.Database, opts ...InferenceFeedbackRepositoryOption) *InferenceFeedbackRepository {
+func NewInferenceFeedbackRepository(db *coreDB.Database) *InferenceFeedbackRepository {
 	log.Trace("NewInferenceFeedbackRepository")
 
-	repository := &InferenceFeedbackRepository{
-		Database:   *db,
-		unitOfWork: coreDB.NewUnitOfWork(db.Pool),
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(repository)
-		}
-	}
-	return repository
+	return &InferenceFeedbackRepository{Database: *db}
 }
 
-func (r *InferenceFeedbackRepository) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
+func (r *InferenceFeedbackRepository) RecordFeedback(ctx context.Context, tx pgx.Tx, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
 	log.Trace("InferenceFeedbackRepository RecordFeedback")
 
-	var record *model.InferenceFeedback
-	err := r.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		var err error
-		record, err = scanInferenceFeedback(tx.QueryRow(ctx, r.feedbackQuery(), feedbackArgs(feedback, idempotencyKey)))
-		if err != nil {
-			if coreDB.IsForeignKeyViolation(err) {
-				return domain.ErrValidationFailed.Extend("tenant projection is not ready")
-			}
-			return fmt.Errorf("record inference feedback: %w", err)
+	record, err := scanInferenceFeedback(tx.QueryRow(ctx, r.feedbackQuery(), feedbackArgs(feedback, idempotencyKey)))
+	if err != nil {
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
 		}
-		return nil
-	})
-	return record, err
+		return nil, fmt.Errorf("record inference feedback: %w", err)
+	}
+	return record, nil
 }
 
 func (r *InferenceFeedbackRepository) feedbackQuery() string {
@@ -237,11 +197,10 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 	}, nil
 }
 
-func (r *InferenceFeedbackRepository) RecordPreferenceDatasetSnapshot(ctx context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+func (r *InferenceFeedbackRepository) RecordPreferenceDatasetSnapshot(ctx context.Context, tx pgx.Tx, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
 	log.Trace("InferenceFeedbackRepository RecordPreferenceDatasetSnapshot")
 
-	err := r.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		query := `INSERT INTO ` + r.Name + `.preference_dataset_snapshots (
+	query := `INSERT INTO ` + r.Name + `.preference_dataset_snapshots (
 					preference_dataset_id, user_id, dataset_id, model_id, parent_adapter_uri, parent_base_model,
 					parent_model_version, source_request_id, output_uri, evaluation_output_uri,
 					format, eligibility_policy, example_count, min_examples, limit_count
@@ -249,26 +208,13 @@ func (r *InferenceFeedbackRepository) RecordPreferenceDatasetSnapshot(ctx contex
 					@preference_dataset_id, @user_id, @dataset_id, @model_id, @parent_adapter_uri, @parent_base_model,
 					@parent_model_version, @source_request_id, @output_uri, @evaluation_output_uri,
 				@format, @eligibility_policy, @example_count, @min_examples, @limit_count
-			)
+		)
 		ON CONFLICT (preference_dataset_id) DO NOTHING`
-		if _, err := tx.Exec(ctx, query, preferenceDatasetSnapshotArgs(dataset, request)); err != nil {
-			if coreDB.IsForeignKeyViolation(err) {
-				return domain.ErrValidationFailed.Extend("tenant projection is not ready")
-			}
-			return fmt.Errorf("record preference dataset snapshot: %w", err)
+	if _, err := tx.Exec(ctx, query, preferenceDatasetSnapshotArgs(dataset, request)); err != nil {
+		if coreDB.IsForeignKeyViolation(err) {
+			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
 		}
-		if r.outbox != nil {
-			if err := r.outbox.EnqueueTx(ctx, tx, preferenceDatasetReadyMessage(r.topic, dataset, request)); err != nil {
-				return fmt.Errorf("enqueue preference dataset ready: %w", err)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if r.outbox != nil && r.outboxSignal != nil {
-		r.outboxSignal()
+		return nil, fmt.Errorf("record preference dataset snapshot: %w", err)
 	}
 	return dataset, nil
 }
@@ -327,36 +273,6 @@ func preferenceDatasetSnapshotArgs(dataset *model.PreferenceDataset, request mod
 	}
 }
 
-func preferenceDatasetReadyMessage(topic string, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) msgConn.OutboundMessage {
-	log.Trace("preferenceDatasetReadyMessage")
-
-	payload := mustMarshal(&inferencepb.PreferenceDatasetReadyEvent{
-		PreferenceDatasetId: dataset.PreferenceDatasetID.String(),
-		UserId:              dataset.UserID.String(),
-		DatasetId:           dataset.DatasetID.String(),
-		ModelId:             dataset.ModelID.String(),
-		SourceRequestId:     dataset.RequestID.String(),
-		OutputUri:           strings.TrimSpace(dataset.OutputURI),
-		EvaluationOutputUri: strings.TrimSpace(dataset.EvaluationOutputURI),
-		ExampleCount:        int32(dataset.ExampleCount()),
-		Format:              strings.TrimSpace(dataset.Format),
-		MinExamples:         int32(request.MinExamples),
-		Limit:               int32(request.Limit),
-		ParentAdapterUri:    strings.TrimSpace(dataset.ParentAdapterURI),
-		ParentBaseModel:     strings.TrimSpace(dataset.ParentBaseModel),
-		ParentModelVersion:  int32(dataset.ParentModelVersion),
-	})
-	return msgConn.OutboundMessage{
-		Topic: topic,
-		Message: msgConn.Message{
-			ResourceKey: dataset.DatasetID,
-			MsgType:     msgConn.MsgTypePreferenceDatasetReady,
-			Payload:     payload,
-		},
-		DispatchKey: "preference_dataset_ready:" + dataset.PreferenceDatasetID.String(),
-	}
-}
-
 func ensurePreferenceTrainingSplit(examples []model.PreferenceExample) []model.PreferenceExample {
 	log.Trace("ensurePreferenceTrainingSplit")
 
@@ -371,16 +287,6 @@ func ensurePreferenceTrainingSplit(examples []model.PreferenceExample) []model.P
 	out := make([]model.PreferenceExample, len(examples))
 	copy(out, examples)
 	out[0].Split = "TRAIN"
-	return out
-}
-
-func mustMarshal(payload proto.Message) []byte {
-	log.Trace("mustMarshal")
-
-	out, err := proto.Marshal(payload)
-	if err != nil {
-		panic(err)
-	}
 	return out
 }
 

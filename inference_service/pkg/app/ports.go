@@ -4,8 +4,10 @@ import (
 	"context"
 
 	"inference_service/pkg/domain/model"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type InferenceModelRepository interface {
@@ -23,9 +25,17 @@ type InferenceRequestRepository interface {
 }
 
 type InferenceFeedbackRepository interface {
-	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
+	RecordFeedback(ctx context.Context, tx pgx.Tx, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
 	ReadPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
-	RecordPreferenceDatasetSnapshot(ctx context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
+	RecordPreferenceDatasetSnapshot(ctx context.Context, tx pgx.Tx, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
+}
+
+type InferenceUnitOfWorkAdapter interface {
+	Do(ctx context.Context, fn shareduow.TxFunc) error
+}
+
+type PreferenceDatasetEventBuilder interface {
+	PreferenceDatasetReadyMessage(dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) shareduow.OutboundMessage
 }
 
 type PreferenceDatasetWriter interface {

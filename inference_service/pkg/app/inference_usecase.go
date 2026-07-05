@@ -11,8 +11,10 @@ import (
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -30,6 +32,8 @@ type inferenceUsecase struct {
 	datasetRepository         InferenceDatasetRepository
 	requestRepository         InferenceRequestRepository
 	feedbackRepository        InferenceFeedbackRepository
+	inferenceUnitOfWork       InferenceUnitOfWorkAdapter
+	preferenceEventBuilder    PreferenceDatasetEventBuilder
 	retrievalClient           RetrievalClient
 	queryTransformer          QueryTransformer
 	contextPacker             ContextPacker
@@ -80,6 +84,15 @@ func WithInferenceFeedbackRepository(repository InferenceFeedbackRepository) Inf
 
 	return func(u *inferenceUsecase) {
 		u.feedbackRepository = repository
+	}
+}
+
+func WithInferenceUnitOfWork(unitOfWork InferenceUnitOfWorkAdapter, preferenceEventBuilder PreferenceDatasetEventBuilder) InferenceOption {
+	log.Trace("WithInferenceUnitOfWork")
+
+	return func(u *inferenceUsecase) {
+		u.inferenceUnitOfWork = unitOfWork
+		u.preferenceEventBuilder = preferenceEventBuilder
 	}
 }
 
@@ -184,7 +197,7 @@ func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.I
 	if feedback != nil {
 		ctx = ctxutil.WithTenantID(ctx, feedback.UserID)
 	}
-	record, err := u.feedbackRepository.RecordFeedback(ctx, feedback, idempotencyKey)
+	record, err := u.recordFeedback(ctx, feedback, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -220,9 +233,42 @@ func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request 
 		written.EligibilityPolicy = preferenceDatasetEligibilityPolicy(written.EligibilityPolicy)
 		written.MinExamples = request.MinExamples
 		written.Limit = request.Limit
-		return u.feedbackRepository.RecordPreferenceDatasetSnapshot(ctx, written, request)
+		return u.recordPreferenceDatasetSnapshot(ctx, written, request)
 	}
 	return written, nil
+}
+
+func (u *inferenceUsecase) recordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
+	log.Trace("InferenceUsecase recordFeedback")
+
+	var record *model.InferenceFeedback
+	err := u.inferenceUnitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		out, err := u.feedbackRepository.RecordFeedback(ctx, tx, feedback, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		record = out
+		return nil
+	})
+	return record, err
+}
+
+func (u *inferenceUsecase) recordPreferenceDatasetSnapshot(ctx context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+	log.Trace("InferenceUsecase recordPreferenceDatasetSnapshot")
+
+	var record *model.PreferenceDataset
+	err := u.inferenceUnitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		out, err := u.feedbackRepository.RecordPreferenceDatasetSnapshot(ctx, tx, dataset, request)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(u.preferenceEventBuilder.PreferenceDatasetReadyMessage(out, request)); err != nil {
+			return fmt.Errorf("enqueue preference dataset ready: %w", err)
+		}
+		record = out
+		return nil
+	})
+	return record, err
 }
 
 func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateRequest) (response *model.GenerateResponse, err error) {

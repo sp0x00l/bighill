@@ -7,7 +7,11 @@ import (
 	"data_stream_service/pkg/infra"
 	"data_stream_service/pkg/infra/network/data"
 
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/flight"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"google.golang.org/grpc/metadata"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -31,6 +35,43 @@ func (s *doGetStream) SetTrailer(metadata.MD)       {}
 func (s *doGetStream) Context() context.Context     { return s.ctx }
 func (s *doGetStream) SendMsg(any) error            { return nil }
 func (s *doGetStream) RecvMsg(any) error            { return io.EOF }
+
+type streamingEngineStub struct {
+	streamed bool
+	executed bool
+	schema   *arrow.Schema
+}
+
+func newStreamingEngineStub() *streamingEngineStub {
+	return &streamingEngineStub{
+		schema: arrow.NewSchema([]arrow.Field{
+			{Name: "value", Type: arrow.BinaryTypes.String},
+		}, nil),
+	}
+}
+
+func (e *streamingEngineStub) GetSchema(context.Context, *flight.FlightDescriptor) (*arrow.Schema, error) {
+	return e.schema, nil
+}
+
+func (e *streamingEngineStub) Execute(context.Context, *flight.Ticket) (*data.QueryResult, error) {
+	e.executed = true
+	return nil, nil
+}
+
+func (e *streamingEngineStub) Stream(_ context.Context, _ *flight.Ticket, outStream flight.FlightService_DoGetServer) error {
+	e.streamed = true
+	allocator := memory.NewGoAllocator()
+	builder := array.NewRecordBuilder(allocator, e.schema)
+	defer builder.Release()
+	builder.Field(0).(*array.StringBuilder).Append("streamed")
+	record := builder.NewRecord()
+	defer record.Release()
+
+	writer := flight.NewRecordWriter(outStream, ipc.WithSchema(e.schema), ipc.WithAllocator(allocator))
+	defer writer.Close()
+	return writer.Write(record)
+}
 
 var _ = Describe("Flight query gateway", func() {
 	var (
@@ -83,6 +124,22 @@ var _ = Describe("Flight query gateway", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(stream.messages).NotTo(BeEmpty())
 		Expect(stream.messages[0].DataHeader).NotTo(BeEmpty())
+	})
+
+	It("uses a streaming query engine path when available", func() {
+		streamingEngine := newStreamingEngineStub()
+		gateway = data.NewFlightServer(server, infra.DataConfig{
+			Server: infra.ServerConnectionConfig{Hostname: "localhost", Port: 0},
+		}, streamingEngine)
+		stream := &doGetStream{ctx: context.Background()}
+		ticket := &flight.Ticket{Ticket: []byte("SELECT * FROM dataset LIMIT 10")}
+
+		err := gateway.DoGet(ticket, stream)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(streamingEngine.streamed).To(BeTrue())
+		Expect(streamingEngine.executed).To(BeFalse())
+		Expect(stream.messages).NotTo(BeEmpty())
 	})
 })
 

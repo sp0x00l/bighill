@@ -13,7 +13,15 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const promptEncodingName = "cl100k_base"
+const (
+	promptEncodingName            = "cl100k_base"
+	promptSectionDataset          = "\n\nDataset:\n"
+	promptSectionModel            = "\nModel:\n"
+	promptSectionRetrievedContext = "\nRetrieved context:\n"
+	promptContextHeaderFormat     = "[context:%d record_id:%s snapshot_id:%s chunk:%d similarity:%.6f]\n"
+	promptSectionQuestion         = "Question:\n"
+	promptSectionAnswer           = "\n\nAnswer:"
+)
 
 var (
 	promptEncodingOnce sync.Once
@@ -98,16 +106,16 @@ func (b *DefaultPromptBuilder) BuildPrompt(_ context.Context, request model.Prom
 	strategy := b.strategy
 	var prompt strings.Builder
 	prompt.WriteString(strategy.SystemPrompt)
-	prompt.WriteString("\n\nDataset:\n")
+	prompt.WriteString(promptSectionDataset)
 	prompt.WriteString(fmt.Sprintf("- dataset_id: %s\n", request.Dataset.DatasetID))
 	prompt.WriteString(fmt.Sprintf("- version: %d\n", request.Dataset.DatasetVersion))
 	prompt.WriteString(fmt.Sprintf("- embedding_snapshot_id: %s\n", request.Dataset.EmbeddingSnapshotID))
-	prompt.WriteString("\nModel:\n")
+	prompt.WriteString(promptSectionModel)
 	prompt.WriteString(fmt.Sprintf("- model_id: %s\n", request.Model.ModelID))
 	prompt.WriteString(fmt.Sprintf("- model_version: %d\n", request.Model.ModelVersion))
-	prompt.WriteString("\nRetrieved context:\n")
+	prompt.WriteString(promptSectionRetrievedContext)
 	for i, retrieved := range request.Contexts {
-		prompt.WriteString(fmt.Sprintf("[context:%d record_id:%s snapshot_id:%s chunk:%d similarity:%.6f]\n",
+		prompt.WriteString(fmt.Sprintf(promptContextHeaderFormat,
 			i+1,
 			retrieved.EmbeddingRecordID,
 			retrieved.EmbeddingSnapshotID,
@@ -117,9 +125,9 @@ func (b *DefaultPromptBuilder) BuildPrompt(_ context.Context, request model.Prom
 		prompt.WriteString(strings.TrimSpace(retrieved.SourceText))
 		prompt.WriteString("\n\n")
 	}
-	prompt.WriteString("Question:\n")
+	prompt.WriteString(promptSectionQuestion)
 	prompt.WriteString(query)
-	prompt.WriteString("\n\nAnswer:")
+	prompt.WriteString(promptSectionAnswer)
 
 	return &model.PromptPackage{
 		Prompt:   prompt.String(),

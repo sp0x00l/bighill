@@ -9,7 +9,6 @@ import (
 	"data_registry_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
 	coreDB "lib/shared_lib/db"
-	msgConn "lib/shared_lib/messaging"
 	core "lib/shared_lib/transport"
 
 	"github.com/google/uuid"
@@ -38,14 +37,7 @@ var _ = Describe("DatasetDB", func() {
 		dataset = validDatasetDomain(uuid.New(), userID)
 	})
 
-	It("creates a dataset in a transaction and emits the outbox message", func() {
-		outbox := &orderedOutboxStub{}
-		signaled := false
-		repo = NewDatasetDB(
-			coreDB.NewDatabase(pool, "test_schema"),
-			WithTransactionalOutbox(outbox, "data_registry"),
-			WithOutboxSignal(func() { signaled = true }),
-		)
+	It("creates a dataset with the supplied transaction", func() {
 		pool.txRows = []pgx.Row{stringScanRow(nil,
 			dataset.ID.String(),
 			userID.String(),
@@ -55,15 +47,11 @@ var _ = Describe("DatasetDB", func() {
 		)}
 		idempotencyKey := uuid.New()
 
-		err := repo.Create(ctx, dataset, idempotencyKey)
+		err := repo.Create(ctx, &repositoryTxStub{pool: pool}, dataset, idempotencyKey)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pool.beginTxCalled).To(BeTrue())
-		Expect(pool.commitCalled).To(BeTrue())
-		Expect(outbox.messages).To(HaveLen(1))
-		Expect(outbox.messages[0].Topic).To(Equal("data_registry"))
-		Expect(outbox.messages[0].Message.ResourceKey).To(Equal(dataset.ID))
-		Expect(signaled).To(BeTrue())
+		Expect(pool.beginTxCalled).To(BeFalse())
+		Expect(pool.commitCalled).To(BeFalse())
 		Expect(pool.lastQuery).To(ContainSubstring("INSERT INTO test_schema.datasets"))
 		args := pool.lastArgs[0].(pgx.NamedArgs)
 		Expect(args["user_id"]).To(Equal(pgtype.UUID{Bytes: userID, Valid: true}))
@@ -73,7 +61,7 @@ var _ = Describe("DatasetDB", func() {
 	It("maps duplicate dataset creation to the domain conflict error", func() {
 		pool.txRows = []pgx.Row{errorRowStub{err: &pgconn.PgError{Code: pgerrcode.UniqueViolation}}}
 
-		err := repo.Create(ctx, dataset, uuid.New())
+		err := repo.Create(ctx, &repositoryTxStub{pool: pool}, dataset, uuid.New())
 
 		Expect(errors.Is(err, domainErrors.ErrResourceAlreadyExists)).To(BeTrue())
 		Expect(pool.commitCalled).To(BeFalse())
@@ -82,7 +70,7 @@ var _ = Describe("DatasetDB", func() {
 	It("maps tenant projection failures to validation errors", func() {
 		pool.txRows = []pgx.Row{errorRowStub{err: &pgconn.PgError{Code: pgerrcode.ForeignKeyViolation}}}
 
-		err := repo.Create(ctx, dataset, uuid.New())
+		err := repo.Create(ctx, &repositoryTxStub{pool: pool}, dataset, uuid.New())
 
 		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("tenant projection is not ready"))
@@ -152,56 +140,42 @@ var _ = Describe("DatasetDB", func() {
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 	})
 
-	It("replaces a dataset and emits an update", func() {
-		outbox := &orderedOutboxStub{}
-		repo = NewDatasetDB(
-			coreDB.NewDatabase(pool, "test_schema"),
-			WithTransactionalOutbox(outbox, "data_registry"),
-		)
+	It("replaces a dataset with the supplied transaction", func() {
 		updatedDAO := validDatasetDAO(dataset.ID, userID)
 		updatedDAO.Title = pgtype.Text{String: "Updated", Valid: true}
 		pool.txRows = []pgx.Row{&datasetRowStub{dao: updatedDAO}}
 
-		got, err := repo.Replace(ctx, dataset)
+		got, err := repo.Replace(ctx, &repositoryTxStub{pool: pool}, dataset)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.Title).To(Equal("Updated"))
-		Expect(pool.commitCalled).To(BeTrue())
-		Expect(outbox.messages).To(HaveLen(1))
-		Expect(outbox.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeDatasetUpdated))
+		Expect(pool.commitCalled).To(BeFalse())
 	})
 
 	It("returns resource-not-found when replacing a missing dataset", func() {
 		pool.txRows = []pgx.Row{errorRowStub{err: pgx.ErrNoRows}}
 
-		got, err := repo.Replace(ctx, dataset)
+		got, err := repo.Replace(ctx, &repositoryTxStub{pool: pool}, dataset)
 
 		Expect(got).To(BeNil())
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 		Expect(pool.commitCalled).To(BeFalse())
 	})
 
-	It("deletes a dataset and emits a delete event", func() {
-		outbox := &orderedOutboxStub{}
-		repo = NewDatasetDB(
-			coreDB.NewDatabase(pool, "test_schema"),
-			WithTransactionalOutbox(outbox, "data_registry"),
-		)
+	It("deletes a dataset with the supplied transaction", func() {
 		pool.execRowsAffected = []int64{1}
 
-		err := repo.Delete(ctx, dataset.ID, userID)
+		err := repo.Delete(ctx, &repositoryTxStub{pool: pool}, dataset.ID, userID)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pool.commitCalled).To(BeTrue())
-		Expect(outbox.messages).To(HaveLen(1))
-		Expect(outbox.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeDatasetDeleted))
+		Expect(pool.commitCalled).To(BeFalse())
 		Expect(pool.lastQuery).To(ContainSubstring("user_id = @user_id"))
 	})
 
 	It("returns resource-not-found when deleting a missing dataset", func() {
 		pool.execRowsAffected = []int64{0}
 
-		err := repo.Delete(ctx, dataset.ID, userID)
+		err := repo.Delete(ctx, &repositoryTxStub{pool: pool}, dataset.ID, userID)
 
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 		Expect(pool.commitCalled).To(BeFalse())
@@ -212,35 +186,29 @@ var _ = Describe("DatasetDB", func() {
 		updatedDAO.ProcessingState = pgtype.Text{String: model.DatasetProcessingFeatureMaterialized.String(), Valid: true}
 		pool.txRows = []pgx.Row{&datasetRowStub{dao: updatedDAO}}
 
-		got, changed, err := repo.UpdateProcessingState(ctx, dataset.ID, userID, model.DatasetProcessingFeatureMaterialized)
+		got, changed, err := repo.UpdateProcessingState(ctx, &repositoryTxStub{pool: pool}, dataset.ID, userID, model.DatasetProcessingFeatureMaterialized)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(changed).To(BeTrue())
 		Expect(got.ProcessingState).To(Equal(model.DatasetProcessingFeatureMaterialized))
-		Expect(pool.commitCalled).To(BeTrue())
+		Expect(pool.commitCalled).To(BeFalse())
 	})
 
 	It("returns the current dataset when a processing state update is unchanged", func() {
 		currentDAO := validDatasetDAO(dataset.ID, userID)
 		currentDAO.ProcessingState = pgtype.Text{String: model.DatasetProcessingEmbeddingsMaterialized.String(), Valid: true}
-		pool.txRows = []pgx.Row{errorRowStub{err: pgx.ErrNoRows}}
-		pool.poolRows = []pgx.Row{&datasetRowStub{dao: currentDAO}}
+		pool.txRows = []pgx.Row{errorRowStub{err: pgx.ErrNoRows}, &datasetRowStub{dao: currentDAO}}
 
-		got, changed, err := repo.UpdateProcessingState(ctx, dataset.ID, userID, model.DatasetProcessingRawMaterialized)
+		got, changed, err := repo.UpdateProcessingState(ctx, &repositoryTxStub{pool: pool}, dataset.ID, userID, model.DatasetProcessingRawMaterialized)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(changed).To(BeFalse())
 		Expect(got.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 		Expect(pool.commitCalled).To(BeFalse())
-		Expect(pool.rollbackCalled).To(BeTrue())
+		Expect(pool.rollbackCalled).To(BeFalse())
 	})
 
-	It("records materialization metadata and emits an update when values change", func() {
-		outbox := &orderedOutboxStub{}
-		repo = NewDatasetDB(
-			coreDB.NewDatabase(pool, "test_schema"),
-			WithTransactionalOutbox(outbox, "data_registry"),
-		)
+	It("records materialization metadata with the supplied transaction", func() {
 		rawSnapshotID := uuid.New()
 		materialized := validDatasetDomain(dataset.ID, userID)
 		materialized.Location = "s3://bucket/raw/movies.parquet"
@@ -250,12 +218,12 @@ var _ = Describe("DatasetDB", func() {
 		updatedDAO.RawSnapshotID = pgtype.UUID{Bytes: rawSnapshotID, Valid: true}
 		pool.txRows = []pgx.Row{&datasetRowStub{dao: updatedDAO}}
 
-		got, err := repo.RecordMaterialization(ctx, materialized, model.DatasetProcessingRawMaterialized)
+		got, changed, err := repo.RecordMaterialization(ctx, &repositoryTxStub{pool: pool}, materialized, model.DatasetProcessingRawMaterialized)
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(changed).To(BeTrue())
 		Expect(got.RawSnapshotID).To(Equal(rawSnapshotID))
-		Expect(outbox.messages).To(HaveLen(1))
-		Expect(pool.commitCalled).To(BeTrue())
+		Expect(pool.commitCalled).To(BeFalse())
 	})
 
 	It("keeps materialization table fields unset when no table metadata is present", func() {
@@ -277,7 +245,7 @@ var _ = Describe("DatasetDB", func() {
 	It("publishes a draft dataset", func() {
 		pool.execRowsAffected = []int64{1}
 
-		err := repo.UpdatePublishedState(ctx, dataset.ID, userID)
+		err := repo.UpdatePublishedState(ctx, &repositoryTxStub{pool: pool}, dataset.ID, userID)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pool.execCalled).To(BeTrue())
@@ -290,7 +258,7 @@ var _ = Describe("DatasetDB", func() {
 	It("returns resource-not-found when publishing a non-draft or missing dataset", func() {
 		pool.execRowsAffected = []int64{0}
 
-		err := repo.UpdatePublishedState(ctx, dataset.ID, userID)
+		err := repo.UpdatePublishedState(ctx, &repositoryTxStub{pool: pool}, dataset.ID, userID)
 
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 	})
@@ -623,19 +591,6 @@ func (tx *repositoryTxStub) QueryRow(_ context.Context, sql string, args ...any)
 }
 
 func (tx *repositoryTxStub) Conn() *pgx.Conn {
-	return nil
-}
-
-type orderedOutboxStub struct {
-	messages []msgConn.OutboundMessage
-	err      error
-}
-
-func (o *orderedOutboxStub) EnqueueTx(_ context.Context, _ pgx.Tx, msg msgConn.OutboundMessage) error {
-	if o.err != nil {
-		return o.err
-	}
-	o.messages = append(o.messages, msg)
 	return nil
 }
 

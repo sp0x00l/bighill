@@ -87,21 +87,69 @@ func (e *lakehouseQueryEngine) Execute(ctx context.Context, ticket *flight.Ticke
 	return e.executeCommand(ctx, command)
 }
 
+func (e *lakehouseQueryEngine) Stream(ctx context.Context, ticket *flight.Ticket, outStream flight.FlightService_DoGetServer) error {
+	log.Trace("lakehouseQueryEngine Stream")
+
+	command := ticketCommand(ticket)
+	if strings.TrimSpace(command) == "" {
+		return streamdomain.ErrValidationFailed.Extend("flight ticket requires query command")
+	}
+	return e.streamCommand(ctx, command, outStream)
+}
+
 func (e *lakehouseQueryEngine) executeCommand(ctx context.Context, command string) (*QueryResult, error) {
 	log.Trace("lakehouseQueryEngine executeCommand")
 
-	query, err := parseLakehouseQueryCommand(command)
+	query, runCtx, cancel, err := e.resolveLakehouseQuery(ctx, command)
 	if err != nil {
 		return nil, err
+	}
+	defer cancel()
+
+	table, err := e.registryClient.ReadDatasetTable(runCtx, query.datasetID, query.userID, query.command.SnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	return e.executeDatasetTable(runCtx, table, query.command.SQL)
+}
+
+func (e *lakehouseQueryEngine) streamCommand(ctx context.Context, command string, outStream flight.FlightService_DoGetServer) error {
+	log.Trace("lakehouseQueryEngine streamCommand")
+
+	query, runCtx, cancel, err := e.resolveLakehouseQuery(ctx, command)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	table, err := e.registryClient.ReadDatasetTable(runCtx, query.datasetID, query.userID, query.command.SnapshotID)
+	if err != nil {
+		return err
+	}
+	return e.streamDatasetTable(runCtx, table, query.command.SQL, outStream)
+}
+
+type resolvedLakehouseQuery struct {
+	command   *lakehouseQueryCommand
+	datasetID uuid.UUID
+	userID    uuid.UUID
+}
+
+func (e *lakehouseQueryEngine) resolveLakehouseQuery(ctx context.Context, command string) (resolvedLakehouseQuery, context.Context, context.CancelFunc, error) {
+	log.Trace("lakehouseQueryEngine resolveLakehouseQuery")
+
+	query, err := parseLakehouseQueryCommand(command)
+	if err != nil {
+		return resolvedLakehouseQuery{}, nil, nil, err
 	}
 
 	datasetID, err := uuid.Parse(query.DatasetID)
 	if err != nil || datasetID == uuid.Nil {
-		return nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command has invalid datasetId")
+		return resolvedLakehouseQuery{}, nil, nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command has invalid datasetId")
 	}
 	userID, err := uuid.Parse(query.UserID)
 	if err != nil || userID == uuid.Nil {
-		return nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command has invalid userId")
+		return resolvedLakehouseQuery{}, nil, nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command has invalid userId")
 	}
 
 	runCtx := ctx
@@ -109,13 +157,11 @@ func (e *lakehouseQueryEngine) executeCommand(ctx context.Context, command strin
 	if e.timeout > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, e.timeout)
 	}
-	defer cancel()
-
-	table, err := e.registryClient.ReadDatasetTable(runCtx, datasetID, userID, query.SnapshotID)
-	if err != nil {
-		return nil, err
-	}
-	return e.executeDatasetTable(runCtx, table, query.SQL)
+	return resolvedLakehouseQuery{
+		command:   query,
+		datasetID: datasetID,
+		userID:    userID,
+	}, runCtx, cancel, nil
 }
 
 func (e *lakehouseQueryEngine) executeDatasetTable(ctx context.Context, table datasetTableMetadata, sql string) (*QueryResult, error) {
@@ -135,6 +181,26 @@ func (e *lakehouseQueryEngine) executeDatasetTable(ctx context.Context, table da
 		return e.parquetEngine.executeIceberg(ctx, sql, table.GetTableNamespace(), table.GetTableName())
 	default:
 		return nil, streamdomain.ErrValidationFailed.Extend(fmt.Sprintf("unsupported lakehouse table %s/%s", catalogProvider, tableFormat))
+	}
+}
+
+func (e *lakehouseQueryEngine) streamDatasetTable(ctx context.Context, table datasetTableMetadata, sql string, outStream flight.FlightService_DoGetServer) error {
+	log.Trace("lakehouseQueryEngine streamDatasetTable")
+
+	catalogProvider := strings.ToUpper(strings.TrimSpace(table.GetCatalogProvider()))
+	tableFormat := strings.ToUpper(strings.TrimSpace(table.GetTableFormat()))
+	storageLocation := strings.TrimSpace(table.GetStorageLocation())
+
+	switch {
+	case catalogProvider == "LOCAL" && tableFormat == "PARQUET":
+		if storageLocation == "" {
+			return streamdomain.ErrValidationFailed.Extend("dataset table storage location is required")
+		}
+		return e.parquetEngine.streamSQLWithDataRoot(ctx, sql, storageLocation, outStream)
+	case catalogProvider == "POLARIS" && tableFormat == "ICEBERG":
+		return e.parquetEngine.streamIceberg(ctx, sql, table.GetTableNamespace(), table.GetTableName(), outStream)
+	default:
+		return streamdomain.ErrValidationFailed.Extend(fmt.Sprintf("unsupported lakehouse table %s/%s", catalogProvider, tableFormat))
 	}
 }
 

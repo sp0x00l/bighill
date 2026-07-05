@@ -133,6 +133,11 @@ func evaluationMetricsMetadata(report model.EvaluationReport) string {
 		JudgeProvider        string             `json:"judge_provider,omitempty"`
 		JudgeModel           string             `json:"judge_model,omitempty"`
 		JudgeTemplateVersion string             `json:"judge_template_version,omitempty"`
+		DeepchecksPassed     bool               `json:"deepchecks_passed,omitempty"`
+		DeepchecksReportURI  string             `json:"deepchecks_report_uri,omitempty"`
+		EvidentlyPassed      bool               `json:"evidently_passed,omitempty"`
+		EvidentlyReportURI   string             `json:"evidently_report_uri,omitempty"`
+		ScoreRowsURI         string             `json:"score_rows_uri,omitempty"`
 	}{
 		Passed:               report.Passed,
 		Metrics:              report.Metrics,
@@ -146,6 +151,11 @@ func evaluationMetricsMetadata(report model.EvaluationReport) string {
 		JudgeProvider:        report.JudgeProvider,
 		JudgeModel:           report.JudgeModel,
 		JudgeTemplateVersion: report.JudgeTemplateVersion,
+		DeepchecksPassed:     report.DeepchecksPassed,
+		DeepchecksReportURI:  report.DeepchecksReportURI,
+		EvidentlyPassed:      report.EvidentlyPassed,
+		EvidentlyReportURI:   report.EvidentlyReportURI,
+		ScoreRowsURI:         report.ScoreRowsURI,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal evaluation metrics metadata: %v", err))

@@ -31,6 +31,8 @@ const (
 	MsgTypeModelUpdated
 	MsgTypePreferenceDatasetReady
 	MsgTypeModelArtifactIngested
+	MsgTypePromotionRequested
+	MsgTypePromotionReportReady
 )
 
 var msgType = map[MsgType]string{
@@ -49,6 +51,8 @@ var msgType = map[MsgType]string{
 	MsgTypeModelUpdated:           "model_updated",
 	MsgTypePreferenceDatasetReady: "preference_dataset_ready",
 	MsgTypeModelArtifactIngested:  "model_artifact_ingested",
+	MsgTypePromotionRequested:     "promotion_requested",
+	MsgTypePromotionReportReady:   "promotion_report_ready",
 }
 
 func (m MsgType) String() string {

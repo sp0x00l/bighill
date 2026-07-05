@@ -8,9 +8,11 @@ import (
 	"data_registry_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
 	corePagination "lib/shared_lib/transport"
+	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -29,6 +31,8 @@ type DatasetUsecase interface {
 
 type datasetUseCase struct {
 	datasetsRepository DatasetRepositoryAdapter
+	unitOfWork         DatasetUnitOfWorkAdapter
+	eventBuilder       DatasetEventBuilderAdapter
 	tableCatalog       DatasetTableCatalogAdapter
 }
 
@@ -40,11 +44,13 @@ func WithDatasetTableCatalog(tableCatalog DatasetTableCatalogAdapter) DatasetUse
 	}
 }
 
-func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter, opts ...DatasetUsecaseOption) *datasetUseCase {
+func NewDatasetUseCase(datasetsRepository DatasetRepositoryAdapter, unitOfWork DatasetUnitOfWorkAdapter, eventBuilder DatasetEventBuilderAdapter, opts ...DatasetUsecaseOption) *datasetUseCase {
 	log.Trace("NewDatasetUseCase")
 
 	usecase := &datasetUseCase{
 		datasetsRepository: datasetsRepository,
+		unitOfWork:         unitOfWork,
+		eventBuilder:       eventBuilder,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -72,7 +78,12 @@ func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Datas
 	}
 	model.NormalizeDatasetMetadata(dataset)
 
-	return u.datasetsRepository.Create(ctx, dataset, idempotencyKey)
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		if err := u.datasetsRepository.Create(ctx, tx, dataset, idempotencyKey); err != nil {
+			return err
+		}
+		return enqueue(u.eventBuilder.DatasetCreatedMessage(dataset))
+	})
 }
 
 func (u *datasetUseCase) ReadDatasetsForUser(ctx context.Context, userID uuid.UUID, pagination corePagination.Pagination, filters []model.Filter) (datasets []*model.Dataset, total int, err error) {
@@ -135,7 +146,12 @@ func (u *datasetUseCase) DeleteDataset(ctx context.Context, datasetID uuid.UUID,
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	ctx = ctxutil.WithTenantID(ctx, userID)
-	return u.datasetsRepository.Delete(ctx, datasetID, userID)
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		if err := u.datasetsRepository.Delete(ctx, tx, datasetID, userID); err != nil {
+			return err
+		}
+		return enqueue(u.eventBuilder.DatasetDeletedMessage(datasetID, userID))
+	})
 }
 
 func (u *datasetUseCase) PublishDataset(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) (err error) {
@@ -148,7 +164,9 @@ func (u *datasetUseCase) PublishDataset(ctx context.Context, datasetID uuid.UUID
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	ctx = ctxutil.WithTenantID(ctx, userID)
-	return u.datasetsRepository.UpdatePublishedState(ctx, datasetID, userID)
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.datasetsRepository.UpdatePublishedState(ctx, tx, datasetID, userID)
+	})
 }
 
 func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Dataset) (updated *model.Dataset, err error) {
@@ -169,7 +187,15 @@ func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Data
 	}
 	model.NormalizeDatasetMetadata(dataset)
 
-	return u.datasetsRepository.Replace(ctx, dataset)
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		var replaceErr error
+		updated, replaceErr = u.datasetsRepository.Replace(ctx, tx, dataset)
+		if replaceErr != nil {
+			return replaceErr
+		}
+		return enqueue(u.eventBuilder.DatasetUpdatedMessage(updated))
+	})
+	return updated, err
 }
 
 func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (updated *model.Dataset, err error) {
@@ -183,11 +209,19 @@ func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, data
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	ctx = ctxutil.WithTenantID(ctx, userID)
-	updated, _, err = u.datasetsRepository.UpdateProcessingState(ctx, datasetID, userID, state)
-	if err != nil {
-		return nil, err
-	}
-	return updated, nil
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		var changed bool
+		var updateErr error
+		updated, changed, updateErr = u.datasetsRepository.UpdateProcessingState(ctx, tx, datasetID, userID, state)
+		if updateErr != nil {
+			return updateErr
+		}
+		if !changed {
+			return nil
+		}
+		return enqueue(u.eventBuilder.DatasetUpdatedMessage(updated))
+	})
+	return updated, err
 }
 
 func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, materialized *model.Dataset, state model.ProcessingState) (updated *model.Dataset, err error) {
@@ -207,7 +241,19 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 	if materialized != nil {
 		ctx = ctxutil.WithTenantID(ctx, materialized.UserID)
 	}
-	return u.datasetsRepository.RecordMaterialization(ctx, materialized, state)
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		var changed bool
+		var updateErr error
+		updated, changed, updateErr = u.datasetsRepository.RecordMaterialization(ctx, tx, materialized, state)
+		if updateErr != nil {
+			return updateErr
+		}
+		if !changed {
+			return nil
+		}
+		return enqueue(u.eventBuilder.DatasetUpdatedMessage(updated))
+	})
+	return updated, err
 }
 
 func isQueryableDatasetTable(dataset *model.Dataset) bool {

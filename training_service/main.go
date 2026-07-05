@@ -38,6 +38,7 @@ type trainingConfig struct {
 	BaseModel              string
 	EvaluationProfile      string
 	DPOEvaluationProfile   string
+	PromotionProfile       string
 	Profile                model.TrainingProfile
 	Executor               trainingExecutorConfig
 	Health                 healthConfig
@@ -62,30 +63,32 @@ type healthConfig struct {
 }
 
 type trainingExecutorConfig struct {
-	Provider                string
-	RayJobsURL              string
-	RayTrainingEntrypoint   string
-	RayEvaluationEntrypoint string
-	AxolotlCommand          string
-	RayRequestTimeout       time.Duration
-	RayPollInterval         time.Duration
-	KubeRayNamespace        string
-	KubeRayRayVersion       string
-	KubeRayImage            string
-	KubeRayImagePullPolicy  string
-	KubeRayServiceAccount   string
-	KubeRayTTLSeconds       int
-	KubeRayWorkerReplicas   int
-	KubeRayCPU              string
-	KubeRayMemory           string
-	KubeRayGPUResource      string
-	KubeRayGPU              string
-	ArtifactBucketRegion    string
-	ModelURIPrefix          string
-	EvaluationURIPrefix     string
-	ServingTarget           string
-	ServingModel            string
-	ServingLoadStatus       string
+	Provider                 string
+	RayJobsURL               string
+	RayTrainingEntrypoint    string
+	RayEvaluationEntrypoint  string
+	RayPromotionEntrypoint   string
+	AxolotlCommand           string
+	RayRequestTimeout        time.Duration
+	RayPollInterval          time.Duration
+	KubeRayNamespace         string
+	KubeRayRayVersion        string
+	KubeRayImage             string
+	KubeRayImagePullPolicy   string
+	KubeRayServiceAccount    string
+	KubeRayTTLSeconds        int
+	KubeRayWorkerReplicas    int
+	KubeRayCPU               string
+	KubeRayMemory            string
+	KubeRayGPUResource       string
+	KubeRayGPU               string
+	ArtifactBucketRegion     string
+	ModelURIPrefix           string
+	EvaluationURIPrefix      string
+	PromotionReportURIPrefix string
+	ServingTarget            string
+	ServingModel             string
+	ServingLoadStatus        string
 }
 
 func init() {
@@ -136,12 +139,13 @@ func main() {
 		temporalworker.WithArtifactBucketRegion(cfg.Executor.ArtifactBucketRegion),
 		temporalworker.WithAxolotlCommand(cfg.Executor.AxolotlCommand),
 	}
+	var trainingExecutor app.TrainingExecutor
 	if cfg.TrainingTriggerEnabled {
 		manifestReader, err := executor.NewObjectManifestReader(cancelCtx, cfg.Executor.ArtifactBucketRegion, nil)
 		if err != nil {
 			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training manifest reader")
 		}
-		trainingExecutor, err := newTrainingExecutor(cfg.Executor, manifestReader)
+		trainingExecutor, err = newTrainingExecutor(cfg.Executor, manifestReader)
 		if err != nil {
 			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training executor")
 		}
@@ -184,6 +188,10 @@ func main() {
 		})
 		startSubscriber("preference-dataset-ready", []string{cfg.Topics.Inference}, func(subscriber messagingConn.Subscriber) {
 			messagingConn.AddListener(subscriber, trainingmessaging.NewPreferenceDatasetReadyEventListener(workflowStarter, cfg.BaseModel, cfg.Profile, cfg.DPOEvaluationProfile))
+		})
+		promotionRunner := trainingmessaging.NewPromotionReportRunner(trainingExecutor, trainingEventPublisher, cfg.Executor.PromotionReportURIPrefix, cfg.Executor.ArtifactBucketRegion, cfg.PromotionProfile)
+		startSubscriber("promotion-requested", []string{cfg.Topics.ModelRegistry}, func(subscriber messagingConn.Subscriber) {
+			messagingConn.AddListener(subscriber, trainingmessaging.NewPromotionRequestedEventListener(promotionRunner))
 		})
 	} else {
 		log.WithContext(cancelCtx).Info("training trigger disabled; dataset materialization events will not start training workflows")
@@ -229,9 +237,10 @@ func readTrainingConfig() trainingConfig {
 			AutoOffsetReset: env.WithDefaultString("TRAINING_SERVICE_KAFKA_AUTO_OFFSET_RESET", "earliest"),
 		},
 		Topics: trainingmessaging.TrainingTopics{
-			DataRegistry: env.WithDefaultString("TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
-			Inference:    env.WithDefaultString("TRAINING_SERVICE_INFERENCE_SUBSCRIBER_TOPIC", "inference"),
-			Training:     env.WithDefaultString("TRAINING_SERVICE_TOPIC", "training"),
+			DataRegistry:  env.WithDefaultString("TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
+			Inference:     env.WithDefaultString("TRAINING_SERVICE_INFERENCE_SUBSCRIBER_TOPIC", "inference"),
+			ModelRegistry: env.WithDefaultString("TRAINING_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry"),
+			Training:      env.WithDefaultString("TRAINING_SERVICE_TOPIC", "training"),
 		},
 		BaseModel:         env.WithDefaultString("TRAINING_SERVICE_BASE_MODEL", "local-dev-base-model"),
 		EvaluationProfile: env.WithDefaultString("TRAINING_SERVICE_EVALUATION_PROFILE", "smoke"),
@@ -239,6 +248,7 @@ func readTrainingConfig() trainingConfig {
 			"TRAINING_SERVICE_DPO_EVALUATION_PROFILE",
 			`{"metric_suite":"preference","evaluator_name":"pairwise-judge","evaluator_version":"v1"}`,
 		),
+		PromotionProfile: env.WithDefaultString("TRAINING_SERVICE_PROMOTION_PROFILE", "{}"),
 		Profile: model.TrainingProfile{
 			Name:                      env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_NAME", "local-dev-qlora"),
 			Trainer:                   env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_TRAINER", "sft"),
@@ -256,30 +266,32 @@ func readTrainingConfig() trainingConfig {
 			LoRAAlpha:                 env.WithDefaultInt("TRAINING_SERVICE_TRAINING_PROFILE_LORA_ALPHA", "32"),
 		},
 		Executor: trainingExecutorConfig{
-			Provider:                env.WithDefaultString("TRAINING_SERVICE_EXECUTOR_PROVIDER", "kuberay"),
-			RayJobsURL:              env.WithDefaultString("TRAINING_SERVICE_RAY_JOBS_URL", "http://localhost:8265"),
-			RayTrainingEntrypoint:   env.WithDefaultString("TRAINING_SERVICE_RAY_TRAINING_ENTRYPOINT", "python -m training_jobs.train"),
-			RayEvaluationEntrypoint: env.WithDefaultString("TRAINING_SERVICE_RAY_EVALUATION_ENTRYPOINT", "python -m training_jobs.evaluate"),
-			AxolotlCommand:          env.WithDefaultString("TRAINING_SERVICE_AXOLOTL_COMMAND", "axolotl train"),
-			RayRequestTimeout:       secondsFromEnv("TRAINING_SERVICE_RAY_REQUEST_TIMEOUT_SECONDS", "30"),
-			RayPollInterval:         secondsFromEnv("TRAINING_SERVICE_RAY_POLL_INTERVAL_SECONDS", "30"),
-			KubeRayNamespace:        env.WithDefaultString("TRAINING_SERVICE_KUBERAY_NAMESPACE", "default"),
-			KubeRayRayVersion:       env.WithDefaultString("TRAINING_SERVICE_KUBERAY_RAY_VERSION", "2.46.0"),
-			KubeRayImage:            env.WithDefaultString("TRAINING_SERVICE_KUBERAY_IMAGE", "training-jobs:0.0.1"),
-			KubeRayImagePullPolicy:  env.WithDefaultString("TRAINING_SERVICE_KUBERAY_IMAGE_PULL_POLICY", "IfNotPresent"),
-			KubeRayServiceAccount:   env.WithDefaultString("TRAINING_SERVICE_KUBERAY_SERVICE_ACCOUNT", "training-jobs"),
-			KubeRayTTLSeconds:       env.WithDefaultInt("TRAINING_SERVICE_KUBERAY_TTL_SECONDS_AFTER_FINISHED", "3600"),
-			KubeRayWorkerReplicas:   env.WithDefaultInt("TRAINING_SERVICE_KUBERAY_WORKER_REPLICAS", "1"),
-			KubeRayCPU:              env.WithDefaultString("TRAINING_SERVICE_KUBERAY_CPU", "1"),
-			KubeRayMemory:           env.WithDefaultString("TRAINING_SERVICE_KUBERAY_MEMORY", "4Gi"),
-			KubeRayGPUResource:      env.WithDefaultString("TRAINING_SERVICE_KUBERAY_GPU_RESOURCE", "nvidia.com/gpu"),
-			KubeRayGPU:              env.WithDefaultString("TRAINING_SERVICE_KUBERAY_GPU", "1"),
-			ArtifactBucketRegion:    env.WithDefaultString("TRAINING_SERVICE_ARTIFACT_BUCKET_REGION", "eu-west-1"),
-			ModelURIPrefix:          env.WithDefaultString("TRAINING_SERVICE_MODEL_URI_PREFIX", "s3://local-dev-bucket/models"),
-			EvaluationURIPrefix:     env.WithDefaultString("TRAINING_SERVICE_EVALUATION_URI_PREFIX", "s3://local-dev-bucket/evaluations"),
-			ServingTarget:           env.WithDefaultString("TRAINING_SERVICE_SERVING_TARGET", ""),
-			ServingModel:            env.WithDefaultString("TRAINING_SERVICE_SERVING_MODEL", ""),
-			ServingLoadStatus:       env.WithDefaultString("TRAINING_SERVICE_SERVING_LOAD_STATUS", "NOT_LOADED"),
+			Provider:                 env.WithDefaultString("TRAINING_SERVICE_EXECUTOR_PROVIDER", "kuberay"),
+			RayJobsURL:               env.WithDefaultString("TRAINING_SERVICE_RAY_JOBS_URL", "http://localhost:8265"),
+			RayTrainingEntrypoint:    env.WithDefaultString("TRAINING_SERVICE_RAY_TRAINING_ENTRYPOINT", "python -m training_jobs.train"),
+			RayEvaluationEntrypoint:  env.WithDefaultString("TRAINING_SERVICE_RAY_EVALUATION_ENTRYPOINT", "python -m training_jobs.evaluate"),
+			RayPromotionEntrypoint:   env.WithDefaultString("TRAINING_SERVICE_RAY_PROMOTION_ENTRYPOINT", "python -m training_jobs.promotion_report"),
+			AxolotlCommand:           env.WithDefaultString("TRAINING_SERVICE_AXOLOTL_COMMAND", "axolotl train"),
+			RayRequestTimeout:        secondsFromEnv("TRAINING_SERVICE_RAY_REQUEST_TIMEOUT_SECONDS", "30"),
+			RayPollInterval:          secondsFromEnv("TRAINING_SERVICE_RAY_POLL_INTERVAL_SECONDS", "30"),
+			KubeRayNamespace:         env.WithDefaultString("TRAINING_SERVICE_KUBERAY_NAMESPACE", "default"),
+			KubeRayRayVersion:        env.WithDefaultString("TRAINING_SERVICE_KUBERAY_RAY_VERSION", "2.46.0"),
+			KubeRayImage:             env.WithDefaultString("TRAINING_SERVICE_KUBERAY_IMAGE", "training-jobs:0.0.1"),
+			KubeRayImagePullPolicy:   env.WithDefaultString("TRAINING_SERVICE_KUBERAY_IMAGE_PULL_POLICY", "IfNotPresent"),
+			KubeRayServiceAccount:    env.WithDefaultString("TRAINING_SERVICE_KUBERAY_SERVICE_ACCOUNT", "training-jobs"),
+			KubeRayTTLSeconds:        env.WithDefaultInt("TRAINING_SERVICE_KUBERAY_TTL_SECONDS_AFTER_FINISHED", "3600"),
+			KubeRayWorkerReplicas:    env.WithDefaultInt("TRAINING_SERVICE_KUBERAY_WORKER_REPLICAS", "1"),
+			KubeRayCPU:               env.WithDefaultString("TRAINING_SERVICE_KUBERAY_CPU", "1"),
+			KubeRayMemory:            env.WithDefaultString("TRAINING_SERVICE_KUBERAY_MEMORY", "4Gi"),
+			KubeRayGPUResource:       env.WithDefaultString("TRAINING_SERVICE_KUBERAY_GPU_RESOURCE", "nvidia.com/gpu"),
+			KubeRayGPU:               env.WithDefaultString("TRAINING_SERVICE_KUBERAY_GPU", "1"),
+			ArtifactBucketRegion:     env.WithDefaultString("TRAINING_SERVICE_ARTIFACT_BUCKET_REGION", "eu-west-1"),
+			ModelURIPrefix:           env.WithDefaultString("TRAINING_SERVICE_MODEL_URI_PREFIX", "s3://local-dev-bucket/models"),
+			EvaluationURIPrefix:      env.WithDefaultString("TRAINING_SERVICE_EVALUATION_URI_PREFIX", "s3://local-dev-bucket/evaluations"),
+			PromotionReportURIPrefix: env.WithDefaultString("TRAINING_SERVICE_PROMOTION_REPORT_URI_PREFIX", "s3://local-dev-bucket/promotion-reports"),
+			ServingTarget:            env.WithDefaultString("TRAINING_SERVICE_SERVING_TARGET", ""),
+			ServingModel:             env.WithDefaultString("TRAINING_SERVICE_SERVING_MODEL", ""),
+			ServingLoadStatus:        env.WithDefaultString("TRAINING_SERVICE_SERVING_LOAD_STATUS", "NOT_LOADED"),
 		},
 		Health: healthConfig{
 			CpuThresholdPercentage:                    env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
@@ -307,6 +319,7 @@ func newTrainingExecutor(cfg trainingExecutorConfig, manifestReader executor.Man
 			URL:                  cfg.RayJobsURL,
 			TrainingEntrypoint:   cfg.RayTrainingEntrypoint,
 			EvaluationEntrypoint: cfg.RayEvaluationEntrypoint,
+			PromotionEntrypoint:  cfg.RayPromotionEntrypoint,
 			RequestTimeout:       cfg.RayRequestTimeout,
 			PollInterval:         cfg.RayPollInterval,
 		}, manifestReader)
@@ -328,6 +341,7 @@ func newTrainingExecutor(cfg trainingExecutorConfig, manifestReader executor.Man
 			GPU:                     cfg.KubeRayGPU,
 			TrainingEntrypoint:      cfg.RayTrainingEntrypoint,
 			EvaluationEntrypoint:    cfg.RayEvaluationEntrypoint,
+			PromotionEntrypoint:     cfg.RayPromotionEntrypoint,
 			PollInterval:            cfg.RayPollInterval,
 		}, manifestReader)
 	default:

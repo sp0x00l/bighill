@@ -7,16 +7,13 @@ import (
 
 	"inference_service/pkg/domain/model"
 	inferencedb "inference_service/pkg/infra/repo/db"
-	inferencepb "lib/data_contracts_lib/inference"
 	coreDB "lib/shared_lib/db"
-	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("InferenceFeedbackRepository", func() {
@@ -29,11 +26,13 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		userID         uuid.UUID
 		idempotencyKey uuid.UUID
 		feedback       *model.InferenceFeedback
+		tx             pgx.Tx
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		pool = &connectionPoolStub{}
+		tx = &inferenceTxStub{pool: pool}
 		repository = inferencedb.NewInferenceFeedbackRepository(coreDB.NewDatabase(pool, "test_db"))
 		feedbackID = uuid.New()
 		requestID = uuid.New()
@@ -53,12 +52,10 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 	It("records feedback and derives a preference example in one transaction", func() {
 		pool.nextRows = []pgx.Row{feedbackRow(feedback)}
 
-		record, err := repository.RecordFeedback(ctx, feedback, idempotencyKey)
+		record, err := repository.RecordFeedback(ctx, tx, feedback, idempotencyKey)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(record).To(Equal(feedback))
-		Expect(pool.commitCalled).To(BeTrue())
-		Expect(pool.rollbackCalled).To(BeFalse())
 		Expect(pool.lastQuery).To(ContainSubstring("INSERT INTO test_db.inference_feedback"))
 		Expect(pool.lastQuery).To(ContainSubstring("preferred_answer"))
 		Expect(pool.lastQuery).To(ContainSubstring("JOIN test_db.inference_requests"))
@@ -85,7 +82,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 	It("wraps database failures", func() {
 		pool.nextRows = []pgx.Row{&repositoryRow{err: errors.New("insert failed")}}
 
-		record, err := repository.RecordFeedback(ctx, feedback, idempotencyKey)
+		record, err := repository.RecordFeedback(ctx, tx, feedback, idempotencyKey)
 
 		Expect(record).To(BeNil())
 		Expect(err).To(MatchError(ContainSubstring("record inference feedback: insert failed")))
@@ -146,14 +143,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		))
 	})
 
-	It("records preference dataset snapshots and enqueues the ready fact in the same transaction", func() {
-		outbox := &orderedOutboxStub{}
-		signaled := false
-		repository = inferencedb.NewInferenceFeedbackRepository(
-			coreDB.NewDatabase(pool, "test_db"),
-			inferencedb.WithPreferenceDatasetOutbox(outbox, "inference"),
-			inferencedb.WithOutboxSignal(func() { signaled = true }),
-		)
+	It("records preference dataset snapshots in the supplied transaction", func() {
 		preferenceDatasetID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
@@ -178,7 +168,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			}},
 		}
 
-		record, err := repository.RecordPreferenceDatasetSnapshot(ctx, dataset, model.PreferenceDatasetExportRequest{
+		record, err := repository.RecordPreferenceDatasetSnapshot(ctx, tx, dataset, model.PreferenceDatasetExportRequest{
 			RequestID:   requestID,
 			UserID:      userID,
 			MinExamples: 10,
@@ -187,29 +177,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(record).To(Equal(dataset))
-		Expect(pool.commitCalled).To(BeTrue())
-		Expect(pool.rollbackCalled).To(BeFalse())
 		Expect(pool.queries[0]).To(ContainSubstring("INSERT INTO test_db.preference_dataset_snapshots"))
-		Expect(outbox.calls).To(Equal(1))
-		Expect(outbox.tx).NotTo(BeNil())
-		Expect(outbox.message.Topic).To(Equal("inference"))
-		Expect(outbox.message.Message.ResourceKey).To(Equal(datasetID))
-		Expect(outbox.message.Message.MsgType).To(Equal(msgConn.MsgTypePreferenceDatasetReady))
-		Expect(outbox.message.DispatchKey).To(Equal("preference_dataset_ready:" + preferenceDatasetID.String()))
-		Expect(signaled).To(BeTrue())
-
-		var payload inferencepb.PreferenceDatasetReadyEvent
-		Expect(proto.Unmarshal(outbox.message.Message.Payload, &payload)).To(Succeed())
-		Expect(payload.PreferenceDatasetId).To(Equal(preferenceDatasetID.String()))
-		Expect(payload.UserId).To(Equal(userID.String()))
-		Expect(payload.OutputUri).To(Equal("s3://local-dev-bucket/preferences/dpo.jsonl"))
-		Expect(payload.EvaluationOutputUri).To(Equal("s3://local-dev-bucket/preferences/dpo-eval.jsonl"))
-		Expect(payload.Format).To(Equal("DPO_JSONL"))
-		Expect(payload.MinExamples).To(Equal(int32(10)))
-		Expect(payload.Limit).To(Equal(int32(100)))
-		Expect(payload.ParentAdapterUri).To(Equal("s3://models/parent"))
-		Expect(payload.ParentBaseModel).To(Equal("mistral-7b"))
-		Expect(payload.ParentModelVersion).To(Equal(int32(7)))
 	})
 })
 
@@ -223,18 +191,4 @@ func feedbackRow(feedback *model.InferenceFeedback) pgx.Row {
 		feedback.Comment,
 		feedback.PreferredAnswer,
 	}}
-}
-
-type orderedOutboxStub struct {
-	tx      pgx.Tx
-	message msgConn.OutboundMessage
-	err     error
-	calls   int
-}
-
-func (s *orderedOutboxStub) EnqueueTx(_ context.Context, tx pgx.Tx, msg msgConn.OutboundMessage) error {
-	s.tx = tx
-	s.message = msg
-	s.calls++
-	return s.err
 }

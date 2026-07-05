@@ -16,7 +16,16 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-const DefaultHTTPGenerationTimeout = 60 * time.Second
+const (
+	generationProviderOllama = "ollama"
+	generationProviderVLLM   = "vllm"
+	httpHeaderContentType    = "Content-Type"
+	jsonContentType          = "application/json"
+	ollamaGeneratePath       = "/api/generate"
+	vllmChatCompletionsPath  = "/v1/chat/completions"
+	vllmUserRole             = "user"
+	httpErrorBodyLimitBytes  = 4096
+)
 
 type HTTPGenerator struct {
 	provider string
@@ -25,57 +34,27 @@ type HTTPGenerator struct {
 	client   *http.Client
 }
 
-func NewHTTPGenerator(provider, endpoint, modelName string, timeout time.Duration) (*HTTPGenerator, error) {
+func NewHTTPGenerator(provider, endpoint, modelName string, timeout time.Duration) *HTTPGenerator {
 	log.Trace("NewHTTPGenerator")
 
-	return newHTTPGenerator(provider, endpoint, modelName, timeout, nil)
-}
-
-func NewHTTPGeneratorWithClient(provider, endpoint, modelName string, timeout time.Duration, client *http.Client) (*HTTPGenerator, error) {
-	log.Trace("NewHTTPGeneratorWithClient")
-
-	return newHTTPGenerator(provider, endpoint, modelName, timeout, client)
-}
-
-func newHTTPGenerator(provider, endpoint, modelName string, timeout time.Duration, client *http.Client) (*HTTPGenerator, error) {
-	log.Trace("newHTTPGenerator")
-
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
-	modelName = strings.TrimSpace(modelName)
-	if provider == "" {
-		return nil, fmt.Errorf("generation provider is required")
-	}
-	if endpoint == "" {
-		return nil, fmt.Errorf("generation endpoint is required")
-	}
-	if modelName == "" {
-		return nil, fmt.Errorf("generation model is required")
-	}
-	if timeout <= 0 {
-		timeout = DefaultHTTPGenerationTimeout
-	}
-	if client == nil {
-		client = &http.Client{
+	return &HTTPGenerator{
+		provider: strings.ToLower(strings.TrimSpace(provider)),
+		endpoint: strings.TrimRight(strings.TrimSpace(endpoint), "/"),
+		model:    strings.TrimSpace(modelName),
+		client: &http.Client{
 			Timeout:   timeout,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
-		}
+		},
 	}
-	return &HTTPGenerator{
-		provider: provider,
-		endpoint: endpoint,
-		model:    modelName,
-		client:   client,
-	}, nil
 }
 
 func (g *HTTPGenerator) Generate(ctx context.Context, request model.GenerationRequest) (string, error) {
 	log.Trace("HTTPGenerator Generate")
 
 	switch g.provider {
-	case "ollama":
+	case generationProviderOllama:
 		return g.generateWithOllama(ctx, request)
-	case "vllm":
+	case generationProviderVLLM:
 		return g.generateWithVLLM(ctx, request)
 	default:
 		return "", fmt.Errorf("unsupported generation provider %q", g.provider)
@@ -110,11 +89,11 @@ func (g *HTTPGenerator) generateWithOllama(ctx context.Context, request model.Ge
 	if err != nil {
 		return "", fmt.Errorf("marshal ollama request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint+"/api/generate", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint+ollamaGeneratePath, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build ollama request: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(httpHeaderContentType, jsonContentType)
 
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
@@ -122,7 +101,7 @@ func (g *HTTPGenerator) generateWithOllama(ctx context.Context, request model.Ge
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, httpErrorBodyLimitBytes))
 		return "", fmt.Errorf("ollama generate failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
@@ -155,7 +134,7 @@ func (g *HTTPGenerator) generateWithVLLM(ctx context.Context, request model.Gene
 	body, err := json.Marshal(vllmChatCompletionRequest{
 		Model: modelName,
 		Messages: []vllmChatMessage{{
-			Role:    "user",
+			Role:    vllmUserRole,
 			Content: prompt,
 		}},
 		Temperature: 0,
@@ -163,11 +142,11 @@ func (g *HTTPGenerator) generateWithVLLM(ctx context.Context, request model.Gene
 	if err != nil {
 		return "", fmt.Errorf("marshal vllm request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+vllmChatCompletionsPath, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build vllm request: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(httpHeaderContentType, jsonContentType)
 
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
@@ -175,7 +154,7 @@ func (g *HTTPGenerator) generateWithVLLM(ctx context.Context, request model.Gene
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, httpErrorBodyLimitBytes))
 		return "", fmt.Errorf("vllm generate failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 

@@ -67,12 +67,12 @@ var _ = Describe("EmbeddingStrategy", func() {
 
 var _ = Describe("ProcessingProfile", func() {
 	It("converts known profiles", func() {
-		profile, err := model.ToProcessingProfile("GENERIC_PARQUET")
+		profile, err := model.ToProcessingProfile("GENERIC_PARQUET_PROCESSING_PROFILE")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(profile).To(Equal(model.ProcessingProfileGenericParquet))
 		Expect(profile.RequiresEmbeddings()).To(BeFalse())
 
-		profile, err = model.ToProcessingProfile("TEXT_RAG")
+		profile, err = model.ToProcessingProfile("TEXT_RAG_PROCESSING_PROFILE")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(profile).To(Equal(model.ProcessingProfileTextRAG))
 		Expect(profile.RequiresEmbeddings()).To(BeTrue())

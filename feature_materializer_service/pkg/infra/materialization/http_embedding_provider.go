@@ -16,6 +16,19 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
+const (
+	httpHeaderContentType    = "Content-Type"
+	jsonContentType          = "application/json"
+	embeddingProviderTEI     = "tei"
+	embeddingProviderOllama  = "ollama"
+	teiEmbeddingPath         = "/embed"
+	ollamaEmbeddingPath      = "/api/embed"
+	embeddingRequestInputs   = "inputs"
+	embeddingRequestModel    = "model"
+	embeddingRequestInput    = "input"
+	embeddingResponseVectors = "embeddings"
+)
+
 type HTTPEmbeddingProvider struct {
 	client     *http.Client
 	provider   string
@@ -69,9 +82,9 @@ func (p *HTTPEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][]
 	}
 
 	switch p.provider {
-	case "tei":
+	case embeddingProviderTEI:
 		return p.embedTEI(ctx, texts)
-	case "ollama":
+	case embeddingProviderOllama:
 		return p.embedOllama(ctx, texts)
 	default:
 		return nil, domain.ErrEmbeddingMaterialize.Extend("unsupported embedding provider")
@@ -81,24 +94,24 @@ func (p *HTTPEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][]
 func (p *HTTPEmbeddingProvider) embedTEI(ctx context.Context, texts []string) ([][]float32, error) {
 	log.Trace("HTTPEmbeddingProvider embedTEI")
 
-	body, err := json.Marshal(map[string]any{"inputs": texts})
+	body, err := json.Marshal(map[string]any{embeddingRequestInputs: texts})
 	if err != nil {
 		return nil, err
 	}
-	return p.postEmbeddings(ctx, p.endpoint+"/embed", body)
+	return p.postEmbeddings(ctx, p.endpoint+teiEmbeddingPath, body)
 }
 
 func (p *HTTPEmbeddingProvider) embedOllama(ctx context.Context, texts []string) ([][]float32, error) {
 	log.Trace("HTTPEmbeddingProvider embedOllama")
 
 	body, err := json.Marshal(map[string]any{
-		"model": p.model,
-		"input": texts,
+		embeddingRequestModel: p.model,
+		embeddingRequestInput: texts,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return p.postEmbeddings(ctx, p.endpoint+"/api/embed", body)
+	return p.postEmbeddings(ctx, p.endpoint+ollamaEmbeddingPath, body)
 }
 
 func (p *HTTPEmbeddingProvider) postEmbeddings(ctx context.Context, url string, body []byte) ([][]float32, error) {
@@ -108,7 +121,7 @@ func (p *HTTPEmbeddingProvider) postEmbeddings(ctx context.Context, url string, 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(httpHeaderContentType, jsonContentType)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -143,14 +156,13 @@ func decodeEmbeddingResponse(body []byte) ([][]float32, error) {
 		return direct, nil
 	}
 
-	var wrapped struct {
-		Embeddings [][]float32 `json:"embeddings"`
-	}
+	var wrapped map[string][][]float32
 	if err := json.Unmarshal(body, &wrapped); err != nil {
 		return nil, err
 	}
-	if wrapped.Embeddings == nil {
+	vectors := wrapped[embeddingResponseVectors]
+	if vectors == nil {
 		return nil, fmt.Errorf("embeddings field is required")
 	}
-	return wrapped.Embeddings, nil
+	return vectors, nil
 }

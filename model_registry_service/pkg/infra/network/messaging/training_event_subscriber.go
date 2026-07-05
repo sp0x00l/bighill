@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ func (s *trainingEventSubscriber) Start(ctx context.Context) error {
 
 	msgConn.AddListener(s.subscriber, NewModelTrainingCompletedEventListener(s.usecase))
 	msgConn.AddListener(s.subscriber, NewModelTrainingFailedEventListener(s.usecase))
+	msgConn.AddListener(s.subscriber, NewPromotionReportReadyEventListener(s.usecase))
 	return s.subscriber.Subscribe(ctx, []string{s.topics.Training})
 }
 
@@ -76,6 +78,41 @@ func (l *modelTrainingCompletedEventListener) Handle(ctx context.Context, resour
 		return msgConn.NonRetryable(err)
 	}
 	_, err = l.usecase.RecordModelTrainingCompleted(ctx, trainedModel, idempotencyKey)
+	return err
+}
+
+type promotionReportReadyEventListener struct {
+	usecase usecase.ModelRegistryUsecase
+}
+
+func NewPromotionReportReadyEventListener(usecase usecase.ModelRegistryUsecase) *promotionReportReadyEventListener {
+	log.Trace("NewPromotionReportReadyEventListener")
+
+	return &promotionReportReadyEventListener{
+		usecase: usecase,
+	}
+}
+
+func (l *promotionReportReadyEventListener) MsgType() msgConn.MsgType {
+	log.Trace("promotionReportReadyEventListener MsgType")
+
+	return msgConn.MsgTypePromotionReportReady
+}
+
+func (l *promotionReportReadyEventListener) NewMessage() *trainingpb.PromotionReportReadyEvent {
+	log.Trace("promotionReportReadyEventListener NewMessage")
+
+	return &trainingpb.PromotionReportReadyEvent{}
+}
+
+func (l *promotionReportReadyEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *trainingpb.PromotionReportReadyEvent) error {
+	log.Trace("promotionReportReadyEventListener Handle")
+
+	report, idempotencyKey, err := promotionReportReadyToModel(resourceKey, payload)
+	if err != nil {
+		return msgConn.NonRetryable(err)
+	}
+	_, err = l.usecase.RecordPromotionReportReady(ctx, report, idempotencyKey)
 	return err
 }
 
@@ -212,6 +249,63 @@ func failedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTraining
 		return nil, uuid.Nil, err
 	}
 	return failedModel, trainingRunID, nil
+}
+
+func promotionReportReadyToModel(resourceKey uuid.UUID, payload *trainingpb.PromotionReportReadyEvent) (model.PromotionReportResult, uuid.UUID, error) {
+	log.Trace("promotionReportReadyToModel")
+
+	if payload == nil {
+		return model.PromotionReportResult{}, uuid.Nil, fmt.Errorf("promotion report ready payload is required")
+	}
+	modelID, err := msgConn.ParseUUID("model_id", payload.GetModelId())
+	if err != nil {
+		return model.PromotionReportResult{}, uuid.Nil, err
+	}
+	if modelID != resourceKey {
+		return model.PromotionReportResult{}, uuid.Nil, fmt.Errorf("model id %s does not match resource key %s", modelID, resourceKey)
+	}
+	userID, err := msgConn.ParseUUID("user_id", payload.GetUserId())
+	if err != nil {
+		return model.PromotionReportResult{}, uuid.Nil, err
+	}
+	trainingRunID, err := msgConn.ParseUUID("training_run_id", payload.GetTrainingRunId())
+	if err != nil {
+		return model.PromotionReportResult{}, uuid.Nil, err
+	}
+	reportURI, err := requiredTrainingEventString("promotion report uri", payload.GetPromotionReportUri())
+	if err != nil {
+		return model.PromotionReportResult{}, uuid.Nil, err
+	}
+	deltas, err := promotionDeltasFromEvent(payload.GetPromotionDeltas())
+	if err != nil {
+		return model.PromotionReportResult{}, uuid.Nil, err
+	}
+	return model.PromotionReportResult{
+		UserID:              userID,
+		ModelID:             modelID,
+		TrainingRunID:       trainingRunID,
+		PromotionReportURI:  reportURI,
+		DeepchecksPassed:    payload.GetDeepchecksPassed(),
+		DeepchecksReportURI: strings.TrimSpace(payload.GetDeepchecksReportUri()),
+		EvidentlyPassed:     payload.GetEvidentlyPassed(),
+		EvidentlyReportURI:  strings.TrimSpace(payload.GetEvidentlyReportUri()),
+		Deltas:              deltas,
+		FailureReason:       strings.TrimSpace(payload.GetFailureReason()),
+	}, modelID, nil
+}
+
+func promotionDeltasFromEvent(raw string) (map[string]float64, error) {
+	log.Trace("promotionDeltasFromEvent")
+
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]float64{}, nil
+	}
+	deltas := map[string]float64{}
+	if err := json.Unmarshal([]byte(raw), &deltas); err != nil {
+		return nil, fmt.Errorf("promotion deltas are invalid: %w", err)
+	}
+	return deltas, nil
 }
 
 func validateCompletedModelEvent(trainedModel *model.Model) error {

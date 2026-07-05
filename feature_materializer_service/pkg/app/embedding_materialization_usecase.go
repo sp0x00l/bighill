@@ -6,8 +6,10 @@ import (
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -18,15 +20,19 @@ type EmbeddingMaterializationUsecase interface {
 
 type embeddingMaterializationUsecase struct {
 	repo          EmbeddingSnapshotRepository
+	unitOfWork    SnapshotUnitOfWorkAdapter
+	eventBuilder  SnapshotEventBuilder
 	featureReader FeatureSnapshotReader
 	writer        EmbeddingWriter
 }
 
-func NewEmbeddingMaterializationUsecase(repo EmbeddingSnapshotRepository, featureReader FeatureSnapshotReader, writer EmbeddingWriter) EmbeddingMaterializationUsecase {
+func NewEmbeddingMaterializationUsecase(repo EmbeddingSnapshotRepository, unitOfWork SnapshotUnitOfWorkAdapter, eventBuilder SnapshotEventBuilder, featureReader FeatureSnapshotReader, writer EmbeddingWriter) EmbeddingMaterializationUsecase {
 	log.Trace("NewEmbeddingMaterializationUsecase")
 
 	return &embeddingMaterializationUsecase{
 		repo:          repo,
+		unitOfWork:    unitOfWork,
+		eventBuilder:  eventBuilder,
 		featureReader: featureReader,
 		writer:        writer,
 	}
@@ -34,6 +40,7 @@ func NewEmbeddingMaterializationUsecase(repo EmbeddingSnapshotRepository, featur
 
 func (u *embeddingMaterializationUsecase) MaterializeEmbeddings(ctx context.Context, featureSnapshotID uuid.UUID, idempotencyKey uuid.UUID, strategy model.EmbeddingStrategy) (out *model.EmbeddingSnapshot, err error) {
 	log.Trace("EmbeddingMaterializationUsecase MaterializeEmbeddings")
+
 	strategy = model.NormalizeEmbeddingStrategy(strategy)
 	ctx, span := startFeatureMaterializerSpan(ctx, "feature_materializer_service/app", "embedding.materialize",
 		attribute.String("feature_snapshot_id", featureSnapshotID.String()),
@@ -44,7 +51,7 @@ func (u *embeddingMaterializationUsecase) MaterializeEmbeddings(ctx context.Cont
 	)
 	defer endFeatureMaterializerSpanOnReturn(ctx, span, &err)
 
-	embeddingSnapshot, err := u.repo.SavePendingEmbeddingSnapshot(ctx, featureSnapshotID, idempotencyKey, strategy)
+	embeddingSnapshot, err := u.savePendingEmbeddingSnapshot(ctx, featureSnapshotID, idempotencyKey, strategy)
 	if err != nil {
 		if existing, ok := domain.IsEmbeddingsAlreadyMaterialized(err); ok {
 			return existing, err
@@ -64,17 +71,57 @@ func (u *embeddingMaterializationUsecase) MaterializeEmbeddings(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
-	materialized, err := u.writer.MaterializeEmbeddings(ctx, featureSnapshot, embeddingSnapshot)
+	materialized, records, err := u.writer.MaterializeEmbeddings(ctx, featureSnapshot, embeddingSnapshot)
 	if err != nil {
-		_ = u.repo.MarkEmbeddingFailed(ctx, embeddingSnapshot.EmbeddingSnapshotID, err.Error())
+		_ = u.markEmbeddingFailed(ctx, embeddingSnapshot.EmbeddingSnapshotID, err.Error())
 		return nil, fmt.Errorf("%w: %w", domain.ErrEmbeddingMaterialize, err)
 	}
 	if materialized == nil {
 		return nil, fmt.Errorf("%w: embedding writer returned nil", domain.ErrEmbeddingMaterialize)
 	}
 	materialized.EmbeddingSnapshotID = embeddingSnapshot.EmbeddingSnapshotID
-	if err := u.repo.MarkEmbeddingReady(ctx, materialized); err != nil {
+	if err := u.markEmbeddingReady(ctx, materialized, records); err != nil {
 		return nil, err
 	}
 	return materialized, nil
+}
+
+func (u *embeddingMaterializationUsecase) savePendingEmbeddingSnapshot(ctx context.Context, featureSnapshotID, idempotencyKey uuid.UUID, strategy model.EmbeddingStrategy) (*model.EmbeddingSnapshot, error) {
+	log.Trace("EmbeddingMaterializationUsecase savePendingEmbeddingSnapshot")
+
+	var embeddingSnapshot *model.EmbeddingSnapshot
+	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		out, err := u.repo.SavePendingEmbeddingSnapshot(ctx, tx, featureSnapshotID, idempotencyKey, strategy)
+		if err != nil {
+			return err
+		}
+		embeddingSnapshot = out
+		return nil
+	})
+	return embeddingSnapshot, err
+}
+
+func (u *embeddingMaterializationUsecase) markEmbeddingReady(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, records []model.EmbeddingRecord) error {
+	log.Trace("EmbeddingMaterializationUsecase markEmbeddingReady")
+
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		if err := u.repo.SaveEmbeddingRecords(ctx, tx, records); err != nil {
+			return err
+		}
+		if err := u.repo.MarkEmbeddingReady(ctx, tx, embeddingSnapshot); err != nil {
+			return err
+		}
+		if err := enqueue(u.eventBuilder.EmbeddingSnapshotReadyMessage(embeddingSnapshot)); err != nil {
+			return fmt.Errorf("enqueue embedding snapshot ready: %w", err)
+		}
+		return nil
+	})
+}
+
+func (u *embeddingMaterializationUsecase) markEmbeddingFailed(ctx context.Context, embeddingSnapshotID uuid.UUID, reason string) error {
+	log.Trace("EmbeddingMaterializationUsecase markEmbeddingFailed")
+
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.repo.MarkEmbeddingFailed(ctx, tx, embeddingSnapshotID, reason)
+	})
 }
