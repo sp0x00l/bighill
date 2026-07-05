@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"testing"
 
 	serviceRest "ingestion_service/pkg/infra/network/rest"
 
@@ -11,6 +12,11 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestRestHandlers(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Ingestion REST handler test suite")
+}
 
 type fakeTokenValidator struct {
 	claims        map[string]any

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"feature_materializer_service/pkg/domain"
@@ -38,18 +39,18 @@ const (
 )
 
 const (
-	arrowSourceFormat      = "arrow"
-	csvSourceFormat        = "csv"
-	jsonSourceFormat       = "json"
-	pdfSourceFormat        = "pdf"
-	htmlSourceFormat       = "html"
-	markdownSourceFormat   = "markdown"
-	textSourceFormat       = "text"
-	csvContentTypeToken    = "csv"
-	jsonContentTypeToken   = "json"
-	htmlContentTypePrefix  = "text/html"
-	mdContentTypePrefix    = "text/markdown"
-	textContentTypePrefix  = "text/plain"
+	arrowSourceFormat     = "arrow"
+	csvSourceFormat       = "csv"
+	jsonSourceFormat      = "json"
+	pdfSourceFormat       = "pdf"
+	htmlSourceFormat      = "html"
+	markdownSourceFormat  = "markdown"
+	textSourceFormat      = "text"
+	csvContentTypeToken   = "csv"
+	jsonContentTypeToken  = "json"
+	htmlContentTypePrefix = "text/html"
+	mdContentTypePrefix   = "text/markdown"
+	textContentTypePrefix = "text/plain"
 )
 
 const (
@@ -73,6 +74,15 @@ type ParquetArtifact struct {
 	SchemaMetadata string
 	RowCount       int64
 }
+
+type parquetColumnKind int
+
+const (
+	parquetColumnString parquetColumnKind = iota
+	parquetColumnBool
+	parquetColumnInt64
+	parquetColumnFloat64
+)
 
 func NormalizeArtifactToParquet(ctx context.Context, data []byte, contentType, extension string) (*ParquetArtifact, error) {
 	log.Trace("NormalizeArtifactToParquet")
@@ -402,9 +412,10 @@ func writeStringTableParquetWithMetadata(fields []string, rows []map[string]stri
 		return nil, "", domain.ErrValidationFailed.Extend("at least one column is required")
 	}
 
+	columnKinds := inferParquetColumnKinds(fields, rows)
 	arrowFields := make([]arrow.Field, len(fields))
 	for i, field := range fields {
-		arrowFields[i] = arrow.Field{Name: field, Type: arrow.BinaryTypes.String, Nullable: true}
+		arrowFields[i] = arrow.Field{Name: field, Type: arrowTypeForColumnKind(columnKinds[i]), Nullable: true}
 	}
 	schema := arrow.NewSchema(arrowFields, nil)
 
@@ -412,7 +423,7 @@ func writeStringTableParquetWithMetadata(fields []string, rows []map[string]stri
 	defer builder.Release()
 	for _, row := range rows {
 		for col, field := range fields {
-			builder.Field(col).(*array.StringBuilder).Append(row[field])
+			appendParquetColumnValue(builder.Field(col), columnKinds[col], row[field])
 		}
 	}
 	record := builder.NewRecordBatch()
@@ -436,6 +447,100 @@ func writeStringTableParquetWithMetadata(fields []string, rows []map[string]stri
 		return nil, "", err
 	}
 	return out.Bytes(), schemaMetadata, nil
+}
+
+func inferParquetColumnKinds(fields []string, rows []map[string]string) []parquetColumnKind {
+	log.Trace("inferParquetColumnKinds")
+
+	kinds := make([]parquetColumnKind, len(fields))
+	for i, field := range fields {
+		seen := false
+		boolCandidate := true
+		intCandidate := true
+		floatCandidate := true
+		for _, row := range rows {
+			value := strings.TrimSpace(row[field])
+			if value == "" {
+				continue
+			}
+			seen = true
+			if !isBoolLiteral(value) {
+				boolCandidate = false
+			}
+			if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+				intCandidate = false
+			}
+			parsedFloat, err := strconv.ParseFloat(value, 64)
+			if err != nil || math.IsInf(parsedFloat, 0) || math.IsNaN(parsedFloat) {
+				floatCandidate = false
+			}
+		}
+		switch {
+		case seen && boolCandidate:
+			kinds[i] = parquetColumnBool
+		case seen && intCandidate:
+			kinds[i] = parquetColumnInt64
+		case seen && floatCandidate:
+			kinds[i] = parquetColumnFloat64
+		default:
+			kinds[i] = parquetColumnString
+		}
+	}
+	return kinds
+}
+
+func arrowTypeForColumnKind(kind parquetColumnKind) arrow.DataType {
+	log.Trace("arrowTypeForColumnKind")
+
+	switch kind {
+	case parquetColumnBool:
+		return arrow.FixedWidthTypes.Boolean
+	case parquetColumnInt64:
+		return arrow.PrimitiveTypes.Int64
+	case parquetColumnFloat64:
+		return arrow.PrimitiveTypes.Float64
+	default:
+		return arrow.BinaryTypes.String
+	}
+}
+
+func appendParquetColumnValue(builder array.Builder, kind parquetColumnKind, rawValue string) {
+	log.Trace("appendParquetColumnValue")
+
+	value := strings.TrimSpace(rawValue)
+	switch kind {
+	case parquetColumnBool:
+		boolBuilder := builder.(*array.BooleanBuilder)
+		if value == "" {
+			boolBuilder.AppendNull()
+			return
+		}
+		boolBuilder.Append(strings.EqualFold(value, "true"))
+	case parquetColumnInt64:
+		intBuilder := builder.(*array.Int64Builder)
+		if value == "" {
+			intBuilder.AppendNull()
+			return
+		}
+		parsed, _ := strconv.ParseInt(value, 10, 64)
+		intBuilder.Append(parsed)
+	case parquetColumnFloat64:
+		floatBuilder := builder.(*array.Float64Builder)
+		if value == "" {
+			floatBuilder.AppendNull()
+			return
+		}
+		parsed, _ := strconv.ParseFloat(value, 64)
+		floatBuilder.Append(parsed)
+	default:
+		builder.(*array.StringBuilder).Append(rawValue)
+	}
+}
+
+func isBoolLiteral(value string) bool {
+	log.Trace("isBoolLiteral")
+
+	return strings.EqualFold(value, "true") || strings.EqualFold(value, "false")
 }
 
 func parquetSchemaMetadata(ctx context.Context, data []byte) (string, int64, error) {

@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	rest "ingestion_service/pkg/infra/network/restsupport"
-
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
@@ -46,62 +44,62 @@ func (h *AuthHandler) Authenticate(ctx context.Context, r *http.Request) (AuthRe
 	}
 	if authorization == "" {
 		log.WithContext(ctx).Warn("DataUploadHandlers auth: missing authorization header")
-		return AuthResult{}, rest.ErrUnauthorized().WithMessage("missing authorization header")
+		return AuthResult{}, ErrUnauthorized().WithMessage("missing authorization header")
 	}
 
 	claims, err := h.authProvider.Validate(ctx, authorization)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Warn("DataUploadHandlers auth: token validation failed")
-		return AuthResult{}, rest.ErrUnauthorized().Wrap(err).WithMessage("invalid token")
+		return AuthResult{}, ErrUnauthorized().Wrap(err).WithMessage("invalid token")
 	}
 
 	uid, ok := claims["userId"].(string)
 	if !ok || uid == "" {
 		log.WithContext(ctx).Warn("DataUploadHandlers auth: validated token missing userId claim")
-		return AuthResult{}, rest.ErrUnauthorized().WithMessage("invalid token: no userId")
+		return AuthResult{}, ErrUnauthorized().WithMessage("invalid token: no userId")
 	}
 	userID, err := uuid.Parse(uid)
 	if err != nil || userID == uuid.Nil {
 		log.WithContext(ctx).WithError(err).Warn("DataUploadHandlers auth: validated token has invalid userId claim")
-		return AuthResult{}, rest.ErrUnauthorized().Wrap(err).WithMessage("invalid token: invalid userId")
+		return AuthResult{}, ErrUnauthorized().Wrap(err).WithMessage("invalid token: invalid userId")
 	}
 
 	sVal, _ := claims["sid"].(string)
 	if sVal == "" {
 		log.WithContext(ctx).Warn("DataUploadHandlers auth: validated token missing sid claim")
-		return AuthResult{}, rest.ErrUnauthorized().WithMessage("invalid token: no sid")
+		return AuthResult{}, ErrUnauthorized().WithMessage("invalid token: no sid")
 	}
 
 	iatUnix := toInt64(claims["iat"])
 	if iatUnix == 0 {
 		log.WithContext(ctx).Warn("DataUploadHandlers auth: validated token missing iat claim")
-		return AuthResult{}, rest.ErrUnauthorized().WithMessage("invalid token: no iat")
+		return AuthResult{}, ErrUnauthorized().WithMessage("invalid token: no iat")
 	}
 
 	expUnix := toInt64(claims["expiresAt"])
 	if expUnix == 0 {
 		log.WithContext(ctx).Warn("DataUploadHandlers auth: validated token missing exp claim")
-		return AuthResult{}, rest.ErrUnauthorized().WithMessage("invalid token: no exp")
+		return AuthResult{}, ErrUnauthorized().WithMessage("invalid token: no exp")
 	}
 
 	okSess, err := h.authStore.SessionExists(ctx, sVal)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("DataUploadHandlers auth: session lookup failed")
-		return AuthResult{}, rest.ErrInternalServer().Wrap(err).WithMessage("auth check failed")
+		return AuthResult{}, ErrInternalServer().Wrap(err).WithMessage("auth check failed")
 	}
 	if !okSess {
 		log.WithContext(ctx).Warn("DataUploadHandlers auth: session not found or revoked")
-		return AuthResult{}, rest.ErrUnauthorized().WithMessage("session revoked")
+		return AuthResult{}, ErrUnauthorized().WithMessage("session revoked")
 	}
 
 	revokedAfter, err := h.authStore.GetUserRevokedAfter(ctx, uid)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("DataUploadHandlers auth: revoked_after lookup failed")
-		return AuthResult{}, rest.ErrInternalServer().Wrap(err).WithMessage("auth check failed")
+		return AuthResult{}, ErrInternalServer().Wrap(err).WithMessage("auth check failed")
 	}
 	if revokedAfter > 0 && iatUnix <= revokedAfter {
 		log.WithContext(ctx).Warn("DataUploadHandlers auth: token issued before revoked_after cutoff")
-		return AuthResult{}, rest.ErrUnauthorized().WithMessage("token revoked")
+		return AuthResult{}, ErrUnauthorized().WithMessage("token revoked")
 	}
 
 	return AuthResult{

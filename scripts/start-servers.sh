@@ -157,6 +157,9 @@ build_and_start_servers() {
     exit 1
   fi
 
+  . "${PROJECT_ROOT}/shared_lib/scripts/config.sh" "$ENV"
+  . "${PROJECT_ROOT}/database/scripts/config.sh" "$ENV"
+
   local SERVICE_DIRS
   SERVICE_DIRS=($(resolve_service_dirs "$PROJECT_ROOT" "$EXCLUDE_SERVICES" "${REQUESTED_SERVICES[@]+"${REQUESTED_SERVICES[@]}"}"))
 

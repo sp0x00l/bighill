@@ -11,6 +11,7 @@ services:
       MINIO_ROOT_PASSWORD: polaris_pass
       MINIO_REGION_NAME: eu-west-1
       MINIO_REGION: eu-west-1
+      MINIO_DOMAIN: polaris-object-store
     healthcheck:
       test: ["CMD-SHELL", "curl --fail http://127.0.0.1:9000/minio/health/live"]
       interval: 30s
@@ -20,7 +21,9 @@ services:
     volumes:
       - polaris_object_store:/data
     networks:
-      - lakehouse-network
+      lakehouse-network:
+        aliases:
+          - bighill-mlops-lakehouse.polaris-object-store
 
   polaris-bucket-setup:
     image: amazon/aws-cli:2.35.11
@@ -57,8 +60,14 @@ services:
       AWS_REGION: eu-west-1
       AWS_ACCESS_KEY_ID: polaris_root
       AWS_SECRET_ACCESS_KEY: polaris_pass
+      AWS_ENDPOINT_URL: http://polaris-object-store:9000
+      AWS_ENDPOINT_URL_S3: http://polaris-object-store:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_PATH_STYLE_ACCESS: "true"
+      JAVA_TOOL_OPTIONS: "-Daws.s3.pathStyleAccess=true"
       POLARIS_BOOTSTRAP_CREDENTIALS: POLARIS,${POLARIS_ROOT_CLIENT_ID:-root},${POLARIS_ROOT_CLIENT_SECRET:-s3cr3t}
       polaris.realm-context.realms: ${POLARIS_REALM:-POLARIS}
+      polaris.features."SKIP_CREDENTIAL_SUBSCOPING_INDIRECTION": "true"
       quarkus.otel.sdk.disabled: "true"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]

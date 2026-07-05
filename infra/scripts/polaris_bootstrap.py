@@ -25,7 +25,6 @@ STORAGE_ENDPOINT = env("POLARIS_STORAGE_ENDPOINT", "http://polaris-object-store:
 STORAGE_REGION = env("POLARIS_STORAGE_REGION", "eu-west-1")
 STORAGE_PATH_STYLE = env("POLARIS_STORAGE_PATH_STYLE", "true").lower() in {"1", "true", "yes"}
 STORAGE_ROLE_ARN = env("POLARIS_STORAGE_ROLE_ARN", "arn:aws:iam::000000000000:role/bighill-polaris")
-STORAGE_USER_ARN = env("POLARIS_STORAGE_USER_ARN", "arn:aws:iam::000000000000:user/bighill-polaris")
 STORAGE_EXTERNAL_ID = env("POLARIS_STORAGE_EXTERNAL_ID", "bighill-local-polaris")
 SERVICE_PRINCIPAL = env("POLARIS_SERVICE_PRINCIPAL", "bighill-services")
 PRINCIPAL_ROLE = env("POLARIS_PRINCIPAL_ROLE", "bighill-services")
@@ -80,30 +79,56 @@ def wait_for_polaris(token: str) -> None:
 
 def ensure_catalog(token: str) -> None:
     path = f"/api/management/v1/catalogs/{quote(CATALOG)}"
-    status, _ = request("GET", path, token, accept=(200, 404))
+    status, body = request("GET", path, token, accept=(200, 404))
     if status == 200:
+        reconcile_catalog(token, body)
         return
-    payload = {
+    request("POST", "/api/management/v1/catalogs", token, create_catalog_payload(), accept=(200, 201, 409))
+
+
+def create_catalog_payload() -> dict[str, Any]:
+    return {
         "catalog": {
             "type": "INTERNAL",
             "name": CATALOG,
-            "properties": {"default-base-location": WAREHOUSE},
-            "storageConfigInfo": {
-                "storageType": "S3",
-                "allowedLocations": [WAREHOUSE],
-                "roleArn": STORAGE_ROLE_ARN,
-                "userArn": STORAGE_USER_ARN,
-                "externalId": STORAGE_EXTERNAL_ID,
-                "region": STORAGE_REGION,
-                "endpoint": STORAGE_ENDPOINT,
-                "endpointInternal": STORAGE_ENDPOINT,
-                "pathStyleAccess": STORAGE_PATH_STYLE,
-                "stsUnavailable": True,
-                "kmsUnavailable": True,
-            },
+            "properties": catalog_properties(),
+            "storageConfigInfo": storage_config_payload(),
         }
     }
-    request("POST", "/api/management/v1/catalogs", token, payload, accept=(200, 201, 409))
+
+
+def catalog_properties() -> dict[str, str]:
+    properties = {
+        "default-base-location": WAREHOUSE,
+        "s3.path-style-access": "true" if STORAGE_PATH_STYLE else "false",
+    }
+    if STORAGE_ENDPOINT:
+        properties["s3.endpoint"] = STORAGE_ENDPOINT
+    return properties
+
+
+def storage_config_payload() -> dict[str, Any]:
+    return {
+        "storageType": "S3",
+        "allowedLocations": [WAREHOUSE],
+        "roleArn": STORAGE_ROLE_ARN,
+        "externalId": STORAGE_EXTERNAL_ID,
+        "region": STORAGE_REGION,
+    }
+
+
+def reconcile_catalog(token: str, body: Any) -> None:
+    catalog = body.get("catalog", body) if isinstance(body, dict) else {}
+    if not isinstance(catalog, dict):
+        raise RuntimeError("Polaris catalog response did not include a catalog object")
+    entity_version = catalog.get("entityVersion")
+    payload: dict[str, Any] = {
+        "properties": catalog_properties(),
+        "storageConfigInfo": storage_config_payload(),
+    }
+    if entity_version is not None:
+        payload["currentEntityVersion"] = entity_version
+    request("PUT", f"/api/management/v1/catalogs/{quote(CATALOG)}", token, payload, accept=(200, 201, 409))
 
 
 def ensure_principal(token: str) -> dict[str, str]:

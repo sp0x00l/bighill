@@ -100,9 +100,23 @@ async fn write_iceberg(config: &Config) -> Result<()> {
         .await
         .map_err(to_datafusion_error)?
     {
-        return Err(DataFusionError::Execution(format!(
-            "iceberg table {table_ident} already exists; overwrite/rematerialize requires a snapshot-replace commit and will not drop existing data"
-        )));
+        let table_rows = count_existing_iceberg_rows(&ctx, catalog.as_ref(), &table_ident).await?;
+        if table_rows != source_count {
+            return Err(DataFusionError::Execution(format!(
+                "iceberg table {table_ident} already exists with {table_rows} rows; source has {source_count} rows; overwrite/rematerialize requires a snapshot-replace commit and will not drop existing data"
+            )));
+        }
+        let result = IcebergWriteResult {
+            catalog: config.catalog_name.clone(),
+            namespace: config.namespace.clone(),
+            table: config.table.clone(),
+            warehouse: config.warehouse.clone(),
+            source_rows: source_count,
+            table_rows,
+        };
+        serde_json::to_writer(io::stdout().lock(), &result)
+            .map_err(|err| DataFusionError::Execution(format!("write iceberg result: {err}")))?;
+        return Ok(());
     }
 
     let provider = IcebergCatalogProvider::try_new(catalog.clone())
@@ -144,6 +158,22 @@ async fn write_iceberg(config: &Config) -> Result<()> {
     serde_json::to_writer(io::stdout().lock(), &result)
         .map_err(|err| DataFusionError::Execution(format!("write iceberg result: {err}")))?;
     Ok(())
+}
+
+async fn count_existing_iceberg_rows(
+    ctx: &SessionContext,
+    catalog: &dyn Catalog,
+    table_ident: &TableIdent,
+) -> Result<u64> {
+    let table = catalog
+        .load_table(table_ident)
+        .await
+        .map_err(to_datafusion_error)?;
+    let table_provider = IcebergStaticTableProvider::try_new_from_table(table)
+        .await
+        .map_err(to_datafusion_error)?;
+    ctx.register_table("dataset", Arc::new(table_provider))?;
+    count_rows(ctx, "dataset").await
 }
 
 async fn register_iceberg_dataset(ctx: &SessionContext, config: &Config) -> Result<()> {

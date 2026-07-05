@@ -277,7 +277,8 @@ func (u *modelRegistryUsecase) RecordPromotionReportReady(ctx context.Context, r
 		return nil, fmt.Errorf("%w: model %s is not a candidate", domain.ErrValidationFailed, report.ModelID)
 	}
 	if report.FailureReason != "" {
-		return u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusFailed, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, report.FailureReason))
+		decision := model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, report.FailureReason)
+		return u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusFailed, report, decision, report.FailureReason)
 	}
 
 	decision, err := u.evaluateCandidatePromotion(contextForModel(ctx, candidate), candidate, &report)
@@ -285,10 +286,11 @@ func (u *modelRegistryUsecase) RecordPromotionReportReady(ctx context.Context, r
 		return nil, err
 	}
 	if !decision.Promote {
-		return u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusFailed, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, decision.Reason))
+		promotionDecision := model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, decision.Reason)
+		return u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusFailed, report, promotionDecision, decision.Reason)
 	}
 	report.Deltas = decision.Deltas
-	out, err = u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusEvaluated, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeAccepted, decision.Reason))
+	out, err = u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusEvaluated, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeAccepted, decision.Reason), "")
 	if err != nil {
 		return nil, err
 	}
@@ -323,9 +325,11 @@ func (u *modelRegistryUsecase) PromoteCandidate(ctx context.Context, modelID uui
 		return nil, err
 	}
 	if !decision.Promote {
-		return u.rejectCandidate(ctx, candidate.ModelID, model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, decision.Reason))
+		report := model.PromotionReportResult{ModelID: candidate.ModelID, TrainingRunID: candidate.TrainingRunID}
+		return u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusFailed, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeRejected, decision.Reason), decision.Reason)
 	}
-	out, err = u.updateModelStatus(contextForModel(ctx, candidate), candidate.ModelID, model.ModelStatusEvaluated, "", model.PromotionDecisionReason(model.PromotionDecisionOutcomeAccepted, decision.Reason))
+	report := model.PromotionReportResult{ModelID: candidate.ModelID, TrainingRunID: candidate.TrainingRunID, Deltas: decision.Deltas}
+	out, err = u.recordPromotionDecision(contextForModel(ctx, candidate), candidate, model.ModelStatusEvaluated, report, model.PromotionDecisionReason(model.PromotionDecisionOutcomeAccepted, decision.Reason), "")
 	if err != nil {
 		return nil, err
 	}
@@ -358,12 +362,6 @@ func (u *modelRegistryUsecase) evaluateCandidatePromotion(ctx context.Context, c
 		}
 	}
 	return model.EvaluatePromotion(candidateMetrics, championMetrics, evidence, u.gatePolicy), nil
-}
-
-func (u *modelRegistryUsecase) rejectCandidate(ctx context.Context, modelID uuid.UUID, reason string) (*model.Model, error) {
-	log.Trace("ModelRegistryUsecase rejectCandidate")
-
-	return u.updateModelStatus(ctx, modelID, model.ModelStatusFailed, "", reason)
 }
 
 func (u *modelRegistryUsecase) ensureServedModel(ctx context.Context, registeredModel *model.Model) error {
@@ -414,7 +412,7 @@ func (u *modelRegistryUsecase) createCandidateModel(ctx context.Context, registe
 	return modelRecord, err
 }
 
-func (u *modelRegistryUsecase) recordPromotionDecision(ctx context.Context, candidate *model.Model, status model.ModelStatus, report model.PromotionReportResult, failureReason string) (*model.Model, error) {
+func (u *modelRegistryUsecase) recordPromotionDecision(ctx context.Context, candidate *model.Model, status model.ModelStatus, report model.PromotionReportResult, promotionDecision string, failureReason string) (*model.Model, error) {
 	log.Trace("ModelRegistryUsecase recordPromotionDecision")
 
 	deltas, err := promotionDeltasJSON(report.Deltas)
@@ -423,7 +421,7 @@ func (u *modelRegistryUsecase) recordPromotionDecision(ctx context.Context, cand
 	}
 	var modelRecord *model.Model
 	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
-		updated, err := u.repo.UpdatePromotionDecision(ctx, tx, candidate.ModelID, status, report.PromotionReportURI, deltas, failureReason)
+		updated, err := u.repo.UpdatePromotionDecision(ctx, tx, candidate.ModelID, status, report.PromotionReportURI, deltas, promotionDecision, failureReason)
 		if err != nil {
 			return err
 		}

@@ -25,6 +25,7 @@ type Model struct {
 	MetricsMetadata    string
 	PromotionReportURI string
 	PromotionDeltas    string
+	PromotionDecision  string
 	Status             ModelStatus
 	FailureReason      string
 }

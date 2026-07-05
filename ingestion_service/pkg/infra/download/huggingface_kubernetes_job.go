@@ -25,6 +25,72 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+const (
+	kubernetesBatchGroup    = "batch"
+	kubernetesBatchVersion  = "v1"
+	kubernetesJobsResource  = "jobs"
+	kubernetesJobAPIVersion = "batch/v1"
+	kubernetesJobKind       = "Job"
+)
+
+const (
+	kubernetesMetadataKey                 = "metadata"
+	kubernetesAPIVersionKey               = "apiVersion"
+	kubernetesKindKey                     = "kind"
+	kubernetesNameKey                     = "name"
+	kubernetesValueKey                    = "value"
+	kubernetesNamespaceKey                = "namespace"
+	kubernetesLabelsKey                   = "labels"
+	kubernetesSpecKey                     = "spec"
+	kubernetesStatusKey                   = "status"
+	kubernetesConditionsKey               = "conditions"
+	kubernetesConditionTypeKey            = "type"
+	kubernetesConditionStatusKey          = "status"
+	kubernetesConditionMessageKey         = "message"
+	kubernetesSucceededKey                = "succeeded"
+	kubernetesFailedKey                   = "failed"
+	kubernetesBackoffLimitKey             = "backoffLimit"
+	kubernetesTemplateKey                 = "template"
+	kubernetesRestartPolicyKey            = "restartPolicy"
+	kubernetesContainersKey               = "containers"
+	kubernetesServiceAccountNameKey       = "serviceAccountName"
+	kubernetesTTLSecondsAfterFinishedKey  = "ttlSecondsAfterFinished"
+	kubernetesContainerNameKey            = "name"
+	kubernetesContainerImageKey           = "image"
+	kubernetesContainerImagePullPolicyKey = "imagePullPolicy"
+	kubernetesContainerCommandKey         = "command"
+	kubernetesContainerEnvKey             = "env"
+	kubernetesContainerResourcesKey       = "resources"
+	kubernetesResourceRequestsKey         = "requests"
+	kubernetesResourceLimitsKey           = "limits"
+	kubernetesCPUResourceKey              = "cpu"
+	kubernetesMemoryResourceKey           = "memory"
+)
+
+const (
+	huggingFaceJobContainerName = "huggingface-download"
+	huggingFaceJobAppLabelValue = "huggingface-model-onboard"
+	huggingFaceJobNamePrefix    = "hf-model-"
+	huggingFaceJobManifestFile  = "manifest.json"
+	kubernetesAppLabelKey       = "app"
+	bighillModelIDLabelKey      = "bighill.io/model-id"
+	kubernetesRestartNever      = "Never"
+)
+
+const (
+	kubernetesConditionComplete = "Complete"
+	kubernetesConditionFailed   = "Failed"
+	kubernetesConditionTrue     = "True"
+)
+
+const (
+	kubeconfigEnvName   = "KUBECONFIG"
+	kubeconfigLocalPath = ".kube/config"
+	kubernetesNameDash  = "-"
+	pathSeparator       = "/"
+	s3Scheme            = "s3"
+)
+
 type HuggingFaceKubernetesJobDownloaderConfig struct {
 	Namespace               string
 	Image                   string
@@ -63,7 +129,7 @@ type modelManifestReader interface {
 	ReadManifest(context.Context, string) ([]byte, error)
 }
 
-var kubernetesJobGVR = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+var kubernetesJobGVR = schema.GroupVersionResource{Group: kubernetesBatchGroup, Version: kubernetesBatchVersion, Resource: kubernetesJobsResource}
 
 func NewHuggingFaceKubernetesJobDownloader(config HuggingFaceKubernetesJobDownloaderConfig, manifestReader modelManifestReader) (*HuggingFaceKubernetesJobDownloader, error) {
 	log.Trace("NewHuggingFaceKubernetesJobDownloader")
@@ -84,7 +150,7 @@ func NewHuggingFaceKubernetesJobDownloaderWithClient(config HuggingFaceKubernete
 		imagePullPolicy:         strings.TrimSpace(config.ImagePullPolicy),
 		serviceAccountName:      strings.TrimSpace(config.ServiceAccountName),
 		command:                 strings.Fields(config.Command),
-		outputURI:               strings.TrimRight(strings.TrimSpace(config.OutputURI), "/"),
+		outputURI:               strings.TrimRight(strings.TrimSpace(config.OutputURI), pathSeparator),
 		ttlSecondsAfterFinished: config.TTLSecondsAfterFinished,
 		backoffLimit:            config.BackoffLimit,
 		cpu:                     strings.TrimSpace(config.CPU),
@@ -140,66 +206,66 @@ func (d *HuggingFaceKubernetesJobDownloader) jobObject(name string, request mode
 	envValues := d.envKeys.envValues(request, request.HuggingFaceToken, d.outputURI)
 	env := make([]any, 0, len(envValues))
 	for key, value := range envValues {
-		env = append(env, map[string]any{"name": key, "value": value})
+		env = append(env, map[string]any{kubernetesNameKey: key, kubernetesValueKey: value})
 	}
 	container := map[string]any{
-		"name":            "huggingface-download",
-		"image":           d.image,
-		"imagePullPolicy": d.imagePullPolicy,
-		"command":         stringSliceToAny(d.command),
-		"env":             env,
+		kubernetesContainerNameKey:            huggingFaceJobContainerName,
+		kubernetesContainerImageKey:           d.image,
+		kubernetesContainerImagePullPolicyKey: d.imagePullPolicy,
+		kubernetesContainerCommandKey:         stringSliceToAny(d.command),
+		kubernetesContainerEnvKey:             env,
 	}
 	if d.cpu != "" || d.memory != "" {
 		resources := map[string]any{}
 		requests := map[string]any{}
 		limits := map[string]any{}
 		if d.cpu != "" {
-			requests["cpu"] = d.cpu
-			limits["cpu"] = d.cpu
+			requests[kubernetesCPUResourceKey] = d.cpu
+			limits[kubernetesCPUResourceKey] = d.cpu
 		}
 		if d.memory != "" {
-			requests["memory"] = d.memory
-			limits["memory"] = d.memory
+			requests[kubernetesMemoryResourceKey] = d.memory
+			limits[kubernetesMemoryResourceKey] = d.memory
 		}
-		resources["requests"] = requests
-		resources["limits"] = limits
-		container["resources"] = resources
+		resources[kubernetesResourceRequestsKey] = requests
+		resources[kubernetesResourceLimitsKey] = limits
+		container[kubernetesContainerResourcesKey] = resources
 	}
 	podSpec := map[string]any{
-		"restartPolicy": "Never",
-		"containers":    []any{container},
+		kubernetesRestartPolicyKey: kubernetesRestartNever,
+		kubernetesContainersKey:    []any{container},
 	}
 	if d.serviceAccountName != "" {
-		podSpec["serviceAccountName"] = d.serviceAccountName
+		podSpec[kubernetesServiceAccountNameKey] = d.serviceAccountName
 	}
 	spec := map[string]any{
-		"backoffLimit": int64(d.backoffLimit),
-		"template": map[string]any{
-			"metadata": map[string]any{
-				"labels": map[string]any{
-					"app":                 "huggingface-model-onboard",
-					"bighill.io/model-id": request.ResourceID.String(),
+		kubernetesBackoffLimitKey: int64(d.backoffLimit),
+		kubernetesTemplateKey: map[string]any{
+			kubernetesMetadataKey: map[string]any{
+				kubernetesLabelsKey: map[string]any{
+					kubernetesAppLabelKey:  huggingFaceJobAppLabelValue,
+					bighillModelIDLabelKey: request.ResourceID.String(),
 				},
 			},
-			"spec": podSpec,
+			kubernetesSpecKey: podSpec,
 		},
 	}
 	if d.ttlSecondsAfterFinished > 0 {
-		spec["ttlSecondsAfterFinished"] = int64(d.ttlSecondsAfterFinished)
+		spec[kubernetesTTLSecondsAfterFinishedKey] = int64(d.ttlSecondsAfterFinished)
 	}
 	return &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "batch/v1",
-			"kind":       "Job",
-			"metadata": map[string]any{
-				"name":      name,
-				"namespace": d.namespace,
-				"labels": map[string]any{
-					"app":                 "huggingface-model-onboard",
-					"bighill.io/model-id": request.ResourceID.String(),
+			kubernetesAPIVersionKey: kubernetesJobAPIVersion,
+			kubernetesKindKey:       kubernetesJobKind,
+			kubernetesMetadataKey: map[string]any{
+				kubernetesNameKey:      name,
+				kubernetesNamespaceKey: d.namespace,
+				kubernetesLabelsKey: map[string]any{
+					kubernetesAppLabelKey:  huggingFaceJobAppLabelValue,
+					bighillModelIDLabelKey: request.ResourceID.String(),
 				},
 			},
-			"spec": spec,
+			kubernetesSpecKey: spec,
 		},
 	}
 }
@@ -211,17 +277,17 @@ func (d *HuggingFaceKubernetesJobDownloader) jobStatus(ctx context.Context, name
 	if err != nil {
 		return huggingFaceJobStatus{}, err
 	}
-	if succeeded, _, _ := unstructured.NestedInt64(obj.Object, "status", "succeeded"); succeeded > 0 {
+	if succeeded, _, _ := unstructured.NestedInt64(obj.Object, kubernetesStatusKey, kubernetesSucceededKey); succeeded > 0 {
 		return huggingFaceJobStatus{succeeded: true}, nil
 	}
-	if failed, _, _ := unstructured.NestedInt64(obj.Object, "status", "failed"); failed > 0 {
-		return huggingFaceJobStatus{failed: true, message: jobConditionMessage(obj, "Failed")}, nil
+	if failed, _, _ := unstructured.NestedInt64(obj.Object, kubernetesStatusKey, kubernetesFailedKey); failed > 0 {
+		return huggingFaceJobStatus{failed: true, message: jobConditionMessage(obj, kubernetesConditionFailed)}, nil
 	}
-	if conditionStatus(obj, "Complete") {
+	if conditionStatus(obj, kubernetesConditionComplete) {
 		return huggingFaceJobStatus{succeeded: true}, nil
 	}
-	if conditionStatus(obj, "Failed") {
-		return huggingFaceJobStatus{failed: true, message: jobConditionMessage(obj, "Failed")}, nil
+	if conditionStatus(obj, kubernetesConditionFailed) {
+		return huggingFaceJobStatus{failed: true, message: jobConditionMessage(obj, kubernetesConditionFailed)}, nil
 	}
 	return huggingFaceJobStatus{}, nil
 }
@@ -229,7 +295,7 @@ func (d *HuggingFaceKubernetesJobDownloader) jobStatus(ctx context.Context, name
 func (d *HuggingFaceKubernetesJobDownloader) manifestURI(resourceID uuid.UUID) string {
 	log.Trace("HuggingFaceKubernetesJobDownloader manifestURI")
 
-	return d.outputURI + "/" + resourceID.String() + "/manifest.json"
+	return d.outputURI + pathSeparator + resourceID.String() + pathSeparator + huggingFaceJobManifestFile
 }
 
 func (d *HuggingFaceKubernetesJobDownloader) readManifest(ctx context.Context, request model.OnboardHuggingFaceModelRequest, manifestURI string) (*model.OnboardedModelArtifact, error) {
@@ -255,13 +321,13 @@ type huggingFaceJobStatus struct {
 func conditionStatus(obj *unstructured.Unstructured, conditionType string) bool {
 	log.Trace("conditionStatus")
 
-	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, kubernetesStatusKey, kubernetesConditionsKey)
 	for _, item := range conditions {
 		condition, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		if strings.EqualFold(fmt.Sprint(condition["type"]), conditionType) && strings.EqualFold(fmt.Sprint(condition["status"]), "True") {
+		if strings.EqualFold(fmt.Sprint(condition[kubernetesConditionTypeKey]), conditionType) && strings.EqualFold(fmt.Sprint(condition[kubernetesConditionStatusKey]), kubernetesConditionTrue) {
 			return true
 		}
 	}
@@ -271,14 +337,14 @@ func conditionStatus(obj *unstructured.Unstructured, conditionType string) bool 
 func jobConditionMessage(obj *unstructured.Unstructured, conditionType string) string {
 	log.Trace("jobConditionMessage")
 
-	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, kubernetesStatusKey, kubernetesConditionsKey)
 	for _, item := range conditions {
 		condition, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		if strings.EqualFold(fmt.Sprint(condition["type"]), conditionType) {
-			return strings.TrimSpace(fmt.Sprint(condition["message"]))
+		if strings.EqualFold(fmt.Sprint(condition[kubernetesConditionTypeKey]), conditionType) {
+			return strings.TrimSpace(fmt.Sprint(condition[kubernetesConditionMessageKey]))
 		}
 	}
 	return ""
@@ -287,13 +353,13 @@ func jobConditionMessage(obj *unstructured.Unstructured, conditionType string) s
 func HuggingFaceJobName(resourceID uuid.UUID) string {
 	log.Trace("HuggingFaceJobName")
 
-	name := "hf-model-" + resourceID.String()
-	name = invalidKubernetesNameChars.ReplaceAllString(strings.ToLower(name), "-")
-	name = strings.Trim(name, "-")
+	name := huggingFaceJobNamePrefix + resourceID.String()
+	name = invalidKubernetesNameChars.ReplaceAllString(strings.ToLower(name), kubernetesNameDash)
+	name = strings.Trim(name, kubernetesNameDash)
 	if len(name) <= 63 {
 		return name
 	}
-	return strings.Trim(name[:63], "-")
+	return strings.Trim(name[:63], kubernetesNameDash)
 }
 
 func newDynamicClient() (dynamic.Interface, error) {
@@ -301,11 +367,11 @@ func newDynamicClient() (dynamic.Interface, error) {
 
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
-		kubeconfig := os.Getenv("KUBECONFIG")
+		kubeconfig := os.Getenv(kubeconfigEnvName)
 		if kubeconfig == "" {
 			home, homeErr := os.UserHomeDir()
 			if homeErr == nil {
-				kubeconfig = filepath.Join(home, ".kube", "config")
+				kubeconfig = filepath.Join(home, kubeconfigLocalPath)
 			}
 		}
 		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
@@ -342,11 +408,11 @@ func (r *ObjectModelManifestReader) ReadManifest(ctx context.Context, location s
 	if err != nil {
 		return nil, fmt.Errorf("%w: parse manifest location: %w", domain.ErrValidationFailed, err)
 	}
-	if parsed.Scheme != "s3" {
+	if parsed.Scheme != s3Scheme {
 		return nil, fmt.Errorf("%w: unsupported manifest scheme %q", domain.ErrValidationFailed, parsed.Scheme)
 	}
 	bucket := parsed.Host
-	key := strings.TrimPrefix(parsed.Path, "/")
+	key := strings.TrimPrefix(parsed.Path, pathSeparator)
 	info, err := r.bucket.HeadObject(ctx, bucket, key)
 	if err != nil {
 		return nil, fmt.Errorf("%w: head manifest object: %w", domain.ErrValidationFailed, err)

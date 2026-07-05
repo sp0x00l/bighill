@@ -25,6 +25,7 @@ func NewDatasetUseCase(datasetsRepository DatasetsRepositoryAdapter) *DatasetUse
 
 func (u *DatasetUsecase) AddDataset(ctx context.Context, dataset *model.Dataset) (err error) {
 	log.Trace("DatasetUsecase AddDataset")
+
 	var attrs []attribute.KeyValue
 	if dataset != nil {
 		attrs = append(attrs,
@@ -43,6 +44,7 @@ func (u *DatasetUsecase) AddDataset(ctx context.Context, dataset *model.Dataset)
 
 func (u *DatasetUsecase) UpdateDataset(ctx context.Context, dataset *model.Dataset) (err error) {
 	log.Trace("DatasetUsecase UpdateDataset")
+
 	var attrs []attribute.KeyValue
 	if dataset != nil {
 		attrs = append(attrs,
@@ -61,6 +63,7 @@ func (u *DatasetUsecase) UpdateDataset(ctx context.Context, dataset *model.Datas
 
 func (u *DatasetUsecase) DatasetForUpload(ctx context.Context, datasetID, userID uuid.UUID) (dataset *model.Dataset, err error) {
 	log.Trace("DatasetUsecase DatasetForUpload")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "ingestion_service/app", "dataset.dataset_for_upload",
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("user_id", userID.String()),
@@ -73,6 +76,7 @@ func (u *DatasetUsecase) DatasetForUpload(ctx context.Context, datasetID, userID
 
 func (u *DatasetUsecase) BlacklistDataset(ctx context.Context, datasetID, userID uuid.UUID) (err error) {
 	log.Trace("DatasetUseCase BlacklistDataset")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "ingestion_service/app", "dataset.blacklist_dataset",
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("user_id", userID.String()),
@@ -85,6 +89,7 @@ func (u *DatasetUsecase) BlacklistDataset(ctx context.Context, datasetID, userID
 
 func (u *DatasetUsecase) DeleteDataset(ctx context.Context, datasetID, userID uuid.UUID) (err error) {
 	log.Trace("DatasetUseCase DeleteDataset")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "ingestion_service/app", "dataset.delete_dataset",
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("user_id", userID.String()),

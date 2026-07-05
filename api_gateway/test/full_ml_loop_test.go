@@ -18,7 +18,7 @@ import (
 	registryapp "model_registry_service/pkg/app"
 	registrydomain "model_registry_service/pkg/domain"
 	registrymodel "model_registry_service/pkg/domain/model"
-	registryk8s "model_registry_service/pkg/infra/network/k8s"
+	registryk8s "model_registry_service/pkg/infra/network/kubernetes"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 	servingapp "model_serving_service/pkg/app"
 	servingk8s "model_serving_service/pkg/infra/network/k8s"
@@ -732,7 +732,7 @@ func (r *registryMemoryRepository) UpdateServingStatus(_ context.Context, _ pgx.
 	return cloneRegistryModel(record), true, nil
 }
 
-func (r *registryMemoryRepository) UpdatePromotionDecision(_ context.Context, _ pgx.Tx, modelID uuid.UUID, status registrymodel.ModelStatus, promotionReportURI string, promotionDeltas string, failureReason string) (*registrymodel.Model, error) {
+func (r *registryMemoryRepository) UpdatePromotionDecision(_ context.Context, _ pgx.Tx, modelID uuid.UUID, status registrymodel.ModelStatus, promotionReportURI string, promotionDeltas string, promotionDecision string, failureReason string) (*registrymodel.Model, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -743,6 +743,7 @@ func (r *registryMemoryRepository) UpdatePromotionDecision(_ context.Context, _ 
 	record.Status = status
 	record.PromotionReportURI = promotionReportURI
 	record.PromotionDeltas = promotionDeltas
+	record.PromotionDecision = promotionDecision
 	record.FailureReason = failureReason
 	return cloneRegistryModel(record), nil
 }

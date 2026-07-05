@@ -12,7 +12,6 @@ import (
 	"ingestion_service/pkg/domain/model"
 	"ingestion_service/pkg/infra/network/adapter"
 	serviceRest "ingestion_service/pkg/infra/network/rest"
-	restSupport "ingestion_service/pkg/infra/network/restsupport"
 	serializers "lib/shared_lib/serializer"
 
 	"github.com/google/uuid"
@@ -405,7 +404,7 @@ var _ = Describe("DataUploadHandlers", func() {
 	})
 
 	It("returns auth errors before dataset validation", func() {
-		authenticator.err = restSupport.ErrUnauthorized().WithMessage("missing authorization header")
+		authenticator.err = serviceRest.ErrUnauthorized().WithMessage("missing authorization header")
 		req := newUploadRequest(datasetID, "dataset.csv", []byte("a,b\n1,2\n"))
 
 		response, err := handler.UploadDataFile(context.Background(), req)

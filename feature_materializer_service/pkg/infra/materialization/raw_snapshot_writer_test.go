@@ -1,6 +1,7 @@
 package materialization_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,8 @@ import (
 	"feature_materializer_service/pkg/domain/model"
 	"feature_materializer_service/pkg/infra/materialization"
 
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -135,6 +138,25 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(artifact.SchemaVersion).To(Equal(1))
 		Expect(artifact.SchemaMetadata).To(ContainSubstring("title"))
 		Expect(artifact.RowCount).To(Equal(int64(1)))
+	})
+
+	It("infers scalar CSV field types when normalizing to Parquet", func() {
+		artifact, err := materialization.NormalizeArtifactToParquet(
+			context.Background(),
+			[]byte("species,sepal_length,count,active\nsetosa,5.1,12,true\nvirginica,7.9,8,false\n"),
+			"text/csv",
+			"csv",
+		)
+
+		Expect(err).NotTo(HaveOccurred())
+		table, err := pqarrow.ReadTable(context.Background(), bytes.NewReader(artifact.Data), nil, pqarrow.ArrowReadProperties{BatchSize: 1024}, memory.DefaultAllocator)
+		Expect(err).NotTo(HaveOccurred())
+		defer table.Release()
+
+		Expect(table.Schema().Field(0).Type.String()).To(Equal("utf8"))
+		Expect(table.Schema().Field(1).Type.String()).To(Equal("float64"))
+		Expect(table.Schema().Field(2).Type.String()).To(Equal("int64"))
+		Expect(table.Schema().Field(3).Type.String()).To(Equal("bool"))
 	})
 
 	It("normalizes PDF artifacts to source text Parquet with extractor metadata", func() {

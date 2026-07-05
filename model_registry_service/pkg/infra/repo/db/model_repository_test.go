@@ -154,6 +154,7 @@ type modelRow struct {
 	MetricsMetadata    string
 	PromotionReportURI string
 	PromotionDeltas    string
+	PromotionDecision  string
 	Status             string
 	FailureReason      string
 }
@@ -181,8 +182,9 @@ func (r modelRow) Scan(dest ...any) error {
 	*(dest[19].(*string)) = r.MetricsMetadata
 	*(dest[20].(*string)) = r.PromotionReportURI
 	*(dest[21].(*string)) = r.PromotionDeltas
-	*(dest[22].(*string)) = r.Status
-	*(dest[23].(*string)) = r.FailureReason
+	*(dest[22].(*string)) = r.PromotionDecision
+	*(dest[23].(*string)) = r.Status
+	*(dest[24].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -268,6 +270,7 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
 			Expect(args).To(HaveKeyWithValue("metrics_metadata", registered.MetricsMetadata))
 			Expect(args).To(HaveKeyWithValue("promotion_deltas", "{}"))
+			Expect(args).To(HaveKeyWithValue("promotion_decision", registered.PromotionDecision))
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
 		})
 
@@ -355,6 +358,7 @@ var _ = Describe("ModelRepository", func() {
 			ready := *registered
 			ready.Status = model.ModelStatusReady
 			ready.ServingLoadStatus = model.ModelLoadStatusLoaded
+			ready.PromotionDecision = model.PromotionDecisionReason(model.PromotionDecisionOutcomeAccepted, "candidate beats champion gate")
 			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
 
 			modelRecord, changed, err := repository.UpdateServingStatus(ctx, tx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "", idempotencyKey)
@@ -363,7 +367,9 @@ var _ = Describe("ModelRepository", func() {
 			Expect(changed).To(BeTrue())
 			Expect(modelRecord.Status).To(Equal(model.ModelStatusReady))
 			Expect(modelRecord.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
+			Expect(modelRecord.PromotionDecision).To(Equal(ready.PromotionDecision))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("UPDATE test_db.models"))
+			Expect(poolMock.QueryCalls[0]).NotTo(ContainSubstring("promotion_decision ="))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("serving_status_idempotency_key IS DISTINCT FROM @serving_status_idempotency_key"))
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
@@ -396,20 +402,24 @@ var _ = Describe("ModelRepository", func() {
 			ready.Status = model.ModelStatusEvaluated
 			ready.PromotionReportURI = "s3://local-dev-bucket/promotion/model.json"
 			ready.PromotionDeltas = `{"faithfulness":0.1}`
+			ready.PromotionDecision = model.PromotionDecisionReason(model.PromotionDecisionOutcomeAccepted, "candidate beats champion gate")
 			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
 
-			modelRecord, err := repository.UpdatePromotionDecision(ctx, tx, modelID, model.ModelStatusEvaluated, ready.PromotionReportURI, ready.PromotionDeltas, "")
+			modelRecord, err := repository.UpdatePromotionDecision(ctx, tx, modelID, model.ModelStatusEvaluated, ready.PromotionReportURI, ready.PromotionDeltas, ready.PromotionDecision, "")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.Status).To(Equal(model.ModelStatusEvaluated))
 			Expect(modelRecord.PromotionReportURI).To(Equal(ready.PromotionReportURI))
 			Expect(modelRecord.PromotionDeltas).To(MatchJSON(ready.PromotionDeltas))
+			Expect(modelRecord.PromotionDecision).To(Equal(ready.PromotionDecision))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("promotion_report_uri = @promotion_report_uri"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("promotion_decision = @promotion_decision"))
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusEvaluated.String()))
 			Expect(args).To(HaveKeyWithValue("promotion_report_uri", ready.PromotionReportURI))
 			Expect(args).To(HaveKeyWithValue("promotion_deltas", ready.PromotionDeltas))
+			Expect(args).To(HaveKeyWithValue("promotion_decision", ready.PromotionDecision))
 		})
 	})
 })
@@ -438,6 +448,7 @@ func newModelRow(modelRecord *model.Model) modelRow {
 		MetricsMetadata:    modelRecord.MetricsMetadata,
 		PromotionReportURI: modelRecord.PromotionReportURI,
 		PromotionDeltas:    withDefaultJSONForTest(modelRecord.PromotionDeltas),
+		PromotionDecision:  modelRecord.PromotionDecision,
 		Status:             modelRecord.Status.String(),
 		FailureReason:      modelRecord.FailureReason,
 	}

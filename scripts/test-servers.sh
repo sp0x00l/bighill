@@ -3,6 +3,7 @@
 BIGHILL_ROOT=$(pwd)
 
 . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
+. $BIGHILL_ROOT/database/scripts/config.sh $1
 . $BIGHILL_ROOT/api_gateway/scripts/config.sh
 
 cd $BIGHILL_ROOT/ingestion_service/

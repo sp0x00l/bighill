@@ -15,7 +15,6 @@ import (
 	ingestionadapter "ingestion_service/pkg/infra/network/adapter"
 	ingestionmessaging "ingestion_service/pkg/infra/network/messaging"
 	resthandler "ingestion_service/pkg/infra/network/rest"
-	restsupport "ingestion_service/pkg/infra/network/restsupport"
 	"ingestion_service/pkg/infra/repo/bucket"
 	repo "ingestion_service/pkg/infra/repo/db"
 	ingestionpb "lib/data_contracts_lib/ingestion"
@@ -227,7 +226,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 
 		Expect(response).To(BeNil())
 		Expect(err).To(MatchError("No valid dataset found for upload"))
-		var httpErr *restsupport.HTTPError
+		var httpErr *resthandler.HTTPError
 		Expect(errors.As(err, &httpErr)).To(BeTrue())
 		Expect(noDatasetUploadedEvent(ctx, brokers, topic, datasetID, 1500*time.Millisecond)).To(BeTrue())
 	})

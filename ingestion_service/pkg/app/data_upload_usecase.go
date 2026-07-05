@@ -110,6 +110,7 @@ func NewDataUploadUseCase(bucket BlobRepositoryAdapter, opts ...DataUploadOption
 // transactional outbox when configured.
 func (u *dataUploadUseCase) UploadFile(ctx context.Context, upload *model.DataFile) (err error) {
 	log.Trace("DataUploadUseCase UploadFile")
+
 	var attrs []attribute.KeyValue
 	if upload != nil {
 		attrs = append(attrs,
@@ -134,6 +135,7 @@ func (u *dataUploadUseCase) UploadFile(ctx context.Context, upload *model.DataFi
 
 func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request model.InitiateUploadSessionRequest) (result *model.InitiatedUploadSession, err error) {
 	log.Trace("DataUploadUseCase InitiateUploadSession")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "ingestion_service/app", "data_upload.initiate_upload_session",
 		attribute.String("dataset_id", request.DatasetID.String()),
 		attribute.String("user_id", request.UserID.String()),
@@ -186,6 +188,7 @@ func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request m
 
 func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, request model.InitiateModelUploadSessionRequest) (result *model.InitiatedUploadSession, err error) {
 	log.Trace("DataUploadUseCase InitiateModelUploadSession")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "ingestion_service/app", "model_upload.initiate_upload_session",
 		attribute.String("resource_id", request.ResourceID.String()),
 		attribute.String("dataset_id", request.DatasetID.String()),
@@ -245,6 +248,7 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 
 func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request model.OnboardHuggingFaceModelRequest) (session *model.UploadSession, err error) {
 	log.Trace("DataUploadUseCase OnboardHuggingFaceModel")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "ingestion_service/app", "model_upload.onboard_huggingface",
 		attribute.String("resource_id", request.ResourceID.String()),
 		attribute.String("repo_id", request.RepoID),
@@ -317,6 +321,7 @@ func (u *dataUploadUseCase) CompleteModelUploadSession(ctx context.Context, requ
 
 func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request model.CompleteUploadSessionRequest, expectedResourceType model.UploadResourceType) (session *model.UploadSession, err error) {
 	log.Trace("DataUploadUseCase completeUploadSession")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "ingestion_service/app", "data_upload.complete_upload_session",
 		attribute.String("upload_id", request.UploadID.String()),
 		attribute.String("user_id", request.UserID.String()),

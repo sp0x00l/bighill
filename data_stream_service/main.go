@@ -71,7 +71,7 @@ func main() {
 			RequireClientCert: cfg.RequireClientCert,
 		},
 		QueryEngine: infra.QueryEngineConfig{
-			Mode:               env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_MODE", "registry"),
+			Mode:               env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_MODE", "hybrid"),
 			DataRoot:           env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_DATA_ROOT", "tmp/local_s3_storage"),
 			BinaryPath:         env.WithDefaultString("DATA_STREAM_SERVICE_QUERY_ENGINE_BINARY_PATH", "internal/infra/queryengine/datafusion_query_engine/target/release/datafusion_query_engine"),
 			TimeoutSec:         env.WithDefaultInt("DATA_STREAM_SERVICE_QUERY_ENGINE_TIMEOUT_SECONDS", "30"),

@@ -38,13 +38,13 @@ func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel
 		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status,
-		metrics_metadata, promotion_report_uri, promotion_deltas, status, failure_reason
+		metrics_metadata, promotion_report_uri, promotion_deltas, promotion_decision, status, failure_reason
 	) VALUES (
 		@model_id, @user_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind, @source, @source_uri, @source_metadata::jsonb,
 		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @serving_target, @serving_model, @serving_load_status,
-		@metrics_metadata::jsonb, @promotion_report_uri, @promotion_deltas::jsonb, @status, @failure_reason
+		@metrics_metadata::jsonb, @promotion_report_uri, @promotion_deltas::jsonb, @promotion_decision, @status, @failure_reason
 	)
 	RETURNING ` + modelColumns()
 
@@ -178,13 +178,14 @@ func (r *ModelRepository) UpdateServingStatus(ctx context.Context, tx pgx.Tx, mo
 	return modelRecord, true, nil
 }
 
-func (r *ModelRepository) UpdatePromotionDecision(ctx context.Context, tx pgx.Tx, modelID uuid.UUID, status model.ModelStatus, promotionReportURI string, promotionDeltas string, failureReason string) (*model.Model, error) {
+func (r *ModelRepository) UpdatePromotionDecision(ctx context.Context, tx pgx.Tx, modelID uuid.UUID, status model.ModelStatus, promotionReportURI string, promotionDeltas string, promotionDecision string, failureReason string) (*model.Model, error) {
 	log.Trace("ModelRepository UpdatePromotionDecision")
 
 	query := `UPDATE ` + r.Name + `.models
 		SET status = @status,
 			promotion_report_uri = @promotion_report_uri,
 			promotion_deltas = @promotion_deltas::jsonb,
+			promotion_decision = @promotion_decision,
 			failure_reason = @failure_reason
 		WHERE model_id = @model_id
 		RETURNING ` + modelColumns()
@@ -193,6 +194,7 @@ func (r *ModelRepository) UpdatePromotionDecision(ctx context.Context, tx pgx.Tx
 		"status":               status.String(),
 		"promotion_report_uri": promotionReportURI,
 		"promotion_deltas":     withDefaultJSON(promotionDeltas),
+		"promotion_decision":   promotionDecision,
 		"failure_reason":       failureReason,
 	}))
 	if err != nil {
@@ -238,6 +240,7 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 		"metrics_metadata":     registeredModel.MetricsMetadata,
 		"promotion_report_uri": registeredModel.PromotionReportURI,
 		"promotion_deltas":     withDefaultJSON(registeredModel.PromotionDeltas),
+		"promotion_decision":   registeredModel.PromotionDecision,
 		"status":               registeredModel.Status.String(),
 		"failure_reason":       registeredModel.FailureReason,
 	}
@@ -264,7 +267,7 @@ func modelColumns() string {
 		model_kind::text, source::text, source_uri, source_metadata::text, name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status::text,
-		metrics_metadata::text, promotion_report_uri, promotion_deltas::text, status::text, failure_reason`
+		metrics_metadata::text, promotion_report_uri, promotion_deltas::text, promotion_decision, status::text, failure_reason`
 }
 
 func scanModel(row pgx.Row) (*model.Model, error) {
@@ -295,6 +298,7 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 		&modelRecord.MetricsMetadata,
 		&modelRecord.PromotionReportURI,
 		&modelRecord.PromotionDeltas,
+		&modelRecord.PromotionDecision,
 		&statusRaw,
 		&modelRecord.FailureReason,
 	); err != nil {

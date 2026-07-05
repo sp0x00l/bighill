@@ -34,6 +34,7 @@ type modelRepositoryStub struct {
 	failure            string
 	promotionReportURI string
 	promotionDeltas    string
+	promotionDecision  string
 	servingKey         uuid.UUID
 	createErr          error
 	readErr            error
@@ -81,15 +82,17 @@ func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _
 	return s.readModel, true, s.updateErr
 }
 
-func (s *modelRepositoryStub) UpdatePromotionDecision(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, promotionReportURI string, promotionDeltas string, failureReason string) (*model.Model, error) {
+func (s *modelRepositoryStub) UpdatePromotionDecision(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, promotionReportURI string, promotionDeltas string, promotionDecision string, failureReason string) (*model.Model, error) {
 	s.status = status
 	s.promotionReportURI = promotionReportURI
 	s.promotionDeltas = promotionDeltas
+	s.promotionDecision = promotionDecision
 	s.failure = failureReason
 	if s.readModel != nil {
 		s.readModel.Status = status
 		s.readModel.PromotionReportURI = promotionReportURI
 		s.readModel.PromotionDeltas = promotionDeltas
+		s.readModel.PromotionDecision = promotionDecision
 		s.readModel.FailureReason = failureReason
 	}
 	return s.readModel, s.updateErr
@@ -218,6 +221,8 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
+		Expect(result.PromotionDecision).To(ContainSubstring("PROMOTION_ACCEPTED"))
+		Expect(result.FailureReason).To(BeEmpty())
 		Expect(repo.status).To(Equal(model.ModelStatusEvaluated))
 		Expect(deployer.servedModel).To(Equal(result))
 	})
@@ -242,6 +247,8 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
 		Expect(repo.promotionReportURI).To(Equal("s3://local-dev-bucket/promotion/model.json"))
 		Expect(repo.promotionDeltas).To(MatchJSON(`{}`))
+		Expect(repo.promotionDecision).To(ContainSubstring("PROMOTION_ACCEPTED"))
+		Expect(result.FailureReason).To(BeEmpty())
 		Expect(deployer.servedModel).To(Equal(result))
 	})
 
@@ -294,7 +301,8 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal(model.ModelStatusFailed))
-		Expect(result.FailureReason).To(ContainSubstring("PROMOTION_REJECTED"))
+		Expect(result.PromotionDecision).To(ContainSubstring("PROMOTION_REJECTED"))
+		Expect(result.FailureReason).To(Equal("evidently evidence requires champion and candidate score_rows_uri"))
 		Expect(deployer.servedModel).To(BeNil())
 	})
 
@@ -314,6 +322,8 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal(model.ModelStatusEvaluated))
+		Expect(result.PromotionDecision).To(ContainSubstring("PROMOTION_ACCEPTED"))
+		Expect(result.FailureReason).To(BeEmpty())
 		Expect(deployer.servedModel).To(Equal(result))
 	})
 
@@ -334,7 +344,8 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal(model.ModelStatusFailed))
-		Expect(result.FailureReason).To(ContainSubstring("PROMOTION_REJECTED"))
+		Expect(result.PromotionDecision).To(ContainSubstring("PROMOTION_REJECTED"))
+		Expect(result.FailureReason).To(ContainSubstring("candidate metric faithfulness regressed"))
 		Expect(deployer.servedModel).To(BeNil())
 	})
 

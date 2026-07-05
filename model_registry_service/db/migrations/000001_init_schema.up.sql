@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     metrics_metadata jsonb NOT NULL,
     promotion_report_uri text NOT NULL DEFAULT '',
     promotion_deltas jsonb NOT NULL DEFAULT '{}'::jsonb,
+    promotion_decision text NOT NULL DEFAULT '',
     status model_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),

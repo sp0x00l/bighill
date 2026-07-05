@@ -218,6 +218,10 @@ gather_kafka_topics() {
     # shellcheck disable=SC1091
     . "$PROJECT_ROOT/shared_lib/scripts/config.sh" "$ENV_NAME"
   fi
+  if [ -f "$PROJECT_ROOT/database/scripts/config.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$PROJECT_ROOT/database/scripts/config.sh" "$ENV_NAME"
+  fi
 
   expand_kafka_topic_template() {
     local TOPIC_TEMPLATE="$1"

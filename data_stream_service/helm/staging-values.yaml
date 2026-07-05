@@ -26,7 +26,7 @@ env:
   flightTlsKeyPath: ""
   flightTlsClientCaCertPath: ""
   flightTlsRequireClientCert: "false"
-  queryEngineMode: "registry"
+  queryEngineMode: "hybrid"
   queryEngineDataRoot: "tmp/local_s3_storage"
   queryEngineBinaryPath: "internal/infra/queryengine/datafusion_query_engine/target/release/datafusion_query_engine"
   queryEngineTimeoutSeconds: "30"

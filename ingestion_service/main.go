@@ -9,7 +9,6 @@ import (
 	ingestionadapter "ingestion_service/pkg/infra/network/adapter"
 	ingestionmessaging "ingestion_service/pkg/infra/network/messaging"
 	"ingestion_service/pkg/infra/network/rest"
-	coreRest "ingestion_service/pkg/infra/network/restsupport"
 	"ingestion_service/pkg/infra/repo/bucket"
 	"ingestion_service/pkg/infra/repo/db"
 	authProvider "lib/shared_lib/auth"
@@ -253,7 +252,7 @@ func main() {
 
 	log.Infof("%s API HTTP port: %d", serviceName, cfg.HTTPPort)
 
-	restService := coreRest.NewService(routes, cfg.HTTPPort, serviceName)
+	restService := rest.NewService(routes, cfg.HTTPPort, serviceName)
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck().WithDatabaseCheck().WithMessageBrokerCheck()
 
