@@ -196,6 +196,44 @@ var _ = Describe("RayExecutor", func() {
 		Expect(err).To(MatchError(ContainSubstring("ray job failed: container exited")))
 	})
 
+	It("stops the Ray job when the activity context is canceled", func() {
+		stopCalled := false
+		statusCalls := 0
+		ctx, cancel := context.WithCancel(context.Background())
+		ray, err := executor.NewRayExecutorWithClient(rayConfig(), &manifestReaderStub{}, &http.Client{
+			Transport: executorRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch req.Method + " " + req.URL.Path {
+				case "GET /api/jobs/train-cancel-hash":
+					statusCalls++
+					if statusCalls == 1 {
+						return response(http.StatusNotFound, ""), nil
+					}
+					cancel()
+					return response(http.StatusOK, `{"status":"RUNNING"}`), nil
+				case "POST /api/jobs/":
+					return response(http.StatusOK, `{"job_id":"train-cancel-hash"}`), nil
+				case "POST /api/jobs/train-cancel-hash/stop":
+					stopCalled = true
+					return response(http.StatusOK, `{}`), nil
+				default:
+					Fail("unexpected request " + req.Method + " " + req.URL.Path)
+					return nil, nil
+				}
+			}),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		artifact, err := ray.RunTrainingJob(ctx, model.TrainingJobSpec{
+			TrainingRunID:       "run-cancel",
+			ArtifactManifestURI: "s3://models/run-cancel/artifact.json",
+			SubmissionID:        "train-cancel-hash",
+		})
+
+		Expect(artifact).To(BeNil())
+		Expect(err).To(HaveOccurred())
+		Expect(stopCalled).To(BeTrue())
+	})
+
 	It("runs evaluation jobs and reads the report manifest", func() {
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://evals/run-4.json": `{"training_run_id":"run-4","report_uri":"s3://evals/run-4.json","passed":true}`,

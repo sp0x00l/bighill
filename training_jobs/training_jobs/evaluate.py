@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
 from training_jobs.config import read_storage_config
 from training_jobs.manifest import EvaluationReportManifest, parse_profile
+from training_jobs.process import run_child
 from training_jobs.promotion_report import add_promotion_evidence
 from training_jobs.storage import StorageConfig
 from training_jobs.storage import artifact_info, read_json_bytes, write_json_bytes
@@ -100,9 +100,9 @@ def run_external_evaluator(command: str, report_path: Path, model_uri: str, prof
     env["TRAINING_EVALUATION_REPORT_PATH"] = str(report_path)
     env["TRAINING_MODEL_URI"] = model_uri
     env["TRAINING_EVALUATION_PROFILE_JSON"] = json.dumps(profile, sort_keys=True)
-    completed = subprocess.run(argv, env=env, cwd=str(report_path.parent), check=False)
-    if completed.returncode != 0:
-        raise RuntimeError(f"evaluation command exited with status {completed.returncode}")
+    returncode = run_child(argv, env=env, cwd=report_path.parent)
+    if returncode != 0:
+        raise RuntimeError(f"evaluation command exited with status {returncode}")
     if not report_path.is_file():
         raise RuntimeError(f"evaluation command did not write {report_path}")
     report = json.loads(report_path.read_text(encoding="utf-8"))

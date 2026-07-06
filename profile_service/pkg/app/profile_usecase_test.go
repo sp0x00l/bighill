@@ -2,13 +2,17 @@ package usecase_test
 
 import (
 	"context"
+	"errors"
 	sharedclock "lib/shared_lib/clock"
+	msgConn "lib/shared_lib/messaging"
+	shareduow "lib/shared_lib/uow"
 	"time"
 
 	usecase "profile_service/pkg/app"
 	"profile_service/pkg/domain"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -24,9 +28,15 @@ type passwordProfileDBStub struct {
 	huggingFaceCiphertext   string
 	savedProfileAccount     *domain.ProfileAccount
 	savedIdempotencyKey     uuid.UUID
+	updatedPasswordHash     string
+	updatePasswordCalled    bool
+	order                   *[]string
 }
 
 func (s *passwordProfileDBStub) Save(_ context.Context, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
+	return s.SaveTx(context.Background(), nil, profile, idempotencyKey)
+}
+func (s *passwordProfileDBStub) SaveTx(_ context.Context, _ pgx.Tx, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
 	copy := *profile
 	s.savedProfileAccount = &copy
 	s.savedIdempotencyKey = idempotencyKey
@@ -35,14 +45,28 @@ func (s *passwordProfileDBStub) Save(_ context.Context, profile *domain.ProfileA
 func (s *passwordProfileDBStub) Update(context.Context, uuid.UUID, *domain.Profile) (*domain.Profile, error) {
 	return nil, nil
 }
+func (s *passwordProfileDBStub) UpdateTx(context.Context, pgx.Tx, uuid.UUID, *domain.Profile) (*domain.Profile, error) {
+	return nil, nil
+}
 func (s *passwordProfileDBStub) UpdateHuggingFaceToken(_ context.Context, _ uuid.UUID, ciphertext string) (*domain.Profile, error) {
+	return s.UpdateHuggingFaceTokenTx(context.Background(), nil, uuid.Nil, ciphertext)
+}
+func (s *passwordProfileDBStub) UpdateHuggingFaceTokenTx(_ context.Context, _ pgx.Tx, _ uuid.UUID, ciphertext string) (*domain.Profile, error) {
 	s.huggingFaceCiphertext = ciphertext
 	return s.huggingFaceTokenProfile, nil
 }
-func (s *passwordProfileDBStub) UpdatePassword(context.Context, uuid.UUID, string) error {
+func (s *passwordProfileDBStub) UpdatePassword(_ context.Context, _ uuid.UUID, passwordHash string) error {
+	s.updatePasswordCalled = true
+	s.updatedPasswordHash = passwordHash
+	if s.order != nil {
+		*s.order = append(*s.order, "update-password")
+	}
 	return nil
 }
 func (s *passwordProfileDBStub) VerifyEmail(context.Context, string) (*domain.Profile, error) {
+	return s.VerifyEmailTx(context.Background(), nil, "")
+}
+func (s *passwordProfileDBStub) VerifyEmailTx(context.Context, pgx.Tx, string) (*domain.Profile, error) {
 	if s.verifyTokenErr != nil {
 		return nil, s.verifyTokenErr
 	}
@@ -51,6 +75,9 @@ func (s *passwordProfileDBStub) VerifyEmail(context.Context, string) (*domain.Pr
 	return &profile, nil
 }
 func (s *passwordProfileDBStub) Read(context.Context, uuid.UUID) (*domain.Profile, error) {
+	return nil, nil
+}
+func (s *passwordProfileDBStub) ReadTx(context.Context, pgx.Tx, uuid.UUID) (*domain.Profile, error) {
 	return nil, nil
 }
 func (s *passwordProfileDBStub) ReadByVerifyToken(context.Context, string) (*domain.Profile, error) {
@@ -68,17 +95,40 @@ func (s *passwordProfileDBStub) ReadProfileIDByEmail(context.Context, string) (u
 func (s *passwordProfileDBStub) CreateOAuthProfile(context.Context, domain.OAuthIdentity, string) (uuid.UUID, error) {
 	return uuid.Nil, nil
 }
+func (s *passwordProfileDBStub) CreateOAuthProfileTx(context.Context, pgx.Tx, domain.OAuthIdentity, string) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
 func (s *passwordProfileDBStub) SaveOAuthIdentity(context.Context, uuid.UUID, domain.OAuthIdentity) error {
 	return nil
 }
+func (s *passwordProfileDBStub) SaveOAuthIdentityTx(context.Context, pgx.Tx, uuid.UUID, domain.OAuthIdentity) error {
+	return nil
+}
 func (s *passwordProfileDBStub) Delete(context.Context, uuid.UUID) error {
+	return s.DeleteTx(context.Background(), nil, uuid.Nil)
+}
+func (s *passwordProfileDBStub) DeleteTx(context.Context, pgx.Tx, uuid.UUID) error {
 	s.deleteCalled = true
 	return nil
 }
 
-type noopUserPublisher struct{}
+type recordingProfileUnitOfWork struct {
+	messages []shareduow.OutboundMessage
+	called   bool
+}
 
-type recordingUserPublisher struct {
+func (u *recordingProfileUnitOfWork) Do(ctx context.Context, fn shareduow.TxFunc) error {
+	u.called = true
+	return fn(ctx, nil, func(message shareduow.OutboundMessage) error {
+		u.messages = append(u.messages, message)
+		return nil
+	})
+}
+
+type noopUserEventBuilder struct{}
+
+type recordingUserEventBuilder struct {
+	createdProfile *domain.ProfileAccount
 	updatedProfile *domain.Profile
 	deletedUserID  uuid.UUID
 }
@@ -94,25 +144,38 @@ func (s *encryptorStub) Encrypt(_ context.Context, plaintext string) (string, er
 	return s.nextCiphertext, s.nextErr
 }
 
-func (n *noopUserPublisher) PublishUserCreatedEvent(context.Context, *domain.ProfileAccount) error {
-	return nil
+func (n *noopUserEventBuilder) UserCreatedMessage(profile *domain.ProfileAccount) shareduow.OutboundMessage {
+	return testOutboundMessage(msgConn.MsgTypeUserCreated, profile.ID)
 }
-func (n *noopUserPublisher) PublishUserUpdatedEvent(context.Context, *domain.Profile) error {
-	return nil
+func (n *noopUserEventBuilder) UserUpdatedMessage(profile *domain.Profile) shareduow.OutboundMessage {
+	return testOutboundMessage(msgConn.MsgTypeUserUpdated, profile.ID)
 }
-func (n *noopUserPublisher) PublishUserDeletedEvent(context.Context, uuid.UUID) error {
-	return nil
+func (n *noopUserEventBuilder) UserDeletedMessage(userID uuid.UUID) shareduow.OutboundMessage {
+	return testOutboundMessage(msgConn.MsgTypeUserDeleted, userID)
 }
-func (r *recordingUserPublisher) PublishUserCreatedEvent(context.Context, *domain.ProfileAccount) error {
-	return nil
+func (r *recordingUserEventBuilder) UserCreatedMessage(profile *domain.ProfileAccount) shareduow.OutboundMessage {
+	r.createdProfile = profile
+	return testOutboundMessage(msgConn.MsgTypeUserCreated, profile.ID)
 }
-func (r *recordingUserPublisher) PublishUserUpdatedEvent(_ context.Context, profile *domain.Profile) error {
+func (r *recordingUserEventBuilder) UserUpdatedMessage(profile *domain.Profile) shareduow.OutboundMessage {
 	r.updatedProfile = profile
-	return nil
+	return testOutboundMessage(msgConn.MsgTypeUserUpdated, profile.ID)
 }
-func (r *recordingUserPublisher) PublishUserDeletedEvent(_ context.Context, userID uuid.UUID) error {
+func (r *recordingUserEventBuilder) UserDeletedMessage(userID uuid.UUID) shareduow.OutboundMessage {
 	r.deletedUserID = userID
-	return nil
+	return testOutboundMessage(msgConn.MsgTypeUserDeleted, userID)
+}
+
+func testOutboundMessage(msgType msgConn.MsgType, resourceKey uuid.UUID) shareduow.OutboundMessage {
+	return shareduow.OutboundMessage{
+		Topic: "profile",
+		Message: msgConn.Message{
+			ResourceKey: resourceKey,
+			MsgType:     msgType,
+			Payload:     []byte("payload"),
+		},
+		DispatchKey: msgType.String() + ":" + resourceKey.String(),
+	}
 }
 
 type passwordAuthProviderStub struct {
@@ -129,11 +192,22 @@ func (s *passwordAuthProviderStub) Validate(context.Context, string) (map[string
 
 type passwordAuthStoreStub struct {
 	createSessionCalled bool
+	revokeErr           error
+	revokedUserID       string
+	revokedAfter        int64
+	order               *[]string
 }
 
-func (s *passwordAuthStoreStub) RevokeToken(context.Context, string, int64) error         { return nil }
-func (s *passwordAuthStoreStub) IsRevoked(context.Context, string) (bool, error)          { return false, nil }
-func (s *passwordAuthStoreStub) SetUserRevokedAfter(context.Context, string, int64) error { return nil }
+func (s *passwordAuthStoreStub) RevokeToken(context.Context, string, int64) error { return nil }
+func (s *passwordAuthStoreStub) IsRevoked(context.Context, string) (bool, error)  { return false, nil }
+func (s *passwordAuthStoreStub) SetUserRevokedAfter(_ context.Context, userID string, revokedAfter int64) error {
+	s.revokedUserID = userID
+	s.revokedAfter = revokedAfter
+	if s.order != nil {
+		*s.order = append(*s.order, "revoke")
+	}
+	return s.revokeErr
+}
 func (s *passwordAuthStoreStub) GetUserRevokedAfter(context.Context, string) (int64, error) {
 	return 0, nil
 }
@@ -147,11 +221,13 @@ func (s *passwordAuthStoreStub) CreateSession(context.Context, string, int64) er
 	return nil
 }
 
-func newProfilesUseCaseForTest(repo usecase.ProfileDB, publisher usecase.UserEventPublisher, store *passwordAuthStoreStub, provider *passwordAuthProviderStub, opts ...usecase.ProfilesUseCaseOption) usecase.ProfilesUseCase {
+func newProfilesUseCaseForTest(repo usecase.ProfileDB, builder usecase.UserEventBuilderAdapter, store *passwordAuthStoreStub, provider *passwordAuthProviderStub, opts ...usecase.ProfilesUseCaseOption) usecase.ProfilesUseCase {
+	options := append([]usecase.ProfilesUseCaseOption{usecase.WithProfileClock(sharedclock.System{})}, opts...)
 	return usecase.NewProfilesUseCase(
 		usecase.ProfilesUseCaseDeps{
 			ProfilesRepository: repo,
-			MsgPublisher:       publisher,
+			UnitOfWork:         &recordingProfileUnitOfWork{},
+			EventBuilder:       builder,
 			AuthStore:          store,
 			AuthProvider:       provider,
 		},
@@ -159,7 +235,7 @@ func newProfilesUseCaseForTest(repo usecase.ProfileDB, publisher usecase.UserEve
 			AuthExpirationInMinutes: 15,
 			EmailValidationTTL:      60 * time.Minute,
 		},
-		append(opts, usecase.WithProfileClock(sharedclock.System{}))...,
+		options...,
 	)
 }
 
@@ -173,7 +249,7 @@ var _ = Describe("profilesUseCase VerifyPassword", func() {
 
 		profiles := newProfilesUseCaseForTest(
 			dbStub,
-			&noopUserPublisher{},
+			&noopUserEventBuilder{},
 			authStore,
 			authProvider,
 		)
@@ -191,7 +267,7 @@ var _ = Describe("profilesUseCase CreateProfile", func() {
 		dbStub := &passwordProfileDBStub{}
 		profiles := newProfilesUseCaseForTest(
 			dbStub,
-			&noopUserPublisher{},
+			&noopUserEventBuilder{},
 			&passwordAuthStoreStub{},
 			&passwordAuthProviderStub{},
 			usecase.WithStagingTestEmailToken(true),
@@ -216,7 +292,7 @@ var _ = Describe("profilesUseCase CreateProfile", func() {
 		dbStub := &passwordProfileDBStub{}
 		profiles := newProfilesUseCaseForTest(
 			dbStub,
-			&noopUserPublisher{},
+			&noopUserEventBuilder{},
 			&passwordAuthStoreStub{},
 			&passwordAuthProviderStub{},
 			usecase.WithStagingTestEmailToken(true),
@@ -249,20 +325,65 @@ var _ = Describe("profilesUseCase VerifyEmail", func() {
 				},
 			},
 		}
-		publisher := &recordingUserPublisher{}
+		builder := &recordingUserEventBuilder{}
 
 		profiles := newProfilesUseCaseForTest(
 			dbStub,
-			publisher,
+			builder,
 			&passwordAuthStoreStub{},
 			&passwordAuthProviderStub{},
 		)
 
 		err := profiles.VerifyEmail(context.Background(), "token-1")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(publisher.updatedProfile).NotTo(BeNil())
-		Expect(publisher.updatedProfile.ID).To(Equal(userID))
-		Expect(publisher.updatedProfile.EmailVerified).To(BeTrue())
+		Expect(builder.updatedProfile).NotTo(BeNil())
+		Expect(builder.updatedProfile.ID).To(Equal(userID))
+		Expect(builder.updatedProfile.EmailVerified).To(BeTrue())
+	})
+})
+
+var _ = Describe("profilesUseCase ReplacePassword", func() {
+	It("revokes existing sessions before storing the new password hash", func() {
+		userID := uuid.New()
+		now := time.Unix(1710001234, 0).UTC()
+		order := []string{}
+		dbStub := &passwordProfileDBStub{order: &order}
+		authStore := &passwordAuthStoreStub{order: &order}
+		profiles := newProfilesUseCaseForTest(
+			dbStub,
+			&noopUserEventBuilder{},
+			authStore,
+			&passwordAuthProviderStub{},
+			usecase.WithProfileClock(sharedclock.Func(func() time.Time { return now })),
+		)
+
+		err := profiles.ReplacePassword(context.Background(), userID, "NewPassword123!")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(order).To(Equal([]string{"revoke", "update-password"}))
+		Expect(authStore.revokedUserID).To(Equal(userID.String()))
+		Expect(authStore.revokedAfter).To(Equal(now.Unix()))
+		Expect(dbStub.updatePasswordCalled).To(BeTrue())
+		Expect(dbStub.updatedPasswordHash).NotTo(BeEmpty())
+		Expect(dbStub.updatedPasswordHash).NotTo(Equal("NewPassword123!"))
+	})
+
+	It("does not store a new password when session revocation fails", func() {
+		userID := uuid.New()
+		revokeErr := errors.New("redis unavailable")
+		dbStub := &passwordProfileDBStub{}
+		authStore := &passwordAuthStoreStub{revokeErr: revokeErr}
+		profiles := newProfilesUseCaseForTest(
+			dbStub,
+			&noopUserEventBuilder{},
+			authStore,
+			&passwordAuthProviderStub{},
+		)
+
+		err := profiles.ReplacePassword(context.Background(), userID, "NewPassword123!")
+
+		Expect(errors.Is(err, revokeErr)).To(BeTrue())
+		Expect(dbStub.updatePasswordCalled).To(BeFalse())
 	})
 })
 
@@ -270,11 +391,11 @@ var _ = Describe("profilesUseCase DeleteProfile", func() {
 	It("publishes a user deleted event after successful delete", func() {
 		userID := uuid.New()
 		dbStub := &passwordProfileDBStub{}
-		publisher := &recordingUserPublisher{}
+		builder := &recordingUserEventBuilder{}
 
 		profiles := newProfilesUseCaseForTest(
 			dbStub,
-			publisher,
+			builder,
 			&passwordAuthStoreStub{},
 			&passwordAuthProviderStub{},
 		)
@@ -282,7 +403,7 @@ var _ = Describe("profilesUseCase DeleteProfile", func() {
 		err := profiles.DeleteProfile(context.Background(), userID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dbStub.deleteCalled).To(BeTrue())
-		Expect(publisher.deletedUserID).To(Equal(userID))
+		Expect(builder.deletedUserID).To(Equal(userID))
 	})
 })
 
@@ -297,13 +418,14 @@ var _ = Describe("profilesUseCase ReplaceHuggingFaceToken", func() {
 			},
 		}
 		dbStub := &passwordProfileDBStub{huggingFaceTokenProfile: updated}
-		publisher := &recordingUserPublisher{}
+		builder := &recordingUserEventBuilder{}
 		encryptor := &encryptorStub{nextCiphertext: "ciphertext-1"}
 
 		profiles := usecase.NewProfilesUseCase(
 			usecase.ProfilesUseCaseDeps{
 				ProfilesRepository: dbStub,
-				MsgPublisher:       publisher,
+				UnitOfWork:         &recordingProfileUnitOfWork{},
+				EventBuilder:       builder,
 				AuthStore:          &passwordAuthStoreStub{},
 				AuthProvider:       &passwordAuthProviderStub{},
 				SecretEncryptor:    encryptor,
@@ -320,6 +442,6 @@ var _ = Describe("profilesUseCase ReplaceHuggingFaceToken", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(encryptor.lastPlaintext).To(Equal("hf-token"))
 		Expect(dbStub.huggingFaceCiphertext).To(Equal("ciphertext-1"))
-		Expect(publisher.updatedProfile).To(Equal(updated))
+		Expect(builder.updatedProfile).To(Equal(updated))
 	})
 })

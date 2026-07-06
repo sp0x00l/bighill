@@ -14,6 +14,7 @@ import (
 	coreDB "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
+	"lib/shared_lib/lifecycle"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
 	serializers "lib/shared_lib/serializer"
@@ -24,7 +25,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -49,6 +49,7 @@ type registryConfig struct {
 	MaterializationTopics registrymessaging.MaterializationTopics
 	Catalog               catalogConfig
 	Health                healthConfig
+	Lifecycle             lifecycle.Config
 }
 
 type catalogConfig struct {
@@ -123,26 +124,6 @@ func main() {
 		log.Fatal("publisher does not support outbox relay publishing")
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
-	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
-	relayDone := make(chan struct{})
-	go func() {
-		defer close(relayDone)
-		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
-			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
-		}
-	}()
-	defer func() {
-		stopOutboxRelay()
-		<-relayDone
-		publisher.Close()
-	}()
-
-	subscriberFactories := []messagingConn.Messenger{}
-	defer func() {
-		for _, factory := range subscriberFactories {
-			_ = factory.Close(cancelCtx)
-		}
-	}()
 
 	sourceConnectorDB := db.NewSourceConnectorDB(database)
 	datasetDB := db.NewDatasetDB(database)
@@ -157,7 +138,7 @@ func main() {
 	catalogClient, tableCatalog := newCatalogAdapters(cfg.Catalog)
 	datasetEventBuilder := registrymessaging.NewDatasetEventBuilder(cfg.Topic)
 	datasetUseCase := usecase.NewDatasetUseCase(datasetDB, datasetUnitOfWork, datasetEventBuilder, usecase.WithDatasetTableCatalog(tableCatalog))
-	sourceConnectorUseCase := usecase.NewSourceUsecase(sourceConnectorDB, catalogClient)
+	sourceConnectorUseCase := usecase.NewSourceUsecase(sourceConnectorDB, datasetUnitOfWork, catalogClient)
 	connectorRestDTOAdapter := adapter.NewRestSourceConnDTOAdapter(adapter.GetConnCfgToDTOFunc, adapter.GetConnCfgFromDTOFunc, encoder)
 	filtersAdapter := adapter.NewFilterDTOAdapter()
 
@@ -173,41 +154,69 @@ func main() {
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
-		factory, monitor, err := messagingConn.StartStreamSubscriber(cancelCtx, messagingConn.StreamSubscriberConfig{
-			Brokers:          cfg.Messaging.Brokers,
-			DLQURL:           cfg.Messaging.DlqURL,
-			BaseGroupID:      cfg.Messaging.GroupID,
-			AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
-			Cancel:           cancelFtn,
-			Monitor:          healthCheck,
-			OnUnexpectedStop: func() { quit <- syscall.SIGTERM },
-		}, name, topics, configure)
-		if err != nil {
-			log.WithContext(cancelCtx).WithError(err).Fatalf("unable to create %s subscriber", name)
-		}
-		healthCheck = monitor
-		subscriberFactories = append(subscriberFactories, factory)
+	components := []lifecycle.Component{
+		lifecycle.CloserComponent("data-registry-observability", func() error {
+			traceShutdown()
+			return nil
+		}),
+		lifecycle.CloserComponent("data-registry-database", func() error {
+			datasetDB.Close()
+			return nil
+		}),
+		lifecycle.CloserComponent("data-registry-publisher", func() error {
+			publisher.Close()
+			return nil
+		}),
+		lifecycle.HealthCheckComponent("data-registry-healthcheck", healthCheck),
+		lifecycle.ServerComponent("data-registry-http", restService),
+		lifecycle.NewFuncComponent(lifecycle.ComponentConfig{
+			Name: "data-registry-grpc",
+			Start: func(context.Context) error {
+				return grpcService.Connect(cfg.GRPCPort)
+			},
+			Drain: grpcService.Shutdown,
+			Health: func() lifecycle.Health {
+				return lifecycle.Health{Name: "data-registry-grpc", State: lifecycle.StateReady, Ready: grpcService.Ready()}
+			},
+		}),
+		lifecycle.WorkerComponent("data-registry-outbox-relay", func(ctx context.Context) error {
+			if err := outboxRelay.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		}),
 	}
 
-	go func() {
-		if err := restService.Connect(); err != nil {
-			if err != http.ErrServerClosed {
-				log.Errorf("unable to start the %s rest service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
-
-	go func() {
-		if err := grpcService.Connect(cfg.GRPCPort); err != nil {
-			log.Errorf("unable to start the %s grpc service: %v", serviceName, err)
-			quit <- syscall.SIGTERM
-		}
-	}()
+	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
+		var factory messagingConn.Messenger
+		components = append(components, lifecycle.NewFuncComponent(lifecycle.ComponentConfig{
+			Name: "data-registry-subscriber-" + name,
+			Start: func(ctx context.Context) error {
+				startedFactory, monitor, err := messagingConn.StartStreamSubscriber(ctx, messagingConn.StreamSubscriberConfig{
+					Brokers:          cfg.Messaging.Brokers,
+					DLQURL:           cfg.Messaging.DlqURL,
+					BaseGroupID:      cfg.Messaging.GroupID,
+					AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
+					Cancel:           cancelFtn,
+					Monitor:          healthCheck,
+					OnUnexpectedStop: cancelFtn,
+				}, name, topics, configure)
+				if err != nil {
+					return err
+				}
+				factory = startedFactory
+				healthCheck = monitor
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			Close: func() error {
+				if factory == nil {
+					return nil
+				}
+				return factory.Close(cancelCtx)
+			},
+		}))
+	}
 
 	materializationTopics := cfg.MaterializationTopics.List()
 	startSubscriber("raw-snapshot-ready", materializationTopics, func(subscriber messagingConn.Subscriber) {
@@ -235,24 +244,11 @@ func main() {
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
 
-	go func() {
-		if err := healthCheck.Connect(ctx); err != nil {
-			if err != http.ErrServerClosed {
-				log.Errorf("unable to start health check for the %s service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
-
-	<-quit
-
-	restService.Close()
-	grpcService.Close()
-	datasetDB.Close()
-	healthCheck.Close()
-
+	supervisor := lifecycle.NewSupervisorWithConfig(cfg.Lifecycle, components...)
+	if err := supervisor.RunWithSignals(cancelCtx, syscall.SIGINT, syscall.SIGTERM); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.WithContext(cancelCtx).WithError(err).Errorf("%s service stopped with error", serviceName)
+	}
 	cancelFtn()
-	traceShutdown()
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
 
@@ -317,6 +313,11 @@ func readRegistryConfig() registryConfig {
 			MessageBrokerSubscriberMaxPollSilence:     secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS", "30"),
 			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("DATA_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
 			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("DATA_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
+		},
+		Lifecycle: lifecycle.Config{
+			ReadinessTimeout: secondsFromEnv("DATA_REGISTRY_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS", "30"),
+			DrainTimeout:     secondsFromEnv("DATA_REGISTRY_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS", "30"),
+			CloseTimeout:     secondsFromEnv("DATA_REGISTRY_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS", "10"),
 		},
 	}
 }

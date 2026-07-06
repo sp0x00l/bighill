@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	usecase "feature_materializer_service/pkg/app"
@@ -27,6 +28,7 @@ type FeatureMaterializerServer struct {
 	featurepb.UnimplementedFeatureMaterializerServiceServer
 	searchUsecase usecase.EmbeddingSearchUsecase
 	grpcServer    *grpc.Server
+	ready         atomic.Bool
 }
 
 func NewFeatureMaterializerGrpcServer(searchUsecase usecase.EmbeddingSearchUsecase) *FeatureMaterializerServer {
@@ -43,6 +45,17 @@ func NewFeatureMaterializerGrpcServer(searchUsecase usecase.EmbeddingSearchUseca
 func (s *FeatureMaterializerServer) Connect(port int) error {
 	log.Trace("FeatureMaterializerServer Connect")
 
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		log.WithError(err).WithField("port", port).Error("FeatureMaterializerServer failed to listen")
+		return fmt.Errorf("failed to open gRPC port %d: %w", port, err)
+	}
+	return s.Serve(lis)
+}
+
+func (s *FeatureMaterializerServer) Serve(lis net.Listener) error {
+	log.Trace("FeatureMaterializerServer Serve")
+
 	s.grpcServer = rpcLib.NewServer(
 		grpc.ChainUnaryInterceptor(rpcLib.MetricsUnaryServerInterceptor()),
 		grpc.ChainStreamInterceptor(rpcLib.MetricsStreamServerInterceptor()),
@@ -57,13 +70,12 @@ func (s *FeatureMaterializerServer) Connect(port int) error {
 	)
 	featurepb.RegisterFeatureMaterializerServiceServer(s.grpcServer, s)
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		log.WithError(err).WithField("port", port).Error("FeatureMaterializerServer failed to listen")
-		return fmt.Errorf("failed to open gRPC port %d: %w", port, err)
-	}
-
+	s.ready.Store(true)
+	defer s.ready.Store(false)
 	if err := s.grpcServer.Serve(lis); err != nil {
+		if errors.Is(err, grpc.ErrServerStopped) {
+			return nil
+		}
 		log.WithError(err).Error("FeatureMaterializerServer failed to serve")
 		return fmt.Errorf("failed to serve gRPC: %w", err)
 	}
@@ -76,7 +88,35 @@ func (s *FeatureMaterializerServer) Close() {
 	if s.grpcServer == nil {
 		return
 	}
+	s.ready.Store(false)
 	s.grpcServer.Stop()
+}
+
+func (s *FeatureMaterializerServer) Shutdown(ctx context.Context) error {
+	log.Trace("FeatureMaterializerServer Shutdown")
+
+	if s.grpcServer == nil {
+		return nil
+	}
+	s.ready.Store(false)
+	done := make(chan struct{})
+	go func() {
+		s.grpcServer.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		s.grpcServer.Stop()
+		return ctx.Err()
+	}
+}
+
+func (s *FeatureMaterializerServer) Ready() bool {
+	log.Trace("FeatureMaterializerServer Ready")
+
+	return s.ready.Load()
 }
 
 func (s *FeatureMaterializerServer) SearchEmbeddings(ctx context.Context, req *featurepb.SearchEmbeddingsRequest) (*featurepb.SearchEmbeddingsResponse, error) {

@@ -43,6 +43,7 @@ type stubBlobRepository struct {
 	readErr        error
 	promoteErr     error
 	deleted        bool
+	promoted       bool
 	headInfo       *model.ObjectInfo
 	prefix         []byte
 	object         []byte
@@ -97,6 +98,7 @@ func (s *stubBlobRepository) ReadStagingRange(_ context.Context, _ *model.Upload
 }
 
 func (s *stubBlobRepository) PromoteStagedObject(_ context.Context, _ *model.UploadSession, _ string) (string, error) {
+	s.promoted = true
 	if s.promotedURI == "" {
 		s.promotedURI = "s3://local-dev-bucket/raw/file.csv"
 	}
@@ -451,6 +453,29 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(repo.deleted).To(BeTrue())
 	})
 
+	It("keeps staged upload retryable when DB promotion fails after object promotion", func() {
+		object := []byte("a,b\n1,2\n")
+		expectedErr := errors.New("database unavailable")
+		repo := &stubBlobRepository{prefix: object}
+		sessions := &stubUploadSessionRepository{promoteErr: expectedErr}
+		uc := usecase.NewDataUploadUseCase(repo,
+			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
+			usecase.WithUploadFileDetector(stubDetector{format: "csv"}),
+			usecase.WithUploadPolicy(1024, time.Minute, 512),
+		)
+		uploadID := uuid.New()
+		userID := uuid.New()
+
+		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: uploadID, UserID: userID})
+
+		Expect(session).To(BeNil())
+		Expect(errors.Is(err, expectedErr)).To(BeTrue())
+		Expect(repo.promoted).To(BeTrue())
+		Expect(repo.deleted).To(BeFalse())
+		Expect(sessions.completed.StorageLocation).To(Equal("s3://local-dev-bucket/raw/file.csv"))
+	})
+
 	It("promotes large parquet staged uploads by validating both head and tail ranges", func() {
 		object := append([]byte("PAR1"), make([]byte, 6*1000*1000)...)
 		object = append(object, []byte("PAR1")...)
@@ -537,6 +562,47 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(event.Source).To(Equal("HUGGING_FACE"))
 		Expect(event.HfCommitSha).To(Equal("abc123"))
 		Expect(event.SourceMetadata).To(ContainSubstring(session.UploadID.String()))
+	})
+
+	It("keeps Hugging Face onboarding retryable when recording the promoted artifact fails", func() {
+		expectedErr := errors.New("outbox unavailable")
+		sessions := &stubUploadSessionRepository{recordErr: expectedErr}
+		unitOfWork := &stubUploadSessionUnitOfWork{}
+		downloader := &stubModelDownloader{}
+		tenants := &stubTenantRepository{tenant: &sharedDomain.Tenant{HuggingFaceTokenCiphertext: "ciphertext-1"}}
+		decryptor := &stubSecretDecryptor{token: "hf-token"}
+		uc := usecase.NewDataUploadUseCase(&stubBlobRepository{},
+			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(unitOfWork, uploadEventBuilder()),
+			usecase.WithUploadTenantsRepository(tenants),
+			usecase.WithHuggingFaceTokenDecryptor(decryptor),
+			usecase.WithModelArtifactDownloader(downloader),
+		)
+		request := model.OnboardHuggingFaceModelRequest{
+			UserID:       uuid.New(),
+			ClientNonce:  "hf-retry",
+			RepoID:       "meta-llama/Llama-3.1-8B",
+			Revision:     "main",
+			ModelName:    "llama",
+			ModelVersion: "1",
+			BaseModel:    "meta-llama/Llama-3.1-8B",
+		}
+
+		session, err := uc.OnboardHuggingFaceModel(context.Background(), request)
+
+		Expect(session).To(BeNil())
+		Expect(errors.Is(err, expectedErr)).To(BeTrue())
+		Expect(sessions.recordedModel).NotTo(BeNil())
+		failedUploadID := sessions.recordedModel.UploadID
+		Expect(unitOfWork.messages).To(BeEmpty())
+
+		sessions.recordErr = nil
+		session, err = uc.OnboardHuggingFaceModel(context.Background(), request)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(session.UploadID).To(Equal(failedUploadID))
+		Expect(session.ResourceID).To(Equal(sessions.recordedModel.ResourceID))
+		Expect(unitOfWork.messages).To(HaveLen(1))
 	})
 
 	It("rejects a staged upload when actual bytes do not match the declared format", func() {

@@ -11,6 +11,11 @@ service:
   type: ClusterIP
   healthPort: 5057
   grpcPort: 7072
+lifecycle:
+  terminationGracePeriodSeconds: 45
+  readinessTimeoutSeconds: "30"
+  drainTimeoutSeconds: "30"
+  closeTimeoutSeconds: "10"
 env:
   environment: "local-dev"
   serviceName: "feature-materializer-service"

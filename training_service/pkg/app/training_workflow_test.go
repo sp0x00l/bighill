@@ -3,6 +3,7 @@ package app_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -180,6 +181,46 @@ var _ = Describe("TrainModelWorkflow", func() {
 		Expect(result.Status).To(Equal(model.TrainingRunStatusFailed))
 		Expect(result.FailureReason).To(Equal("model evaluation failed"))
 		Expect(result.MetricsMetadata).To(MatchJSON(`{"passed":false,"report_uri":"s3://local-dev-bucket/evaluations/training-run-2.json"}`))
+	})
+
+	It("publishes a failed training fact when an activity fails", func() {
+		env := suite.NewTestWorkflowEnvironment()
+		request := model.TrainingRunRequest{
+			TrainingRunID:     "6d7adfd9-d11f-53d9-bc8d-567c73ff4307",
+			UserID:            "d3b800cb-f988-46e3-b6c7-2f5a8bf42ce6",
+			DatasetID:         "d7799a97-a188-4a9c-b73f-1546c66bbcdf",
+			DatasetVersion:    "5",
+			FeatureSnapshotID: "feature-snapshot-activity-failure",
+			ModelName:         "sentence-transformer",
+			ModelVersion:      "local-dev",
+			BaseModel:         "mistral-7b",
+		}
+		activityErr := errors.New("prepare failed")
+		var failedResult model.TrainingRunResult
+
+		env.RegisterActivityWithOptions(func(model.TrainingRunRequest) (*model.PreparedTrainingDataset, error) {
+			return nil, nil
+		}, activity.RegisterOptions{Name: app.PrepareTrainingDatasetActivity})
+		env.RegisterActivityWithOptions(func(model.TrainingRunResult) error {
+			return nil
+		}, activity.RegisterOptions{Name: app.PublishModelTrainingFailedActivity})
+		env.OnActivity(app.PrepareTrainingDatasetActivity, request).Return(nil, activityErr)
+		env.OnActivity(app.PublishModelTrainingFailedActivity, mock.MatchedBy(func(result model.TrainingRunResult) bool {
+			failedResult = result
+			return true
+		})).Return(nil)
+
+		env.ExecuteWorkflow(app.TrainModelWorkflow, request)
+
+		Expect(env.IsWorkflowCompleted()).To(BeTrue())
+		Expect(env.GetWorkflowError()).To(HaveOccurred())
+		Expect(failedResult.Status).To(Equal(model.TrainingRunStatusFailed))
+		Expect(failedResult.TrainingRunID).To(Equal(request.TrainingRunID))
+		Expect(failedResult.ModelID).To(Equal(request.TrainingRunID))
+		Expect(failedResult.UserID).To(Equal(request.UserID))
+		Expect(failedResult.DatasetID).To(Equal(request.DatasetID))
+		Expect(failedResult.FailureReason).To(ContainSubstring("prepare training dataset failed"))
+		Expect(failedResult.FailureReason).To(ContainSubstring("prepare failed"))
 	})
 
 	It("runs end to end through fake Ray submit, poll, manifests, and model event publishing", func() {

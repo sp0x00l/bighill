@@ -263,6 +263,29 @@ var _ = Describe("InferenceServer", func() {
 })
 
 var _ = Describe("FeatureMaterializerClient", func() {
+	It("accepts complete gRPC client configuration", func() {
+		err := ValidateFeatureMaterializerClientConfig(FeatureMaterializerClientConfig{
+			Address:       "feature-materializer:7072",
+			DialTimeoutMs: 500,
+			CallTimeoutMs: 15000,
+			RetryCount:    3,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	DescribeTable("rejects incomplete gRPC client configuration",
+		func(config FeatureMaterializerClientConfig, expected string) {
+			err := ValidateFeatureMaterializerClientConfig(config)
+
+			Expect(err).To(MatchError(ContainSubstring(expected)))
+		},
+		Entry("missing address", FeatureMaterializerClientConfig{DialTimeoutMs: 1, CallTimeoutMs: 1, RetryCount: 1}, "address"),
+		Entry("missing dial timeout", FeatureMaterializerClientConfig{Address: "feature-materializer:7072", CallTimeoutMs: 1, RetryCount: 1}, "dial timeout"),
+		Entry("missing call timeout", FeatureMaterializerClientConfig{Address: "feature-materializer:7072", DialTimeoutMs: 1, RetryCount: 1}, "call timeout"),
+		Entry("missing retry count", FeatureMaterializerClientConfig{Address: "feature-materializer:7072", DialTimeoutMs: 1, CallTimeoutMs: 1}, "retry count"),
+	)
+
 	It("maps search responses into retrieved contexts", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()

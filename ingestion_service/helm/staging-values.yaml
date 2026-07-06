@@ -18,7 +18,7 @@ env:
   redisAddress: "redis.bighill-staging.svc.cluster.local:6379"
   topic: "ingestion"
   dataRegistrySubscriberTopic: "data_registry"
-  dlq: "http://localhost:4566/ingestion-dev-env-queue/"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-ingestion-dlq"
   outbox: "postgres"
   authKmsKeyId: "alias/bighill-staging-jwt-signing"
   outboxRelayPollMs: "250"

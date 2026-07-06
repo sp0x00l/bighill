@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"strings"
 
+	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 	"profile_service/pkg/domain"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -129,21 +131,27 @@ func (u *profilesUseCase) CreateOAuthSession(ctx context.Context, provider strin
 	switch {
 	case err == nil:
 	case errors.Is(err, domain.ErrOAuthIdentityNotFound):
-		userID, isNewUser, err := u.findOrCreateOAuthProfile(ctx, *identity, passwordHash)
+		var isNewUser bool
+		err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+			var upsertErr error
+			userID, isNewUser, upsertErr = u.findOrCreateOAuthProfileTx(ctx, tx, *identity, passwordHash)
+			if upsertErr != nil {
+				return upsertErr
+			}
+			if err := u.profilesRepository.SaveOAuthIdentityTx(ctx, tx, userID, *identity); err != nil {
+				return err
+			}
+			if !isNewUser {
+				return nil
+			}
+			profile, err := u.profilesRepository.ReadTx(ctx, tx, userID)
+			if err != nil {
+				return err
+			}
+			return enqueue(u.eventBuilder.UserCreatedMessage(&profile.ProfileAccount))
+		})
 		if err != nil {
 			return nil, err
-		}
-		if err := u.profilesRepository.SaveOAuthIdentity(ctx, userID, *identity); err != nil {
-			return nil, err
-		}
-		if isNewUser {
-			profile, err := u.profilesRepository.Read(ctx, userID)
-			if err != nil {
-				return nil, err
-			}
-			if err := u.msgPublisher.PublishUserCreatedEvent(ctx, &profile.ProfileAccount); err != nil {
-				return nil, err
-			}
 		}
 		return u.createOAuthSession(ctx, provider, userID, isNewUser)
 	default:
@@ -160,6 +168,22 @@ func (u *profilesUseCase) findOrCreateOAuthProfile(ctx context.Context, identity
 		return userID, false, nil
 	case errors.Is(err, domain.ErrProfileNotFound):
 		userID, err = u.profilesRepository.CreateOAuthProfile(ctx, identity, passwordHash)
+		if err != nil {
+			return uuid.Nil, false, err
+		}
+		return userID, true, nil
+	default:
+		return uuid.Nil, false, err
+	}
+}
+
+func (u *profilesUseCase) findOrCreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, bool, error) {
+	userID, err := u.profilesRepository.ReadProfileIDByEmail(ctx, identity.Email)
+	switch {
+	case err == nil:
+		return userID, false, nil
+	case errors.Is(err, domain.ErrProfileNotFound):
+		userID, err = u.profilesRepository.CreateOAuthProfileTx(ctx, tx, identity, passwordHash)
 		if err != nil {
 			return uuid.Nil, false, err
 		}

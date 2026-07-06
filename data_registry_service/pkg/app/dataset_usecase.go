@@ -122,9 +122,6 @@ func (u *datasetUseCase) ReadDatasetTable(ctx context.Context, datasetID uuid.UU
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if strings.TrimSpace(snapshotID) != "" {
-		return nil, domainErrors.ErrValidationFailed.Extend("snapshot-pinned dataset table reads are not supported")
-	}
 	ctx = ctxutil.WithTenantID(ctx, userID)
 	dataset, err = u.datasetsRepository.ReadByID(ctx, datasetID, userID)
 	if err != nil {
@@ -132,6 +129,9 @@ func (u *datasetUseCase) ReadDatasetTable(ctx context.Context, datasetID uuid.UU
 	}
 	if !isQueryableDatasetTable(dataset) {
 		return nil, domainErrors.ErrValidationFailed.Extend("dataset table is not materialized")
+	}
+	if err := validateDatasetTableSnapshot(dataset, snapshotID); err != nil {
+		return nil, err
 	}
 	return dataset, nil
 }
@@ -269,4 +269,21 @@ func isQueryableDatasetTable(dataset *model.Dataset) bool {
 	return strings.TrimSpace(dataset.Location) != "" &&
 		strings.TrimSpace(dataset.TableNamespace) != "" &&
 		strings.TrimSpace(dataset.TableName) != ""
+}
+
+func validateDatasetTableSnapshot(dataset *model.Dataset, snapshotID string) error {
+	log.Trace("validateDatasetTableSnapshot")
+
+	snapshotID = strings.TrimSpace(snapshotID)
+	if snapshotID == "" {
+		return nil
+	}
+	parsed, err := uuid.Parse(snapshotID)
+	if err != nil || parsed == uuid.Nil {
+		return domainErrors.ErrValidationFailed.Extend("snapshot_id is invalid")
+	}
+	if dataset.FeatureSnapshotID == parsed || dataset.EmbeddingSnapshotID == parsed {
+		return nil
+	}
+	return domainErrors.ErrResourceNotFound.Extend("dataset snapshot was not found")
 }

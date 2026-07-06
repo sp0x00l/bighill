@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	usecase "inference_service/pkg/app"
@@ -27,6 +28,7 @@ type InferenceServer struct {
 	inferencepb.UnimplementedInferenceServiceServer
 	usecase    usecase.InferenceUsecase
 	grpcServer *grpc.Server
+	ready      atomic.Bool
 }
 
 func NewInferenceGrpcServer(usecase usecase.InferenceUsecase) *InferenceServer {
@@ -68,6 +70,8 @@ func (s *InferenceServer) Serve(lis net.Listener) error {
 	)
 	inferencepb.RegisterInferenceServiceServer(s.grpcServer, s)
 
+	s.ready.Store(true)
+	defer s.ready.Store(false)
 	if err := s.grpcServer.Serve(lis); err != nil {
 		if errors.Is(err, grpc.ErrServerStopped) {
 			return nil
@@ -84,7 +88,35 @@ func (s *InferenceServer) Close() {
 	if s.grpcServer == nil {
 		return
 	}
+	s.ready.Store(false)
 	s.grpcServer.Stop()
+}
+
+func (s *InferenceServer) Shutdown(ctx context.Context) error {
+	log.Trace("InferenceServer Shutdown")
+
+	if s.grpcServer == nil {
+		return nil
+	}
+	s.ready.Store(false)
+	done := make(chan struct{})
+	go func() {
+		s.grpcServer.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		s.grpcServer.Stop()
+		return ctx.Err()
+	}
+}
+
+func (s *InferenceServer) Ready() bool {
+	log.Trace("InferenceServer Ready")
+
+	return s.ready.Load()
 }
 
 func (s *InferenceServer) Generate(ctx context.Context, req *inferencepb.GenerateRequest) (*inferencepb.GenerateResponse, error) {

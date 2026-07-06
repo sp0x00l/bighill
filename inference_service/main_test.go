@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,26 @@ import (
 func TestInferenceMain(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Inference service main unit test suite")
+}
+
+var _ = Describe("staging Helm values", func() {
+	It("does not inherit local generation and retrieval adapters", func() {
+		values := readTextFile("helm/staging-values.yaml")
+
+		Expect(values).To(ContainSubstring(`generationProvider: "vllm"`))
+		Expect(values).To(ContainSubstring(`rerankerProvider: "tei"`))
+		Expect(values).To(ContainSubstring(`queryTransformerProvider: "self_query"`))
+		Expect(values).NotTo(ContainSubstring(`generationProvider: "deterministic"`))
+		Expect(values).NotTo(ContainSubstring(`rerankerProvider: "disabled"`))
+		Expect(values).NotTo(ContainSubstring(`queryTransformerProvider: "disabled"`))
+		Expect(values).NotTo(ContainSubstring("localhost:4566"))
+	})
+})
+
+func readTextFile(path string) string {
+	content, err := os.ReadFile(path)
+	Expect(err).NotTo(HaveOccurred())
+	return strings.TrimSpace(string(content))
 }
 
 var _ = Describe("readInferenceConfig", func() {

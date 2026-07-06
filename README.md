@@ -2,13 +2,9 @@
 
 **A self-hosted platform for building RAG and fine-tuned LLM systems.**
 
-BigHill isn't just an app — it's the platform underneath one. It's a set of Go microservices tied
-together with Temporal workflows, Kafka events, per-service Postgres databases, pgvector for
-retrieval, Ray/KubeRay for training jobs, and vLLM-style serving. Python shows up only where it
-belongs: the GPU batch jobs.
+BigHill is an ML platform consisting of a set of Go microservices tied together with Temporal workflows, Kafka events, per-service Postgres databases, pgvector for retrieval, Ray/KubeRay for training jobs, and vLLM-style serving. Python shows up only where it belongs: the GPU batch jobs.
 
-The point isn't "build a chatbot." The point is **own the whole lifecycle** — data, models,
-inference, feedback, and retraining.
+Is **own the whole lifecycle** — data, models, inference, feedback, and retraining.
 
 ---
 
@@ -26,8 +22,8 @@ The design follows the **FTI idea — Feature, Training, Inference** — but bui
 instead of a single Python app: event-driven, each service owns its own database, and long-running
 work runs as durable workflows. Kubernetes, Ray, and vLLM handle the ML runtime.
 
-The key idea: **each service owns its state, events cross between services, and workflows coordinate
-the slow steps.** That's a cleaner way to run things than most LLM repos manage.
+**Each service owns its state, events cross between services, and workflows coordinate
+the slow steps.** That's a cleaner way to run things than most LLM platforms manage.
 
 > **Heads up:** this is an emerging platform. The infrastructure is solid and well-reviewed, but some
 > pieces (multi-LoRA serving by default, the self-improving DPO loop, the full lakehouse path) are a
@@ -319,12 +315,7 @@ After that:
 
 ## Bottom line
 
-BigHill is an **emerging self-hosted platform** for RAG, fine-tuning, evaluation, serving, and
-feedback-driven improvement.
+BigHill is an **emerging** self-hosted platform for RAG, fine-tuning, evaluation, serving, and feedback-driven improvement, with service-owned state, an outbox, Temporal, Kafka, explicit contracts, clean boundaries.
+Next to the big commercial platforms it's less polished, but pretty complete, it just takes more work to run. Next to lightweight frameworks it's a far more complete system and easy to extend.
 
-It's more serious than most LLM app repos — service-owned state, an outbox, Temporal, Kafka, explicit
-contracts, clean boundaries. Next to the big commercial platforms it's less polished and more work to
-run. Next to lightweight frameworks it's a far more complete system.
-
-The value isn't "build a chatbot." It's **owning the full lifecycle of data, models, inference,
-feedback, and retraining.**
+Bighill **owns the full lifecycle of data, models, inference, feedback, and retraining.**

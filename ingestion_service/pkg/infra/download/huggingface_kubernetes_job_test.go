@@ -85,12 +85,63 @@ var _ = Describe("HuggingFaceKubernetesJobDownloader", func() {
 		Expect(reader.location).To(Equal("s3://bucket/models/" + resourceID.String() + "/manifest.json"))
 		Expect(created.GetNamespace()).To(Equal("ml-ops-test"))
 		Expect(created.GetName()).To(HavePrefix("hf-model-"))
+		Expect(created.GetAnnotations()).To(HaveKeyWithValue("bighill.io/request-hash", Not(BeEmpty())))
 		container := firstJobContainer(created)
 		Expect(container["image"]).To(Equal("training-jobs:test"))
 		Expect(container["command"]).To(Equal([]any{"python", "-m", "training_jobs.model_onboard"}))
 		env := containerEnv(container)
 		Expect(env["INGESTION_SERVICE_MODEL_RESOURCE_ID"].(map[string]any)["value"]).To(Equal(resourceID.String()))
 		Expect(env["INGESTION_SERVICE_HUGGINGFACE_TOKEN"].(map[string]any)["value"]).To(Equal("hf-token"))
+	})
+
+	It("deletes the Kubernetes Job when the download times out", func() {
+		resourceID := uuid.New()
+		reader := &stubModelManifestReader{}
+		client := fake.NewSimpleDynamicClient(kruntime.NewScheme())
+		var created *unstructured.Unstructured
+		deleted := false
+		client.PrependReactor("create", "jobs", func(action ktesting.Action) (bool, kruntime.Object, error) {
+			created = action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
+			return false, nil, nil
+		})
+		client.PrependReactor("get", "jobs", func(action ktesting.Action) (bool, kruntime.Object, error) {
+			Expect(created).NotTo(BeNil())
+			return true, created.DeepCopy(), nil
+		})
+		client.PrependReactor("delete", "jobs", func(action ktesting.Action) (bool, kruntime.Object, error) {
+			deleted = true
+			return true, nil, nil
+		})
+		downloader, err := download.NewHuggingFaceKubernetesJobDownloaderWithClient(testKubernetesDownloaderConfig(time.Millisecond, 5*time.Millisecond), reader, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = downloader.DownloadHuggingFaceModel(context.Background(), testOnboardRequest(resourceID, "main"))
+
+		Expect(err).To(MatchError(ContainSubstring("wait for hugging face download job")))
+		Expect(deleted).To(BeTrue())
+	})
+
+	It("rejects an existing Kubernetes Job with a different request hash", func() {
+		resourceID := uuid.New()
+		name := download.HuggingFaceJobName(resourceID)
+		existing := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "batch/v1",
+			"kind":       "Job",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": "ml-ops-test",
+				"annotations": map[string]any{
+					"bighill.io/request-hash": "different",
+				},
+			},
+		}}
+		client := fake.NewSimpleDynamicClient(kruntime.NewScheme(), existing)
+		downloader, err := download.NewHuggingFaceKubernetesJobDownloaderWithClient(testKubernetesDownloaderConfig(time.Millisecond, time.Second), &stubModelManifestReader{}, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = downloader.DownloadHuggingFaceModel(context.Background(), testOnboardRequest(resourceID, "main"))
+
+		Expect(err).To(MatchError(ContainSubstring("existing hugging face download job has different request hash")))
 	})
 })
 
@@ -133,4 +184,34 @@ func containerEnv(container map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+func testKubernetesDownloaderConfig(pollInterval, timeout time.Duration) download.HuggingFaceKubernetesJobDownloaderConfig {
+	return download.HuggingFaceKubernetesJobDownloaderConfig{
+		Namespace:               "ml-ops-test",
+		Image:                   "training-jobs:test",
+		ImagePullPolicy:         "IfNotPresent",
+		ServiceAccountName:      "ingestion-service",
+		Command:                 "python -m training_jobs.model_onboard",
+		OutputURI:               "s3://bucket/models",
+		TTLSecondsAfterFinished: 60,
+		BackoffLimit:            0,
+		CPU:                     "1",
+		Memory:                  "1Gi",
+		PollInterval:            pollInterval,
+		Timeout:                 timeout,
+		EnvKeys:                 testHuggingFaceJobEnvKeys(),
+	}
+}
+
+func testOnboardRequest(resourceID uuid.UUID, revision string) model.OnboardHuggingFaceModelRequest {
+	return model.OnboardHuggingFaceModelRequest{
+		ResourceID:       resourceID,
+		RepoID:           "meta-llama/Llama",
+		Revision:         revision,
+		ModelName:        "llama",
+		ModelVersion:     "1",
+		BaseModel:        "meta-llama/Llama",
+		HuggingFaceToken: "hf-token",
+	}
 }

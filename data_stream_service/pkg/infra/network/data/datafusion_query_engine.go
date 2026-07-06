@@ -2,7 +2,6 @@ package data
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	domainErrors "data_stream_service/pkg/domain"
 	"data_stream_service/pkg/infra"
@@ -10,10 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"lib/shared_lib/processrunner"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/flight"
@@ -179,41 +179,25 @@ func sqlArgs(query, dataRoot string) ([]string, error) {
 func (e *dataFusionQueryEngine) collectIPC(ctx context.Context, args []string, runLabel string) (*QueryResult, error) {
 	log.Trace("dataFusionQueryEngine collectIPC")
 
-	runCtx := ctx
-	cancel := func() {}
-	if e.timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, e.timeout)
-	}
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, e.binaryPath, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("%s: stdout pipe: %w", runLabel, err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, formatCommandError(runLabel, err, stderr.String())
-	}
-
 	var records []arrow.Record
-	schema, totalRecords, decodeErr := e.decodeIPC(stdout, nil, func(record arrow.Record) error {
-		record.Retain()
-		records = append(records, record)
-		return nil
+	var schema *arrow.Schema
+	var totalRecords int64
+	result, err := processrunner.StreamStdout(ctx, processrunner.Command{
+		Name:    e.binaryPath,
+		Args:    args,
+		Timeout: e.timeout,
+	}, func(stdout io.Reader) error {
+		var decodeErr error
+		schema, totalRecords, decodeErr = e.decodeIPC(stdout, nil, func(record arrow.Record) error {
+			record.Retain()
+			records = append(records, record)
+			return nil
+		})
+		return decodeErr
 	})
-	if decodeErr != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-	waitErr := cmd.Wait()
-	if decodeErr != nil {
+	if err != nil {
 		releaseRecords(records)
-		return nil, formatCommandError(runLabel, decodeErr, stderr.String())
-	}
-	if waitErr != nil {
-		releaseRecords(records)
-		return nil, formatCommandError(runLabel, waitErr, stderr.String())
+		return nil, formatCommandError(runLabel, err, result.Stderr)
 	}
 
 	return &QueryResult{
@@ -226,45 +210,31 @@ func (e *dataFusionQueryEngine) collectIPC(ctx context.Context, args []string, r
 func (e *dataFusionQueryEngine) streamIPC(ctx context.Context, args []string, runLabel string, outStream flight.FlightService_DoGetServer) error {
 	log.Trace("dataFusionQueryEngine streamIPC")
 
-	runCtx := ctx
-	cancel := func() {}
-	if e.timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, e.timeout)
-	}
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, e.binaryPath, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("%s: stdout pipe: %w", runLabel, err)
-	}
-	if err := cmd.Start(); err != nil {
-		return formatCommandError(runLabel, err, stderr.String())
-	}
-
 	var writer *flight.Writer
-	_, _, decodeErr := e.decodeIPC(stdout, func(schema *arrow.Schema) error {
-		writer = flight.NewRecordWriter(outStream, ipc.WithSchema(schema), ipc.WithAllocator(e.allocator))
-		return nil
-	}, func(record arrow.Record) error {
-		return writer.Write(record)
+	var decodeErr error
+	result, err := processrunner.StreamStdout(ctx, processrunner.Command{
+		Name:    e.binaryPath,
+		Args:    args,
+		Timeout: e.timeout,
+	}, func(stdout io.Reader) error {
+		_, _, decodeErr = e.decodeIPC(stdout, func(schema *arrow.Schema) error {
+			writer = flight.NewRecordWriter(outStream, ipc.WithSchema(schema), ipc.WithAllocator(e.allocator))
+			return nil
+		}, func(record arrow.Record) error {
+			return writer.Write(record)
+		})
+		return decodeErr
 	})
-	if decodeErr != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
 	if writer != nil {
 		if err := writer.Close(); decodeErr == nil && err != nil {
 			decodeErr = fmt.Errorf("close flight stream writer: %w", err)
 		}
 	}
-	waitErr := cmd.Wait()
 	if decodeErr != nil {
-		return formatCommandError(runLabel, decodeErr, stderr.String())
+		return formatCommandError(runLabel, decodeErr, result.Stderr)
 	}
-	if waitErr != nil {
-		return formatCommandError(runLabel, waitErr, stderr.String())
+	if err != nil {
+		return formatCommandError(runLabel, err, result.Stderr)
 	}
 	return nil
 }

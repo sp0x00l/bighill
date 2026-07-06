@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	usecase "data_registry_service/pkg/app"
 	domainErrors "data_registry_service/pkg/domain"
@@ -17,6 +18,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestGRPC(t *testing.T) {
@@ -286,5 +288,18 @@ var _ = Describe("DataRegistryServer", func() {
 		})
 
 		Expect(status.Code(err)).To(Equal(codes.Internal))
+	})
+
+	It("treats a stopped gRPC server as a clean shutdown", func() {
+		lis := bufconn.Listen(1024)
+		result := make(chan error, 1)
+
+		go func() {
+			result <- server.Serve(lis)
+		}()
+		time.Sleep(10 * time.Millisecond)
+		server.Close()
+
+		Eventually(result).Should(Receive(BeNil()))
 	})
 })

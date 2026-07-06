@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -41,7 +42,7 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 
 	var prepared model.PreparedTrainingDataset
 	if err := workflow.ExecuteActivity(ctx, PrepareTrainingDatasetActivity, request).Get(ctx, &prepared); err != nil {
-		return nil, err
+		return nil, publishActivityFailure(ctx, request, "prepare training dataset", err)
 	}
 
 	var artifact model.TrainedModelArtifact
@@ -58,7 +59,7 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 		},
 	})
 	if err := workflow.ExecuteActivity(runTrainingCtx, RunTrainingJobActivity, prepared, request).Get(ctx, &artifact); err != nil {
-		return nil, err
+		return nil, publishActivityFailure(ctx, request, "run training job", err)
 	}
 
 	var report model.EvaluationReport
@@ -75,7 +76,7 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 		},
 	})
 	if err := workflow.ExecuteActivity(evaluateCtx, EvaluateTrainedModelActivity, artifact, request).Get(ctx, &report); err != nil {
-		return nil, err
+		return nil, publishActivityFailure(ctx, request, "evaluate trained model", err)
 	}
 
 	result := &model.TrainingRunResult{
@@ -117,6 +118,31 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 
 	logger.Info("TrainModelWorkflow completed", "training_run_id", request.TrainingRunID, "model_uri", result.ModelURI)
 	return result, nil
+}
+
+func publishActivityFailure(ctx workflow.Context, request model.TrainingRunRequest, stage string, cause error) error {
+	failed := failedTrainingRunResult(request, fmt.Sprintf("%s failed: %v", stage, cause))
+	if err := workflow.ExecuteActivity(ctx, PublishModelTrainingFailedActivity, *failed).Get(ctx, nil); err != nil {
+		return errors.Join(cause, fmt.Errorf("publish model training failed fact: %w", err))
+	}
+	return cause
+}
+
+func failedTrainingRunResult(request model.TrainingRunRequest, reason string) *model.TrainingRunResult {
+	return &model.TrainingRunResult{
+		TrainingRunID:     request.TrainingRunID,
+		UserID:            request.UserID,
+		DatasetID:         request.DatasetID,
+		DatasetVersion:    request.DatasetVersion,
+		FeatureSnapshotID: request.FeatureSnapshotID,
+		SourceModelID:     request.SourceModelID,
+		ModelID:           request.TrainingRunID,
+		ModelName:         request.ModelName,
+		ModelVersion:      request.ModelVersion,
+		BaseModel:         request.BaseModel,
+		FailureReason:     reason,
+		Status:            model.TrainingRunStatusFailed,
+	}
 }
 
 func evaluationMetricsMetadata(report model.EvaluationReport) string {

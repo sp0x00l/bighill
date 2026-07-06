@@ -1,17 +1,17 @@
 package download
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"lib/shared_lib/processrunner"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -78,24 +78,21 @@ func NewHuggingFaceCommandDownloader(config HuggingFaceCommandDownloaderConfig) 
 func (d *HuggingFaceCommandDownloader) DownloadHuggingFaceModel(ctx context.Context, request model.OnboardHuggingFaceModelRequest) (*model.OnboardedModelArtifact, error) {
 	log.Trace("HuggingFaceCommandDownloader DownloadHuggingFaceModel")
 
-	runCtx, cancel := context.WithTimeout(ctx, d.timeout)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, d.command[0], d.command[1:]...)
-	if d.workingDirectory != "" {
-		cmd.Dir = d.workingDirectory
+	runResult, err := processrunner.Run(ctx, processrunner.Command{
+		Name:    d.command[0],
+		Args:    d.command[1:],
+		Dir:     d.workingDirectory,
+		Env:     append(os.Environ(), d.envKeys.commandEnv(request, request.HuggingFaceToken, d.outputURI)...),
+		Timeout: d.timeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: hugging face download command failed: %w: %s", domain.ErrValidationFailed, err, strings.TrimSpace(runResult.Stderr))
 	}
-	cmd.Env = append(os.Environ(), d.envKeys.commandEnv(request, request.HuggingFaceToken, d.outputURI)...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%w: hugging face download command failed: %w: %s", domain.ErrValidationFailed, err, strings.TrimSpace(stderr.String()))
-	}
-	var result huggingFaceDownloadResult
-	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+	var downloadResult huggingFaceDownloadResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(runResult.Stdout))), &downloadResult); err != nil {
 		return nil, fmt.Errorf("%w: parse hugging face download result: %w", domain.ErrValidationFailed, err)
 	}
-	return downloadResultToArtifact(request, result)
+	return downloadResultToArtifact(request, downloadResult)
 }
 
 func (k HuggingFaceJobEnvKeys) trimmed() HuggingFaceJobEnvKeys {

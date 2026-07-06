@@ -20,6 +20,7 @@ type embeddingSnapshotRepoStub struct {
 	records           []model.EmbeddingRecord
 	readyID           uuid.UUID
 	failedID          uuid.UUID
+	failedErr         error
 }
 
 func (s *embeddingSnapshotRepoStub) SavePendingEmbeddingSnapshot(_ context.Context, _ pgx.Tx, featureSnapshotID, _ uuid.UUID, _ model.EmbeddingStrategy) (*model.EmbeddingSnapshot, error) {
@@ -44,7 +45,7 @@ func (s *embeddingSnapshotRepoStub) MarkEmbeddingReady(_ context.Context, _ pgx.
 
 func (s *embeddingSnapshotRepoStub) MarkEmbeddingFailed(_ context.Context, _ pgx.Tx, embeddingSnapshotID uuid.UUID, _ string) error {
 	s.failedID = embeddingSnapshotID
-	return nil
+	return s.failedErr
 }
 
 func (s *embeddingSnapshotRepoStub) ReadEmbeddingByIdempotencyKey(context.Context, uuid.UUID) (*model.EmbeddingSnapshot, error) {
@@ -85,16 +86,6 @@ func (s embeddingWriterStub) MaterializeEmbeddings(_ context.Context, _ *model.F
 }
 
 var _ = Describe("EmbeddingMaterializationUsecase", func() {
-	It("saves pending embeddings when no writer is configured", func() {
-		repo := &embeddingSnapshotRepoStub{}
-		uc := usecase.NewEmbeddingMaterializationUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, nil, nil)
-
-		embeddingSnapshot, err := uc.MaterializeEmbeddings(context.Background(), uuid.New(), uuid.New(), model.EmbeddingStrategy{})
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(embeddingSnapshot.Status).To(Equal(model.SnapshotStatusPending))
-	})
-
 	It("materializes and marks embeddings ready", func() {
 		featureSnapshot := validFeatureSnapshot(uuid.New())
 		embeddingSnapshot := validEmbeddingSnapshot(featureSnapshot.FeatureSnapshotID)
@@ -132,6 +123,21 @@ var _ = Describe("EmbeddingMaterializationUsecase", func() {
 		Expect(errors.Is(err, expectedErr)).To(BeTrue())
 		Expect(errors.Is(err, domain.ErrEmbeddingMaterialize)).To(BeTrue())
 		Expect(repo.failedID).To(Equal(repo.embeddingSnapshot.EmbeddingSnapshotID))
+	})
+
+	It("returns the failure-state write error when marking embeddings failed is unsuccessful", func() {
+		writerErr := errors.New("embedding writer failed")
+		markErr := errors.New("mark failed")
+		featureSnapshot := validFeatureSnapshot(uuid.New())
+		repo := &embeddingSnapshotRepoStub{embeddingSnapshot: validEmbeddingSnapshot(featureSnapshot.FeatureSnapshotID), failedErr: markErr}
+		uc := usecase.NewEmbeddingMaterializationUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, featureSnapshotReaderStub{featureSnapshot: featureSnapshot}, embeddingWriterStub{err: writerErr})
+
+		result, err := uc.MaterializeEmbeddings(context.Background(), featureSnapshot.FeatureSnapshotID, uuid.New(), model.EmbeddingStrategy{})
+
+		Expect(result).To(BeNil())
+		Expect(errors.Is(err, writerErr)).To(BeTrue())
+		Expect(errors.Is(err, markErr)).To(BeTrue())
+		Expect(errors.Is(err, domain.ErrEmbeddingMaterialize)).To(BeTrue())
 	})
 })
 

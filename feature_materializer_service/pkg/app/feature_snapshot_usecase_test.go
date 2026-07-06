@@ -20,6 +20,7 @@ type featureSnapshotRepoStub struct {
 	readyID         uuid.UUID
 	failedID        uuid.UUID
 	failure         string
+	failedErr       error
 }
 
 func (s *featureSnapshotRepoStub) SavePendingFeatureSnapshot(_ context.Context, _ pgx.Tx, rawSnapshotID, _ uuid.UUID) (*model.FeatureSnapshot, error) {
@@ -40,7 +41,7 @@ func (s *featureSnapshotRepoStub) MarkFeatureReady(_ context.Context, _ pgx.Tx, 
 func (s *featureSnapshotRepoStub) MarkFeatureFailed(_ context.Context, _ pgx.Tx, featureSnapshotID uuid.UUID, reason string) error {
 	s.failedID = featureSnapshotID
 	s.failure = reason
-	return nil
+	return s.failedErr
 }
 
 func (s *featureSnapshotRepoStub) ReadFeatureByIdempotencyKey(context.Context, uuid.UUID) (*model.FeatureSnapshot, error) {
@@ -76,16 +77,6 @@ func (s featureSnapshotBuilderStub) BuildFeatureSnapshot(_ context.Context, _ *m
 }
 
 var _ = Describe("FeatureSnapshotUsecase", func() {
-	It("saves a pending feature snapshot when no builder is configured", func() {
-		repo := &featureSnapshotRepoStub{}
-		uc := usecase.NewFeatureSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, nil, nil)
-
-		featureSnapshot, err := uc.BuildFeatureSnapshot(context.Background(), uuid.New(), uuid.New())
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(featureSnapshot.Status).To(Equal(model.SnapshotStatusPending))
-	})
-
 	It("builds and marks a feature snapshot ready", func() {
 		rawSnapshot := validRawSnapshot()
 		featureSnapshot := validFeatureSnapshot(rawSnapshot.RawSnapshotID)
@@ -122,6 +113,21 @@ var _ = Describe("FeatureSnapshotUsecase", func() {
 		Expect(errors.Is(err, expectedErr)).To(BeTrue())
 		Expect(errors.Is(err, domain.ErrFeatureSnapshotBuild)).To(BeTrue())
 		Expect(repo.failedID).To(Equal(repo.featureSnapshot.FeatureSnapshotID))
+	})
+
+	It("returns the failure-state write error when marking a feature snapshot failed is unsuccessful", func() {
+		builderErr := errors.New("builder failed")
+		markErr := errors.New("mark failed")
+		rawSnapshot := validRawSnapshot()
+		repo := &featureSnapshotRepoStub{featureSnapshot: validFeatureSnapshot(rawSnapshot.RawSnapshotID), failedErr: markErr}
+		uc := usecase.NewFeatureSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, rawSnapshotReaderStub{rawSnapshot: rawSnapshot}, featureSnapshotBuilderStub{err: builderErr})
+
+		result, err := uc.BuildFeatureSnapshot(context.Background(), rawSnapshot.RawSnapshotID, uuid.New())
+
+		Expect(result).To(BeNil())
+		Expect(errors.Is(err, builderErr)).To(BeTrue())
+		Expect(errors.Is(err, markErr)).To(BeTrue())
+		Expect(errors.Is(err, domain.ErrFeatureSnapshotBuild)).To(BeTrue())
 	})
 })
 

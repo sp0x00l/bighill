@@ -4,9 +4,11 @@ import (
 	"context"
 	"data_registry_service/pkg/domain/model"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +31,7 @@ type DataRegistryServer struct {
 	datasetUsecase usecase.DatasetUsecase
 	sourceUsecase  usecase.SourceUsecase
 	grpcServer     *grpc.Server
+	ready          atomic.Bool
 }
 
 func NewDataRegistryGrpcServer(datasetUsecase usecase.DatasetUsecase, sourceUsecase usecase.SourceUsecase) *DataRegistryServer {
@@ -49,6 +52,17 @@ func NewDataRegistryGrpcServer(datasetUsecase usecase.DatasetUsecase, sourceUsec
 func (s *DataRegistryServer) Connect(port int) error {
 	log.Trace("DataRegistryServer Connect")
 
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		log.WithError(err).WithField("port", port).Error("DataRegistryServer failed to listen")
+		return fmt.Errorf("failed to open gRPC port %d: %w", port, err)
+	}
+	return s.Serve(lis)
+}
+
+func (s *DataRegistryServer) Serve(lis net.Listener) error {
+	log.Trace("DataRegistryServer Serve")
+
 	s.grpcServer = rpcLib.NewServer(
 		grpc.ChainUnaryInterceptor(rpcLib.MetricsUnaryServerInterceptor()),
 		grpc.ChainStreamInterceptor(rpcLib.MetricsStreamServerInterceptor()),
@@ -63,13 +77,12 @@ func (s *DataRegistryServer) Connect(port int) error {
 	)
 	dataregistrypb.RegisterDataRegistryServiceServer(s.grpcServer, s)
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		log.WithError(err).WithField("port", port).Error("DataRegistryServer failed to listen")
-		return fmt.Errorf("failed to open gRPC port %d: %w", port, err)
-	}
-
+	s.ready.Store(true)
+	defer s.ready.Store(false)
 	if err := s.grpcServer.Serve(lis); err != nil {
+		if errors.Is(err, grpc.ErrServerStopped) {
+			return nil
+		}
 		log.WithError(err).Error("DataRegistryServer failed to serve")
 		return fmt.Errorf("failed to serve gRPC: %w", err)
 	}
@@ -82,7 +95,35 @@ func (s *DataRegistryServer) Close() {
 	if s.grpcServer == nil {
 		return
 	}
+	s.ready.Store(false)
 	s.grpcServer.Stop()
+}
+
+func (s *DataRegistryServer) Shutdown(ctx context.Context) error {
+	log.Trace("DataRegistryServer Shutdown")
+
+	if s.grpcServer == nil {
+		return nil
+	}
+	s.ready.Store(false)
+	done := make(chan struct{})
+	go func() {
+		s.grpcServer.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		s.grpcServer.Stop()
+		return ctx.Err()
+	}
+}
+
+func (s *DataRegistryServer) Ready() bool {
+	log.Trace("DataRegistryServer Ready")
+
+	return s.ready.Load()
 }
 
 func (s *DataRegistryServer) ReadSourceConnector(ctx context.Context, req *dataregistrypb.ReadSourceConnectorRequest) (*dataregistrypb.ReadSourceConnectorResponse, error) {

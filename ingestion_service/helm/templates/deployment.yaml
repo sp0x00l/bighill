@@ -14,6 +14,7 @@ spec:
       labels:
         app: {{ include "ingestion-service.fullname" . }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds | default 45 }}
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default "ingestion-service" }}
       {{- end }}
@@ -37,6 +38,12 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: INGESTION_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
+            - name: INGESTION_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.readinessTimeoutSeconds | quote }}
+            - name: INGESTION_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.drainTimeoutSeconds | quote }}
+            - name: INGESTION_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.closeTimeoutSeconds | quote }}
             - name: INGESTION_SERVICE_API_HTTP_PORT
               value: {{ .Values.service.httpPort | quote }}
             - name: INGESTION_SERVICE_REDIS_ADDRESS

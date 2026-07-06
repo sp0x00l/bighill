@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"feature_materializer_service/pkg/domain"
@@ -54,18 +55,13 @@ func (u *rawSnapshotUsecase) MaterializeRawSnapshot(ctx context.Context, dataset
 		return nil, err
 	}
 
-	if u.writer == nil {
-		log.WithContext(ctx).WithFields(log.Fields{
-			"raw_snapshot_id": rawSnapshot.RawSnapshotID,
-			"dataset_id":      rawSnapshot.DatasetID,
-		}).Info("raw snapshot accepted for future materialization")
-		return rawSnapshot, nil
-	}
-
 	written, err := u.writer.WriteRawSnapshot(ctx, datasetFile, rawSnapshot)
 	if err != nil {
-		_ = u.markRawFailed(ctx, rawSnapshot.RawSnapshotID, err.Error())
-		return nil, fmt.Errorf("%w: %w", domain.ErrRawSnapshotMaterialize, err)
+		outErr := fmt.Errorf("%w: %w", domain.ErrRawSnapshotMaterialize, err)
+		if markErr := u.markRawFailed(ctx, rawSnapshot.RawSnapshotID, err.Error()); markErr != nil {
+			return nil, errors.Join(outErr, fmt.Errorf("mark raw snapshot failed: %w", markErr))
+		}
+		return nil, outErr
 	}
 	if written == nil {
 		return nil, fmt.Errorf("%w: raw snapshot writer returned nil", domain.ErrRawSnapshotMaterialize)

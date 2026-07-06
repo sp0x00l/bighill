@@ -295,7 +295,7 @@ var _ = Describe("SourceConnectorDB", func() {
 		pool.execRowsAffected = []int64{1}
 		idempotencyKey := uuid.New()
 
-		err := repo.Create(ctx, connector, idempotencyKey)
+		err := repo.Create(ctx, &repositoryTxStub{pool: pool}, connector, idempotencyKey)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pool.execCalled).To(BeTrue())
@@ -308,7 +308,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	It("maps duplicate connector creation to the domain conflict error", func() {
 		pool.execErrors = []error{&pgconn.PgError{Code: pgerrcode.UniqueViolation}}
 
-		err := repo.Create(ctx, connector, uuid.New())
+		err := repo.Create(ctx, &repositoryTxStub{pool: pool}, connector, uuid.New())
 
 		Expect(errors.Is(err, domainErrors.ErrResourceAlreadyExists)).To(BeTrue())
 	})
@@ -316,7 +316,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	It("maps connector tenant projection failures to validation errors", func() {
 		pool.execErrors = []error{&pgconn.PgError{Code: pgerrcode.ForeignKeyViolation}}
 
-		err := repo.Create(ctx, connector, uuid.New())
+		err := repo.Create(ctx, &repositoryTxStub{pool: pool}, connector, uuid.New())
 
 		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("tenant projection is not ready"))
@@ -399,7 +399,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	It("deletes a source connector", func() {
 		pool.execRowsAffected = []int64{1}
 
-		err := repo.Delete(ctx, connector.ID, userID)
+		err := repo.Delete(ctx, &repositoryTxStub{pool: pool}, connector.ID, userID)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pool.execCalled).To(BeTrue())
@@ -409,7 +409,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	It("returns resource-not-found when deleting a missing source connector", func() {
 		pool.execRowsAffected = []int64{0}
 
-		err := repo.Delete(ctx, connector.ID, userID)
+		err := repo.Delete(ctx, &repositoryTxStub{pool: pool}, connector.ID, userID)
 
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 	})
@@ -417,7 +417,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	It("replaces a source connector", func() {
 		pool.execRowsAffected = []int64{1}
 
-		err := repo.Replace(ctx, connector)
+		err := repo.Replace(ctx, &repositoryTxStub{pool: pool}, connector)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pool.execCalled).To(BeTrue())
@@ -429,7 +429,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	It("returns resource-not-found when replacing a missing source connector", func() {
 		pool.execRowsAffected = []int64{0}
 
-		err := repo.Replace(ctx, connector)
+		err := repo.Replace(ctx, &repositoryTxStub{pool: pool}, connector)
 
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 	})

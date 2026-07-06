@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -41,6 +43,7 @@ type Monitor struct {
 	checks     map[string]healthCheck
 	results    map[string]error
 	mutex      sync.Mutex
+	ready      atomic.Bool
 }
 
 func NewMonitor(config HealthCheckConfig) *Monitor {
@@ -98,9 +101,16 @@ func (m *Monitor) Connect(ctx context.Context) error {
 	log.Trace("Monitor Connect")
 
 	log.WithContext(ctx).Infof("health check monitor starting http listener on %s", m.httpServer.Addr)
-	err := m.httpServer.ListenAndServe()
+	listener, err := net.Listen("tcp", m.httpServer.Addr)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("HealthCheck HTTP server failed to listen")
+		return err
+	}
+	m.ready.Store(true)
+	defer m.ready.Store(false)
+	err = m.httpServer.Serve(listener)
 	if err != nil && err != http.ErrServerClosed {
-		log.WithContext(ctx).WithError(err).Fatal("HealthCheck HTTP server failed")
+		log.WithContext(ctx).WithError(err).Error("HealthCheck HTTP server failed")
 	}
 	return err
 }
@@ -110,9 +120,26 @@ func (m *Monitor) Close() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
-	if err := m.httpServer.Shutdown(ctx); err != nil {
+	if err := m.Shutdown(ctx); err != nil {
 		log.WithContext(ctx).Errorf("Monitor http server shutdown error: %v", err)
 	}
+}
+
+func (m *Monitor) Shutdown(ctx context.Context) error {
+	log.Trace("Monitor Shutdown")
+
+	m.ready.Store(false)
+	if err := m.httpServer.Shutdown(ctx); err != nil {
+		log.WithContext(ctx).Errorf("Monitor http server shutdown error: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (m *Monitor) Ready() bool {
+	log.Trace("Monitor Ready")
+
+	return m.ready.Load()
 }
 
 func (m *Monitor) WithDatabaseCheck() *Monitor {

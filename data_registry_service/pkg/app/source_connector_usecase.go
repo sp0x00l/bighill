@@ -6,9 +6,11 @@ import (
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
+	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -22,12 +24,14 @@ type SourceUsecase interface {
 
 type sourceUsecase struct {
 	sourceRepository SourceRepositoryAdapter
+	unitOfWork       SourceUnitOfWorkAdapter
 	catalogClient    CatalogClientAdapter
 }
 
-func NewSourceUsecase(sourceRepository SourceRepositoryAdapter, catalogClient CatalogClientAdapter) *sourceUsecase {
+func NewSourceUsecase(sourceRepository SourceRepositoryAdapter, unitOfWork SourceUnitOfWorkAdapter, catalogClient CatalogClientAdapter) *sourceUsecase {
 	return &sourceUsecase{
 		sourceRepository: sourceRepository,
+		unitOfWork:       unitOfWork,
 		catalogClient:    catalogClient,
 	}
 }
@@ -54,7 +58,9 @@ func (u *sourceUsecase) CreateSourceConnector(ctx context.Context, sourceConnect
 	sourceConnector.ID = id
 	sourceConnector.CatalogID = catalogID
 
-	err = u.sourceRepository.Create(ctx, sourceConnector, idempotencyKey)
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.sourceRepository.Create(ctx, tx, sourceConnector, idempotencyKey)
+	})
 	if err != nil {
 		log.WithContext(ctx).Infof("Rolling back catalog source connector. Failed to create source connector: %v", err)
 		err2 := u.catalogClient.DeleteResource(ctx, catalogID)
@@ -101,25 +107,15 @@ func (u *sourceUsecase) ReplaceSourceConnector(ctx context.Context, sourceConnec
 	}
 	sourceConnector.CatalogID = originalSourceConn.CatalogID
 
-	err = u.sourceRepository.Replace(ctx, sourceConnector)
-	if err != nil {
-		return err
-	}
-
 	name := originalSourceConn.ID.String()
 	err = u.catalogClient.ReplaceResource(ctx, name, sourceConnector.CatalogID, sourceConnector.Config)
 	if err != nil {
-		log.WithContext(ctx).Infof("Rolling back catalog data source. Failed to replace catalog data source: %v", err)
-		err2 := u.sourceRepository.Replace(ctx, originalSourceConn)
-		if err2 != nil {
-			log.WithContext(ctx).Errorf("MANUAL INTERVENTION REQUIRED: Failed to rollback source connector replacement: %v", err2)
-			return err
-		}
-
 		return err
 	}
 
-	return u.sourceRepository.Replace(ctx, sourceConnector)
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.sourceRepository.Replace(ctx, tx, sourceConnector)
+	})
 }
 
 func (u *sourceUsecase) DeleteSourceConnector(ctx context.Context, connectorID, userID uuid.UUID) (err error) {
@@ -144,7 +140,9 @@ func (u *sourceUsecase) DeleteSourceConnector(ctx context.Context, connectorID, 
 		}
 	}
 
-	err = u.sourceRepository.Delete(ctx, connectorID, userID)
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.sourceRepository.Delete(ctx, tx, connectorID, userID)
+	})
 	if err != nil {
 		log.WithContext(ctx).Errorf("Failed to delete source connector: %v", err)
 		return err

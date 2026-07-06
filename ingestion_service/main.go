@@ -17,6 +17,7 @@ import (
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	kms "lib/shared_lib/key_management"
+	"lib/shared_lib/lifecycle"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
 	"lib/shared_lib/secret"
@@ -28,7 +29,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -76,6 +76,7 @@ type ingestionConfig struct {
 	HuggingFaceJobMemory          string
 	HuggingFaceJobPollInterval    time.Duration
 	Health                        healthConfig
+	Lifecycle                     lifecycle.Config
 }
 
 type healthConfig struct {
@@ -138,26 +139,6 @@ func main() {
 		log.Fatal("publisher does not support outbox relay publishing")
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
-	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
-	relayDone := make(chan struct{})
-	go func() {
-		defer close(relayDone)
-		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
-			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
-		}
-	}()
-	defer func() {
-		stopOutboxRelay()
-		<-relayDone
-		publisher.Close()
-	}()
-
-	subscriberFactories := []messagingConn.Messenger{}
-	defer func() {
-		for _, factory := range subscriberFactories {
-			_ = factory.Close(cancelCtx)
-		}
-	}()
 
 	redisClient, err := rueidis.NewClient(cfg.Redis)
 	if err != nil {
@@ -258,34 +239,63 @@ func main() {
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck().WithDatabaseCheck().WithMessageBrokerCheck()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
-		factory, monitor, err := messagingConn.StartStreamSubscriber(cancelCtx, messagingConn.StreamSubscriberConfig{
-			Brokers:          cfg.Messaging.Brokers,
-			DLQURL:           cfg.Messaging.DlqURL,
-			BaseGroupID:      cfg.Messaging.GroupID,
-			AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
-			Cancel:           cancelFtn,
-			Monitor:          healthCheck,
-			OnUnexpectedStop: func() { quit <- syscall.SIGTERM },
-		}, name, topics, configure)
-		if err != nil {
-			log.WithContext(cancelCtx).WithError(err).Fatalf("unable to create %s subscriber", name)
-		}
-		healthCheck = monitor
-		subscriberFactories = append(subscriberFactories, factory)
+	components := []lifecycle.Component{
+		lifecycle.CloserComponent("ingestion-observability", func() error {
+			traceShutdown()
+			return nil
+		}),
+		lifecycle.CloserComponent("ingestion-database", func() error {
+			datasetDB.Close()
+			return nil
+		}),
+		lifecycle.CloserComponent("ingestion-publisher", func() error {
+			publisher.Close()
+			return nil
+		}),
+		lifecycle.CloserComponent("ingestion-redis", func() error {
+			redisClient.Close()
+			return nil
+		}),
+		lifecycle.HealthCheckComponent("ingestion-healthcheck", healthCheck),
+		lifecycle.ServerComponent("ingestion-http", restService),
+		lifecycle.WorkerComponent("ingestion-outbox-relay", func(ctx context.Context) error {
+			if err := outboxRelay.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		}),
 	}
 
-	go func() {
-		if err := restService.Connect(); err != nil {
-			if err != http.ErrServerClosed {
-				log.Fatalf("unable to start the %s rest service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
+	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
+		var factory messagingConn.Messenger
+		components = append(components, lifecycle.NewFuncComponent(lifecycle.ComponentConfig{
+			Name: "ingestion-subscriber-" + name,
+			Start: func(ctx context.Context) error {
+				startedFactory, monitor, err := messagingConn.StartStreamSubscriber(ctx, messagingConn.StreamSubscriberConfig{
+					Brokers:          cfg.Messaging.Brokers,
+					DLQURL:           cfg.Messaging.DlqURL,
+					BaseGroupID:      cfg.Messaging.GroupID,
+					AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
+					Cancel:           cancelFtn,
+					Monitor:          healthCheck,
+					OnUnexpectedStop: cancelFtn,
+				}, name, topics, configure)
+				if err != nil {
+					return err
+				}
+				factory = startedFactory
+				healthCheck = monitor
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			Close: func() error {
+				if factory == nil {
+					return nil
+				}
+				return factory.Close(cancelCtx)
+			},
+		}))
+	}
 
 	startSubscriber("dataset-created", []string{cfg.DataRegistryTopic}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, ingestionmessaging.NewDatasetCreatedEventListener(datasetUseCase))
@@ -309,23 +319,11 @@ func main() {
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
 
-	go func() {
-		if err := healthCheck.Connect(ctx); err != nil {
-			if err != http.ErrServerClosed {
-				log.Fatalf("unable to start health check for the %s service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
-
-	<-quit
-
-	datasetDB.Close()
-	restService.Close()
-	healthCheck.Close()
-
+	supervisor := lifecycle.NewSupervisorWithConfig(cfg.Lifecycle, components...)
+	if err := supervisor.RunWithSignals(cancelCtx, syscall.SIGINT, syscall.SIGTERM); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.WithContext(cancelCtx).WithError(err).Errorf("%s service stopped with error", serviceName)
+	}
 	cancelFtn()
-	traceShutdown()
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
 
@@ -415,6 +413,11 @@ func readIngestionConfig() ingestionConfig {
 			MessageBrokerSubscriberMaxPollSilence:     secondsFromEnv("INGESTION_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS", "30"),
 			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("INGESTION_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
 			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("INGESTION_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
+		},
+		Lifecycle: lifecycle.Config{
+			ReadinessTimeout: secondsFromEnv("INGESTION_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS", "30"),
+			DrainTimeout:     secondsFromEnv("INGESTION_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS", "30"),
+			CloseTimeout:     secondsFromEnv("INGESTION_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS", "10"),
 		},
 	}
 }

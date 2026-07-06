@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/apache/arrow-go/v18/arrow/flight"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
@@ -27,6 +28,8 @@ type flightServer struct {
 	config       infra.DataConfig
 	engine       QueryEngine
 	allocator    memory.Allocator
+	serveErr     chan error
+	ready        atomic.Bool
 }
 
 type closeableQueryEngine interface {
@@ -37,7 +40,7 @@ type streamingQueryEngine interface {
 	Stream(context.Context, *flight.Ticket, flight.FlightService_DoGetServer) error
 }
 
-func NewFlightServer(authHandler flight.ServerAuthHandler, config infra.DataConfig, engine QueryEngine) *flightServer {
+func NewFlightServer(authHandler flight.ServerAuthHandler, config infra.DataConfig, engine QueryEngine) (*flightServer, error) {
 	log.Trace("NewFlightServer")
 
 	if engine == nil {
@@ -47,6 +50,7 @@ func NewFlightServer(authHandler flight.ServerAuthHandler, config infra.DataConf
 		config:    config,
 		engine:    engine,
 		allocator: memory.NewGoAllocator(),
+		serveErr:  make(chan error, 1),
 	}
 
 	interceptor := flight.ServerMiddleware{
@@ -58,32 +62,59 @@ func NewFlightServer(authHandler flight.ServerAuthHandler, config infra.DataConf
 	fs.SetAuthHandler(authHandler)
 	opts, err := serverOptions(config.Server)
 	if err != nil {
-		log.WithError(err).Fatal("unable to create data stream flight server options")
+		return nil, fmt.Errorf("create data stream flight server options: %w", err)
 	}
 	opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	server := flight.NewServerWithMiddleware(mw, opts...)
 	fs.flightServer = server
-	return fs
+	return fs, nil
 }
 
-func (fs *flightServer) Connect() func() {
+func (fs *flightServer) Connect() (func(), error) {
 	log.Trace("flightServer Connect")
 
 	dest := fmt.Sprintf("%s:%d", fs.config.Server.Hostname, fs.config.Server.Port)
 
-	fs.flightServer.Init(dest)
+	if err := fs.flightServer.Init(dest); err != nil {
+		return nil, fmt.Errorf("initialize flight server: %w", err)
+	}
 	fs.flightServer.RegisterFlightService(fs)
+	fs.ready.Store(true)
 
-	go fs.flightServer.Serve()
+	go func() {
+		defer fs.ready.Store(false)
+		fs.serveErr <- fs.flightServer.Serve()
+	}()
 	log.Info("flight server listening for grpc connections on ", dest)
 	return func() {
-		fs.flightServer.Shutdown()
-		if closer, ok := fs.engine.(closeableQueryEngine); ok {
-			if err := closer.Close(); err != nil {
-				log.WithError(err).Warn("failed to close query engine")
-			}
+		_ = fs.Shutdown(context.Background())
+	}, nil
+}
+
+func (fs *flightServer) ServeError() <-chan error {
+	log.Trace("flightServer ServeError")
+
+	return fs.serveErr
+}
+
+func (fs *flightServer) Shutdown(context.Context) error {
+	log.Trace("flightServer Shutdown")
+
+	fs.ready.Store(false)
+	fs.flightServer.Shutdown()
+	if closer, ok := fs.engine.(closeableQueryEngine); ok {
+		if err := closer.Close(); err != nil {
+			log.WithError(err).Warn("failed to close query engine")
+			return err
 		}
 	}
+	return nil
+}
+
+func (fs *flightServer) Ready() bool {
+	log.Trace("flightServer Ready")
+
+	return fs.ready.Load()
 }
 
 func serverOptions(config infra.ServerConnectionConfig) ([]grpc.ServerOption, error) {

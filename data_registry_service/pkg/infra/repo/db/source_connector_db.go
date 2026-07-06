@@ -28,7 +28,7 @@ func NewSourceConnectorDB(db *coreDB.Database) *sourceConnectorDB {
 	}
 }
 
-func (db *sourceConnectorDB) Create(ctx context.Context, sourceConnector *model.SourceConnector, idempotencyKey uuid.UUID) error {
+func (db *sourceConnectorDB) Create(ctx context.Context, tx pgx.Tx, sourceConnector *model.SourceConnector, idempotencyKey uuid.UUID) error {
 	log.Trace("SourceConnectorDB Create")
 
 	sourceConnDAO, err := toSourceConnDAO(ctx, sourceConnector, idempotencyKey)
@@ -39,7 +39,7 @@ func (db *sourceConnectorDB) Create(ctx context.Context, sourceConnector *model.
 	var sqlStatement = `INSERT INTO ` + db.Name + `.connectors (id, user_id, catalog_id, storage_type, config, idempotency_key)
 	VALUES (@id,  @user_id, @catalog_id, @storage_type, @config, @idempotency_key);`
 
-	_, err = db.Pool.Exec(ctx, sqlStatement, sourceConnDAO)
+	_, err = tx.Exec(ctx, sqlStatement, sourceConnDAO)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("database error. Failed to insert connector")
 		var pgErr *pgconn.PgError
@@ -127,13 +127,13 @@ func (db *sourceConnectorDB) ReadCatalogID(ctx context.Context, connectorID, use
 	return catalogID, nil
 }
 
-func (db *sourceConnectorDB) Delete(ctx context.Context, connectorID, userID uuid.UUID) error {
+func (db *sourceConnectorDB) Delete(ctx context.Context, tx pgx.Tx, connectorID, userID uuid.UUID) error {
 	log.Trace("SourceConnectorDB Delete")
 
 	sqlStatement := `UPDATE ` + db.Name + `.connectors SET deleted = true 
 	WHERE id = @id AND user_id = @user_id AND deleted = false;`
 
-	commandTag, err := db.Pool.Exec(ctx, sqlStatement, pgx.NamedArgs{"id": connectorID, "user_id": userID})
+	commandTag, err := tx.Exec(ctx, sqlStatement, pgx.NamedArgs{"id": connectorID, "user_id": userID})
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("database error. Failed to delete connector")
 		return fmt.Errorf("database error. Failed to delete connector: %w", err)
@@ -147,7 +147,7 @@ func (db *sourceConnectorDB) Delete(ctx context.Context, connectorID, userID uui
 	return nil
 }
 
-func (db *sourceConnectorDB) Replace(ctx context.Context, sourceConnector *model.SourceConnector) error {
+func (db *sourceConnectorDB) Replace(ctx context.Context, tx pgx.Tx, sourceConnector *model.SourceConnector) error {
 	log.Trace("SourceConnectorDB Replace")
 
 	sourceConnDAO, err := toSourceConnDAO(ctx, sourceConnector, uuid.Nil)
@@ -158,7 +158,7 @@ func (db *sourceConnectorDB) Replace(ctx context.Context, sourceConnector *model
 	sqlStatement := `UPDATE ` + db.Name + `.connectors SET user_id = @user_id, catalog_id = @catalog_id, storage_type = @storage_type, config = @config
 	WHERE id = @id AND user_id = @user_id AND deleted = false;`
 
-	commandTag, err := db.Pool.Exec(ctx, sqlStatement, sourceConnDAO)
+	commandTag, err := tx.Exec(ctx, sqlStatement, sourceConnDAO)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("database error. Failed to update connector")
 		return fmt.Errorf("database error. Failed to update connector: %w", err)

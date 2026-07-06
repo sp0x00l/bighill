@@ -1,18 +1,17 @@
 package materialization
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"feature_materializer_service/pkg/domain"
 	domainmodel "feature_materializer_service/pkg/domain/model"
+	"lib/shared_lib/processrunner"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -108,13 +107,6 @@ func (w *ExternalIcebergTableWriter) WriteTable(ctx context.Context, request Ice
 		return nil, fmt.Errorf("%w: stage parquet for iceberg: %w", domain.ErrCatalogRegister, err)
 	}
 
-	runCtx := ctx
-	cancel := func() {}
-	if w.config.Timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, w.config.Timeout)
-	}
-	defer cancel()
-
 	args := []string{
 		icebergArgMode, icebergArgModeWrite,
 		icebergArgSource, icebergSourceParquet,
@@ -135,23 +127,24 @@ func (w *ExternalIcebergTableWriter) WriteTable(ctx context.Context, request Ice
 		icebergArgS3PathStyle, fmt.Sprintf("%t", w.config.S3PathStyle),
 	}
 
-	cmd := exec.CommandContext(runCtx, w.config.BinaryPath, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+	runResult, err := processrunner.Run(ctx, processrunner.Command{
+		Name:    w.config.BinaryPath,
+		Args:    args,
+		Timeout: w.config.Timeout,
+	})
 	if err != nil {
-		details := strings.TrimSpace(stderr.String())
+		details := strings.TrimSpace(runResult.Stderr)
 		if details != "" {
 			return nil, fmt.Errorf("%w: run iceberg writer: %w: %s", domain.ErrCatalogRegister, err, details)
 		}
 		return nil, fmt.Errorf("%w: run iceberg writer: %w", domain.ErrCatalogRegister, err)
 	}
 
-	var result IcebergTableWriteResult
-	if err := json.Unmarshal(output, &result); err != nil {
+	var writeResult IcebergTableWriteResult
+	if err := json.Unmarshal(runResult.Stdout, &writeResult); err != nil {
 		return nil, fmt.Errorf("%w: decode iceberg writer result: %w", domain.ErrCatalogRegister, err)
 	}
-	return &result, nil
+	return &writeResult, nil
 }
 
 func isPolarisIceberg(catalogProvider, tableFormat string) bool {

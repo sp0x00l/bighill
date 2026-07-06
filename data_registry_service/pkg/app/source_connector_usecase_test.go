@@ -7,8 +7,10 @@ import (
 	usecase "data_registry_service/pkg/app"
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
+	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -39,7 +41,7 @@ type stubSourceRepository struct {
 
 func (s *stubSourceRepository) Close() {}
 
-func (s *stubSourceRepository) Create(_ context.Context, connector *model.SourceConnector, idempotencyKey uuid.UUID) error {
+func (s *stubSourceRepository) Create(_ context.Context, _ pgx.Tx, connector *model.SourceConnector, idempotencyKey uuid.UUID) error {
 	s.createConnector = connector
 	s.createIdempotencyKey = idempotencyKey
 	return s.createErr
@@ -61,13 +63,13 @@ func (s *stubSourceRepository) ReadCatalogID(_ context.Context, connectorID, use
 	return s.readCatalogID, s.readCatalogIDErr
 }
 
-func (s *stubSourceRepository) Delete(_ context.Context, connectorID, userID uuid.UUID) error {
+func (s *stubSourceRepository) Delete(_ context.Context, _ pgx.Tx, connectorID, userID uuid.UUID) error {
 	s.deleteConnectorID = connectorID
 	s.deleteUserID = userID
 	return s.deleteErr
 }
 
-func (s *stubSourceRepository) Replace(_ context.Context, connector *model.SourceConnector) error {
+func (s *stubSourceRepository) Replace(_ context.Context, _ pgx.Tx, connector *model.SourceConnector) error {
 	s.replaceConnectors = append(s.replaceConnectors, connector)
 	if len(s.replaceErrs) > 0 {
 		err := s.replaceErrs[0]
@@ -75,6 +77,19 @@ func (s *stubSourceRepository) Replace(_ context.Context, connector *model.Sourc
 		return err
 	}
 	return s.replaceErr
+}
+
+type stubSourceUnitOfWork struct {
+	calls int
+	err   error
+}
+
+func (s *stubSourceUnitOfWork) Do(ctx context.Context, fn shareduow.TxFunc) error {
+	s.calls++
+	if s.err != nil {
+		return s.err
+	}
+	return fn(ctx, nil, func(shareduow.OutboundMessage) error { return nil })
 }
 
 type stubCatalogClient struct {
@@ -124,6 +139,7 @@ var _ = Describe("SourceUsecase", func() {
 	var (
 		ctx       context.Context
 		repo      *stubSourceRepository
+		uow       *stubSourceUnitOfWork
 		catalog   *stubCatalogClient
 		uc        usecase.SourceUsecase
 		userID    uuid.UUID
@@ -135,8 +151,9 @@ var _ = Describe("SourceUsecase", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		repo = &stubSourceRepository{}
+		uow = &stubSourceUnitOfWork{}
 		catalog = &stubCatalogClient{}
-		uc = usecase.NewSourceUsecase(repo, catalog)
+		uc = usecase.NewSourceUsecase(repo, uow, catalog)
 		userID = uuid.New()
 		catalogID = uuid.New()
 		config = &mockSourceConfig{nextSourceType: model.S3}
@@ -155,6 +172,7 @@ var _ = Describe("SourceUsecase", func() {
 		Expect(repo.createConnector.ID).NotTo(Equal(uuid.Nil))
 		Expect(repo.createConnector.CatalogID).To(Equal(catalogID))
 		Expect(repo.createIdempotencyKey).To(Equal(idempotencyKey))
+		Expect(uow.calls).To(Equal(1))
 	})
 
 	It("rolls back the catalog source when repository create fails", func() {
@@ -178,7 +196,7 @@ var _ = Describe("SourceUsecase", func() {
 		Expect(repo.readUserID).To(Equal(userID))
 	})
 
-	It("replaces the repository record and catalog resource", func() {
+	It("replaces the catalog resource before the repository record", func() {
 		connectorID := uuid.New()
 		originalConfig := &mockSourceConfig{nextSourceType: model.Postgres}
 		updatedConfig := &mockSourceConfig{nextSourceType: model.MySQL}
@@ -199,12 +217,12 @@ var _ = Describe("SourceUsecase", func() {
 		Expect(repo.readConnectorID).To(Equal(connectorID))
 		Expect(repo.readUserID).To(Equal(userID))
 		Expect(replacement.CatalogID).To(Equal(catalogID))
-		Expect(repo.replaceConnectors).To(HaveLen(2))
+		Expect(repo.replaceConnectors).To(HaveLen(1))
 		Expect(repo.replaceConnectors[0]).To(Equal(replacement))
-		Expect(repo.replaceConnectors[1]).To(Equal(replacement))
 		Expect(catalog.replaceName).To(Equal(connectorID.String()))
 		Expect(catalog.replaceCatalogID).To(Equal(catalogID))
 		Expect(catalog.replaceConfig).To(Equal(updatedConfig))
+		Expect(uow.calls).To(Equal(1))
 	})
 
 	It("returns repository read errors before replacing source connectors", func() {
@@ -219,7 +237,7 @@ var _ = Describe("SourceUsecase", func() {
 		Expect(catalog.replaceName).To(BeEmpty())
 	})
 
-	It("returns repository replace errors before replacing catalog resources", func() {
+	It("returns repository replace errors after replacing catalog resources", func() {
 		expectedErr := errors.New("replace failed")
 		connectorID := uuid.New()
 		repo.readConnector = &model.SourceConnector{ID: connectorID, UserID: userID, CatalogID: catalogID, Config: config}
@@ -229,36 +247,21 @@ var _ = Describe("SourceUsecase", func() {
 
 		Expect(err).To(MatchError(expectedErr))
 		Expect(repo.replaceConnectors).To(HaveLen(1))
-		Expect(catalog.replaceName).To(BeEmpty())
+		Expect(catalog.replaceName).To(Equal(connectorID.String()))
 	})
 
-	It("rolls back the repository record when catalog replace fails", func() {
+	It("does not replace the repository record when catalog replace fails", func() {
 		expectedErr := errors.New("catalog replace failed")
 		connectorID := uuid.New()
-		original := &model.SourceConnector{ID: connectorID, UserID: userID, CatalogID: catalogID, Config: config}
 		updatedConfig := &mockSourceConfig{nextSourceType: model.MySQL}
-		repo.readConnector = original
+		repo.readConnector = &model.SourceConnector{ID: connectorID, UserID: userID, CatalogID: catalogID, Config: config}
 		catalog.replaceErr = expectedErr
 
 		err := uc.ReplaceSourceConnector(ctx, &model.SourceConnector{ID: connectorID, UserID: userID, Config: updatedConfig})
 
 		Expect(err).To(MatchError(expectedErr))
-		Expect(repo.replaceConnectors).To(HaveLen(2))
-		Expect(repo.replaceConnectors[1]).To(Equal(original))
-	})
-
-	It("returns the catalog error when rollback also fails", func() {
-		catalogErr := errors.New("catalog replace failed")
-		connectorID := uuid.New()
-		original := &model.SourceConnector{ID: connectorID, UserID: userID, CatalogID: catalogID, Config: config}
-		repo.readConnector = original
-		repo.replaceErrs = []error{nil, errors.New("rollback failed")}
-		catalog.replaceErr = catalogErr
-
-		err := uc.ReplaceSourceConnector(ctx, &model.SourceConnector{ID: connectorID, UserID: userID, Config: config})
-
-		Expect(err).To(MatchError(catalogErr))
-		Expect(repo.replaceConnectors).To(HaveLen(2))
+		Expect(repo.replaceConnectors).To(BeEmpty())
+		Expect(uow.calls).To(Equal(0))
 	})
 
 	It("deletes the catalog source before deleting the repository record", func() {
@@ -272,6 +275,7 @@ var _ = Describe("SourceUsecase", func() {
 		Expect(catalog.deleteCatalogIDs).To(Equal([]uuid.UUID{catalogID}))
 		Expect(repo.deleteConnectorID).To(Equal(connectorID))
 		Expect(repo.deleteUserID).To(Equal(userID))
+		Expect(uow.calls).To(Equal(1))
 	})
 
 	It("continues deleting the repository record if catalog delete reports not found", func() {

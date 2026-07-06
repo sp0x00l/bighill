@@ -928,12 +928,13 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
 	})
 
-	It("returns successful generations when request audit recording fails", func() {
+	It("returns audit recording errors for otherwise successful generations", func() {
 		dataset := validInferenceDataset()
 		inferenceModel := validInferenceModel()
 		inferenceModel.UserID = dataset.UserID
 		inferenceModel.DatasetID = dataset.DatasetID
-		requestRepository := &inferenceRequestRepositoryStub{err: errors.New("audit table unavailable")}
+		auditErr := errors.New("audit table unavailable")
+		requestRepository := &inferenceRequestRepositoryStub{err: auditErr}
 		retrieval := &retrievalClientStub{contexts: []model.RetrievedContext{{
 			EmbeddingRecordID:   uuid.New(),
 			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
@@ -962,8 +963,8 @@ var _ = Describe("InferenceUsecase", func() {
 			TopK:      4,
 		})
 
-		Expect(err).NotTo(HaveOccurred())
-		Expect(response.Answer).To(Equal("generated answer"))
+		Expect(response).To(BeNil())
+		Expect(errors.Is(err, auditErr)).To(BeTrue())
 		Expect(requestRepository.request).NotTo(BeNil())
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
 		Expect(requestRepository.request.PromptText).To(ContainSubstring("retrieved context"))

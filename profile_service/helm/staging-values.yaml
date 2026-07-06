@@ -17,7 +17,7 @@ env:
   environment: "staging"
   kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
   redisAddress: "redis.bighill-staging.svc.cluster.local:6379"
-  dlq: "http://localhost:4566/profile-dev-env-queue/"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-profile-dlq"
   outbox: "postgres"
   # KMS key for JWT signing - created by Terraform
   authKmsKeyId: "alias/bighill-staging-jwt-signing"

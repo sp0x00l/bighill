@@ -28,6 +28,7 @@ type rawSnapshotRepoStub struct {
 	readyID     uuid.UUID
 	failedID    uuid.UUID
 	failure     string
+	failedErr   error
 }
 
 type snapshotUnitOfWorkStub struct {
@@ -98,7 +99,7 @@ func (s *rawSnapshotRepoStub) MarkRawReady(_ context.Context, _ pgx.Tx, rawSnaps
 func (s *rawSnapshotRepoStub) MarkRawFailed(_ context.Context, _ pgx.Tx, rawSnapshotID uuid.UUID, reason string) error {
 	s.failedID = rawSnapshotID
 	s.failure = reason
-	return nil
+	return s.failedErr
 }
 
 func (s *rawSnapshotRepoStub) ReadRawByIdempotencyKey(context.Context, uuid.UUID) (*model.RawSnapshot, error) {
@@ -122,16 +123,6 @@ func (s *rawSnapshotWriterStub) WriteRawSnapshot(_ context.Context, _ *model.Dat
 }
 
 var _ = Describe("RawSnapshotUsecase", func() {
-	It("saves a pending raw snapshot when no writer is configured", func() {
-		repo := &rawSnapshotRepoStub{}
-		uc := usecase.NewRawSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, nil)
-
-		rawSnapshot, err := uc.MaterializeRawSnapshot(context.Background(), validDatasetFile(), uuid.New())
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rawSnapshot.Status).To(Equal(model.SnapshotStatusPending))
-	})
-
 	It("writes and marks a raw snapshot ready", func() {
 		repo := &rawSnapshotRepoStub{rawSnapshot: validRawSnapshot()}
 		writer := &rawSnapshotWriterStub{}
@@ -167,6 +158,20 @@ var _ = Describe("RawSnapshotUsecase", func() {
 		Expect(errors.Is(err, domain.ErrRawSnapshotMaterialize)).To(BeTrue())
 		Expect(repo.failedID).To(Equal(repo.rawSnapshot.RawSnapshotID))
 		Expect(repo.failure).To(Equal(expectedErr.Error()))
+	})
+
+	It("returns the failure-state write error when marking a raw snapshot failed is unsuccessful", func() {
+		writerErr := errors.New("writer failed")
+		markErr := errors.New("mark failed")
+		repo := &rawSnapshotRepoStub{rawSnapshot: validRawSnapshot(), failedErr: markErr}
+		uc := usecase.NewRawSnapshotUsecase(repo, &snapshotUnitOfWorkStub{}, snapshotEventBuilderStub{}, &rawSnapshotWriterStub{err: writerErr})
+
+		rawSnapshot, err := uc.MaterializeRawSnapshot(context.Background(), validDatasetFile(), uuid.New())
+
+		Expect(rawSnapshot).To(BeNil())
+		Expect(errors.Is(err, writerErr)).To(BeTrue())
+		Expect(errors.Is(err, markErr)).To(BeTrue())
+		Expect(errors.Is(err, domain.ErrRawSnapshotMaterialize)).To(BeTrue())
 	})
 })
 

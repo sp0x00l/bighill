@@ -198,6 +198,46 @@ var _ = Describe("KubeRayExecutor", func() {
 		Expect(err).To(MatchError(ContainSubstring("kuberay job failed: pod failed")))
 	})
 
+	It("deletes the RayJob when the activity context is canceled", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		var created *unstructured.Unstructured
+		deleted := false
+		statusCalls := 0
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		client.PrependReactor("create", "rayjobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+			created = action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
+			return true, created, nil
+		})
+		client.PrependReactor("get", "rayjobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+			statusCalls++
+			if created == nil {
+				return true, nil, errors.NewNotFound(schema.GroupResource{Group: "ray.io", Resource: "rayjobs"}, action.(ktesting.GetAction).GetName())
+			}
+			out := created.DeepCopy()
+			Expect(unstructured.SetNestedField(out.Object, "RUNNING", "status", "jobStatus")).To(Succeed())
+			if statusCalls == 1 {
+				cancel()
+			}
+			return true, out, nil
+		})
+		client.PrependReactor("delete", "rayjobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+			deleted = true
+			return true, nil, nil
+		})
+		kuberay, err := executor.NewKubeRayExecutorWithClient(kubeRayConfig(), &manifestReaderStub{}, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		artifact, err := kuberay.RunTrainingJob(ctx, model.TrainingJobSpec{
+			TrainingRunID:       "run-cancel",
+			ArtifactManifestURI: "s3://models/run-cancel/artifact.json",
+			SubmissionID:        "train-cancel-hash",
+		})
+
+		Expect(artifact).To(BeNil())
+		Expect(err).To(HaveOccurred())
+		Expect(deleted).To(BeTrue())
+	})
+
 	It("sanitizes deterministic submission ids into Kubernetes names", func() {
 		name := executor.KubeRayJobName("Train_RUN_WITH_UPPERCASE_AND_SYMBOLS_" + strings.Repeat("abcdef", 20))
 

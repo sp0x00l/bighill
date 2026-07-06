@@ -8,3 +8,11 @@ service:
   healthPort: 5059
 env:
   environment: "staging"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-inference-dlq"
+  generationProvider: "vllm"
+  generationEndpoint: "http://model-serving-service:8000"
+  generationModel: "llama3.1:8b"
+  rerankerProvider: "tei"
+  rerankerUrl: "http://text-embeddings-inference-reranker:80"
+  rerankerModel: "bge-reranker-large"
+  queryTransformerProvider: "self_query"

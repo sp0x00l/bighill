@@ -13,6 +13,11 @@ service:
   type: ClusterIP
   httpPort: 8084
   healthPort: 5060
+lifecycle:
+  terminationGracePeriodSeconds: 45
+  readinessTimeoutSeconds: "30"
+  drainTimeoutSeconds: "30"
+  closeTimeoutSeconds: "10"
 ingress:
   enabled: false
   host: ""

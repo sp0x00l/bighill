@@ -29,22 +29,35 @@ var (
 
 type ProfileDB interface {
 	Save(ctx context.Context, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error
+	SaveTx(ctx context.Context, tx pgx.Tx, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error
 	Update(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error)
+	UpdateTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error)
 	UpdateHuggingFaceToken(ctx context.Context, userID uuid.UUID, ciphertext string) (*domain.Profile, error)
+	UpdateHuggingFaceTokenTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ciphertext string) (*domain.Profile, error)
 	UpdatePassword(ctx context.Context, userID uuid.UUID, newPassword string) error
 	VerifyEmail(ctx context.Context, token string) (*domain.Profile, error)
+	VerifyEmailTx(ctx context.Context, tx pgx.Tx, token string) (*domain.Profile, error)
 	Read(ctx context.Context, userID uuid.UUID) (*domain.Profile, error)
+	ReadTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (*domain.Profile, error)
 	ReadByVerifyToken(ctx context.Context, token string) (*domain.Profile, error)
 	ReadPasswordHash(ctx context.Context, email string) (uuid.UUID, string, error)
 	ReadOAuthProfileIDByProviderSubject(ctx context.Context, provider, subject string) (uuid.UUID, error)
 	ReadProfileIDByEmail(ctx context.Context, email string) (uuid.UUID, error)
 	CreateOAuthProfile(ctx context.Context, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error)
+	CreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error)
 	SaveOAuthIdentity(ctx context.Context, userID uuid.UUID, identity domain.OAuthIdentity) error
+	SaveOAuthIdentityTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, identity domain.OAuthIdentity) error
 	Delete(ctx context.Context, userID uuid.UUID) error
+	DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error
 }
 
 type profileDB struct {
 	dbConn.Database
+}
+
+type profileExecutor interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 func NewProfileDB(db *dbConn.Database) ProfileDB {
@@ -53,8 +66,23 @@ func NewProfileDB(db *dbConn.Database) ProfileDB {
 	}
 }
 
+func (db *profileDB) executor(tx pgx.Tx) profileExecutor {
+	log.Trace("ProfileDB executor")
+
+	if tx != nil {
+		return tx
+	}
+	return db.Pool
+}
+
 func (db *profileDB) Save(ctx context.Context, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
 	log.Trace("ProfileDB Save")
+
+	return db.SaveTx(ctx, nil, profileAccount, idempotencyKey)
+}
+
+func (db *profileDB) SaveTx(ctx context.Context, tx pgx.Tx, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
+	log.Trace("ProfileDB SaveTx")
 
 	dao := ToDAOProfileAccount(profileAccount)
 	dao["idempotency_key"] = pgtype.UUID{Bytes: idempotencyKey, Valid: true}
@@ -65,7 +93,7 @@ func (db *profileDB) Save(ctx context.Context, profileAccount *domain.ProfileAcc
 	VALUES (uuid_generate_v4(), @idempotency_key, @email, @phone_number, @country_code, @password_hash, @email_verified, @email_verify_token_hash, @email_verify_expires_at)
 	RETURNING id;`
 
-	err := db.Pool.QueryRow(ctx,
+	err := db.executor(tx).QueryRow(ctx,
 		sqlStatementProfile,
 		dao,
 	).Scan(&profileID)
@@ -92,6 +120,12 @@ func (db *profileDB) Save(ctx context.Context, profileAccount *domain.ProfileAcc
 func (db *profileDB) Update(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error) {
 	log.Trace("ProfileDB Update")
 
+	return db.UpdateTx(ctx, nil, userID, profile)
+}
+
+func (db *profileDB) UpdateTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error) {
+	log.Trace("ProfileDB UpdateTx")
+
 	// important to use userID here, not profile.ID to avoid any potential security issues
 	dao := ToDAO(profile, userID)
 
@@ -105,7 +139,7 @@ func (db *profileDB) Update(ctx context.Context, userID uuid.UUID, profile *doma
 	address_line_1, address_line_2, city, state, postal_code, country, huggingface_token_ciphertext, email_verified;`
 
 	var updatedProfile ProfileDAO = ProfileDAO{}
-	row := db.Pool.QueryRow(ctx, sqlStatementProfile, dao)
+	row := db.executor(tx).QueryRow(ctx, sqlStatementProfile, dao)
 	switch err := row.Scan(&updatedProfile.ID, &updatedProfile.Email, &updatedProfile.FirstName, &updatedProfile.LastName,
 		&updatedProfile.PhoneNumber, &updatedProfile.DateOfBirth, &updatedProfile.CountryCode,
 		&updatedProfile.AddressLine1, &updatedProfile.AddressLine2, &updatedProfile.City, &updatedProfile.State,
@@ -134,8 +168,14 @@ func (db *profileDB) Update(ctx context.Context, userID uuid.UUID, profile *doma
 func (db *profileDB) UpdateHuggingFaceToken(ctx context.Context, userID uuid.UUID, ciphertext string) (*domain.Profile, error) {
 	log.Trace("ProfileDB UpdateHuggingFaceToken")
 
+	return db.UpdateHuggingFaceTokenTx(ctx, nil, userID, ciphertext)
+}
+
+func (db *profileDB) UpdateHuggingFaceTokenTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ciphertext string) (*domain.Profile, error) {
+	log.Trace("ProfileDB UpdateHuggingFaceTokenTx")
+
 	var profileDAO ProfileDAO
-	err := db.Pool.QueryRow(ctx, `
+	err := db.executor(tx).QueryRow(ctx, `
 		UPDATE `+db.Name+`.profiles
 		SET huggingface_token_ciphertext = @huggingface_token_ciphertext
 		WHERE id = @id AND deleted = false
@@ -198,8 +238,14 @@ func (db *profileDB) UpdatePassword(ctx context.Context, userID uuid.UUID, newPa
 func (db *profileDB) VerifyEmail(ctx context.Context, token string) (*domain.Profile, error) {
 	log.Trace("ProfileDB VerifyEmail")
 
+	return db.VerifyEmailTx(ctx, nil, token)
+}
+
+func (db *profileDB) VerifyEmailTx(ctx context.Context, tx pgx.Tx, token string) (*domain.Profile, error) {
+	log.Trace("ProfileDB VerifyEmailTx")
+
 	var profileDAO ProfileDAO
-	err := db.Pool.QueryRow(ctx, `
+	err := db.executor(tx).QueryRow(ctx, `
 		UPDATE `+db.Name+`.profiles
 		SET email_verified = true, email_verify_token_hash = NULL, email_verify_expires_at = NULL
 		WHERE id = (
@@ -289,6 +335,12 @@ func (db *profileDB) ReadByVerifyToken(ctx context.Context, token string) (*doma
 func (db *profileDB) Read(ctx context.Context, userID uuid.UUID) (*domain.Profile, error) {
 	log.Trace("ProfileDB Read")
 
+	return db.ReadTx(ctx, nil, userID)
+}
+
+func (db *profileDB) ReadTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (*domain.Profile, error) {
+	log.Trace("ProfileDB ReadTx")
+
 	var profileDao ProfileDAO
 	var sqlStatementProfile = `
 	SELECT id, email, first_name, last_name, phone_number,
@@ -296,7 +348,7 @@ func (db *profileDB) Read(ctx context.Context, userID uuid.UUID) (*domain.Profil
 	postal_code, country, huggingface_token_ciphertext, email_verified
 	FROM ` + db.Name + `.profiles WHERE id = @id AND deleted = false;`
 
-	switch err := db.Pool.QueryRow(ctx,
+	switch err := db.executor(tx).QueryRow(ctx,
 		sqlStatementProfile,
 		pgx.NamedArgs{
 			"id": pgtype.UUID{Bytes: userID, Valid: true},
@@ -406,6 +458,12 @@ func (db *profileDB) ReadProfileIDByEmail(ctx context.Context, email string) (uu
 func (db *profileDB) CreateOAuthProfile(ctx context.Context, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error) {
 	log.Trace("ProfileDB CreateOAuthProfile")
 
+	return db.CreateOAuthProfileTx(ctx, nil, identity, passwordHash)
+}
+
+func (db *profileDB) CreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error) {
+	log.Trace("ProfileDB CreateOAuthProfileTx")
+
 	email := strings.ToLower(strings.TrimSpace(identity.Email))
 	if email == "" {
 		return uuid.Nil, fmt.Errorf("database error. invalid oauth identity")
@@ -416,7 +474,7 @@ func (db *profileDB) CreateOAuthProfile(ctx context.Context, identity domain.OAu
 	dao := ToDAOOAuthProfile(identity, passwordHash)
 
 	var profileID string
-	err := db.Pool.QueryRow(ctx, `
+	err := db.executor(tx).QueryRow(ctx, `
 		INSERT INTO `+db.Name+`.profiles (id, idempotency_key, email, phone_number, country_code, password_hash, first_name, last_name)
 		VALUES (uuid_generate_v4(), @idempotency_key, @email, @phone_number, @country_code, @password_hash, @first_name, @last_name)
 		RETURNING id;`,
@@ -435,6 +493,12 @@ func (db *profileDB) CreateOAuthProfile(ctx context.Context, identity domain.OAu
 func (db *profileDB) SaveOAuthIdentity(ctx context.Context, userID uuid.UUID, identity domain.OAuthIdentity) error {
 	log.Trace("ProfileDB SaveOAuthIdentity")
 
+	return db.SaveOAuthIdentityTx(ctx, nil, userID, identity)
+}
+
+func (db *profileDB) SaveOAuthIdentityTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, identity domain.OAuthIdentity) error {
+	log.Trace("ProfileDB SaveOAuthIdentityTx")
+
 	dao := ToDAOOAuthIdentity(userID, domain.OAuthIdentity{
 		Provider:      strings.ToLower(strings.TrimSpace(identity.Provider)),
 		Subject:       strings.TrimSpace(identity.Subject),
@@ -442,7 +506,7 @@ func (db *profileDB) SaveOAuthIdentity(ctx context.Context, userID uuid.UUID, id
 		EmailVerified: identity.EmailVerified,
 	})
 
-	_, err := db.Pool.Exec(ctx, `
+	_, err := db.executor(tx).Exec(ctx, `
 		INSERT INTO `+db.Name+`.oauth_identities (id, profile_id, provider, provider_subject, email, email_verified)
 		VALUES (uuid_generate_v4(), @profile_id, @provider, @provider_subject, @email, @email_verified)
 		ON CONFLICT (provider, provider_subject)
@@ -462,12 +526,18 @@ func (db *profileDB) SaveOAuthIdentity(ctx context.Context, userID uuid.UUID, id
 func (db *profileDB) Delete(ctx context.Context, userID uuid.UUID) error {
 	log.Trace("ProfileDB Delete")
 
+	return db.DeleteTx(ctx, nil, userID)
+}
+
+func (db *profileDB) DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
+	log.Trace("ProfileDB DeleteTx")
+
 	var sqlStatement = `
 	UPDATE ` + db.Name + `.profiles
 	SET deleted = true
 	WHERE id = @id AND deleted = false;`
 
-	cmdTag, err := db.Pool.Exec(ctx, sqlStatement, pgx.NamedArgs{
+	cmdTag, err := db.executor(tx).Exec(ctx, sqlStatement, pgx.NamedArgs{
 		"id": pgtype.UUID{Bytes: userID, Valid: true},
 	})
 	if err != nil {

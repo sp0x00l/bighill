@@ -14,6 +14,11 @@ crd:
 service:
   type: ClusterIP
   healthPort: 5061
+lifecycle:
+  terminationGracePeriodSeconds: 45
+  readinessTimeoutSeconds: "30"
+  drainTimeoutSeconds: "30"
+  closeTimeoutSeconds: "10"
 env:
   environment: "local-dev"
   serviceName: "model-serving-service"

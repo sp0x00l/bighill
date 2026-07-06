@@ -1,24 +1,16 @@
 package data
 
 import (
-	"context"
+	streamapp "data_stream_service/pkg/app"
 	domainErrors "data_stream_service/pkg/domain"
 
-	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/flight"
 	log "github.com/sirupsen/logrus"
 )
 
-type QueryResult struct {
-	Schema       *arrow.Schema
-	Records      []arrow.Record
-	TotalRecords int64
-}
+type QueryResult = streamapp.QueryResult
 
-type QueryEngine interface {
-	GetSchema(context.Context, *flight.FlightDescriptor) (*arrow.Schema, error)
-	Execute(context.Context, *flight.Ticket) (*QueryResult, error)
-}
+type QueryEngine = streamapp.QueryEngineAdapter
 
 func descriptorCommand(descriptor *flight.FlightDescriptor) string {
 	log.Trace("descriptorCommand")

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"os"
@@ -447,9 +448,18 @@ func minimalHFModelArchive() []byte {
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	writeZipFile(writer, "config.json", []byte(`{"architectures":["BighillE2EModel"],"model_type":"bighill_e2e"}`))
-	writeZipFile(writer, "model.safetensors", []byte("safe tensors fixture bytes"))
+	writeZipFile(writer, "model.safetensors", minimalSafetensorsObject())
 	Expect(writer.Close()).To(Succeed())
 	return buffer.Bytes()
+}
+
+func minimalSafetensorsObject() []byte {
+	header := []byte(`{"weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}`)
+	payload := make([]byte, 8+len(header)+4)
+	binary.LittleEndian.PutUint64(payload[:8], uint64(len(header)))
+	copy(payload[8:], header)
+	copy(payload[8+len(header):], []byte{0, 0, 0, 0})
+	return payload
 }
 
 func invalidHFModelArchive() []byte {

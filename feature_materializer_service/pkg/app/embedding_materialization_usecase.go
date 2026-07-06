@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"feature_materializer_service/pkg/domain"
@@ -59,22 +60,17 @@ func (u *embeddingMaterializationUsecase) MaterializeEmbeddings(ctx context.Cont
 		return nil, err
 	}
 
-	if u.featureReader == nil || u.writer == nil {
-		log.WithContext(ctx).WithFields(log.Fields{
-			"embedding_snapshot_id": embeddingSnapshot.EmbeddingSnapshotID,
-			"feature_snapshot_id":   featureSnapshotID,
-		}).Info("embeddings accepted for future materialization")
-		return embeddingSnapshot, nil
-	}
-
 	featureSnapshot, err := u.featureReader.ReadFeatureSnapshot(ctx, featureSnapshotID)
 	if err != nil {
 		return nil, err
 	}
 	materialized, records, err := u.writer.MaterializeEmbeddings(ctx, featureSnapshot, embeddingSnapshot)
 	if err != nil {
-		_ = u.markEmbeddingFailed(ctx, embeddingSnapshot.EmbeddingSnapshotID, err.Error())
-		return nil, fmt.Errorf("%w: %w", domain.ErrEmbeddingMaterialize, err)
+		outErr := fmt.Errorf("%w: %w", domain.ErrEmbeddingMaterialize, err)
+		if markErr := u.markEmbeddingFailed(ctx, embeddingSnapshot.EmbeddingSnapshotID, err.Error()); markErr != nil {
+			return nil, errors.Join(outErr, fmt.Errorf("mark embedding snapshot failed: %w", markErr))
+		}
+		return nil, outErr
 	}
 	if materialized == nil {
 		return nil, fmt.Errorf("%w: embedding writer returned nil", domain.ErrEmbeddingMaterialize)

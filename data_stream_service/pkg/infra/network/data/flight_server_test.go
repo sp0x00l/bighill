@@ -86,13 +86,15 @@ var _ = Describe("Flight query gateway", func() {
 
 	BeforeEach(func() {
 		server = data.NewFlightServerAuth("", true)
-		gateway = data.NewFlightServer(server, infra.DataConfig{
+		var err error
+		gateway, err = data.NewFlightServer(server, infra.DataConfig{
 			Server: infra.ServerConnectionConfig{Hostname: "localhost", Port: 0},
 			QueryEngine: infra.QueryEngineConfig{
 				Mode:     "local",
 				DataRoot: "tmp/local_s3_storage",
 			},
 		}, data.NewLocalQueryEngine())
+		Expect(err).NotTo(HaveOccurred())
 		descriptor = &flight.FlightDescriptor{
 			Type: flight.DescriptorCMD,
 			Cmd:  []byte("SELECT * FROM dataset LIMIT 10"),
@@ -128,13 +130,15 @@ var _ = Describe("Flight query gateway", func() {
 
 	It("uses a streaming query engine path when available", func() {
 		streamingEngine := newStreamingEngineStub()
-		gateway = data.NewFlightServer(server, infra.DataConfig{
+		var err error
+		gateway, err = data.NewFlightServer(server, infra.DataConfig{
 			Server: infra.ServerConnectionConfig{Hostname: "localhost", Port: 0},
 		}, streamingEngine)
+		Expect(err).NotTo(HaveOccurred())
 		stream := &doGetStream{ctx: context.Background()}
 		ticket := &flight.Ticket{Ticket: []byte("SELECT * FROM dataset LIMIT 10")}
 
-		err := gateway.DoGet(ticket, stream)
+		err = gateway.DoGet(ticket, stream)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(streamingEngine.streamed).To(BeTrue())

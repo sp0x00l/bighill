@@ -62,7 +62,12 @@ func StartStreamSubscriber(
 			SubscriberHealthRegistration{Name: name, Subscriber: subscriber},
 		)
 	}
+	done := make(chan struct{})
+	if doneSetter, ok := factory.(interface{ setSubscriberDone(<-chan struct{}) }); ok {
+		doneSetter.setSubscriberDone(done)
+	}
 	go func() {
+		defer close(done)
 		if err := subscriber.Subscribe(ctx, topics); err != nil && !errors.Is(err, context.Canceled) {
 			log.WithContext(ctx).WithError(err).WithFields(log.Fields{
 				"subscriber": name,

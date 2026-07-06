@@ -14,6 +14,7 @@ spec:
       labels:
         app: {{ include "feature-materializer-service.fullname" . }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds | default 45 }}
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default "feature-materializer-service" }}
       {{- end }}
@@ -37,6 +38,12 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.readinessTimeoutSeconds | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.drainTimeoutSeconds | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.closeTimeoutSeconds | quote }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_KAFKA_BASE_GROUP_ID

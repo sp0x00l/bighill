@@ -176,24 +176,6 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(artifact.ServingLoadStatus).To(Equal("LOADED"))
 	})
 
-	It("fails training with a domain error when the executor is not configured", func() {
-		activities := temporalworker.NewTrainingActivities(nil)
-
-		artifact, err := activities.RunTrainingJob(context.Background(), model.PreparedTrainingDataset{
-			TrainingRunID: "training-run-1",
-			DatasetURI:    "s3://local-dev-bucket/features/feature-snapshot-1.parquet",
-		}, model.TrainingRunRequest{
-			TrainingRunID:   "training-run-1",
-			ModelName:       "model",
-			ModelVersion:    "v1",
-			BaseModel:       "mistral-7b",
-			TrainingProfile: trainingProfile(),
-		})
-
-		Expect(artifact).To(BeNil())
-		Expect(errors.Is(err, domain.ErrTrainModel)).To(BeTrue())
-	})
-
 	It("builds a real DPO recipe from the parent adapter and preference dataset", func() {
 		executor := &recordingTrainingExecutor{artifact: &model.TrainedModelArtifact{
 			TrainingRunID:     "training-run-dpo",
@@ -272,18 +254,6 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(executor.evaluationSpec.ReportManifestURI).To(Equal("s3://evaluations/training-run-1.json"))
 		Expect(executor.evaluationSpec.ArtifactBucketRegion).To(Equal("eu-west-1"))
 		Expect(executor.evaluationSpec.SubmissionID).To(HavePrefix("eval-training-run-1-"))
-	})
-
-	It("fails evaluation with a domain error when the executor is not configured", func() {
-		activities := temporalworker.NewTrainingActivities(nil)
-
-		report, err := activities.EvaluateTrainedModel(context.Background(), model.TrainedModelArtifact{
-			TrainingRunID: "training-run-1",
-			ModelURI:      "s3://local-dev-bucket/models/training-run-1",
-		}, model.TrainingRunRequest{TrainingRunID: "training-run-1", EvaluationProfile: `{"evaluator":"ragas"}`})
-
-		Expect(report).To(BeNil())
-		Expect(errors.Is(err, domain.ErrEvaluateModel)).To(BeTrue())
 	})
 
 	It("publishes completed training facts", func() {

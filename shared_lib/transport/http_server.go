@@ -3,7 +3,9 @@ package transport
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -25,6 +27,7 @@ type HttpServer struct {
 	httpServer *http.Server
 	router     *mux.Router
 	name       string
+	ready      atomic.Bool
 }
 
 func NewHttpServer(tracer trace.Tracer, routes []Route, httpPort int, name string) *HttpServer {
@@ -53,7 +56,13 @@ func NewHttpServer(tracer trace.Tracer, routes []Route, httpPort int, name strin
 func (s *HttpServer) Connect() error {
 	log.Trace("HttpServer Connect")
 
-	return s.httpServer.ListenAndServe()
+	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return err
+	}
+	s.ready.Store(true)
+	defer s.ready.Store(false)
+	return s.httpServer.Serve(listener)
 }
 
 func (s *HttpServer) Close() {
@@ -62,9 +71,22 @@ func (s *HttpServer) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 
-	if err := s.httpServer.Shutdown(ctx); err != nil {
+	if err := s.Shutdown(ctx); err != nil {
 		log.Errorf("%s http server shutdown error: %v", s.name, err)
 	}
+}
+
+func (s *HttpServer) Shutdown(ctx context.Context) error {
+	log.Trace("HttpServer Shutdown")
+
+	s.ready.Store(false)
+	return s.httpServer.Shutdown(ctx)
+}
+
+func (s *HttpServer) Ready() bool {
+	log.Trace("HttpServer Ready")
+
+	return s.ready.Load()
 }
 
 func (s *HttpServer) addRoutes(routes []Route) {

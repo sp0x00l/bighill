@@ -394,7 +394,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		GenerationModel:       generationModel,
 	}
 	if err := u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusCompleted, ""); err != nil {
-		log.WithContext(ctx).WithError(err).Warn("failed to record completed inference request")
+		return nil, err
 	}
 	return response, nil
 }

@@ -1,0 +1,24 @@
+replicaCount: 1
+image:
+  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops/feature-materializer-service"
+  tag: "0.0.1"
+  pullPolicy: Always
+service:
+  type: ClusterIP
+  healthPort: 5057
+  grpcPort: 7072
+env:
+  environment: "staging"
+  kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-feature-materializer-dlq"
+  artifactBucketName: "bighill-mlops-lakehouse"
+  artifactBucketRegion: "eu-west-1"
+  embeddingProvider: "tei"
+  embeddingUrl: "http://text-embeddings-inference:80"
+  embeddingModel: "bge-small-en-v1.5"
+  dataStreamInsecure: "false"
+  polarisBaseUrl: "http://polaris-catalog:8181"
+  polarisCatalog: "bighill"
+  polarisWarehouse: "s3://bighill-mlops-lakehouse/"
+  polarisStorageRegion: "eu-west-1"
+  polarisStoragePathStyle: "true"

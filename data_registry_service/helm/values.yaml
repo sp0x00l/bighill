@@ -12,6 +12,11 @@ service:
   httpPort: 8081
   grpcPort: 7071
   healthPort: 5051
+lifecycle:
+  terminationGracePeriodSeconds: 45
+  readinessTimeoutSeconds: "30"
+  drainTimeoutSeconds: "30"
+  closeTimeoutSeconds: "10"
 ingress:
   enabled: false
   host: ""

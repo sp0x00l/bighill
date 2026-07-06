@@ -11,10 +11,12 @@ import (
 
 	auth "lib/shared_lib/auth"
 	sharedclock "lib/shared_lib/clock"
+	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
 	"github.com/alexedwards/argon2id"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 
@@ -56,7 +58,8 @@ type ProfilesUseCase interface {
 
 type profilesUseCase struct {
 	profilesRepository      ProfileDB
-	msgPublisher            UserEventPublisher
+	unitOfWork              ProfileUnitOfWorkAdapter
+	eventBuilder            UserEventBuilderAdapter
 	authProvider            auth.AuthProvider
 	authStore               auth.RevocationStore
 	secretEncryptor         SecretEncryptor
@@ -71,7 +74,8 @@ type profilesUseCase struct {
 
 type ProfilesUseCaseDeps struct {
 	ProfilesRepository ProfileDB
-	MsgPublisher       UserEventPublisher
+	UnitOfWork         ProfileUnitOfWorkAdapter
+	EventBuilder       UserEventBuilderAdapter
 	AuthStore          auth.RevocationStore
 	AuthProvider       auth.AuthProvider
 	SecretEncryptor    SecretEncryptor
@@ -114,13 +118,10 @@ func NewProfilesUseCase(deps ProfilesUseCaseDeps, cfg ProfilesUseCaseConfig, opt
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	clock := cfg.Clock
-	if clock == nil {
-		log.Fatal("NewProfilesUseCase: clock is required")
-	}
 	return &profilesUseCase{
 		profilesRepository:      deps.ProfilesRepository,
-		msgPublisher:            deps.MsgPublisher,
+		unitOfWork:              deps.UnitOfWork,
+		eventBuilder:            deps.EventBuilder,
 		authProvider:            deps.AuthProvider,
 		secretEncryptor:         deps.SecretEncryptor,
 		authStore:               deps.AuthStore,
@@ -130,7 +131,7 @@ func NewProfilesUseCase(deps ProfilesUseCaseDeps, cfg ProfilesUseCaseConfig, opt
 		oauthStateStore:         cfg.OAuthStateStore,
 		oauthStateTTL:           cfg.OAuthStateTTL,
 		useStagingTestToken:     cfg.UseStagingTestToken,
-		clock:                   clock,
+		clock:                   cfg.Clock,
 	}
 }
 
@@ -145,11 +146,13 @@ func (u *profilesUseCase) ReplaceHuggingFaceToken(ctx context.Context, userID uu
 	if err != nil {
 		return fmt.Errorf("encrypt hugging face token: %w", err)
 	}
-	updatedProfile, err := u.profilesRepository.UpdateHuggingFaceToken(ctx, userID, ciphertext)
-	if err != nil {
-		return err
-	}
-	return u.msgPublisher.PublishUserUpdatedEvent(ctx, updatedProfile)
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		updatedProfile, err := u.profilesRepository.UpdateHuggingFaceTokenTx(ctx, tx, userID, ciphertext)
+		if err != nil {
+			return err
+		}
+		return enqueue(u.eventBuilder.UserUpdatedMessage(updatedProfile))
+	})
 }
 
 func (u *profilesUseCase) CreateProfile(ctx context.Context, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) (err error) {
@@ -172,15 +175,12 @@ func (u *profilesUseCase) CreateProfile(ctx context.Context, profileAccount *dom
 	}
 	profileAccount.EmailVerifyExpiresAt = u.clock.Now().Add(u.emailValidationTTL)
 
-	if err = u.profilesRepository.Save(ctx, profileAccount, idempotencyKey); err != nil {
-		return err
-	}
-
-	if err = u.msgPublisher.PublishUserCreatedEvent(ctx, profileAccount); err != nil {
-		return err
-	}
-
-	return nil
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		if err := u.profilesRepository.SaveTx(ctx, tx, profileAccount, idempotencyKey); err != nil {
+			return err
+		}
+		return enqueue(u.eventBuilder.UserCreatedMessage(profileAccount))
+	})
 }
 
 func (u *profilesUseCase) ReplaceProfile(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (updatedProfile *domain.Profile, err error) {
@@ -190,16 +190,15 @@ func (u *profilesUseCase) ReplaceProfile(ctx context.Context, userID uuid.UUID, 
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	updatedProfile, err = u.profilesRepository.Update(ctx, userID, profile)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := u.msgPublisher.PublishUserUpdatedEvent(ctx, updatedProfile); err != nil {
-		return nil, err
-	}
-
-	return updatedProfile, nil
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		var updateErr error
+		updatedProfile, updateErr = u.profilesRepository.UpdateTx(ctx, tx, userID, profile)
+		if updateErr != nil {
+			return updateErr
+		}
+		return enqueue(u.eventBuilder.UserUpdatedMessage(updatedProfile))
+	})
+	return updatedProfile, err
 }
 
 func (u *profilesUseCase) ReadProfile(ctx context.Context, userID uuid.UUID) (profile *domain.Profile, err error) {
@@ -219,11 +218,12 @@ func (u *profilesUseCase) DeleteProfile(ctx context.Context, userID uuid.UUID) (
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	if err := u.profilesRepository.Delete(ctx, userID); err != nil {
-		return err
-	}
-
-	return u.msgPublisher.PublishUserDeletedEvent(ctx, userID)
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		if err := u.profilesRepository.DeleteTx(ctx, tx, userID); err != nil {
+			return err
+		}
+		return enqueue(u.eventBuilder.UserDeletedMessage(userID))
+	})
 }
 
 func (u *profilesUseCase) ReplacePassword(ctx context.Context, userID uuid.UUID, newPassword string) (err error) {
@@ -239,14 +239,14 @@ func (u *profilesUseCase) ReplacePassword(ctx context.Context, userID uuid.UUID,
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	if err := u.profilesRepository.UpdatePassword(ctx, userID, passwordHash); err != nil {
-		return err
-	}
-
 	now := u.clock.Now().Unix()
 	if err := u.authStore.SetUserRevokedAfter(ctx, userID.String(), now); err != nil {
-		log.WithContext(ctx).WithError(err).Error("Failed to revoke user sessions after password change")
+		log.WithContext(ctx).WithError(err).Error("Failed to revoke user sessions before password change")
 		return fmt.Errorf("failed to revoke user sessions: %w", err)
+	}
+
+	if err := u.profilesRepository.UpdatePassword(ctx, userID, passwordHash); err != nil {
+		return err
 	}
 
 	return nil
@@ -289,12 +289,13 @@ func (u *profilesUseCase) VerifyEmail(ctx context.Context, token string) (err er
 	ctx, span := usecasetrace.StartSpan(ctx, "profile_service/app", "profile.verify_email")
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	profile, err := u.profilesRepository.VerifyEmail(ctx, token)
-	if err != nil {
-		return err
-	}
-
-	return u.msgPublisher.PublishUserUpdatedEvent(ctx, profile)
+	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+		profile, err := u.profilesRepository.VerifyEmailTx(ctx, tx, token)
+		if err != nil {
+			return err
+		}
+		return enqueue(u.eventBuilder.UserUpdatedMessage(profile))
+	})
 }
 
 func (u *profilesUseCase) Logout(ctx context.Context, sessionID string) (err error) {

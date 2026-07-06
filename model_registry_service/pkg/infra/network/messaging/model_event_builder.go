@@ -1,6 +1,8 @@
 package messaging
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -60,7 +62,7 @@ func (b *ModelEventBuilder) ModelUpdatedMessage(modelRecord *model.Model) msgCon
 			MsgType:     msgConn.MsgTypeModelUpdated,
 			Payload:     payload,
 		},
-		DispatchKey: fmt.Sprintf("model_updated:%s:%s:%d", modelRecord.ModelID, modelRecord.Status.String(), modelRecord.ModelVersion),
+		DispatchKey: fmt.Sprintf("model_updated:%s:%s:%d:%s", modelRecord.ModelID, modelRecord.Status.String(), modelRecord.ModelVersion, payloadHash(payload)),
 	}
 }
 
@@ -123,4 +125,11 @@ func mustMarshal(payload proto.Message) []byte {
 		panic(err)
 	}
 	return out
+}
+
+func payloadHash(payload []byte) string {
+	log.Trace("payloadHash")
+
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])[:16]
 }

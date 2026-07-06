@@ -162,10 +162,19 @@ func (e *KubeRayExecutor) RunPromotionReport(ctx context.Context, spec model.Pro
 	})
 }
 
-func waitForKubeRayJob[T any](ctx context.Context, executor *KubeRayExecutor, failureError *domain.ServiceError, submissionID, entrypoint string, envVars map[string]string, readResult func(context.Context) (*T, error)) (*T, error) {
+func waitForKubeRayJob[T any](ctx context.Context, executor *KubeRayExecutor, failureError *domain.ServiceError, submissionID, entrypoint string, envVars map[string]string, readResult func(context.Context) (*T, error)) (result *T, err error) {
 	log.Trace("waitForKubeRayJob")
 
 	name := KubeRayJobName(submissionID)
+	defer func() {
+		if err != nil && ctx.Err() != nil {
+			deleteCtx, cancel := context.WithTimeout(context.Background(), kubeRayDeleteTimeout)
+			defer cancel()
+			if deleteErr := executor.deleteRayJob(deleteCtx, name); deleteErr != nil {
+				log.WithContext(ctx).WithError(deleteErr).WithField("ray_job", name).Warn("failed to delete canceled kuberay job")
+			}
+		}
+	}()
 	if err := executor.ensureRayJob(ctx, name, submissionID, entrypoint, envVars); err != nil {
 		return nil, err
 	}
@@ -209,6 +218,19 @@ func (e *KubeRayExecutor) ensureRayJob(ctx context.Context, name, submissionID, 
 	obj := e.rayJobObject(name, submissionID, entrypoint, envVars)
 	_, err := e.client.Resource(rayJobGVR).Namespace(e.namespace).Create(ctx, obj, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return err
+}
+
+func (e *KubeRayExecutor) deleteRayJob(ctx context.Context, name string) error {
+	log.Trace("KubeRayExecutor deleteRayJob")
+
+	propagation := metav1.DeletePropagationBackground
+	err := e.client.Resource(rayJobGVR).Namespace(e.namespace).Delete(ctx, name, metav1.DeleteOptions{
+		PropagationPolicy: &propagation,
+	})
+	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	return err
@@ -433,4 +455,7 @@ func withDefaultString(value, fallback string) string {
 
 var invalidKubeNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
 
-const maxKubeRayNameLength = 63
+const (
+	maxKubeRayNameLength = 63
+	kubeRayDeleteTimeout = 30 * time.Second
+)

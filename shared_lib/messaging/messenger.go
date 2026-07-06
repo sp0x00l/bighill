@@ -29,6 +29,7 @@ type messenger struct {
 	dlqURL           string
 	autoOffsetReset  string
 	subscriberCancel context.CancelFunc
+	subscriberDone   <-chan struct{}
 }
 
 func exponentialBackOffFactory() *backoff.ExponentialBackOff {
@@ -91,8 +92,20 @@ func (m messenger) Close(ctx context.Context) error {
 	}
 
 	if m.subscriberCancel != nil {
-		// cancel the context to stop the subscriber loop
 		m.subscriberCancel()
 	}
+	if m.subscriberDone != nil {
+		select {
+		case <-m.subscriberDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return nil
+}
+
+func (m *messenger) setSubscriberDone(done <-chan struct{}) {
+	log.Trace("messenger setSubscriberDone")
+
+	m.subscriberDone = done
 }

@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
+	"lib/shared_lib/lifecycle"
 	logs "lib/shared_lib/logs"
 	trace "lib/shared_lib/trace"
 
@@ -34,6 +36,7 @@ type modelServingConfig struct {
 	ServedModel servedModelConfig
 	Runtime     runtimeConfig
 	Health      healthConfig
+	Lifecycle   lifecycle.Config
 }
 
 type servedModelConfig struct {
@@ -77,7 +80,6 @@ func main() {
 	serviceName := cfg.ServiceName
 	log.Trace(fmt.Sprintf("starting the %s service", serviceName))
 	traceShutdown := trace.Init(cancelCtx, serviceName, Version)
-	defer traceShutdown()
 
 	store, runtimeAdapter, err := newServingBackend(cfg)
 	if err != nil {
@@ -86,31 +88,27 @@ func main() {
 	reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
 	controller := servingk8s.NewServedModelController(store, reconciler, cfg.PollEvery, servingk8s.WithSharedRuntimeSerialization(cfg.Runtime.MultiTenant))
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck()
 	healthCheck = healthCheck.Register("served_model_controller", servedModelControllerReadinessCheck(controller, cfg.Health.ControllerMaxSilence))
 	healthServer := newModelServingHealthServer(cfg.Health.HealthCheckPort, healthCheck, controller, cfg.Health.ControllerMaxSilence)
-	go func() {
-		log.WithContext(cancelCtx).Infof("health check monitor starting http listener on %s", healthServer.Addr)
-		if err := healthServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.WithContext(cancelCtx).WithError(err).Error("health check stopped unexpectedly")
-			quit <- syscall.SIGTERM
-		}
-	}()
-	go func() {
-		if err := controller.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
-			log.WithContext(cancelCtx).WithError(err).Error("served model controller stopped unexpectedly")
-			quit <- syscall.SIGTERM
-		}
-	}()
-
-	<-quit
-
+	supervisor := lifecycle.NewSupervisorWithConfig(cfg.Lifecycle,
+		lifecycle.CloserComponent("model-serving-observability", func() error {
+			traceShutdown()
+			return nil
+		}),
+		lifecycle.ServerComponent("model-serving-health", healthServer),
+		lifecycle.WorkerComponent("model-serving-controller", func(ctx context.Context) error {
+			if err := controller.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		}),
+	)
+	if err := supervisor.RunWithSignals(cancelCtx, syscall.SIGINT, syscall.SIGTERM); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.WithContext(cancelCtx).WithError(err).Errorf("%s service stopped with error", serviceName)
+	}
 	cancel()
-	shutdownHealthServer(healthServer)
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
 
@@ -145,6 +143,11 @@ func readModelServingConfig() modelServingConfig {
 			HealthCheckPort:            env.WithDefaultInt("MODEL_SERVING_SERVICE_HEALTHCHECK_PORT", "5061"),
 			ServiceLatencyThreshold:    secondsFromEnv("MODEL_SERVING_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
 			ControllerMaxSilence:       secondsFromEnv("MODEL_SERVING_SERVICE_HEALTHCHECK_CONTROLLER_MAX_SILENCE_SECONDS", "30"),
+		},
+		Lifecycle: lifecycle.Config{
+			ReadinessTimeout: secondsFromEnv("MODEL_SERVING_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS", "30"),
+			DrainTimeout:     secondsFromEnv("MODEL_SERVING_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS", "30"),
+			CloseTimeout:     secondsFromEnv("MODEL_SERVING_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS", "10"),
 		},
 	}
 }
@@ -218,7 +221,12 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 	}
 }
 
-func newModelServingHealthServer(port int, readiness *coreHealthCheck.Monitor, controller *servingk8s.ServedModelController, maxSilence time.Duration) *http.Server {
+type modelServingHealthServer struct {
+	server *http.Server
+	ready  atomic.Bool
+}
+
+func newModelServingHealthServer(port int, readiness *coreHealthCheck.Monitor, controller *servingk8s.ServedModelController, maxSilence time.Duration) *modelServingHealthServer {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := readiness.Check(r.Context()); err != nil {
@@ -238,18 +246,40 @@ func newModelServingHealthServer(port int, readiness *coreHealthCheck.Monitor, c
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
-	return &http.Server{
+	return &modelServingHealthServer{server: &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
-	}
+	}}
 }
 
-func shutdownHealthServer(server *http.Server) {
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		log.WithContext(ctx).Errorf("health http server shutdown error: %v", err)
+func (s *modelServingHealthServer) Connect() error {
+	log.Trace("modelServingHealthServer Connect")
+
+	listener, err := net.Listen("tcp", s.server.Addr)
+	if err != nil {
+		return err
 	}
+	s.ready.Store(true)
+	defer s.ready.Store(false)
+	log.Infof("health check monitor starting http listener on %s", s.server.Addr)
+	return s.server.Serve(listener)
+}
+
+func (s *modelServingHealthServer) Shutdown(ctx context.Context) error {
+	log.Trace("modelServingHealthServer Shutdown")
+
+	s.ready.Store(false)
+	if err := s.server.Shutdown(ctx); err != nil {
+		log.WithContext(ctx).Errorf("health http server shutdown error: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (s *modelServingHealthServer) Ready() bool {
+	log.Trace("modelServingHealthServer Ready")
+
+	return s.ready.Load()
 }
 
 func servedModelControllerReadinessCheck(controller *servingk8s.ServedModelController, maxSilence time.Duration) func(context.Context, coreHealthCheck.HealthCheckConfig) error {

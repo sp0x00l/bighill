@@ -3,6 +3,7 @@ package grpc_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"feature_materializer_service/pkg/domain/model"
 	featuregrpc "feature_materializer_service/pkg/infra/network/grpc"
@@ -13,6 +14,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestFeatureMaterializerGrpc(t *testing.T) {
@@ -118,5 +120,19 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		})
 
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+	})
+
+	It("treats a stopped gRPC server as a clean shutdown", func() {
+		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{})
+		lis := bufconn.Listen(1024)
+		result := make(chan error, 1)
+
+		go func() {
+			result <- server.Serve(lis)
+		}()
+		time.Sleep(10 * time.Millisecond)
+		server.Close()
+
+		Eventually(result).Should(Receive(BeNil()))
 	})
 })

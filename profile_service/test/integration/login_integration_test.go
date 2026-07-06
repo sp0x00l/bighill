@@ -15,6 +15,7 @@ import (
 	kms "lib/shared_lib/key_management"
 	msgConn "lib/shared_lib/messaging"
 	"lib/shared_lib/transport"
+	shareduow "lib/shared_lib/uow"
 	"net/http"
 	"strings"
 	"time"
@@ -35,10 +36,10 @@ import (
 var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 	var (
 		profileDB           db.ProfileDB
-		profilePublisher    messaging.UserEventPublisher
 		profilesUseCase     usecase.ProfilesUseCase
 		httpServer          *transport.HttpServer
 		dtoProfileAdapter   rest.ProfilesDTOAdapter
+		database            *dbConn.Database
 		messagingFactory    msgConn.Messenger
 		kafkaPublisherTopic string
 		redisClient         rueidis.Client
@@ -49,6 +50,7 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		ctx                context.Context
 		cancelCtxPublisher context.Context
 		cancelFtnPublisher context.CancelFunc
+		relayDone          chan struct{}
 
 		// Test data
 		email       string
@@ -72,7 +74,8 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		dbConfig.WithDbMaxConnections("PROFILE_SERVICE_DB_MAX_CONNECTIONS", "60")
 		dbConnectionStr := dbConfig.GetConnectionString()
 		log.Info("Using DB connection string: ", dbConnectionStr)
-		database, err := dbConn.InitDatabase(ctx, dbConfig.GetName(), dbConnectionStr, log.StandardLogger())
+		var err error
+		database, err = dbConn.InitDatabase(ctx, dbConfig.GetName(), dbConnectionStr, log.StandardLogger())
 		Expect(err).ShouldNot(HaveOccurred())
 		Expect(purgeProfileDatabase(ctx, database)).To(Succeed())
 		profileDB = db.NewProfileDB(database)
@@ -95,7 +98,36 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 
 		msgPublisher, err := messagingFactory.Publisher(cancelCtxPublisher)
 		Expect(err).ShouldNot(HaveOccurred())
-		profilePublisher = messaging.NewUserEventPublisher(msgPublisher, kafkaPublisherTopic)
+		outboxWriter, err := msgConn.NewPostgresOutbox(database.Pool, database.Name, "")
+		Expect(err).ShouldNot(HaveOccurred())
+		orderedOutbox, ok := outboxWriter.(msgConn.OrderedOutbox)
+		Expect(ok).To(BeTrue())
+		outboxSignal := make(chan struct{}, 1)
+		signaledOutbox := msgConn.NewSignaledOutbox(outboxWriter, outboxSignal)
+		relayOutbox, ok := signaledOutbox.(msgConn.RelayOutbox)
+		Expect(ok).To(BeTrue())
+		relayPublisher, ok := msgPublisher.(msgConn.RelayPublisher)
+		Expect(ok).To(BeTrue())
+		relay := msgConn.NewOutboxRelay(relayOutbox, relayPublisher, msgConn.OutboxRelayConfig{
+			PollInterval:   25 * time.Millisecond,
+			FailureBackoff: 25 * time.Millisecond,
+			BatchSize:      10,
+			Signal:         outboxSignal,
+		})
+		relayDone = make(chan struct{})
+		go func() {
+			defer GinkgoRecover()
+			defer close(relayDone)
+			err := relay.Run(cancelCtxPublisher)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				Fail(fmt.Sprintf("profile outbox relay failed: %v", err))
+			}
+		}()
+		profileUnitOfWork := shareduow.New(database.Pool,
+			shareduow.WithTransactionalOutbox(orderedOutbox),
+			shareduow.WithOutboxSignal(func() { msgConn.NotifyOutboxSignal(outboxSignal) }),
+		)
+		profileEventBuilder := messaging.NewUserEventBuilder(kafkaPublisherTopic)
 
 		redisAddr := env.WithDefaultString("PROFILE_SERVICE_REDIS_ADDRESS", "localhost:6379")
 		redisUser := env.WithDefaultString("PROFILE_SERVICE_REDIS_USERNAME", "")
@@ -119,7 +151,8 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		profilesUseCase = usecase.NewProfilesUseCase(
 			usecase.ProfilesUseCaseDeps{
 				ProfilesRepository: profileDB,
-				MsgPublisher:       profilePublisher,
+				UnitOfWork:         profileUnitOfWork,
+				EventBuilder:       profileEventBuilder,
 				AuthStore:          authStore,
 				AuthProvider:       authProvider,
 			},
@@ -153,6 +186,9 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		}
 		if cancelFtnPublisher != nil {
 			cancelFtnPublisher()
+		}
+		if relayDone != nil {
+			Eventually(relayDone, 5*time.Second).Should(BeClosed())
 		}
 		if redisClient != nil {
 			redisClient.Close()

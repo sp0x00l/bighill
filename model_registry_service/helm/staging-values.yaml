@@ -18,7 +18,7 @@ env:
   topic: "model_registry"
   trainingSubscriberTopic: "training"
   ingestionSubscriberTopic: "ingestion"
-  dlq: "http://localhost:4566/model-registry-dev-env-queue/"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-model-registry-dlq"
   outbox: "postgres"
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"

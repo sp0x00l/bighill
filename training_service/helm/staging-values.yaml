@@ -17,7 +17,7 @@ env:
   kafkaAutoOffsetReset: "earliest"
   topic: "training"
   inferenceSubscriberTopic: "inference"
-  dlq: "http://localhost:4566/training-dev-env-queue/"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-training-dlq"
   httpClientTimeoutSeconds: "10"
   dataRegistryHttpHost: "data-registry-service"
   dataRegistryHttpPort: "8081"

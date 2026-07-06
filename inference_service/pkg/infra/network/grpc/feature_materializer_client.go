@@ -22,6 +22,24 @@ type FeatureMaterializerClientConfig struct {
 	RetryCount    int
 }
 
+func ValidateFeatureMaterializerClientConfig(config FeatureMaterializerClientConfig) error {
+	log.Trace("ValidateFeatureMaterializerClientConfig")
+
+	if config.Address == "" {
+		return fmt.Errorf("feature materializer grpc address is required")
+	}
+	if config.DialTimeoutMs <= 0 {
+		return fmt.Errorf("feature materializer grpc dial timeout must be greater than zero")
+	}
+	if config.CallTimeoutMs <= 0 {
+		return fmt.Errorf("feature materializer grpc call timeout must be greater than zero")
+	}
+	if config.RetryCount <= 0 {
+		return fmt.Errorf("feature materializer grpc retry count must be greater than zero")
+	}
+	return nil
+}
+
 type featureMaterializerClient struct {
 	conn   *grpc.ClientConn
 	client featurepb.FeatureMaterializerServiceClient

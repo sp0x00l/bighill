@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +21,7 @@ import (
 
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
+	"lib/shared_lib/lifecycle"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
 	serializers "lib/shared_lib/serializer"
@@ -52,6 +52,7 @@ type trainingConfig struct {
 	Profile                  model.TrainingProfile
 	Executor                 trainingExecutorConfig
 	Health                   healthConfig
+	Lifecycle                lifecycle.Config
 }
 
 type temporalConfig struct {
@@ -115,7 +116,6 @@ func main() {
 
 	log.Trace(fmt.Sprintf("starting the %s service", serviceName))
 	traceShutdown := trace.Init(cancelCtx, serviceName, Version)
-	defer traceShutdown()
 
 	temporalClient, err := client.Dial(client.Options{
 		HostPort:  cfg.Temporal.Address,
@@ -124,22 +124,12 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to connect to Temporal")
 	}
-	defer temporalClient.Close()
 
 	publisherFactory := messagingConn.NewMessenger(cfg.Messaging, cancelFtn)
-	defer func() {
-		_ = publisherFactory.Close(cancelCtx)
-	}()
 	publisher, err := publisherFactory.Publisher(cancelCtx)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training publisher")
 	}
-	subscriberFactories := []messagingConn.Messenger{}
-	defer func() {
-		for _, factory := range subscriberFactories {
-			_ = factory.Close(cancelCtx)
-		}
-	}()
 
 	trainingEventPublisher := trainingmessaging.NewTrainingEventPublisher(publisher, cfg.Topics)
 	activityOptions := []temporalworker.TrainingActivitiesOption{
@@ -149,24 +139,17 @@ func main() {
 		temporalworker.WithArtifactBucketRegion(cfg.Executor.ArtifactBucketRegion),
 		temporalworker.WithAxolotlCommand(cfg.Executor.AxolotlCommand),
 	}
-	var trainingExecutor app.TrainingExecutor
-	if cfg.TrainingTriggerEnabled {
-		manifestReader, err := executor.NewObjectManifestReader(cancelCtx, cfg.Executor.ArtifactBucketRegion, nil)
-		if err != nil {
-			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training manifest reader")
-		}
-		trainingExecutor, err = newTrainingExecutor(cfg.Executor, manifestReader)
-		if err != nil {
-			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training executor")
-		}
-		activityOptions = append(activityOptions, temporalworker.WithExecutor(trainingExecutor))
+	manifestReader, err := executor.NewObjectManifestReader(cancelCtx, cfg.Executor.ArtifactBucketRegion, nil)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training manifest reader")
 	}
+	trainingExecutor, err := newTrainingExecutor(cfg.Executor, manifestReader)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create training executor")
+	}
+	activityOptions = append(activityOptions, temporalworker.WithExecutor(trainingExecutor))
 	activities := temporalworker.NewTrainingActivities(trainingEventPublisher, activityOptions...)
 	trainingWorker := temporalworker.NewTrainingWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
-	if err := trainingWorker.Start(); err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to start Temporal worker")
-	}
-	defer trainingWorker.Stop()
 
 	workflowStarter := temporalworker.NewTrainingWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
 	resolverClient := &http.Client{Timeout: cfg.HTTPClientTimeout}
@@ -189,24 +172,52 @@ func main() {
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck().WithMessageBrokerCheck()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	components := []lifecycle.Component{
+		lifecycle.CloserComponent("training-observability", func() error {
+			traceShutdown()
+			return nil
+		}),
+		lifecycle.CloserComponent("training-temporal-client", func() error {
+			temporalClient.Close()
+			return nil
+		}),
+		lifecycle.CloserComponent("training-publisher", func() error {
+			return publisherFactory.Close(cancelCtx)
+		}),
+		lifecycle.HealthCheckComponent("training-healthcheck", healthCheck),
+		lifecycle.ServerComponent("training-http", restService),
+		lifecycle.TemporalWorkerComponent("training-temporal-worker", trainingWorker),
+	}
 
 	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
-		factory, monitor, err := messagingConn.StartStreamSubscriber(cancelCtx, messagingConn.StreamSubscriberConfig{
-			Brokers:          cfg.Messaging.Brokers,
-			DLQURL:           cfg.Messaging.DlqURL,
-			BaseGroupID:      cfg.Messaging.GroupID,
-			AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
-			Cancel:           cancelFtn,
-			Monitor:          healthCheck,
-			OnUnexpectedStop: func() { quit <- syscall.SIGTERM },
-		}, name, topics, configure)
-		if err != nil {
-			log.WithContext(cancelCtx).WithError(err).Fatalf("unable to create %s subscriber", name)
-		}
-		healthCheck = monitor
-		subscriberFactories = append(subscriberFactories, factory)
+		var factory messagingConn.Messenger
+		components = append(components, lifecycle.NewFuncComponent(lifecycle.ComponentConfig{
+			Name: "training-subscriber-" + name,
+			Start: func(ctx context.Context) error {
+				startedFactory, monitor, err := messagingConn.StartStreamSubscriber(ctx, messagingConn.StreamSubscriberConfig{
+					Brokers:          cfg.Messaging.Brokers,
+					DLQURL:           cfg.Messaging.DlqURL,
+					BaseGroupID:      cfg.Messaging.GroupID,
+					AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
+					Cancel:           cancelFtn,
+					Monitor:          healthCheck,
+					OnUnexpectedStop: cancelFtn,
+				}, name, topics, configure)
+				if err != nil {
+					return err
+				}
+				factory = startedFactory
+				healthCheck = monitor
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			Close: func() error {
+				if factory == nil {
+					return nil
+				}
+				return factory.Close(cancelCtx)
+			},
+		}))
 	}
 
 	if cfg.TrainingTriggerEnabled {
@@ -221,24 +232,6 @@ func main() {
 		log.WithContext(cancelCtx).Info("training event triggers disabled; preference dataset events will not start training workflows")
 	}
 
-	go func() {
-		if err := restService.Connect(); err != nil {
-			if err != http.ErrServerClosed {
-				log.Fatalf("unable to start the %s rest service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
-
-	go func() {
-		if err := healthCheck.Connect(cancelCtx); err != nil {
-			if err != http.ErrServerClosed {
-				log.Fatalf("unable to start health check for the %s service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
-
 	log.WithContext(cancelCtx).WithFields(log.Fields{
 		"temporal_address":    cfg.Temporal.Address,
 		"temporal_namespace":  cfg.Temporal.Namespace,
@@ -246,11 +239,11 @@ func main() {
 		"workflow":            app.TrainModelWorkflowName,
 	}).Info("training Temporal worker started")
 
-	<-quit
-
+	supervisor := lifecycle.NewSupervisorWithConfig(cfg.Lifecycle, components...)
+	if err := supervisor.RunWithSignals(cancelCtx, syscall.SIGINT, syscall.SIGTERM); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.WithContext(cancelCtx).WithError(err).Errorf("%s service stopped with error", serviceName)
+	}
 	cancelFtn()
-	restService.Close()
-	healthCheck.Close()
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
 
@@ -351,6 +344,11 @@ func readTrainingConfig() trainingConfig {
 			MessageBrokerSubscriberMaxPollSilence:     secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS", "30"),
 			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
 			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("TRAINING_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
+		},
+		Lifecycle: lifecycle.Config{
+			ReadinessTimeout: secondsFromEnv("TRAINING_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS", "30"),
+			DrainTimeout:     secondsFromEnv("TRAINING_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS", "30"),
+			CloseTimeout:     secondsFromEnv("TRAINING_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS", "10"),
 		},
 	}
 }

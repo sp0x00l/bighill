@@ -14,6 +14,7 @@ spec:
       labels:
         app: {{ include "data-stream-service.fullname" . }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds | default 45 }}
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default "data-stream-service" }}
       {{- end }}
@@ -37,6 +38,12 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: DATA_STREAM_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
+            - name: DATA_STREAM_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.readinessTimeoutSeconds | quote }}
+            - name: DATA_STREAM_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.drainTimeoutSeconds | quote }}
+            - name: DATA_STREAM_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.closeTimeoutSeconds | quote }}
             - name: DATA_STREAM_SERVICE_API_GRPC_HOST
               value: "0.0.0.0"
             - name: DATA_STREAM_SERVICE_API_GRPC_PORT

@@ -77,6 +77,14 @@ func (s *Service) Close() {
 	s.server.Close()
 }
 
+func (s *Service) Shutdown(ctx context.Context) error {
+	return s.server.Shutdown(ctx)
+}
+
+func (s *Service) Ready() bool {
+	return s.server.Ready()
+}
+
 func NewResponseWithPayload(statusCode int, payload []byte) APIResponse {
 	return response{statusCode: statusCode, payload: payload}
 }

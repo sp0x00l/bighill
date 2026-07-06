@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"feature_materializer_service/pkg/domain"
@@ -54,22 +55,17 @@ func (u *featureSnapshotUsecase) BuildFeatureSnapshot(ctx context.Context, rawSn
 		return nil, err
 	}
 
-	if u.rawReader == nil || u.builder == nil {
-		log.WithContext(ctx).WithFields(log.Fields{
-			"feature_snapshot_id": featureSnapshot.FeatureSnapshotID,
-			"raw_snapshot_id":     rawSnapshotID,
-		}).Info("feature snapshot accepted for future build")
-		return featureSnapshot, nil
-	}
-
 	rawSnapshot, err := u.rawReader.ReadRawSnapshot(ctx, rawSnapshotID)
 	if err != nil {
 		return nil, err
 	}
 	built, err := u.builder.BuildFeatureSnapshot(ctx, rawSnapshot, featureSnapshot)
 	if err != nil {
-		_ = u.markFeatureFailed(ctx, featureSnapshot.FeatureSnapshotID, err.Error())
-		return nil, fmt.Errorf("%w: %w", domain.ErrFeatureSnapshotBuild, err)
+		outErr := fmt.Errorf("%w: %w", domain.ErrFeatureSnapshotBuild, err)
+		if markErr := u.markFeatureFailed(ctx, featureSnapshot.FeatureSnapshotID, err.Error()); markErr != nil {
+			return nil, errors.Join(outErr, fmt.Errorf("mark feature snapshot failed: %w", markErr))
+		}
+		return nil, outErr
 	}
 	if built == nil {
 		return nil, fmt.Errorf("%w: feature snapshot builder returned nil", domain.ErrFeatureSnapshotBuild)

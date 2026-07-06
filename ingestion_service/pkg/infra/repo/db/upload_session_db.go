@@ -183,11 +183,13 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, tx pgx.Tx, s
 	query := `INSERT INTO ` + db.Name + `.upload_sessions (
 		upload_id, resource_type, resource_id, dataset_id, user_id, client_nonce, file_name, storage_location,
 		declared_format, declared_content_type, declared_size_bytes, actual_size_bytes, checksum, status,
+		table_namespace, table_name, table_format, catalog_provider, processing_profile,
 		artifact_type, model_name, model_version, base_model,
 		source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha, created_at, expires_at
 	) VALUES (
 		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @client_nonce, @file_name, @storage_location,
 		@declared_format, @declared_content_type, @declared_size_bytes, @actual_size_bytes, @checksum, 'PROMOTED'::upload_session_status_enum,
+		@table_namespace, @table_name, NULLIF(@table_format, '')::table_format_enum, NULLIF(@catalog_provider, '')::catalog_provider_enum, NULLIF(@processing_profile, '')::processing_profile_enum,
 		@artifact_type, @model_name, @model_version, @base_model,
 		@source::model_source_enum, @source_uri, @manifest_location, @hf_repo_id, @hf_revision, @hf_commit_sha, @created_at, @expires_at
 	)

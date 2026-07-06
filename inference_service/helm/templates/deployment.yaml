@@ -14,6 +14,7 @@ spec:
       labels:
         app: {{ include "inference-service.fullname" . }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds | default 45 }}
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default "inference-service" }}
       {{- end }}
@@ -37,6 +38,12 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: INFERENCE_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
+            - name: INFERENCE_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.readinessTimeoutSeconds | quote }}
+            - name: INFERENCE_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.drainTimeoutSeconds | quote }}
+            - name: INFERENCE_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.closeTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_DB_NAME
 {{- if .Values.env.dbCredentialsSecret.name }}
               valueFrom:

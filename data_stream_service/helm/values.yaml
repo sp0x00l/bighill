@@ -11,6 +11,11 @@ service:
   type: ClusterIP
   grpcPort: 7070
   healthPort: 5050
+lifecycle:
+  terminationGracePeriodSeconds: 45
+  readinessTimeoutSeconds: "30"
+  drainTimeoutSeconds: "30"
+  closeTimeoutSeconds: "10"
 ingress:
   enabled: false
   host: ""

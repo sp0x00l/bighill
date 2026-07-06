@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,20 @@ func (manifestReaderStub) Stat(context.Context, string) (executor.ObjectInfo, er
 func TestTrainingMain(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Training service main unit test suite")
+}
+
+var _ = Describe("staging Helm values", func() {
+	It("does not point the DLQ at LocalStack", func() {
+		values := readTextFile("helm/staging-values.yaml")
+
+		Expect(values).NotTo(ContainSubstring("localhost:4566"))
+	})
+})
+
+func readTextFile(path string) string {
+	content, err := os.ReadFile(path)
+	Expect(err).NotTo(HaveOccurred())
+	return strings.TrimSpace(string(content))
 }
 
 var _ = Describe("readTrainingConfig", func() {

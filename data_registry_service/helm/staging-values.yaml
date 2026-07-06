@@ -15,11 +15,12 @@ ingress:
 env:
   environment: "staging"
   kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
-  dlq: "http://localhost:4566/data-registry-dev-env-queue/"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-data-registry-dlq"
   outbox: "postgres"
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"
   outboxRelayFailureBackoffMs: "2000"
+  catalogProvider: "polaris"
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   dbCredentialsSecret:
     name: "aurora-creds-staging"

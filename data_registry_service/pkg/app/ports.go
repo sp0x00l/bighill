@@ -35,12 +35,16 @@ type DatasetEventBuilderAdapter interface {
 
 type SourceRepositoryAdapter interface {
 	Close()
-	Create(context.Context, *model.SourceConnector, uuid.UUID) error
+	Create(context.Context, pgx.Tx, *model.SourceConnector, uuid.UUID) error
 	ReadByUserID(context.Context, uuid.UUID) ([]model.SourceConnector, error)
 	ReadByID(context.Context, uuid.UUID, uuid.UUID) (*model.SourceConnector, error)
 	ReadCatalogID(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, error)
-	Delete(context.Context, uuid.UUID, uuid.UUID) error
-	Replace(context.Context, *model.SourceConnector) error
+	Delete(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error
+	Replace(context.Context, pgx.Tx, *model.SourceConnector) error
+}
+
+type SourceUnitOfWorkAdapter interface {
+	Do(context.Context, shareduow.TxFunc) error
 }
 
 type CatalogClientAdapter interface {

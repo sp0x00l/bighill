@@ -2,16 +2,16 @@ package main
 
 import (
 	"context"
+	streamapp "data_stream_service/pkg/app"
 	"data_stream_service/pkg/infra"
 	"data_stream_service/pkg/infra/network/data"
+	"errors"
 	"fmt"
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
+	"lib/shared_lib/lifecycle"
 	logs "lib/shared_lib/logs"
 	trace "lib/shared_lib/trace"
-	"net/http"
-	"os"
-	"os/signal"
 	"strings"
 	"syscall"
 	"time"
@@ -32,6 +32,7 @@ type streamConfig struct {
 	TLSClientCAPath      string
 	RequireClientCert    bool
 	Health               healthConfig
+	Lifecycle            lifecycle.Config
 }
 
 type healthConfig struct {
@@ -102,27 +103,49 @@ func main() {
 	if !cfg.FlightAllowAnonymous && (strings.TrimSpace(cfg.TLSCertPath) == "" || strings.TrimSpace(cfg.TLSKeyPath) == "" || strings.TrimSpace(cfg.TLSClientCAPath) == "" || !cfg.RequireClientCert) {
 		log.WithContext(cancelCtx).Fatal("data stream Flight requires mTLS when anonymous access is disabled")
 	}
-	dataServer := data.NewFlightServer(data.NewFlightServerAuth(cfg.FlightAuthToken, cfg.FlightAllowAnonymous), streamCfg, queryEngine)
-	dataShutdown := dataServer.Connect()
+	queryUsecase := streamapp.NewQueryUsecase(queryEngine)
+	dataServer, err := data.NewFlightServer(data.NewFlightServerAuth(cfg.FlightAuthToken, cfg.FlightAllowAnonymous), streamCfg, queryUsecase)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to initialize data stream Flight server")
+	}
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	supervisor := lifecycle.NewSupervisorWithConfig(cfg.Lifecycle,
+		lifecycle.CloserComponent("data-stream-observability", func() error {
+			traceShutdown()
+			return nil
+		}),
+		lifecycle.HealthCheckComponent("data-stream-healthcheck", healthCheck),
+		lifecycle.NewFuncComponent(lifecycle.ComponentConfig{
+			Name: "data-stream-flight",
+			Start: func(ctx context.Context) error {
+				shutdown, err := dataServer.Connect()
+				if err != nil {
+					return err
+				}
+				_ = shutdown
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case err := <-dataServer.ServeError():
+					if errors.Is(err, context.Canceled) {
+						return nil
+					}
+					return err
+				}
+			},
+			Drain: func(ctx context.Context) error {
+				return dataServer.Shutdown(ctx)
+			},
+			Health: func() lifecycle.Health {
+				return lifecycle.Health{Name: "data-stream-flight", State: lifecycle.StateReady, Ready: dataServer.Ready()}
+			},
+		}),
+	)
 
-	go func() {
-		if err := healthCheck.Connect(ctx); err != nil {
-			if err != http.ErrServerClosed {
-				log.Fatalf("unable to start health check for the %s service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
-
-	<-quit
-
-	dataShutdown()
-	healthCheck.Close()
+	if err := supervisor.RunWithSignals(cancelCtx, syscall.SIGINT, syscall.SIGTERM); err != nil {
+		log.WithContext(cancelCtx).WithError(err).Errorf("%s service stopped with error", serviceName)
+	}
 	cancelFtn()
-	traceShutdown()
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
 
@@ -145,6 +168,11 @@ func readStreamConfig() streamConfig {
 			MessageBrokerConnectionString: brokers,
 			MessageBrokerLatencyThreshold: secondsFromEnv("DATA_STREAM_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS", "5"),
 			ServiceLatencyThreshold:       secondsFromEnv("DATA_STREAM_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS", "5"),
+		},
+		Lifecycle: lifecycle.Config{
+			ReadinessTimeout: secondsFromEnv("DATA_STREAM_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS", "30"),
+			DrainTimeout:     secondsFromEnv("DATA_STREAM_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS", "30"),
+			CloseTimeout:     secondsFromEnv("DATA_STREAM_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS", "10"),
 		},
 	}
 }

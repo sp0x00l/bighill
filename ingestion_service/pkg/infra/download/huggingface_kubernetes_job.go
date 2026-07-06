@@ -2,6 +2,8 @@ package download
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"ingestion_service/pkg/domain"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +44,7 @@ const (
 	kubernetesValueKey                    = "value"
 	kubernetesNamespaceKey                = "namespace"
 	kubernetesLabelsKey                   = "labels"
+	kubernetesAnnotationsKey              = "annotations"
 	kubernetesSpecKey                     = "spec"
 	kubernetesStatusKey                   = "status"
 	kubernetesConditionsKey               = "conditions"
@@ -74,6 +78,7 @@ const (
 	huggingFaceJobManifestFile  = "manifest.json"
 	kubernetesAppLabelKey       = "app"
 	bighillModelIDLabelKey      = "bighill.io/model-id"
+	bighillRequestHashLabelKey  = "bighill.io/request-hash"
 	kubernetesRestartNever      = "Never"
 )
 
@@ -89,6 +94,7 @@ const (
 	kubernetesNameDash  = "-"
 	pathSeparator       = "/"
 	s3Scheme            = "s3"
+	kubernetesDeleteTTL = 30 * time.Second
 )
 
 type HuggingFaceKubernetesJobDownloaderConfig struct {
@@ -163,13 +169,22 @@ func NewHuggingFaceKubernetesJobDownloaderWithClient(config HuggingFaceKubernete
 	}, nil
 }
 
-func (d *HuggingFaceKubernetesJobDownloader) DownloadHuggingFaceModel(ctx context.Context, request model.OnboardHuggingFaceModelRequest) (*model.OnboardedModelArtifact, error) {
+func (d *HuggingFaceKubernetesJobDownloader) DownloadHuggingFaceModel(ctx context.Context, request model.OnboardHuggingFaceModelRequest) (artifact *model.OnboardedModelArtifact, err error) {
 	log.Trace("HuggingFaceKubernetesJobDownloader DownloadHuggingFaceModel")
 
 	runCtx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()
 	name := HuggingFaceJobName(request.ResourceID)
 	manifestURI := d.manifestURI(request.ResourceID)
+	defer func() {
+		if err != nil && runCtx.Err() != nil {
+			deleteCtx, deleteCancel := context.WithTimeout(context.Background(), kubernetesDeleteTTL)
+			defer deleteCancel()
+			if deleteErr := d.deleteJob(deleteCtx, name); deleteErr != nil {
+				log.WithContext(ctx).WithError(deleteErr).WithField(kubernetesNameKey, name).Warn("failed to delete canceled hugging face download job")
+			}
+		}
+	}()
 	if err := d.ensureJob(runCtx, name, request); err != nil {
 		return nil, fmt.Errorf("%w: create hugging face download job: %w", domain.ErrValidationFailed, err)
 	}
@@ -195,6 +210,33 @@ func (d *HuggingFaceKubernetesJobDownloader) ensureJob(ctx context.Context, name
 
 	_, err := d.client.Resource(kubernetesJobGVR).Namespace(d.namespace).Create(ctx, d.jobObject(name, request), metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
+		return d.validateExistingJob(ctx, name, request)
+	}
+	return err
+}
+
+func (d *HuggingFaceKubernetesJobDownloader) validateExistingJob(ctx context.Context, name string, request model.OnboardHuggingFaceModelRequest) error {
+	log.Trace("HuggingFaceKubernetesJobDownloader validateExistingJob")
+
+	obj, err := d.client.Resource(kubernetesJobGVR).Namespace(d.namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	annotations := obj.GetAnnotations()
+	if annotations[bighillRequestHashLabelKey] != d.requestHash(request) {
+		return fmt.Errorf("existing hugging face download job has different request hash")
+	}
+	return nil
+}
+
+func (d *HuggingFaceKubernetesJobDownloader) deleteJob(ctx context.Context, name string) error {
+	log.Trace("HuggingFaceKubernetesJobDownloader deleteJob")
+
+	propagation := metav1.DeletePropagationBackground
+	err := d.client.Resource(kubernetesJobGVR).Namespace(d.namespace).Delete(ctx, name, metav1.DeleteOptions{
+		PropagationPolicy: &propagation,
+	})
+	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	return err
@@ -260,6 +302,9 @@ func (d *HuggingFaceKubernetesJobDownloader) jobObject(name string, request mode
 			kubernetesMetadataKey: map[string]any{
 				kubernetesNameKey:      name,
 				kubernetesNamespaceKey: d.namespace,
+				kubernetesAnnotationsKey: map[string]any{
+					bighillRequestHashLabelKey: d.requestHash(request),
+				},
 				kubernetesLabelsKey: map[string]any{
 					kubernetesAppLabelKey:  huggingFaceJobAppLabelValue,
 					bighillModelIDLabelKey: request.ResourceID.String(),
@@ -268,6 +313,28 @@ func (d *HuggingFaceKubernetesJobDownloader) jobObject(name string, request mode
 			kubernetesSpecKey: spec,
 		},
 	}
+}
+
+func (d *HuggingFaceKubernetesJobDownloader) requestHash(request model.OnboardHuggingFaceModelRequest) string {
+	log.Trace("HuggingFaceKubernetesJobDownloader requestHash")
+
+	env := d.envKeys.envValues(request, request.HuggingFaceToken, d.outputURI)
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	hash := sha256.New()
+	for _, key := range keys {
+		hash.Write([]byte(key))
+		hash.Write([]byte("="))
+		hash.Write([]byte(env[key]))
+		hash.Write([]byte("\n"))
+	}
+	hash.Write([]byte(strings.Join(d.command, " ")))
+	hash.Write([]byte("\n"))
+	hash.Write([]byte(d.image))
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func (d *HuggingFaceKubernetesJobDownloader) jobStatus(ctx context.Context, name string) (huggingFaceJobStatus, error) {

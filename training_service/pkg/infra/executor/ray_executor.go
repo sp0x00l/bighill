@@ -133,8 +133,18 @@ func (e *RayExecutor) RunPromotionReport(ctx context.Context, spec model.Promoti
 	})
 }
 
-func waitForRayJob[T any](ctx context.Context, executor *RayExecutor, failureError *domain.ServiceError, submissionID, entrypoint string, envVars map[string]string, readResult func(context.Context) (*T, error)) (*T, error) {
+func waitForRayJob[T any](ctx context.Context, executor *RayExecutor, failureError *domain.ServiceError, submissionID, entrypoint string, envVars map[string]string, readResult func(context.Context) (*T, error)) (result *T, err error) {
 	log.Trace("waitForRayJob")
+
+	defer func() {
+		if err != nil && ctx.Err() != nil {
+			stopCtx, cancel := context.WithTimeout(context.Background(), rayStopTimeout)
+			defer cancel()
+			if stopErr := executor.stop(stopCtx, submissionID); stopErr != nil {
+				log.WithContext(ctx).WithError(stopErr).WithField("submission_id", submissionID).Warn("failed to stop canceled ray job")
+			}
+		}
+	}()
 
 	_, found, err := executor.jobStatus(ctx, submissionID)
 	if err != nil {
@@ -248,6 +258,28 @@ func (e *RayExecutor) jobStatus(ctx context.Context, submissionID string) (rayJo
 		return rayJobStatusResponse{}, false, fmt.Errorf("%w: decode ray job status: %w", domain.ErrTrainModel, err)
 	}
 	return parsed, true, nil
+}
+
+func (e *RayExecutor) stop(ctx context.Context, submissionID string) error {
+	log.Trace("RayExecutor stop")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.url+"/api/jobs/"+url.PathEscape(submissionID)+"/stop", nil)
+	if err != nil {
+		return fmt.Errorf("%w: build ray stop request: %w", domain.ErrTrainModel, err)
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: stop ray job: %w", domain.ErrTrainModel, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("%w: ray stop failed with status %d: %s", domain.ErrTrainModel, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return nil
 }
 
 func (e *RayExecutor) readTrainingArtifact(ctx context.Context, location string, trainingRunID string) (*model.TrainedModelArtifact, error) {
@@ -477,7 +509,10 @@ type s3Downloader interface {
 	ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
-const rayJobRegistrationAttempts = 3
+const (
+	rayJobRegistrationAttempts = 3
+	rayStopTimeout             = 30 * time.Second
+)
 
 func NewObjectManifestReader(ctx context.Context, region string, client *http.Client) (*ObjectManifestReader, error) {
 	log.Trace("NewObjectManifestReader")

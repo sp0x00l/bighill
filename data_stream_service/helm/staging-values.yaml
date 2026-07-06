@@ -15,7 +15,7 @@ ingress:
 env:
   environment: "staging"
   kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
-  dlq: "http://localhost:4566/data-stream-dev-env-queue/"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-data-stream-dlq"
   outbox: "postgres"
   outboxRelayPollMs: "250"
   outboxRelayBatchSize: "100"

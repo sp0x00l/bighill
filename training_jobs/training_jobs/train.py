@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import os
 import shlex
-import subprocess
 from pathlib import Path
 
 from training_jobs.config import read_storage_config
 from training_jobs.manifest import TrainingArtifactManifest
+from training_jobs.process import run_child
 from training_jobs.storage import upload_directory, write_json_bytes
 
 REQUIRED_ENV_KEYS = (
@@ -107,9 +107,9 @@ def run_training_command(command: str, recipe_path: Path, output_dir: Path) -> N
     env = os.environ.copy()
     env["TRAINING_AXOLOTL_RECIPE_PATH"] = str(recipe_path)
     env["TRAINING_OUTPUT_DIR"] = str(output_dir)
-    completed = subprocess.run(argv, env=env, cwd=str(recipe_path.parent), check=False)
-    if completed.returncode != 0:
-        raise RuntimeError(f"training command exited with status {completed.returncode}")
+    returncode = run_child(argv, env=env, cwd=recipe_path.parent)
+    if returncode != 0:
+        raise RuntimeError(f"training command exited with status {returncode}")
     if not output_dir.is_dir() or not any(output_dir.rglob("*")):
         raise RuntimeError(f"training command did not produce adapter files at {output_dir}")
 

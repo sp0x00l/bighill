@@ -79,7 +79,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		sourceDB = repo.NewSourceConnectorDB(database)
 		datasetUnitOfWork := shareduow.New(database.Pool, shareduow.WithTransactionalOutbox(orderedOutbox))
 		datasets = usecase.NewDatasetUseCase(datasetDB, datasetUnitOfWork, registrymessaging.NewDatasetEventBuilder("data_registry"))
-		connectors = usecase.NewSourceUsecase(sourceDB, catalogclient.NewLocalCatalogClient())
+		connectors = usecase.NewSourceUsecase(sourceDB, datasetUnitOfWork, catalogclient.NewLocalCatalogClient())
 	})
 
 	AfterAll(func() {

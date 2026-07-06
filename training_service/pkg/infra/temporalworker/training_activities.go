@@ -139,9 +139,6 @@ func (a *TrainingActivities) PrepareTrainingDataset(_ context.Context, request m
 func (a *TrainingActivities) RunTrainingJob(ctx context.Context, prepared model.PreparedTrainingDataset, request model.TrainingRunRequest) (*model.TrainedModelArtifact, error) {
 	log.Trace("TrainingActivities RunTrainingJob")
 
-	if a.executor == nil {
-		return nil, domain.ErrTrainModel.Extend("training executor is not configured")
-	}
 	spec, err := a.trainingJobSpec(prepared, request)
 	if err != nil {
 		return nil, err
@@ -156,9 +153,6 @@ func (a *TrainingActivities) RunTrainingJob(ctx context.Context, prepared model.
 func (a *TrainingActivities) EvaluateTrainedModel(ctx context.Context, artifact model.TrainedModelArtifact, request model.TrainingRunRequest) (*model.EvaluationReport, error) {
 	log.Trace("TrainingActivities EvaluateTrainedModel")
 
-	if a.executor == nil {
-		return nil, domain.ErrEvaluateModel.Extend("training executor is not configured")
-	}
 	spec, err := a.evaluationJobSpec(artifact, request)
 	if err != nil {
 		return nil, err

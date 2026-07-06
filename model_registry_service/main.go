@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -25,6 +24,7 @@ import (
 	coreDB "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
+	"lib/shared_lib/lifecycle"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
 	serializers "lib/shared_lib/serializer"
@@ -49,6 +49,7 @@ type registryConfig struct {
 	ProfileTopic       string
 	Serving            servingConfig
 	Health             healthConfig
+	Lifecycle          lifecycle.Config
 }
 
 type healthConfig struct {
@@ -92,13 +93,11 @@ func main() {
 
 	log.Trace(fmt.Sprintf("starting the %s service", serviceName))
 	traceShutdown := trace.Init(cancelCtx, serviceName, Version)
-	defer traceShutdown()
 
 	database, err := coreDB.InitDatabase(cancelCtx, cfg.DBName, cfg.DBConnectionString, log.StandardLogger())
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("database init failed")
 	}
-	defer database.Close()
 
 	outboxWriter, err := newPostgresOutbox(database, cfg.OutboxBackend)
 	if err != nil {
@@ -124,26 +123,6 @@ func main() {
 		log.Fatal("publisher does not support outbox relay publishing")
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
-	relayCtx, stopOutboxRelay := context.WithCancel(cancelCtx)
-	relayDone := make(chan struct{})
-	go func() {
-		defer close(relayDone)
-		if relayErr := outboxRelay.Run(relayCtx); relayErr != nil && !errors.Is(relayErr, context.Canceled) {
-			log.WithContext(cancelCtx).WithError(relayErr).Error("outbox relay stopped unexpectedly")
-		}
-	}()
-	defer func() {
-		stopOutboxRelay()
-		<-relayDone
-		outboxPublisher.Close()
-	}()
-
-	subscriberFactories := []messagingConn.Messenger{}
-	defer func() {
-		for _, factory := range subscriberFactories {
-			_ = factory.Close(cancelCtx)
-		}
-	}()
 
 	modelRepository := modeldb.NewModelRepository(database)
 	modelUnitOfWork := shareduow.New(database.Pool,
@@ -179,24 +158,58 @@ func main() {
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	components := []lifecycle.Component{
+		lifecycle.CloserComponent("model-registry-observability", func() error {
+			traceShutdown()
+			return nil
+		}),
+		lifecycle.CloserComponent("model-registry-database", func() error {
+			database.Close()
+			return nil
+		}),
+		lifecycle.CloserComponent("model-registry-publisher", func() error {
+			outboxPublisher.Close()
+			return nil
+		}),
+		lifecycle.HealthCheckComponent("model-registry-healthcheck", healthCheck),
+		lifecycle.ServerComponent("model-registry-http", restService),
+		lifecycle.WorkerComponent("model-registry-outbox-relay", func(ctx context.Context) error {
+			if err := outboxRelay.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			return nil
+		}),
+	}
 
 	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
-		factory, monitor, err := messagingConn.StartStreamSubscriber(cancelCtx, messagingConn.StreamSubscriberConfig{
-			Brokers:          cfg.Messaging.Brokers,
-			DLQURL:           cfg.Messaging.DlqURL,
-			BaseGroupID:      cfg.Messaging.GroupID,
-			AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
-			Cancel:           cancelFtn,
-			Monitor:          healthCheck,
-			OnUnexpectedStop: func() { quit <- syscall.SIGTERM },
-		}, name, topics, configure)
-		if err != nil {
-			log.WithContext(cancelCtx).WithError(err).Fatalf("unable to create %s subscriber", name)
-		}
-		healthCheck = monitor
-		subscriberFactories = append(subscriberFactories, factory)
+		var factory messagingConn.Messenger
+		components = append(components, lifecycle.NewFuncComponent(lifecycle.ComponentConfig{
+			Name: "model-registry-subscriber-" + name,
+			Start: func(ctx context.Context) error {
+				startedFactory, monitor, err := messagingConn.StartStreamSubscriber(ctx, messagingConn.StreamSubscriberConfig{
+					Brokers:          cfg.Messaging.Brokers,
+					DLQURL:           cfg.Messaging.DlqURL,
+					BaseGroupID:      cfg.Messaging.GroupID,
+					AutoOffsetReset:  cfg.Messaging.AutoOffsetReset,
+					Cancel:           cancelFtn,
+					Monitor:          healthCheck,
+					OnUnexpectedStop: cancelFtn,
+				}, name, topics, configure)
+				if err != nil {
+					return err
+				}
+				factory = startedFactory
+				healthCheck = monitor
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			Close: func() error {
+				if factory == nil {
+					return nil
+				}
+				return factory.Close(cancelCtx)
+			},
+		}))
 	}
 
 	startSubscriber("training-completed", []string{cfg.Topics.Training}, func(subscriber messagingConn.Subscriber) {
@@ -224,36 +237,20 @@ func main() {
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
 
-	go func() {
-		if err := restService.Connect(); err != nil {
-			if err != http.ErrServerClosed {
-				log.Fatalf("unable to start the %s rest service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
-	go func() {
-		if err := healthCheck.Connect(cancelCtx); err != nil {
-			if err != http.ErrServerClosed {
-				log.Fatalf("unable to start health check for the %s service: %v", serviceName, err)
-			}
-			quit <- syscall.SIGTERM
-		}
-	}()
 	if servingObserver != nil {
-		go func() {
-			if err := servingObserver.Start(cancelCtx); err != nil && !errors.Is(err, context.Canceled) {
-				log.WithContext(cancelCtx).WithError(err).Error("served model status observer stopped unexpectedly")
-				quit <- syscall.SIGTERM
+		components = append(components, lifecycle.WorkerComponent("model-registry-serving-observer", func(ctx context.Context) error {
+			if err := servingObserver.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				return err
 			}
-		}()
+			return nil
+		}))
 	}
 
-	<-quit
-
+	supervisor := lifecycle.NewSupervisorWithConfig(cfg.Lifecycle, components...)
+	if err := supervisor.RunWithSignals(cancelCtx, syscall.SIGINT, syscall.SIGTERM); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.WithContext(cancelCtx).WithError(err).Errorf("%s service stopped with error", serviceName)
+	}
 	cancelFtn()
-	restService.Close()
-	healthCheck.Close()
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
 
@@ -316,6 +313,11 @@ func readModelRegistryConfig() registryConfig {
 			MessageBrokerSubscriberMaxPollSilence:     secondsFromEnv("MODEL_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS", "30"),
 			MessageBrokerSubscriberMaxProgressSilence: secondsFromEnv("MODEL_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS", "90"),
 			MessageBrokerSubscriberMaxLag:             int64(env.WithDefaultInt("MODEL_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG", "100000")),
+		},
+		Lifecycle: lifecycle.Config{
+			ReadinessTimeout: secondsFromEnv("MODEL_REGISTRY_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS", "30"),
+			DrainTimeout:     secondsFromEnv("MODEL_REGISTRY_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS", "30"),
+			CloseTimeout:     secondsFromEnv("MODEL_REGISTRY_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS", "10"),
 		},
 	}
 }

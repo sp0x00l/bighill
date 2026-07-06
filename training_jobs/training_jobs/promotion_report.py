@@ -6,12 +6,12 @@ import binascii
 import json
 import os
 import shlex
-import subprocess
 from pathlib import Path
 from typing import Any
 
 from training_jobs.config import read_storage_config
 from training_jobs.manifest import PromotionReportManifest, parse_profile
+from training_jobs.process import run_child
 from training_jobs.storage import StorageConfig, read_json_bytes
 from training_jobs.storage import write_json_bytes
 
@@ -225,9 +225,9 @@ def run_evidence_command(
         part.replace("{input}", str(input_path)).replace("{output}", str(output_path))
         for part in shlex.split(command)
     ]
-    completed = subprocess.run(argv, cwd=str(work_dir), check=False)
-    if completed.returncode != 0:
-        raise RuntimeError(f"{name} evidence command exited with status {completed.returncode}")
+    returncode = run_child(argv, cwd=work_dir)
+    if returncode != 0:
+        raise RuntimeError(f"{name} evidence command exited with status {returncode}")
     if not output_path.is_file():
         raise RuntimeError(f"{name} evidence command did not write {output_path}")
     evidence = json.loads(output_path.read_text(encoding="utf-8"))

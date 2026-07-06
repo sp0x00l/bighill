@@ -259,11 +259,57 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(err).To(MatchError(ContainSubstring("dataset table is not materialized")))
 	})
 
-	It("rejects snapshot-pinned dataset table reads until snapshots are persisted", func() {
+	It("reads materialized dataset table metadata pinned to the feature snapshot", func() {
+		featureSnapshotID := uuid.New()
+		expected := &model.Dataset{
+			ID:                datasetID,
+			UserID:            userID,
+			Location:          "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			ProcessingState:   model.DatasetProcessingFeatureMaterialized,
+			FeatureSnapshotID: featureSnapshotID,
+		}
+		repo.readDataset = expected
+
+		got, err := uc.ReadDatasetTable(ctx, datasetID, userID, featureSnapshotID.String())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(expected))
+		Expect(repo.readDatasetID).To(Equal(datasetID))
+		Expect(repo.readUserID).To(Equal(userID))
+	})
+
+	It("rejects invalid snapshot-pinned dataset table reads", func() {
+		repo.readDataset = &model.Dataset{
+			ID:              datasetID,
+			UserID:          userID,
+			Location:        "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:  "features",
+			TableName:       "movies",
+			ProcessingState: model.DatasetProcessingFeatureMaterialized,
+		}
+
 		_, err := uc.ReadDatasetTable(ctx, datasetID, userID, "123")
 
-		Expect(err).To(MatchError(ContainSubstring("snapshot-pinned dataset table reads are not supported")))
-		Expect(repo.readDatasetID).To(Equal(uuid.Nil))
+		Expect(err).To(MatchError(ContainSubstring("snapshot_id is invalid")))
+		Expect(repo.readDatasetID).To(Equal(datasetID))
+	})
+
+	It("rejects unknown snapshot-pinned dataset table reads", func() {
+		repo.readDataset = &model.Dataset{
+			ID:                datasetID,
+			UserID:            userID,
+			Location:          "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:    "features",
+			TableName:         "movies",
+			ProcessingState:   model.DatasetProcessingFeatureMaterialized,
+			FeatureSnapshotID: uuid.New(),
+		}
+
+		_, err := uc.ReadDatasetTable(ctx, datasetID, userID, uuid.New().String())
+
+		Expect(err).To(MatchError(ContainSubstring("dataset snapshot was not found")))
 	})
 
 	It("deletes a dataset through the repository", func() {
