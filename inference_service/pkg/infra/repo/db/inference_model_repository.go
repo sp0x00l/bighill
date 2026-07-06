@@ -39,11 +39,11 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 		metrics_metadata, status, failure_reason
 	) VALUES (
 		@model_id, @user_id, @training_run_id, @dataset_id, @idempotency_key,
-		@model_kind, @source, @source_uri, @source_metadata::jsonb,
+		@model_kind::inference_model_kind_enum, @source::inference_model_source_enum, @source_uri, @source_metadata::jsonb,
 		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
-		@adapter_uri, @serving_target, @serving_model, @serving_load_status,
-		@metrics_metadata::jsonb, @status, @failure_reason
+		@adapter_uri, @serving_target, @serving_model, @serving_load_status::inference_model_load_status_enum,
+		@metrics_metadata::jsonb, @status::inference_model_status_enum, @failure_reason
 	)
 	ON CONFLICT (model_id) DO UPDATE SET
 		training_run_id = EXCLUDED.training_run_id,

@@ -4,10 +4,13 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
+    export INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION=local-dev
     true
 elif [ "$1" = "staging" ]; then
+    export INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION=eu-west-1
     true
 elif [ "$1" = "prod" ]; then
+    export INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION=eu-west-1
     true
 else
     echo "Error: Invalid environment provided to inference_service config"
@@ -50,7 +53,6 @@ export INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED=false
 export INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE=s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl
 export INFERENCE_SERVICE_PREFERENCE_DATASET_MIN_EXAMPLES=1
 export INFERENCE_SERVICE_PREFERENCE_DATASET_LIMIT=1000
-export INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION=eu-west-1
 export INFERENCE_SERVICE_PREFERENCE_DATASET_UPLOAD_PART_SIZE_MB=10
 export INFERENCE_SERVICE_PROMPT_STRATEGY_VERSION=rag-prompt-v1
 export INFERENCE_SERVICE_PROMPT_MAX_CONTEXT_TOKENS=3000

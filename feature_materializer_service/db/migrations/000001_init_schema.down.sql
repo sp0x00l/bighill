@@ -11,6 +11,9 @@ DROP TABLE IF EXISTS bighill_feature_materializer_db.feature_snapshots;
 DROP TABLE IF EXISTS bighill_feature_materializer_db.raw_snapshots;
 DROP TABLE IF EXISTS bighill_feature_materializer_db.tenants;
 
+DROP TYPE IF EXISTS processing_profile_enum;
+DROP TYPE IF EXISTS catalog_provider_enum;
+DROP TYPE IF EXISTS table_format_enum;
 DROP TYPE IF EXISTS snapshot_status_enum;
 
 DROP EXTENSION IF EXISTS vector;

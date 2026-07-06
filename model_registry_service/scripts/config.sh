@@ -20,6 +20,7 @@ else
 fi
 
 export MODEL_REGISTRY_SERVICE_NAME=model-registry-service
+export MODEL_REGISTRY_SERVICE_API_HTTP_PORT=8084
 export MODEL_REGISTRY_SERVICE_DB_NAME=bighill_model_registry_db
 export MODEL_REGISTRY_SERVICE_DB_USER=bighill_model_registry_db_user
 export MODEL_REGISTRY_SERVICE_DB_PASSWORD=$BIGHILL_DB_PASSWORD

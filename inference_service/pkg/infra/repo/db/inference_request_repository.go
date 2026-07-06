@@ -34,7 +34,7 @@ func (r *InferenceRequestRepository) RecordInferenceRequest(ctx context.Context,
 	) VALUES (
 		@request_id, @user_id, @dataset_id, @model_id, @embedding_snapshot_id, @query_text, @top_k,
 		@metadata_filters::jsonb, @retrieved_context_ids::jsonb, @retrieved_contexts::jsonb, @prompt_text, @answer_text,
-		@prompt_strategy_version, @generation_provider, @generation_model, @latency_ms, @status, @error_message
+		@prompt_strategy_version, @generation_provider, @generation_model, @latency_ms, @status::inference_request_status_enum, @error_message
 	)
 	ON CONFLICT (request_id) DO UPDATE SET
 		user_id = EXCLUDED.user_id,

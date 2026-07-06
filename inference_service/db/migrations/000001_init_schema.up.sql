@@ -4,6 +4,13 @@ CREATE TYPE inference_model_kind_enum AS ENUM ('BASE', 'FINE_TUNED');
 CREATE TYPE inference_model_source_enum AS ENUM ('TRAINING', 'UPLOAD', 'HUGGING_FACE');
 CREATE TYPE inference_dataset_processing_state_enum AS ENUM ('PENDING', 'RAW_MATERIALIZED', 'FEATURE_MATERIALIZED', 'EMBEDDINGS_MATERIALIZED', 'FAILED');
 CREATE TYPE inference_request_status_enum AS ENUM ('COMPLETED', 'FAILED');
+CREATE TYPE table_format_enum AS ENUM ('PARQUET', 'ICEBERG');
+CREATE TYPE catalog_provider_enum AS ENUM ('LOCAL', 'POLARIS');
+CREATE TYPE processing_profile_enum AS ENUM (
+    'GENERIC_PARQUET_PROCESSING_PROFILE',
+    'TEXT_RAG_PROCESSING_PROFILE',
+    'INSTRUCTION_TUNING_PROCESSING_PROFILE'
+);
 
 CREATE EXTENSION IF NOT EXISTS citext;
 
@@ -90,9 +97,9 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_datasets (
     storage_location text NOT NULL DEFAULT '',
     table_namespace text NOT NULL DEFAULT '',
     table_name text NOT NULL DEFAULT '',
-    table_format text NOT NULL DEFAULT '',
-    catalog_provider text NOT NULL DEFAULT '',
-    processing_profile text NOT NULL DEFAULT '',
+    table_format table_format_enum NOT NULL DEFAULT 'PARQUET',
+    catalog_provider catalog_provider_enum NOT NULL DEFAULT 'LOCAL',
+    processing_profile processing_profile_enum NOT NULL DEFAULT 'GENERIC_PARQUET_PROCESSING_PROFILE',
     schema_version integer NOT NULL DEFAULT 1,
     schema_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     raw_snapshot_id uuid,
@@ -249,6 +256,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.outbox_messages (
     lease_expires_at timestamptz,
     next_attempt_at timestamptz NOT NULL DEFAULT now(),
     last_error text NOT NULL DEFAULT '',
+    sent_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT outbox_messages_status_check CHECK (status IN ('PENDING', 'PROCESSING', 'SENT'))

@@ -225,7 +225,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 			CollectionName:           "movies",
 			EmbeddingDimensions:      384,
 			EmbeddingCount:           9,
-			ProcessingProfile:        "RAG",
+			ProcessingProfile:        "TEXT_RAG_PROCESSING_PROFILE",
 			EmbeddingStrategyVersion: "rag-v1",
 			EmbeddingChunkerName:     "go-token-window",
 			EmbeddingChunkerVersion:  "v1",

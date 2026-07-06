@@ -2,6 +2,7 @@ CREATE TYPE model_status_enum AS ENUM ('PENDING', 'CANDIDATE', 'EVALUATED', 'REA
 CREATE TYPE model_load_status_enum AS ENUM ('NOT_LOADED', 'LOADED', 'FAILED');
 CREATE TYPE model_kind_enum AS ENUM ('BASE', 'FINE_TUNED');
 CREATE TYPE model_source_enum AS ENUM ('TRAINING', 'UPLOAD', 'HUGGING_FACE');
+CREATE TYPE promotion_decision_enum AS ENUM ('PROMOTION_ACCEPTED', 'PROMOTION_REJECTED');
 
 CREATE EXTENSION IF NOT EXISTS citext;
 
@@ -55,7 +56,8 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     metrics_metadata jsonb NOT NULL,
     promotion_report_uri text NOT NULL DEFAULT '',
     promotion_deltas jsonb NOT NULL DEFAULT '{}'::jsonb,
-    promotion_decision text NOT NULL DEFAULT '',
+    promotion_decision promotion_decision_enum,
+    promotion_reason text NOT NULL DEFAULT '',
     status model_status_enum NOT NULL DEFAULT 'PENDING',
     failure_reason text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),

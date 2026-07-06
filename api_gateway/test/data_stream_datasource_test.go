@@ -140,7 +140,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 	})
 
 	It("rejects invalid datasource connector payloads", func() {
-		status, body := doJSON(http.MethodPost, "/v1/data/registry/connector/mysql", map[string]any{
+		status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/mysql", map[string]any{
 			"config": map[string]any{
 				"hostname":           mysqlDataSourceHost,
 				"port":               mysqlDataSourcePort,
@@ -151,7 +151,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 		}, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusBadRequest), "body: %s", string(body))
 
-		status, body = doJSON(http.MethodPost, "/v1/data/registry/connector/clickhouse", map[string]any{
+		status, body = doJSON(http.MethodPost, "/v1/private/data/registry/connector/clickhouse", map[string]any{
 			"config": map[string]any{
 				"hostname":           clickHouseDataSourceHost,
 				"port":               clickHouseDataSourcePort,
@@ -162,7 +162,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 		}, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusBadRequest), "body: %s", string(body))
 
-		status, body = doJSON(http.MethodPost, "/v1/data/registry/connector/mongo", map[string]any{
+		status, body = doJSON(http.MethodPost, "/v1/private/data/registry/connector/mongo", map[string]any{
 			"config": map[string]any{
 				"hostList":           []map[string]any{},
 				"username":           mongoDataSourceUsername,
@@ -272,7 +272,7 @@ func createPostgresSourceConnector(user profileTestUser) string {
 		},
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/data/registry/connector/postgres", payload, user.Token, uuid.New())
+	status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/postgres", payload, user.Token, uuid.New())
 	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 
 	created := decodeObject(body)
@@ -291,7 +291,7 @@ func createMySQLSourceConnector(user profileTestUser) string {
 		},
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/data/registry/connector/mysql", payload, user.Token, uuid.New())
+	status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/mysql", payload, user.Token, uuid.New())
 	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 
 	created := decodeObject(body)
@@ -310,7 +310,7 @@ func createClickHouseSourceConnector(user profileTestUser) string {
 		},
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/data/registry/connector/clickhouse", payload, user.Token, uuid.New())
+	status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/clickhouse", payload, user.Token, uuid.New())
 	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 
 	created := decodeObject(body)
@@ -333,7 +333,7 @@ func createMongoSourceConnector(user profileTestUser) string {
 		},
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/data/registry/connector/mongo", payload, user.Token, uuid.New())
+	status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/mongo", payload, user.Token, uuid.New())
 	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 
 	created := decodeObject(body)

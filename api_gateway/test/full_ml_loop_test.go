@@ -30,7 +30,9 @@ import (
 	ingestionpb "lib/data_contracts_lib/ingestion"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	trainingpb "lib/data_contracts_lib/training"
+	"lib/shared_lib/ctxutil"
 	sharedmessaging "lib/shared_lib/messaging"
+	transport "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
 	"lib/shared_lib/uuidutil"
 
@@ -67,13 +69,15 @@ var _ = Describe("Full ML loop", func() {
 		ctx := context.Background()
 
 		datasetID := uuid.New()
-		trainingRunID := uuid.New()
 		featureSnapshotID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		userID := uuid.New()
+		sourceModelID := uuid.New()
 		servingModel := "rag-adapter-v1"
 
-		trainingEvent := runTrainingWorkflow(trainingRunID, userID, datasetID, featureSnapshotID, servingModel)
+		trainingRequest := startFullLoopTrainingCommand(ctx, userID, datasetID, featureSnapshotID, sourceModelID)
+		trainingRunID := uuid.MustParse(trainingRequest.TrainingRunID)
+		trainingEvent := runTrainingWorkflow(trainingRequest, servingModel)
 
 		k8sClient := newE2EK8sClient()
 		registryRepo := newRegistryMemoryRepository()
@@ -299,7 +303,68 @@ var _ = Describe("Full ML loop", func() {
 	})
 })
 
-func runTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
+func startFullLoopTrainingCommand(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, sourceModelID uuid.UUID) trainingmodel.TrainingRunRequest {
+	GinkgoHelper()
+
+	starter := &fullLoopWorkflowStarter{}
+	datasetResolver := fullLoopDatasetResolver{ref: trainingmodel.MaterializedDatasetRef{
+		DatasetID:         datasetID.String(),
+		UserID:            userID.String(),
+		DatasetVersion:    "1",
+		FeatureSnapshotID: featureSnapshotID.String(),
+		DatasetURI:        "s3://local-dev-bucket/features/" + featureSnapshotID.String() + ".parquet",
+		TableName:         "rag_adapter",
+		TableFormat:       "PARQUET",
+		ProcessingState:   "FEATURE_MATERIALIZED",
+	}}
+	modelResolver := fullLoopModelResolver{ref: trainingmodel.SourceModelRef{
+		ModelID:           sourceModelID.String(),
+		ModelKind:         "BASE",
+		Name:              "mistral-7b",
+		ModelVersion:      1,
+		BaseModel:         "mistral-7b",
+		ArtifactLocation:  "s3://local-dev-bucket/models/base/" + sourceModelID.String(),
+		ArtifactChecksum:  "sha256:base",
+		ServingLoadStatus: "LOADED",
+		Status:            "READY",
+	}}
+	catalog := trainingapp.NewStaticTrainingProfileCatalog(
+		[]trainingmodel.TrainingProfile{{
+			Name:                      "sft-default@v1",
+			Trainer:                   "sft",
+			Adapter:                   "qlora",
+			Quantization:              "4bit",
+			SequenceLength:            2048,
+			SamplePacking:             true,
+			LearningRate:              0.0002,
+			Epochs:                    1,
+			MicroBatchSize:            1,
+			GradientAccumulationSteps: 4,
+			LoRAR:                     16,
+			LoRAAlpha:                 32,
+		}},
+		"sft-default@v1",
+		map[string]string{"ragas-default@v1": "smoke"},
+		"ragas-default@v1",
+	)
+	usecase := trainingapp.NewTrainingCommandUsecase(starter, starter, datasetResolver, modelResolver, catalog)
+	result, err := usecase.StartTrainingRun(ctxutil.WithTenantID(ctx, userID), trainingmodel.StartTrainingRunCommand{
+		IdempotencyKey:    uuid.NewString(),
+		DatasetID:         datasetID.String(),
+		SourceModelID:     sourceModelID.String(),
+		TrainingProfile:   "sft-default@v1",
+		EvaluationProfile: "ragas-default@v1",
+	})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(result.TrainingRunID).To(Equal(starter.request.TrainingRunID))
+	Expect(result.StatusURL).To(Equal("/v1/private/training-runs/" + result.TrainingRunID))
+	Expect(starter.request.SourceModelID).To(Equal(sourceModelID.String()))
+	Expect(starter.request.SourceArtifactURI).To(Equal(modelResolver.ref.ArtifactLocation))
+	Expect(starter.request.BaseModel).To(Equal("mistral-7b"))
+	return starter.request
+}
+
+func runTrainingWorkflow(request trainingmodel.TrainingRunRequest, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
 	GinkgoHelper()
 
 	var suite testsuite.WorkflowTestSuite
@@ -317,32 +382,6 @@ func runTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, datasetID uu
 	env.RegisterActivityWithOptions(activities.EvaluateTrainedModel, activity.RegisterOptions{Name: trainingapp.EvaluateTrainedModelActivity})
 	env.RegisterActivityWithOptions(activities.PublishModelTrainingCompleted, activity.RegisterOptions{Name: trainingapp.PublishModelTrainingCompletedActivity})
 	env.RegisterActivityWithOptions(activities.PublishModelTrainingFailed, activity.RegisterOptions{Name: trainingapp.PublishModelTrainingFailedActivity})
-
-	request := trainingmodel.TrainingRunRequest{
-		TrainingRunID:     trainingRunID.String(),
-		UserID:            userID.String(),
-		DatasetID:         datasetID.String(),
-		DatasetVersion:    "1",
-		FeatureSnapshotID: featureSnapshotID.String(),
-		ModelName:         "rag-adapter",
-		ModelVersion:      "1",
-		BaseModel:         "mistral-7b",
-		EvaluationProfile: "smoke",
-		TrainingProfile: trainingmodel.TrainingProfile{
-			Name:                      "qlora-smoke",
-			Trainer:                   "sft",
-			Adapter:                   "qlora",
-			Quantization:              "4bit",
-			SequenceLength:            2048,
-			SamplePacking:             true,
-			LearningRate:              0.0002,
-			Epochs:                    1,
-			MicroBatchSize:            1,
-			GradientAccumulationSteps: 4,
-			LoRAR:                     16,
-			LoRAAlpha:                 32,
-		},
-	}
 	env.ExecuteWorkflow(trainingapp.TrainModelWorkflow, request)
 	Expect(env.IsWorkflowCompleted()).To(BeTrue(), "training workflow did not complete")
 	Expect(env.GetWorkflowError()).NotTo(HaveOccurred())
@@ -351,8 +390,7 @@ func runTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, datasetID uu
 	Expect(result.Status).To(Equal(trainingmodel.TrainingRunStatusCompleted))
 	Expect(publisher.messages).To(HaveLen(1))
 	Expect(publisher.messages[0].message.MsgType).To(Equal(sharedmessaging.MsgTypeModelTrainingCompleted))
-	completed, ok := publisher.messages[0].payload.(*trainingpb.ModelTrainingCompletedEvent)
-	Expect(ok).To(BeTrue(), "unexpected training payload type %T", publisher.messages[0].payload)
+	completed := decodeTrainingCompletedEvent(publisher.messages[0].message)
 	Expect(completed.GetServingLoadStatus()).To(Equal(registrymodel.ModelLoadStatusNotLoaded.String()))
 	return completed
 }
@@ -415,12 +453,45 @@ func runDPOTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, datasetID
 	Expect(env.GetWorkflowResult(&result)).To(Succeed())
 	Expect(result.Status).To(Equal(trainingmodel.TrainingRunStatusCompleted))
 	Expect(publisher.messages).To(HaveLen(1))
-	completed, ok := publisher.messages[0].payload.(*trainingpb.ModelTrainingCompletedEvent)
-	Expect(ok).To(BeTrue(), "unexpected dpo training payload type %T", publisher.messages[0].payload)
-	return completed
+	return decodeTrainingCompletedEvent(publisher.messages[0].message)
 }
 
 type fakeTrainingExecutor struct{}
+
+type fullLoopWorkflowStarter struct {
+	request trainingmodel.TrainingRunRequest
+}
+
+func (s *fullLoopWorkflowStarter) StartTrainingWorkflow(_ context.Context, request trainingmodel.TrainingRunRequest) error {
+	s.request = request
+	return nil
+}
+
+func (s *fullLoopWorkflowStarter) ReadTrainingWorkflowStatus(_ context.Context, trainingRunID string) (*trainingmodel.TrainingRunStatusResult, error) {
+	return &trainingmodel.TrainingRunStatusResult{TrainingRunID: trainingRunID, Status: "RUNNING"}, nil
+}
+
+type fullLoopDatasetResolver struct {
+	ref trainingmodel.MaterializedDatasetRef
+}
+
+func (r fullLoopDatasetResolver) ResolveMaterializedDataset(_ context.Context, userID uuid.UUID, datasetID uuid.UUID) (trainingmodel.MaterializedDatasetRef, error) {
+	ref := r.ref
+	Expect(ref.UserID).To(Equal(userID.String()))
+	Expect(ref.DatasetID).To(Equal(datasetID.String()))
+	return ref, nil
+}
+
+type fullLoopModelResolver struct {
+	ref trainingmodel.SourceModelRef
+}
+
+func (r fullLoopModelResolver) ResolveTrainableModel(_ context.Context, userID uuid.UUID, modelID uuid.UUID) (trainingmodel.SourceModelRef, error) {
+	ref := r.ref
+	Expect(modelID.String()).To(Equal(ref.ModelID))
+	Expect(userID).NotTo(Equal(uuid.Nil))
+	return ref, nil
+}
 
 func (e *fakeTrainingExecutor) RunTrainingJob(_ context.Context, spec trainingmodel.TrainingJobSpec) (*trainingmodel.TrainedModelArtifact, error) {
 	if err := validateTrainingRecipe(spec); err != nil {
@@ -543,11 +614,26 @@ type capturingPublisher struct {
 }
 
 func (p *capturingPublisher) Publish(_ context.Context, topic string, message sharedmessaging.Message, payload proto.Message) error {
+	if payload != nil && len(message.Payload) == 0 {
+		raw, err := proto.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		message.Payload = raw
+	}
 	p.messages = append(p.messages, publishedMessage{topic: topic, message: message, payload: payload})
 	return nil
 }
 
 func (p *capturingPublisher) Close() {}
+
+func decodeTrainingCompletedEvent(message sharedmessaging.Message) *trainingpb.ModelTrainingCompletedEvent {
+	GinkgoHelper()
+
+	event := &trainingpb.ModelTrainingCompletedEvent{}
+	Expect(proto.Unmarshal(message.Payload, event)).To(Succeed())
+	return event
+}
 
 func newE2EK8sClient() dynamic.Interface {
 	scheme := kruntime.NewScheme()
@@ -694,6 +780,35 @@ func (r *registryMemoryRepository) ReadChampion(_ context.Context, lineage regis
 		return nil, registrydomain.ErrModelNotFound
 	}
 	return cloneRegistryModel(champion), nil
+}
+
+func (r *registryMemoryRepository) List(_ context.Context, pagination transport.Pagination, filter registrymodel.ListFilter) ([]*registrymodel.Model, int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	records := make([]*registrymodel.Model, 0, len(r.byModelID))
+	for _, record := range r.byModelID {
+		if filter.KindSet && record.ModelKind != filter.Kind {
+			continue
+		}
+		if filter.SourceSet && record.Source != filter.Source {
+			continue
+		}
+		if filter.StatusSet && record.Status != filter.Status {
+			continue
+		}
+		records = append(records, cloneRegistryModel(record))
+	}
+	total := len(records)
+	offset := pagination.GetOffset()
+	if offset >= total {
+		return []*registrymodel.Model{}, total, nil
+	}
+	end := offset + pagination.Limit
+	if end > total {
+		end = total
+	}
+	return records[offset:end], total, nil
 }
 
 func (r *registryMemoryRepository) UpdateStatus(_ context.Context, _ pgx.Tx, modelID uuid.UUID, status registrymodel.ModelStatus, artifactLocation string, failureReason string) (*registrymodel.Model, error) {

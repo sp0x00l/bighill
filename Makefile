@@ -39,6 +39,7 @@ test:
 	scripts/kafka/kafka-clean-topics.sh $(ENV); \
 	scripts/kafka/kafka-create-topics.sh $(ENV); \
 	api_gateway/scripts/check-docker.sh; \
+	export INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_COMMAND="python3 $(CURDIR)/api_gateway/test/data/huggingface_onboard_stub.py"; \
 	CI_TEST_EXCLUDE_SERVICES=$(CI_TEST_EXCLUDE_SERVICES) scripts/start-servers.sh build $(ENV); \
 	api_gateway/scripts/install.sh; \
 	api_gateway/scripts/build.sh auth; \
@@ -105,8 +106,13 @@ test-api:
 	scripts/stop-servers.sh; \
 	scripts/stop-infra.sh $(ENV); \
 	scripts/start-infra.sh $(ENV); \
+	export INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_COMMAND="python3 $(CURDIR)/api_gateway/test/data/huggingface_onboard_stub.py"; \
 	scripts/start-servers.sh $(START_MODE) $(ENV); \
-	scripts/test-api.sh $(ENV)
+	api_gateway/scripts/install.sh; \
+	api_gateway/scripts/build.sh auth; \
+	api_gateway/scripts/build.sh api; \
+	cd api_gateway && ./scripts/run.sh; \
+	./scripts/test.sh $(ENV)
 
 kafka-clean:
 	# @scripts/stop-servers.sh

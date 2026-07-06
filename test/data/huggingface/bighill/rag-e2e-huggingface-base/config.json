@@ -1,0 +1,5 @@
+{
+  "architectures": ["BigHillE2EModel"],
+  "model_type": "bighill-e2e",
+  "vocab_size": 8
+}

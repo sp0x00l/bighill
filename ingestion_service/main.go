@@ -62,6 +62,7 @@ type ingestionConfig struct {
 	HuggingFaceTokenEncryptionKey string
 	HuggingFaceDownloadMode       string
 	HuggingFaceDownloadCommand    string
+	HuggingFaceDownloadWorkingDir string
 	HuggingFaceOutputURI          string
 	HuggingFaceDownloadTimeout    time.Duration
 	HuggingFaceJobEnvKeys         download.HuggingFaceJobEnvKeys
@@ -203,10 +204,11 @@ func main() {
 	switch strings.ToLower(strings.TrimSpace(cfg.HuggingFaceDownloadMode)) {
 	case "command":
 		modelDownloader, err = download.NewHuggingFaceCommandDownloader(download.HuggingFaceCommandDownloaderConfig{
-			Command:   cfg.HuggingFaceDownloadCommand,
-			OutputURI: cfg.HuggingFaceOutputURI,
-			Timeout:   cfg.HuggingFaceDownloadTimeout,
-			EnvKeys:   cfg.HuggingFaceJobEnvKeys,
+			Command:          cfg.HuggingFaceDownloadCommand,
+			WorkingDirectory: cfg.HuggingFaceDownloadWorkingDir,
+			OutputURI:        cfg.HuggingFaceOutputURI,
+			Timeout:          cfg.HuggingFaceDownloadTimeout,
+			EnvKeys:          cfg.HuggingFaceJobEnvKeys,
 		})
 		if err != nil {
 			log.WithContext(cancelCtx).WithError(err).Fatal("invalid Hugging Face downloader configuration")
@@ -388,6 +390,7 @@ func readIngestionConfig() ingestionConfig {
 			"INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_COMMAND",
 			"python -m training_jobs.model_onboard",
 		),
+		HuggingFaceDownloadWorkingDir: env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_WORKING_DIRECTORY", ""),
 		HuggingFaceOutputURI:          env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI", "s3://local-dev-bucket/models/huggingface"),
 		HuggingFaceDownloadTimeout:    time.Duration(env.WithDefaultInt("INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_TIMEOUT_SECONDS", "1800")) * time.Second,
 		HuggingFaceJobEnvKeys:         huggingFaceJobEnvKeysFromEnv(),

@@ -41,7 +41,7 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, tx pgx.
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, status
 	) VALUES (
 		@dataset_id, @user_id, @idempotency_key, @source_storage_location, @storage_location, @content_type, @file_extension,
-		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @status
+		@table_namespace, @table_name, @table_format::table_format_enum, @catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @status::snapshot_status_enum
 	)
 	ON CONFLICT (idempotency_key) DO NOTHING
 	RETURNING ` + rawSnapshotColumns()
@@ -79,9 +79,9 @@ func (r *SnapshotRepository) MarkRawReady(ctx context.Context, tx pgx.Tx, rawSna
 	log.Trace("SnapshotRepository MarkRawReady")
 
 	query := `UPDATE ` + r.Name + `.raw_snapshots
-		SET status = @status,
+		SET status = @status::snapshot_status_enum,
 			storage_location = @storage_location,
-			table_format = @table_format,
+			table_format = @table_format::table_format_enum,
 			schema_version = @schema_version,
 			schema_metadata = @schema_metadata::jsonb,
 			failure_reason = NULL
@@ -108,7 +108,7 @@ func (r *SnapshotRepository) MarkRawFailed(ctx context.Context, tx pgx.Tx, rawSn
 	log.Trace("SnapshotRepository MarkRawFailed")
 
 	query := `UPDATE ` + r.Name + `.raw_snapshots
-		SET status = @status, failure_reason = @failure_reason
+		SET status = @status::snapshot_status_enum, failure_reason = @failure_reason
 		WHERE raw_snapshot_id = @raw_snapshot_id`
 	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
 		"raw_snapshot_id": pgtype.UUID{Bytes: rawSnapshotID, Valid: true},
@@ -182,7 +182,7 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, tx 
 	query := `INSERT INTO ` + r.Name + `.feature_snapshots (
 		raw_snapshot_id, dataset_id, user_id, idempotency_key, table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata, status
 	) VALUES (
-		@raw_snapshot_id, @dataset_id, @user_id, @idempotency_key, @table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, @status
+		@raw_snapshot_id, @dataset_id, @user_id, @idempotency_key, @table_namespace, @table_name, @table_format::table_format_enum, @catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @schema_version, @schema_metadata::jsonb, @status::snapshot_status_enum
 	)
 	ON CONFLICT (idempotency_key) DO NOTHING
 	RETURNING ` + featureSnapshotColumns()
@@ -218,9 +218,9 @@ func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, tx pgx.Tx, fe
 	log.Trace("SnapshotRepository MarkFeatureReady")
 
 	query := `UPDATE ` + r.Name + `.feature_snapshots
-		SET status = @status,
+		SET status = @status::snapshot_status_enum,
 			storage_location = @storage_location,
-			table_format = @table_format,
+			table_format = @table_format::table_format_enum,
 			schema_version = @schema_version,
 			schema_metadata = @schema_metadata::jsonb,
 			failure_reason = NULL
@@ -247,7 +247,7 @@ func (r *SnapshotRepository) MarkFeatureFailed(ctx context.Context, tx pgx.Tx, f
 	log.Trace("SnapshotRepository MarkFeatureFailed")
 
 	query := `UPDATE ` + r.Name + `.feature_snapshots
-		SET status = @status, failure_reason = @failure_reason
+		SET status = @status::snapshot_status_enum, failure_reason = @failure_reason
 		WHERE feature_snapshot_id = @feature_snapshot_id`
 	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
 		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshotID, Valid: true},
@@ -328,7 +328,7 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, t
 		@feature_snapshot_id, @dataset_id, @user_id, @idempotency_key, @strategy_version,
 		@extractor_name, @extractor_version, @cleaner_name, @cleaner_version,
 		@chunker_name, @chunker_version, @chunk_size, @chunk_overlap, @embedding_provider, @embedding_model,
-		@embedding_dimensions, @status
+		@embedding_dimensions, @status::snapshot_status_enum
 	)
 	ON CONFLICT (idempotency_key) DO NOTHING
 	RETURNING ` + embeddingSnapshotColumns()
@@ -424,7 +424,7 @@ func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx
 	}
 
 	query := `UPDATE ` + r.Name + `.embedding_snapshots
-		SET status = @status,
+		SET status = @status::snapshot_status_enum,
 			active_for_retrieval = true,
 			vector_store = @vector_store,
 			collection_name = @collection_name,
@@ -476,7 +476,7 @@ func (r *SnapshotRepository) MarkEmbeddingFailed(ctx context.Context, tx pgx.Tx,
 	log.Trace("SnapshotRepository MarkEmbeddingFailed")
 
 	query := `UPDATE ` + r.Name + `.embedding_snapshots
-		SET status = @status, active_for_retrieval = false, failure_reason = @failure_reason
+		SET status = @status::snapshot_status_enum, active_for_retrieval = false, failure_reason = @failure_reason
 		WHERE embedding_snapshot_id = @embedding_snapshot_id`
 	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
 		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshotID, Valid: true},
@@ -523,7 +523,7 @@ func (r *SnapshotRepository) ReadActiveEmbeddingSnapshot(ctx context.Context, us
 		WHERE dataset_id = @dataset_id
 			AND user_id = @user_id
 			AND active_for_retrieval = true
-			AND status = @status
+			AND status = @status::snapshot_status_enum
 		ORDER BY updated_at DESC
 		LIMIT 1`
 	embeddingSnapshot, err := scanEmbeddingSnapshot(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
@@ -653,7 +653,7 @@ func (r *SnapshotRepository) reopenRawSnapshotForRetry(ctx context.Context, tx p
 	log.Trace("SnapshotRepository reopenRawSnapshotForRetry")
 
 	query := `UPDATE ` + r.Name + `.raw_snapshots
-		SET status = @status, failure_reason = NULL
+		SET status = @status::snapshot_status_enum, failure_reason = NULL
 		WHERE raw_snapshot_id = @raw_snapshot_id
 		RETURNING ` + rawSnapshotColumns()
 	rawSnapshot, err := scanRawSnapshot(tx.QueryRow(ctx, query, pgx.NamedArgs{
@@ -671,7 +671,7 @@ func (r *SnapshotRepository) reopenFeatureSnapshotForRetry(ctx context.Context, 
 	log.Trace("SnapshotRepository reopenFeatureSnapshotForRetry")
 
 	query := `UPDATE ` + r.Name + `.feature_snapshots
-		SET status = @status, failure_reason = NULL
+		SET status = @status::snapshot_status_enum, failure_reason = NULL
 		WHERE feature_snapshot_id = @feature_snapshot_id
 		RETURNING ` + featureSnapshotColumns()
 	featureSnapshot, err := scanFeatureSnapshot(tx.QueryRow(ctx, query, pgx.NamedArgs{
@@ -689,7 +689,7 @@ func (r *SnapshotRepository) reopenEmbeddingSnapshotForRetry(ctx context.Context
 	log.Trace("SnapshotRepository reopenEmbeddingSnapshotForRetry")
 
 	query := `UPDATE ` + r.Name + `.embedding_snapshots
-		SET status = @status, failure_reason = NULL
+		SET status = @status::snapshot_status_enum, failure_reason = NULL
 		WHERE embedding_snapshot_id = @embedding_snapshot_id
 		RETURNING ` + embeddingSnapshotColumns()
 	embeddingSnapshot, err := scanEmbeddingSnapshot(tx.QueryRow(ctx, query, pgx.NamedArgs{
@@ -705,12 +705,12 @@ func (r *SnapshotRepository) reopenEmbeddingSnapshotForRetry(ctx context.Context
 
 func rawSnapshotColumns() string {
 	return `raw_snapshot_id::text, dataset_id::text, user_id::text, storage_location, content_type, file_extension,
-		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, status::text, COALESCE(failure_reason, '')`
+		table_namespace, table_name, table_format::text, catalog_provider::text, processing_profile::text, schema_version, schema_metadata::text, status::text, COALESCE(failure_reason, '')`
 }
 
 func featureSnapshotColumns() string {
 	return `feature_snapshot_id::text, raw_snapshot_id::text, dataset_id::text, user_id::text, storage_location,
-		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, status::text, COALESCE(failure_reason, '')`
+		table_namespace, table_name, table_format::text, catalog_provider::text, processing_profile::text, schema_version, schema_metadata::text, status::text, COALESCE(failure_reason, '')`
 }
 
 func embeddingSnapshotColumns() string {

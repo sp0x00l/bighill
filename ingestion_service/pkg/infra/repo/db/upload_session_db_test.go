@@ -102,7 +102,7 @@ var _ = Describe("Upload session DAO helpers", func() {
 		Expect(args["resource_type"]).To(Equal(string(model.UploadResourceDataFile)))
 		Expect(args["resource_id"]).To(Equal(pgtype.UUID{Bytes: datasetID, Valid: true}))
 		Expect(args["user_id"]).To(Equal(pgtype.UUID{Bytes: userID, Valid: true}))
-		Expect(args["source"]).To(Equal("upload"))
+		Expect(args["source"]).To(Equal("UPLOAD"))
 	})
 
 	It("maps upload session ids to database arguments", func() {
@@ -149,7 +149,7 @@ var _ = Describe("Upload session DAO helpers", func() {
 			"",
 			"",
 			"",
-			"upload",
+			"UPLOAD",
 			"",
 			"",
 			"",

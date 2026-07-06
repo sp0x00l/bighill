@@ -15,29 +15,33 @@ import (
 )
 
 type DatasetDTO struct {
-	ID                string          `json:"id,omitempty"`
-	UserID            string          `json:"userId,omitempty"`
-	Title             string          `json:"title"                       validate:"required,max=250"`
-	Description       string          `json:"description,omitempty"`
-	Origin            string          `json:"origin,omitempty"`
-	Location          string          `json:"location,omitempty"          validate:"max=250"`
-	StorageLocation   string          `json:"storageLocation,omitempty"   validate:"max=1024"`
-	SourceType        string          `json:"sourceType,omitempty"`
-	SourceConnectorID string          `json:"sourceConnectorId,omitempty"`
-	SourceQuery       string          `json:"sourceQuery,omitempty"`
-	SourceDatabase    string          `json:"sourceDatabase,omitempty"`
-	SourceCollection  string          `json:"sourceCollection,omitempty"`
-	Status            string          `json:"status"`
-	Category          string          `json:"category,omitempty"          validate:"max=250"`
-	TableNamespace    string          `json:"tableNamespace,omitempty"    validate:"max=250"`
-	TableName         string          `json:"tableName,omitempty"         validate:"max=250"`
-	TableFormat       string          `json:"tableFormat,omitempty"`
-	CatalogProvider   string          `json:"catalogProvider,omitempty"`
-	ProcessingProfile string          `json:"processingProfile,omitempty"`
-	SchemaVersion     int             `json:"schemaVersion,omitempty"`
-	SchemaMetadata    json.RawMessage `json:"schemaMetadata,omitempty"`
-	ProcessingState   string          `json:"processingState,omitempty"`
-	Links             ResourceLinks   `json:"links"`
+	ID                  string          `json:"id,omitempty"`
+	UserID              string          `json:"userId,omitempty"`
+	Title               string          `json:"title"                       validate:"required,max=250"`
+	Description         string          `json:"description,omitempty"`
+	Origin              string          `json:"origin,omitempty"`
+	Location            string          `json:"location,omitempty"          validate:"max=250"`
+	StorageLocation     string          `json:"storageLocation,omitempty"   validate:"max=1024"`
+	SourceType          string          `json:"sourceType,omitempty"`
+	SourceConnectorID   string          `json:"sourceConnectorId,omitempty"`
+	SourceQuery         string          `json:"sourceQuery,omitempty"`
+	SourceDatabase      string          `json:"sourceDatabase,omitempty"`
+	SourceCollection    string          `json:"sourceCollection,omitempty"`
+	Status              string          `json:"status"`
+	Category            string          `json:"category,omitempty"          validate:"max=250"`
+	TableNamespace      string          `json:"tableNamespace,omitempty"    validate:"max=250"`
+	TableName           string          `json:"tableName,omitempty"         validate:"max=250"`
+	TableFormat         string          `json:"tableFormat,omitempty"`
+	CatalogProvider     string          `json:"catalogProvider,omitempty"`
+	ProcessingProfile   string          `json:"processingProfile,omitempty"`
+	SchemaVersion       int             `json:"schemaVersion,omitempty"`
+	SchemaMetadata      json.RawMessage `json:"schemaMetadata,omitempty"`
+	ProcessingState     string          `json:"processingState,omitempty"`
+	DatasetVersion      int             `json:"datasetVersion,omitempty"`
+	RawSnapshotID       string          `json:"rawSnapshotId,omitempty"`
+	FeatureSnapshotID   string          `json:"featureSnapshotId,omitempty"`
+	EmbeddingSnapshotID string          `json:"embeddingSnapshotId,omitempty"`
+	Links               ResourceLinks   `json:"links"`
 }
 
 type ResourceLinks struct {
@@ -237,28 +241,32 @@ func (a *dtoAdapter) toDTO(datasetModel *model.Dataset, baseURL string) *Dataset
 		schemaMetadata = "{}"
 	}
 	dtoDataset := DatasetDTO{
-		ID:                datasetModel.ID.String(),
-		UserID:            datasetModel.UserID.String(),
-		Title:             datasetModel.Title,
-		Description:       datasetModel.Description,
-		Origin:            datasetModel.Origin.String(),
-		Location:          datasetModel.Location,
-		StorageLocation:   datasetModel.Location,
-		SourceType:        datasetSourceType(datasetModel),
-		SourceConnectorID: uuidToString(datasetModel.SourceConnectorID),
-		SourceQuery:       datasetModel.SourceQuery,
-		SourceDatabase:    datasetModel.SourceDatabase,
-		SourceCollection:  datasetModel.SourceCollection,
-		Status:            datasetModel.Status.String(),
-		Category:          datasetModel.Category,
-		TableNamespace:    datasetModel.TableNamespace,
-		TableName:         datasetModel.TableName,
-		TableFormat:       datasetModel.TableFormat.String(),
-		CatalogProvider:   datasetModel.CatalogProvider.String(),
-		ProcessingProfile: datasetModel.ProcessingProfile.String(),
-		SchemaVersion:     datasetModel.SchemaVersion,
-		SchemaMetadata:    json.RawMessage(schemaMetadata),
-		ProcessingState:   datasetModel.ProcessingState.String(),
+		ID:                  datasetModel.ID.String(),
+		UserID:              datasetModel.UserID.String(),
+		Title:               datasetModel.Title,
+		Description:         datasetModel.Description,
+		Origin:              datasetModel.Origin.String(),
+		Location:            datasetModel.Location,
+		StorageLocation:     datasetModel.Location,
+		SourceType:          datasetSourceType(datasetModel),
+		SourceConnectorID:   uuidToString(datasetModel.SourceConnectorID),
+		SourceQuery:         datasetModel.SourceQuery,
+		SourceDatabase:      datasetModel.SourceDatabase,
+		SourceCollection:    datasetModel.SourceCollection,
+		Status:              datasetModel.Status.String(),
+		Category:            datasetModel.Category,
+		TableNamespace:      datasetModel.TableNamespace,
+		TableName:           datasetModel.TableName,
+		TableFormat:         datasetModel.TableFormat.String(),
+		CatalogProvider:     datasetModel.CatalogProvider.String(),
+		ProcessingProfile:   datasetModel.ProcessingProfile.String(),
+		SchemaVersion:       datasetModel.SchemaVersion,
+		SchemaMetadata:      json.RawMessage(schemaMetadata),
+		ProcessingState:     datasetModel.ProcessingState.String(),
+		DatasetVersion:      datasetModel.DatasetVersion,
+		RawSnapshotID:       uuidToString(datasetModel.RawSnapshotID),
+		FeatureSnapshotID:   uuidToString(datasetModel.FeatureSnapshotID),
+		EmbeddingSnapshotID: uuidToString(datasetModel.EmbeddingSnapshotID),
 		Links: ResourceLinks{
 			Self: Self{
 				Href: fmt.Sprintf("%s/%s", baseURL, datasetModel.ID.String()),

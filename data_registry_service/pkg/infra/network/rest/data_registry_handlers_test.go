@@ -36,6 +36,12 @@ type datasetUsecaseStub struct {
 	readDataset   *model.Dataset
 	readErr       error
 
+	readTableDatasetID uuid.UUID
+	readTableUserID    uuid.UUID
+	readTableFormat    string
+	readTableDataset   *model.Dataset
+	readTableErr       error
+
 	readManyUserID     uuid.UUID
 	readManyPagination transport.Pagination
 	readManyFilters    []model.Filter
@@ -75,8 +81,11 @@ func (s *datasetUsecaseStub) ReadDatasetForUser(_ context.Context, datasetID uui
 	return s.readDataset, s.readErr
 }
 
-func (s *datasetUsecaseStub) ReadDatasetTable(context.Context, uuid.UUID, uuid.UUID, string) (*model.Dataset, error) {
-	return nil, nil
+func (s *datasetUsecaseStub) ReadDatasetTable(_ context.Context, datasetID uuid.UUID, userID uuid.UUID, tableFormat string) (*model.Dataset, error) {
+	s.readTableDatasetID = datasetID
+	s.readTableUserID = userID
+	s.readTableFormat = tableFormat
+	return s.readTableDataset, s.readTableErr
 }
 
 func (s *datasetUsecaseStub) DeleteDataset(_ context.Context, datasetID uuid.UUID, userID uuid.UUID) error {
@@ -199,8 +208,9 @@ var _ = Describe("DataRegistryHandlers", func() {
 	It("exposes all REST routes for the service router", func() {
 		routes := handlers.GetRoutes()
 
-		Expect(routes).To(HaveLen(10))
+		Expect(routes).To(HaveLen(11))
 		Expect(routeExists(routes, "/v1/data/registry", http.MethodPost)).To(BeTrue())
+		Expect(routeExists(routes, "/v1/data/registry/{datasetId}/materialization", http.MethodGet)).To(BeTrue())
 		Expect(routeExists(routes, "/v1/data/registry/connector/{type}/{connectorId}", http.MethodDelete)).To(BeTrue())
 	})
 
@@ -226,6 +236,47 @@ var _ = Describe("DataRegistryHandlers", func() {
 		Expect(httpErr.statusCode).To(Equal(http.StatusNotFound))
 		Expect(datasets.readDatasetID).To(Equal(datasetID))
 		Expect(datasets.readUserID).To(Equal(userID))
+	})
+
+	It("reads dataset materialization for the authenticated user", func() {
+		featureSnapshotID := uuid.New()
+		datasets.readTableDataset = &model.Dataset{
+			ID:                datasetID,
+			UserID:            userID,
+			Title:             "Movies",
+			DatasetVersion:    4,
+			FeatureSnapshotID: featureSnapshotID,
+			Location:          "s3://lakehouse/features/movies.parquet",
+			TableName:         "movies",
+			TableFormat:       model.Parquet,
+			ProcessingState:   model.DatasetProcessingFeatureMaterialized,
+		}
+		req := newJSONRequest(http.MethodGet, "/v1/data/registry/"+datasetID.String()+"/materialization", `{}`, userID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"datasetId": datasetID.String()})
+
+		res, err := handlers.ReadDatasetMaterialization(ctx, req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		Expect(datasets.readTableDatasetID).To(Equal(datasetID))
+		Expect(datasets.readTableUserID).To(Equal(userID))
+		Expect(datasets.readTableFormat).To(BeEmpty())
+		Expect(res.Payload()).To(ContainSubstring(featureSnapshotID.String()))
+		Expect(res.Payload()).To(ContainSubstring("s3://lakehouse/features/movies.parquet"))
+	})
+
+	It("maps missing dataset materialization to not found", func() {
+		datasets.readTableErr = domainErrors.ErrResourceNotFound
+		req := newJSONRequest(http.MethodGet, "/v1/data/registry/"+datasetID.String()+"/materialization", `{}`, userID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"datasetId": datasetID.String()})
+
+		_, err := handlers.ReadDatasetMaterialization(ctx, req)
+
+		var httpErr *HTTPError
+		Expect(errors.As(err, &httpErr)).To(BeTrue())
+		Expect(httpErr.statusCode).To(Equal(http.StatusNotFound))
+		Expect(datasets.readTableDatasetID).To(Equal(datasetID))
+		Expect(datasets.readTableUserID).To(Equal(userID))
 	})
 
 	It("lists datasets for the authenticated user", func() {

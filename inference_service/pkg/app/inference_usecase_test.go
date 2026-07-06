@@ -1021,7 +1021,7 @@ func validInferenceDataset() *model.InferenceDataset {
 		TableName:                "movies",
 		TableFormat:              "PARQUET",
 		CatalogProvider:          "LOCAL",
-		ProcessingProfile:        "RAG",
+		ProcessingProfile:        "TEXT_RAG_PROCESSING_PROFILE",
 		SchemaVersion:            2,
 		SchemaMetadata:           "{}",
 		RawSnapshotID:            uuid.New(),

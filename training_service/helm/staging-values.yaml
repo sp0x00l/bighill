@@ -5,6 +5,7 @@ image:
   pullPolicy: Always
 service:
   type: ClusterIP
+  httpPort: 8085
   healthPort: 5058
 env:
   environment: "staging"
@@ -15,6 +16,10 @@ env:
   kafkaBaseGroupId: "training"
   kafkaAutoOffsetReset: "earliest"
   topic: "training"
-  dataRegistrySubscriberTopic: "data_registry"
+  inferenceSubscriberTopic: "inference"
   dlq: "http://localhost:4566/training-dev-env-queue/"
-  baseModel: "local-dev-base-model"
+  httpClientTimeoutSeconds: "10"
+  dataRegistryHttpHost: "data-registry-service"
+  dataRegistryHttpPort: "8081"
+  modelRegistryHttpHost: "model-registry-service"
+  modelRegistryHttpPort: "8084"

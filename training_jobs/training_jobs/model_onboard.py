@@ -8,6 +8,8 @@ from pathlib import Path
 from training_jobs.config import read_storage_config
 from training_jobs import storage
 
+local_fixture_env = "INGESTION_SERVICE_HUGGINGFACE_LOCAL_FIXTURE_ROOT"
+
 
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
@@ -42,6 +44,16 @@ def resolve_commit_sha(*, repo_id: str, revision: str, token: str) -> str:
     return sha
 
 
+def resolve_local_fixture_snapshot(*, repo_id: str, revision: str) -> tuple[Path, str] | None:
+    root = optional_env(local_fixture_env)
+    if not root:
+        return None
+    snapshot = Path(root).expanduser().resolve() / repo_id
+    if not snapshot.is_dir():
+        return None
+    return snapshot, f"local-{revision}"
+
+
 def validate_snapshot(snapshot_dir: Path) -> None:
     files = {p.relative_to(snapshot_dir).as_posix() for p in snapshot_dir.rglob("*") if p.is_file()}
     if "config.json" not in files:
@@ -66,8 +78,12 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         local_dir = Path(tmp) / "snapshot"
-        commit = resolve_commit_sha(repo_id=repo_id, revision=revision, token=token)
-        snapshot_path = Path(snapshot_download(repo_id=repo_id, revision=revision, token=token, local_dir=local_dir))
+        fixture = resolve_local_fixture_snapshot(repo_id=repo_id, revision=revision)
+        if fixture is not None:
+            snapshot_path, commit = fixture
+        else:
+            commit = resolve_commit_sha(repo_id=repo_id, revision=revision, token=token)
+            snapshot_path = Path(snapshot_download(repo_id=repo_id, revision=revision, token=token, local_dir=local_dir))
         validate_snapshot(snapshot_path)
         artifact_uri = f"{output_root}/{resource_id}/snapshot"
         manifest_uri = f"{output_root}/{resource_id}/manifest.json"

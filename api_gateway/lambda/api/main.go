@@ -63,9 +63,17 @@ func NewAPIHandler() APIHandler {
 			env.WithDefaultString("INGESTION_SERVICE_HTTP_HOST", "127.0.0.1"),
 			env.WithDefaultString("INGESTION_SERVICE_HTTP_PORT", "8086"),
 		),
+		ModelRegistryServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("MODEL_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("MODEL_REGISTRY_SERVICE_HTTP_PORT", "8084"),
+		),
 		ProfileServiceRoute: serviceBaseRoute(
 			env.WithDefaultString("PROFILE_SERVICE_HTTP_HOST", "127.0.0.1"),
 			env.WithDefaultString("PROFILE_SERVICE_HTTP_PORT", "8082"),
+		),
+		TrainingServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("TRAINING_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("TRAINING_SERVICE_HTTP_PORT", "8085"),
 		),
 	}
 

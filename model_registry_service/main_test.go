@@ -29,6 +29,7 @@ var _ = Describe("readModelRegistryConfig", func() {
 	BeforeEach(func() {
 		env.ResetEnvironmentCache()
 		Expect(os.Setenv("ENVIRONMENT", "local-dev")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_API_HTTP_PORT")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_REGISTRY_SERVICE_INGESTION_SUBSCRIBER_TOPIC")).To(Succeed())
@@ -50,6 +51,7 @@ var _ = Describe("readModelRegistryConfig", func() {
 	It("uses explicit local messaging and outbox defaults", func() {
 		cfg := readModelRegistryConfig()
 
+		Expect(cfg.HTTPPort).To(Equal(8084))
 		Expect(cfg.Topics.ModelRegistry).To(Equal("model_registry"))
 		Expect(cfg.Topics.Training).To(Equal("training"))
 		Expect(cfg.Topics.Ingestion).To(Equal("ingestion"))

@@ -40,21 +40,26 @@ func ToTrainingRunStatus(value string) (TrainingRunStatus, error) {
 }
 
 type TrainingRunRequest struct {
-	TrainingRunID        string
-	UserID               string
-	DatasetID            string
-	DatasetVersion       string
-	FeatureSnapshotID    string
-	PreferenceDatasetID  string
-	PreferenceDatasetURI string
-	ParentModelID        string
-	ParentModelVersion   string
-	ParentAdapterURI     string
-	ModelName            string
-	ModelVersion         string
-	BaseModel            string
-	EvaluationProfile    string
-	TrainingProfile      TrainingProfile
+	TrainingRunID          string
+	UserID                 string
+	DatasetID              string
+	DatasetVersion         string
+	FeatureSnapshotID      string
+	DatasetURI             string
+	PreferenceDatasetID    string
+	PreferenceDatasetURI   string
+	SourceModelID          string
+	SourceArtifactURI      string
+	SourceModelKind        string
+	SourceArtifactChecksum string
+	ParentModelID          string
+	ParentModelVersion     string
+	ParentAdapterURI       string
+	ModelName              string
+	ModelVersion           string
+	BaseModel              string
+	EvaluationProfile      string
+	TrainingProfile        TrainingProfile
 }
 
 type TrainingProfile struct {
@@ -72,6 +77,49 @@ type TrainingProfile struct {
 	GradientAccumulationSteps int
 	LoRAR                     int
 	LoRAAlpha                 int
+}
+
+type StartTrainingRunCommand struct {
+	IdempotencyKey    string
+	DatasetID         string
+	SourceModelID     string
+	TrainingProfile   string
+	EvaluationProfile string
+}
+
+type TrainingRunStartResult struct {
+	TrainingRunID string
+	StatusURL     string
+}
+
+type TrainingRunStatusResult struct {
+	TrainingRunID string
+	Status        string
+}
+
+type MaterializedDatasetRef struct {
+	DatasetID         string
+	UserID            string
+	DatasetVersion    string
+	FeatureSnapshotID string
+	DatasetURI        string
+	TableName         string
+	TableFormat       string
+	ProcessingState   string
+}
+
+type SourceModelRef struct {
+	ModelID           string
+	UserID            string
+	ModelKind         string
+	Name              string
+	ModelVersion      int
+	BaseModel         string
+	ArtifactLocation  string
+	ArtifactChecksum  string
+	AdapterURI        string
+	ServingLoadStatus string
+	Status            string
 }
 
 type PreparedTrainingDataset struct {
@@ -119,28 +167,32 @@ type EvaluationReport struct {
 }
 
 type TrainingJobSpec struct {
-	TrainingRunID        string
-	DatasetURI           string
-	PreferenceDatasetID  string
-	ModelName            string
-	ModelVersion         string
-	BaseModel            string
-	ParentModelID        string
-	ParentModelVersion   string
-	ParentAdapterURI     string
-	TrainingProfile      TrainingProfile
-	ModelURI             string
-	AdapterURI           string
-	ServingTarget        string
-	ServingModel         string
-	ServingLoadStatus    string
-	ArtifactFormat       string
-	ArtifactManifestURI  string
-	ArtifactBucketRegion string
-	AxolotlCommand       string
-	RecipeYAML           string
-	RecipeHash           string
-	SubmissionID         string
+	TrainingRunID          string
+	DatasetURI             string
+	PreferenceDatasetID    string
+	ModelName              string
+	ModelVersion           string
+	BaseModel              string
+	SourceModelID          string
+	SourceArtifactURI      string
+	SourceModelKind        string
+	SourceArtifactChecksum string
+	ParentModelID          string
+	ParentModelVersion     string
+	ParentAdapterURI       string
+	TrainingProfile        TrainingProfile
+	ModelURI               string
+	AdapterURI             string
+	ServingTarget          string
+	ServingModel           string
+	ServingLoadStatus      string
+	ArtifactFormat         string
+	ArtifactManifestURI    string
+	ArtifactBucketRegion   string
+	AxolotlCommand         string
+	RecipeYAML             string
+	RecipeHash             string
+	SubmissionID           string
 }
 
 type EvaluationJobSpec struct {
@@ -188,6 +240,7 @@ type TrainingRunResult struct {
 	DatasetID         string
 	DatasetVersion    string
 	FeatureSnapshotID string
+	SourceModelID     string
 	ModelID           string
 	ModelURI          string
 	ModelName         string

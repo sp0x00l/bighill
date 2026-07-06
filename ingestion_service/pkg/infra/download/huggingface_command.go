@@ -18,17 +18,19 @@ import (
 )
 
 type HuggingFaceCommandDownloader struct {
-	command   []string
-	outputURI string
-	timeout   time.Duration
-	envKeys   HuggingFaceJobEnvKeys
+	command          []string
+	workingDirectory string
+	outputURI        string
+	timeout          time.Duration
+	envKeys          HuggingFaceJobEnvKeys
 }
 
 type HuggingFaceCommandDownloaderConfig struct {
-	Command   string
-	OutputURI string
-	Timeout   time.Duration
-	EnvKeys   HuggingFaceJobEnvKeys
+	Command          string
+	WorkingDirectory string
+	OutputURI        string
+	Timeout          time.Duration
+	EnvKeys          HuggingFaceJobEnvKeys
 }
 
 type HuggingFaceJobEnvKeys struct {
@@ -65,10 +67,11 @@ func NewHuggingFaceCommandDownloader(config HuggingFaceCommandDownloaderConfig) 
 	log.Trace("NewHuggingFaceCommandDownloader")
 
 	return &HuggingFaceCommandDownloader{
-		command:   strings.Fields(config.Command),
-		outputURI: strings.TrimRight(strings.TrimSpace(config.OutputURI), "/"),
-		timeout:   config.Timeout,
-		envKeys:   config.EnvKeys.trimmed(),
+		command:          strings.Fields(config.Command),
+		workingDirectory: strings.TrimSpace(config.WorkingDirectory),
+		outputURI:        strings.TrimRight(strings.TrimSpace(config.OutputURI), "/"),
+		timeout:          config.Timeout,
+		envKeys:          config.EnvKeys.trimmed(),
 	}, nil
 }
 
@@ -78,6 +81,9 @@ func (d *HuggingFaceCommandDownloader) DownloadHuggingFaceModel(ctx context.Cont
 	runCtx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, d.command[0], d.command[1:]...)
+	if d.workingDirectory != "" {
+		cmd.Dir = d.workingDirectory
+	}
 	cmd.Env = append(os.Environ(), d.envKeys.commandEnv(request, request.HuggingFaceToken, d.outputURI)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

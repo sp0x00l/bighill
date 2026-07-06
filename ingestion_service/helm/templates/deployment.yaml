@@ -65,6 +65,8 @@ spec:
               value: {{ .Values.env.huggingFaceDownloadMode | quote }}
             - name: INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_COMMAND
               value: {{ .Values.env.huggingFaceDownloadCommand | quote }}
+            - name: INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_WORKING_DIRECTORY
+              value: {{ .Values.env.huggingFaceDownloadWorkingDirectory | quote }}
             - name: INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI
               value: {{ .Values.env.huggingFaceOutputUri | quote }}
             - name: INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_TIMEOUT_SECONDS

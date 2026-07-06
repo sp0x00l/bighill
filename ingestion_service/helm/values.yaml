@@ -43,6 +43,7 @@ env:
   huggingFaceTokenEncryptionKey: "01234567890123456789012345678901"
   huggingFaceDownloadMode: "command"
   huggingFaceDownloadCommand: "python -m training_jobs.model_onboard"
+  huggingFaceDownloadWorkingDirectory: ""
   huggingFaceOutputUri: "s3://local-dev-bucket/models/huggingface"
   huggingFaceDownloadTimeoutSeconds: "1800"
   huggingFaceJobNamespace: "default"

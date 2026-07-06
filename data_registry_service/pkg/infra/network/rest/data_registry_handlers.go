@@ -73,6 +73,12 @@ func (h *DataRegistryHandlers) GetRoutes() []Route {
 			SpanName: "read-authenticated-user-dataset-by-id",
 		},
 		{
+			Path:     "/v1/data/registry/{datasetId}/materialization",
+			Handler:  h.ReadDatasetMaterialization,
+			Method:   http.MethodGet,
+			SpanName: "read-authenticated-user-dataset-materialization",
+		},
+		{
 			Path:     "/v1/data/registry/{datasetId}",
 			Handler:  h.DeleteDataset,
 			Method:   http.MethodDelete,
@@ -220,6 +226,41 @@ func (h *DataRegistryHandlers) ReadDatasetByID(ctx context.Context, req *http.Re
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Errorf("encode dataset %s failed for user %s", datasetID.String(), userID.String())
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode dataset")
+	}
+	return NewResponseWithPayload(http.StatusOK, datasetBytes), nil
+}
+
+func (h *DataRegistryHandlers) ReadDatasetMaterialization(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("DataRegistryHandlers ReadDatasetMaterialization")
+
+	userID, err := ReadUserIDHeader(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
+	ctx = ctxutil.WithTenantID(ctx, userID)
+
+	ctx, datasetID, err := h.readDatasetId(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	dataset, err := h.datasetsUsecase.ReadDatasetTable(ctx, datasetID, userID, "")
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Errorf("read dataset materialization %s failed for user %s", datasetID.String(), userID.String())
+		if domainErrors.IsServiceError(err, domainErrors.ErrResourceNotFound) {
+			return nil, ErrNotFound().Wrap(err).WithMessage("Dataset not found")
+		}
+		if domainErrors.IsServiceError(err, domainErrors.ErrValidationFailed) {
+			return nil, ErrBadRequest().Wrap(err).WithMessage("Dataset is not materialized")
+		}
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to read dataset materialization")
+	}
+
+	datasetBytes, err := h.datasetDTOAdapter.ToDTO(ctx, dataset, pathAuthUserDatasets)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Errorf("encode dataset materialization %s failed for user %s", datasetID.String(), userID.String())
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode dataset materialization")
 	}
 	return NewResponseWithPayload(http.StatusOK, datasetBytes), nil
 }

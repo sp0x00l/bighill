@@ -11,6 +11,7 @@ rbac:
   create: true
 service:
   type: ClusterIP
+  httpPort: 8084
   healthPort: 5060
 ingress:
   enabled: false

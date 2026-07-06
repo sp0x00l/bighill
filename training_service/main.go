@@ -14,13 +14,17 @@ import (
 	"training_service/pkg/app"
 	"training_service/pkg/domain/model"
 	"training_service/pkg/infra/executor"
+	trainingadapter "training_service/pkg/infra/network/adapter"
+	trainingclient "training_service/pkg/infra/network/client"
 	trainingmessaging "training_service/pkg/infra/network/messaging"
+	trainingrest "training_service/pkg/infra/network/rest"
 	"training_service/pkg/infra/temporalworker"
 
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
+	serializers "lib/shared_lib/serializer"
 	trace "lib/shared_lib/trace"
 
 	log "github.com/sirupsen/logrus"
@@ -30,18 +34,24 @@ import (
 var Version string
 
 type trainingConfig struct {
-	ServiceName            string
-	TrainingTriggerEnabled bool
-	Temporal               temporalConfig
-	Messaging              messagingConn.MessengerConfig
-	Topics                 trainingmessaging.TrainingTopics
-	BaseModel              string
-	EvaluationProfile      string
-	DPOEvaluationProfile   string
-	PromotionProfile       string
-	Profile                model.TrainingProfile
-	Executor               trainingExecutorConfig
-	Health                 healthConfig
+	ServiceName              string
+	HTTPPort                 int
+	TrainingTriggerEnabled   bool
+	Temporal                 temporalConfig
+	Messaging                messagingConn.MessengerConfig
+	Topics                   trainingmessaging.TrainingTopics
+	DataRegistryServiceURL   string
+	ModelRegistryServiceURL  string
+	HTTPClientTimeout        time.Duration
+	EvaluationProfile        string
+	EvaluationProfileName    string
+	DPOTrainingProfileName   string
+	DPOEvaluationProfile     string
+	DPOEvaluationProfileName string
+	PromotionProfile         string
+	Profile                  model.TrainingProfile
+	Executor                 trainingExecutorConfig
+	Health                   healthConfig
 }
 
 type temporalConfig struct {
@@ -158,6 +168,24 @@ func main() {
 	}
 	defer trainingWorker.Stop()
 
+	workflowStarter := temporalworker.NewTrainingWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
+	resolverClient := &http.Client{Timeout: cfg.HTTPClientTimeout}
+	datasetResolver := trainingclient.NewDatasetResolver(cfg.DataRegistryServiceURL, resolverClient)
+	modelResolver := trainingclient.NewModelResolver(cfg.ModelRegistryServiceURL, resolverClient)
+	profileCatalog := app.NewStaticTrainingProfileCatalog(
+		[]model.TrainingProfile{cfg.Profile, dpoTrainingProfile(cfg)},
+		cfg.Profile.Name,
+		map[string]string{
+			cfg.EvaluationProfileName:    cfg.EvaluationProfile,
+			cfg.DPOEvaluationProfileName: cfg.DPOEvaluationProfile,
+		},
+		cfg.EvaluationProfileName,
+	)
+	validateProfileCatalog(cancelCtx, profileCatalog, cfg)
+	trainingCommandUsecase := app.NewTrainingCommandUsecase(workflowStarter, workflowStarter, datasetResolver, modelResolver, profileCatalog)
+	trainingDTOAdapter := trainingadapter.NewTrainingRunDTOAdapter(serializers.NewJSONSerializer())
+	restService := trainingrest.NewService(trainingrest.NewTrainingHandlers(trainingCommandUsecase, trainingDTOAdapter).GetRoutes(), cfg.HTTPPort, serviceName)
+
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck().WithMessageBrokerCheck()
 
@@ -182,20 +210,25 @@ func main() {
 	}
 
 	if cfg.TrainingTriggerEnabled {
-		workflowStarter := temporalworker.NewTrainingWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
-		startSubscriber("dataset-updated", []string{cfg.Topics.DataRegistry}, func(subscriber messagingConn.Subscriber) {
-			messagingConn.AddListener(subscriber, trainingmessaging.NewDatasetUpdatedEventListener(workflowStarter, cfg.BaseModel, cfg.Profile, cfg.EvaluationProfile))
-		})
 		startSubscriber("preference-dataset-ready", []string{cfg.Topics.Inference}, func(subscriber messagingConn.Subscriber) {
-			messagingConn.AddListener(subscriber, trainingmessaging.NewPreferenceDatasetReadyEventListener(workflowStarter, cfg.BaseModel, cfg.Profile, cfg.DPOEvaluationProfile))
+			messagingConn.AddListener(subscriber, trainingmessaging.NewPreferenceDatasetReadyEventListener(workflowStarter, profileCatalog, cfg.DPOTrainingProfileName, cfg.DPOEvaluationProfileName))
 		})
 		promotionRunner := trainingmessaging.NewPromotionReportRunner(trainingExecutor, trainingEventPublisher, cfg.Executor.PromotionReportURIPrefix, cfg.Executor.ArtifactBucketRegion, cfg.PromotionProfile)
 		startSubscriber("promotion-requested", []string{cfg.Topics.ModelRegistry}, func(subscriber messagingConn.Subscriber) {
 			messagingConn.AddListener(subscriber, trainingmessaging.NewPromotionRequestedEventListener(promotionRunner))
 		})
 	} else {
-		log.WithContext(cancelCtx).Info("training trigger disabled; dataset materialization events will not start training workflows")
+		log.WithContext(cancelCtx).Info("training event triggers disabled; preference dataset events will not start training workflows")
 	}
+
+	go func() {
+		if err := restService.Connect(); err != nil {
+			if err != http.ErrServerClosed {
+				log.Fatalf("unable to start the %s rest service: %v", serviceName, err)
+			}
+			quit <- syscall.SIGTERM
+		}
+	}()
 
 	go func() {
 		if err := healthCheck.Connect(cancelCtx); err != nil {
@@ -216,6 +249,7 @@ func main() {
 	<-quit
 
 	cancelFtn()
+	restService.Close()
 	healthCheck.Close()
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
@@ -224,6 +258,7 @@ func readTrainingConfig() trainingConfig {
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	return trainingConfig{
 		ServiceName:            env.WithDefaultString("TRAINING_SERVICE_NAME", "training-service"),
+		HTTPPort:               env.WithDefaultInt("TRAINING_SERVICE_API_HTTP_PORT", "8085"),
 		TrainingTriggerEnabled: env.WithDefaultBool("TRAINING_SERVICE_TRAINING_TRIGGER_ENABLED", false),
 		Temporal: temporalConfig{
 			Address:   env.WithDefaultString("TRAINING_SERVICE_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
@@ -237,20 +272,33 @@ func readTrainingConfig() trainingConfig {
 			AutoOffsetReset: env.WithDefaultString("TRAINING_SERVICE_KAFKA_AUTO_OFFSET_RESET", "earliest"),
 		},
 		Topics: trainingmessaging.TrainingTopics{
-			DataRegistry:  env.WithDefaultString("TRAINING_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 			Inference:     env.WithDefaultString("TRAINING_SERVICE_INFERENCE_SUBSCRIBER_TOPIC", "inference"),
 			ModelRegistry: env.WithDefaultString("TRAINING_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry"),
 			Training:      env.WithDefaultString("TRAINING_SERVICE_TOPIC", "training"),
 		},
-		BaseModel:         env.WithDefaultString("TRAINING_SERVICE_BASE_MODEL", "local-dev-base-model"),
-		EvaluationProfile: env.WithDefaultString("TRAINING_SERVICE_EVALUATION_PROFILE", "smoke"),
+		DataRegistryServiceURL: serviceBaseRoute(
+			env.WithDefaultString("DATA_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("DATA_REGISTRY_SERVICE_HTTP_PORT", "8081"),
+		),
+		ModelRegistryServiceURL: serviceBaseRoute(
+			env.WithDefaultString("MODEL_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("MODEL_REGISTRY_SERVICE_HTTP_PORT", "8084"),
+		),
+		HTTPClientTimeout:     secondsFromEnv("TRAINING_SERVICE_HTTP_CLIENT_TIMEOUT_SECONDS", "10"),
+		EvaluationProfile:     env.WithDefaultString("TRAINING_SERVICE_EVALUATION_PROFILE", "smoke"),
+		EvaluationProfileName: env.WithDefaultString("TRAINING_SERVICE_EVALUATION_PROFILE_NAME", "ragas-default@v1"),
+		DPOTrainingProfileName: env.WithDefaultString(
+			"TRAINING_SERVICE_DPO_TRAINING_PROFILE_NAME",
+			"dpo-default@v1",
+		),
 		DPOEvaluationProfile: env.WithDefaultString(
 			"TRAINING_SERVICE_DPO_EVALUATION_PROFILE",
 			`{"metric_suite":"preference","evaluator_name":"pairwise-judge","evaluator_version":"v1"}`,
 		),
-		PromotionProfile: env.WithDefaultString("TRAINING_SERVICE_PROMOTION_PROFILE", "{}"),
+		DPOEvaluationProfileName: env.WithDefaultString("TRAINING_SERVICE_DPO_EVALUATION_PROFILE_NAME", "dpo-default@v1"),
+		PromotionProfile:         env.WithDefaultString("TRAINING_SERVICE_PROMOTION_PROFILE", "{}"),
 		Profile: model.TrainingProfile{
-			Name:                      env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_NAME", "local-dev-qlora"),
+			Name:                      env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_NAME", "sft-default@v1"),
 			Trainer:                   env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_TRAINER", "sft"),
 			Adapter:                   env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_ADAPTER", "qlora"),
 			Quantization:              env.WithDefaultString("TRAINING_SERVICE_TRAINING_PROFILE_QUANTIZATION", "4bit"),
@@ -368,6 +416,36 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 
 func secondsFromEnv(key, defaultValue string) time.Duration {
 	return time.Duration(env.WithDefaultInt(key, defaultValue)) * time.Second
+}
+
+func serviceBaseRoute(host, port string) string {
+	return "http://" + host + ":" + port
+}
+
+func dpoTrainingProfile(cfg trainingConfig) model.TrainingProfile {
+	log.Trace("dpoTrainingProfile")
+
+	profile := cfg.Profile
+	profile.Name = cfg.DPOTrainingProfileName
+	profile.Trainer = "dpo"
+	return profile
+}
+
+func validateProfileCatalog(ctx context.Context, catalog app.TrainingProfileCatalog, cfg trainingConfig) {
+	log.Trace("validateProfileCatalog")
+
+	if _, err := catalog.ResolveTrainingProfile(ctx, cfg.Profile.Name); err != nil {
+		log.WithContext(ctx).WithError(err).Fatal("unable to resolve default training profile")
+	}
+	if _, err := catalog.ResolveTrainingProfile(ctx, cfg.DPOTrainingProfileName); err != nil {
+		log.WithContext(ctx).WithError(err).Fatal("unable to resolve DPO training profile")
+	}
+	if _, err := catalog.ResolveEvaluationProfile(ctx, cfg.EvaluationProfileName); err != nil {
+		log.WithContext(ctx).WithError(err).Fatal("unable to resolve default evaluation profile")
+	}
+	if _, err := catalog.ResolveEvaluationProfile(ctx, cfg.DPOEvaluationProfileName); err != nil {
+		log.WithContext(ctx).WithError(err).Fatal("unable to resolve DPO evaluation profile")
+	}
 }
 
 func floatFromEnv(key, defaultValue string) float64 {

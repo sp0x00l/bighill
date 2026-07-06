@@ -162,7 +162,7 @@ func validInferenceDataset() *model.InferenceDataset {
 		TableName:                "dataset_features",
 		TableFormat:              "PARQUET",
 		CatalogProvider:          "POLARIS",
-		ProcessingProfile:        "RAG",
+		ProcessingProfile:        "TEXT_RAG_PROCESSING_PROFILE",
 		SchemaVersion:            2,
 		SchemaMetadata:           `{"columns":[{"name":"text","type":"string"}]}`,
 		RawSnapshotID:            uuid.New(),

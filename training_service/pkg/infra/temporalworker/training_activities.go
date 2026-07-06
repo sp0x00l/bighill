@@ -125,16 +125,23 @@ func (a *TrainingActivities) PrepareTrainingDataset(_ context.Context, request m
 	if strings.TrimSpace(request.FeatureSnapshotID) == "" {
 		return nil, domain.ErrValidationFailed.Extend("feature snapshot id is required")
 	}
+	datasetURI := strings.TrimSpace(request.DatasetURI)
+	if datasetURI == "" {
+		datasetURI = "s3://local-dev-bucket/features/" + request.FeatureSnapshotID + ".parquet"
+	}
 	return &model.PreparedTrainingDataset{
 		TrainingRunID:     request.TrainingRunID,
 		FeatureSnapshotID: request.FeatureSnapshotID,
-		DatasetURI:        "s3://local-dev-bucket/features/" + request.FeatureSnapshotID + ".parquet",
+		DatasetURI:        datasetURI,
 	}, nil
 }
 
 func (a *TrainingActivities) RunTrainingJob(ctx context.Context, prepared model.PreparedTrainingDataset, request model.TrainingRunRequest) (*model.TrainedModelArtifact, error) {
 	log.Trace("TrainingActivities RunTrainingJob")
 
+	if a.executor == nil {
+		return nil, domain.ErrTrainModel.Extend("training executor is not configured")
+	}
 	spec, err := a.trainingJobSpec(prepared, request)
 	if err != nil {
 		return nil, err
@@ -149,6 +156,9 @@ func (a *TrainingActivities) RunTrainingJob(ctx context.Context, prepared model.
 func (a *TrainingActivities) EvaluateTrainedModel(ctx context.Context, artifact model.TrainedModelArtifact, request model.TrainingRunRequest) (*model.EvaluationReport, error) {
 	log.Trace("TrainingActivities EvaluateTrainedModel")
 
+	if a.executor == nil {
+		return nil, domain.ErrEvaluateModel.Extend("training executor is not configured")
+	}
 	spec, err := a.evaluationJobSpec(artifact, request)
 	if err != nil {
 		return nil, err
@@ -203,46 +213,54 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 		servingModel = modelName
 	}
 	recipe := axolotlRecipeYAML(model.TrainingJobSpec{
-		TrainingRunID:       trainingRunID,
-		DatasetURI:          datasetURI,
-		PreferenceDatasetID: strings.TrimSpace(request.PreferenceDatasetID),
-		ModelName:           modelName,
-		ModelVersion:        modelVersion,
-		BaseModel:           baseModel,
-		ParentModelID:       strings.TrimSpace(request.ParentModelID),
-		ParentModelVersion:  strings.TrimSpace(request.ParentModelVersion),
-		ParentAdapterURI:    strings.TrimSpace(request.ParentAdapterURI),
-		TrainingProfile:     trainingProfile,
-		ModelURI:            modelURI,
-		AdapterURI:          modelURI,
-		ServingTarget:       a.servingTarget,
-		ServingModel:        servingModel,
+		TrainingRunID:          trainingRunID,
+		DatasetURI:             datasetURI,
+		PreferenceDatasetID:    strings.TrimSpace(request.PreferenceDatasetID),
+		ModelName:              modelName,
+		ModelVersion:           modelVersion,
+		BaseModel:              baseModel,
+		SourceModelID:          strings.TrimSpace(request.SourceModelID),
+		SourceArtifactURI:      strings.TrimSpace(request.SourceArtifactURI),
+		SourceModelKind:        strings.TrimSpace(request.SourceModelKind),
+		SourceArtifactChecksum: strings.TrimSpace(request.SourceArtifactChecksum),
+		ParentModelID:          strings.TrimSpace(request.ParentModelID),
+		ParentModelVersion:     strings.TrimSpace(request.ParentModelVersion),
+		ParentAdapterURI:       strings.TrimSpace(request.ParentAdapterURI),
+		TrainingProfile:        trainingProfile,
+		ModelURI:               modelURI,
+		AdapterURI:             modelURI,
+		ServingTarget:          a.servingTarget,
+		ServingModel:           servingModel,
 	})
 	hash := sha256.Sum256([]byte(recipe))
 	recipeHash := hex.EncodeToString(hash[:])
 	return model.TrainingJobSpec{
-		TrainingRunID:        trainingRunID,
-		DatasetURI:           datasetURI,
-		PreferenceDatasetID:  strings.TrimSpace(request.PreferenceDatasetID),
-		ModelName:            modelName,
-		ModelVersion:         modelVersion,
-		BaseModel:            baseModel,
-		ParentModelID:        strings.TrimSpace(request.ParentModelID),
-		ParentModelVersion:   strings.TrimSpace(request.ParentModelVersion),
-		ParentAdapterURI:     strings.TrimSpace(request.ParentAdapterURI),
-		TrainingProfile:      trainingProfile,
-		ModelURI:             modelURI,
-		AdapterURI:           modelURI,
-		ServingTarget:        a.servingTarget,
-		ServingModel:         servingModel,
-		ServingLoadStatus:    a.servingLoadStatus,
-		ArtifactFormat:       "HF_PEFT_ADAPTER",
-		ArtifactManifestURI:  modelURI + "/artifact.json",
-		ArtifactBucketRegion: a.artifactBucketRegion,
-		AxolotlCommand:       a.axolotlCommand,
-		RecipeYAML:           recipe,
-		RecipeHash:           recipeHash,
-		SubmissionID:         deterministicSubmissionID("train", trainingRunID, recipeHash),
+		TrainingRunID:          trainingRunID,
+		DatasetURI:             datasetURI,
+		PreferenceDatasetID:    strings.TrimSpace(request.PreferenceDatasetID),
+		ModelName:              modelName,
+		ModelVersion:           modelVersion,
+		BaseModel:              baseModel,
+		SourceModelID:          strings.TrimSpace(request.SourceModelID),
+		SourceArtifactURI:      strings.TrimSpace(request.SourceArtifactURI),
+		SourceModelKind:        strings.TrimSpace(request.SourceModelKind),
+		SourceArtifactChecksum: strings.TrimSpace(request.SourceArtifactChecksum),
+		ParentModelID:          strings.TrimSpace(request.ParentModelID),
+		ParentModelVersion:     strings.TrimSpace(request.ParentModelVersion),
+		ParentAdapterURI:       strings.TrimSpace(request.ParentAdapterURI),
+		TrainingProfile:        trainingProfile,
+		ModelURI:               modelURI,
+		AdapterURI:             modelURI,
+		ServingTarget:          a.servingTarget,
+		ServingModel:           servingModel,
+		ServingLoadStatus:      a.servingLoadStatus,
+		ArtifactFormat:         "HF_PEFT_ADAPTER",
+		ArtifactManifestURI:    modelURI + "/artifact.json",
+		ArtifactBucketRegion:   a.artifactBucketRegion,
+		AxolotlCommand:         a.axolotlCommand,
+		RecipeYAML:             recipe,
+		RecipeHash:             recipeHash,
+		SubmissionID:           deterministicSubmissionID("train", trainingRunID, recipeHash),
 	}, nil
 }
 

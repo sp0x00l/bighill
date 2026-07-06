@@ -37,11 +37,11 @@ func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, tx pgx.Tx, s
 		source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
 		created_at, expires_at
 	) VALUES (
-		@upload_id, @resource_type, @resource_id, @dataset_id, @user_id, @client_nonce, @file_name, @staging_key, @final_key,
-		@declared_format, @declared_content_type, @declared_size_bytes, @status,
-		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile,
+		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @client_nonce, @file_name, @staging_key, @final_key,
+		@declared_format, @declared_content_type, @declared_size_bytes, @status::upload_session_status_enum,
+		@table_namespace, @table_name, NULLIF(@table_format, '')::table_format_enum, NULLIF(@catalog_provider, '')::catalog_provider_enum, NULLIF(@processing_profile, '')::processing_profile_enum,
 		@artifact_type, @model_name, @model_version, @base_model,
-		@source, @source_uri, @manifest_location, @hf_repo_id, @hf_revision, @hf_commit_sha,
+		@source::model_source_enum, @source_uri, @manifest_location, @hf_repo_id, @hf_revision, @hf_commit_sha,
 		@created_at, @expires_at
 	)
 	ON CONFLICT (upload_id) DO UPDATE SET upload_id = EXCLUDED.upload_id
@@ -50,16 +50,11 @@ func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, tx pgx.Tx, s
 			ELSE ` + db.Name + `.upload_sessions.expires_at
 		END
 		, status = CASE
-			WHEN ` + db.Name + `.upload_sessions.status = 'EXPIRED' THEN 'PENDING'
+			WHEN ` + db.Name + `.upload_sessions.status = 'EXPIRED' THEN 'PENDING'::upload_session_status_enum
 			ELSE ` + db.Name + `.upload_sessions.status
 		END
 		, updated_at = now()
-	RETURNING upload_id::text, resource_type, resource_id::text, COALESCE(dataset_id::text, ''), user_id::text, client_nonce, file_name,
-		staging_key, final_key, storage_location, declared_format, declared_content_type,
-		declared_size_bytes, actual_size_bytes, checksum, status, table_namespace, table_name,
-		table_format, catalog_provider, processing_profile, artifact_type, model_name, model_version,
-		base_model, source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
-		created_at, expires_at`
+	RETURNING ` + uploadSessionColumns()
 
 	out, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionDAO(session)))
 	if err != nil {
@@ -74,12 +69,7 @@ func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, tx pgx.Tx, s
 func (db *UploadSessionDB) ReadUploadSessionForComplete(ctx context.Context, uploadID, userID uuid.UUID) (*model.UploadSession, error) {
 	log.Trace("UploadSessionDB ReadUploadSessionForComplete")
 
-	query := `SELECT upload_id::text, resource_type, resource_id::text, COALESCE(dataset_id::text, ''), user_id::text, client_nonce, file_name,
-		staging_key, final_key, storage_location, declared_format, declared_content_type,
-		declared_size_bytes, actual_size_bytes, checksum, status, table_namespace, table_name,
-		table_format, catalog_provider, processing_profile, artifact_type, model_name, model_version,
-		base_model, source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
-		created_at, expires_at
+	query := `SELECT ` + uploadSessionColumns() + `
 		FROM ` + db.Name + `.upload_sessions
 		WHERE upload_id = @upload_id AND user_id = @user_id`
 	session, err := scanUploadSession(db.Pool.QueryRow(ctx, query, uploadSessionIDsDAO(uploadID, userID)))
@@ -99,15 +89,10 @@ func (db *UploadSessionDB) PromoteUploadSession(ctx context.Context, tx pgx.Tx, 
 		storage_location = @storage_location,
 		actual_size_bytes = @actual_size_bytes,
 		checksum = @checksum,
-		status = 'PROMOTED',
+		status = 'PROMOTED'::upload_session_status_enum,
 		updated_at = now()
 		WHERE upload_id = @upload_id AND user_id = @user_id AND status = 'PENDING'
-		RETURNING upload_id::text, resource_type, resource_id::text, COALESCE(dataset_id::text, ''), user_id::text, client_nonce, file_name,
-			staging_key, final_key, storage_location, declared_format, declared_content_type,
-			declared_size_bytes, actual_size_bytes, checksum, status, table_namespace, table_name,
-			table_format, catalog_provider, processing_profile, artifact_type, model_name, model_version,
-			base_model, source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
-			created_at, expires_at`
+		RETURNING ` + uploadSessionColumns()
 	promoted, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionDAO(session)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -166,9 +151,9 @@ func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, tx pgx.Tx, up
 		declared_content_type, status, table_namespace, table_name, table_format,
 		catalog_provider, processing_profile, artifact_type, model_name, model_version, base_model, created_at, expires_at
 	) VALUES (
-		@upload_id, @resource_type, @resource_id, @dataset_id, @user_id, @file_name, @storage_location, @declared_format,
-		@declared_content_type, 'PROMOTED', @table_namespace, @table_name, @table_format,
-		@catalog_provider, @processing_profile, @artifact_type, @model_name, @model_version, @base_model, now(), now()
+		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @file_name, @storage_location, @declared_format,
+		@declared_content_type, 'PROMOTED'::upload_session_status_enum, @table_namespace, @table_name, @table_format::table_format_enum,
+		@catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @artifact_type, @model_name, @model_version, @base_model, now(), now()
 	)
 	ON CONFLICT (upload_id) DO UPDATE SET upload_id = EXCLUDED.upload_id`
 	if _, err := tx.Exec(ctx, query, uploadSessionDAO(session)); err != nil {
@@ -201,18 +186,13 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, tx pgx.Tx, s
 		artifact_type, model_name, model_version, base_model,
 		source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha, created_at, expires_at
 	) VALUES (
-		@upload_id, @resource_type, @resource_id, @dataset_id, @user_id, @client_nonce, @file_name, @storage_location,
-		@declared_format, @declared_content_type, @declared_size_bytes, @actual_size_bytes, @checksum, 'PROMOTED',
+		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @client_nonce, @file_name, @storage_location,
+		@declared_format, @declared_content_type, @declared_size_bytes, @actual_size_bytes, @checksum, 'PROMOTED'::upload_session_status_enum,
 		@artifact_type, @model_name, @model_version, @base_model,
-		@source, @source_uri, @manifest_location, @hf_repo_id, @hf_revision, @hf_commit_sha, @created_at, @expires_at
+		@source::model_source_enum, @source_uri, @manifest_location, @hf_repo_id, @hf_revision, @hf_commit_sha, @created_at, @expires_at
 	)
 	ON CONFLICT (upload_id) DO UPDATE SET upload_id = EXCLUDED.upload_id
-	RETURNING upload_id::text, resource_type, resource_id::text, COALESCE(dataset_id::text, ''), user_id::text, client_nonce, file_name,
-		staging_key, final_key, storage_location, declared_format, declared_content_type,
-		declared_size_bytes, actual_size_bytes, checksum, status, table_namespace, table_name,
-		table_format, catalog_provider, processing_profile, artifact_type, model_name, model_version,
-		base_model, source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
-		created_at, expires_at`
+	RETURNING ` + uploadSessionColumns()
 	recorded, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionDAO(session)))
 	if err != nil {
 		if coreDb.IsForeignKeyViolation(err) {
@@ -226,12 +206,7 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, tx pgx.Tx, s
 func (db *UploadSessionDB) readUploadSessionTx(ctx context.Context, tx pgx.Tx, uploadID, userID uuid.UUID) (*model.UploadSession, error) {
 	log.Trace("UploadSessionDB readUploadSessionTx")
 
-	query := `SELECT upload_id::text, resource_type, resource_id::text, COALESCE(dataset_id::text, ''), user_id::text, client_nonce, file_name,
-		staging_key, final_key, storage_location, declared_format, declared_content_type,
-		declared_size_bytes, actual_size_bytes, checksum, status, table_namespace, table_name,
-		table_format, catalog_provider, processing_profile, artifact_type, model_name, model_version,
-		base_model, source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
-		created_at, expires_at
+	query := `SELECT ` + uploadSessionColumns() + `
 		FROM ` + db.Name + `.upload_sessions
 		WHERE upload_id = @upload_id AND user_id = @user_id`
 	session, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionIDsDAO(uploadID, userID)))
@@ -247,7 +222,7 @@ func (db *UploadSessionDB) readUploadSessionTx(ctx context.Context, tx pgx.Tx, u
 func (db *UploadSessionDB) setUploadSessionStatus(ctx context.Context, tx pgx.Tx, uploadID, userID uuid.UUID, status model.UploadSessionStatus) error {
 	log.Trace("UploadSessionDB setUploadSessionStatus")
 
-	query := `UPDATE ` + db.Name + `.upload_sessions SET status = @status, updated_at = now()
+	query := `UPDATE ` + db.Name + `.upload_sessions SET status = @status::upload_session_status_enum, updated_at = now()
 		WHERE upload_id = @upload_id AND user_id = @user_id AND status = 'PENDING'`
 	cmd, err := tx.Exec(ctx, query, pgx.NamedArgs{
 		"upload_id": pgtype.UUID{Bytes: uploadID, Valid: true},
@@ -281,7 +256,7 @@ func uploadSessionDAO(session *model.UploadSession) pgx.NamedArgs {
 	}
 	source := session.Source
 	if source == "" {
-		source = "upload"
+		source = "UPLOAD"
 	}
 	return pgx.NamedArgs{
 		"upload_id":             pgtype.UUID{Bytes: session.UploadID, Valid: session.UploadID != uuid.Nil},
@@ -325,6 +300,18 @@ func uploadSessionIDsDAO(uploadID, userID uuid.UUID) pgx.NamedArgs {
 		"upload_id": pgtype.UUID{Bytes: uploadID, Valid: true},
 		"user_id":   pgtype.UUID{Bytes: userID, Valid: true},
 	}
+}
+
+func uploadSessionColumns() string {
+	log.Trace("uploadSessionColumns")
+
+	return `upload_id::text, resource_type::text, resource_id::text, COALESCE(dataset_id::text, ''), user_id::text, client_nonce, file_name,
+		staging_key, final_key, storage_location, declared_format, declared_content_type,
+		declared_size_bytes, actual_size_bytes, checksum, status::text, table_namespace, table_name,
+		COALESCE(table_format::text, ''), COALESCE(catalog_provider::text, ''), COALESCE(processing_profile::text, ''),
+		artifact_type, model_name, model_version,
+			base_model, source::text, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
+		created_at, expires_at`
 }
 
 func scanUploadSession(row pgx.Row) (*model.UploadSession, error) {

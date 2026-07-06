@@ -7,6 +7,10 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
+    - name: http
+      port: {{ .Values.service.httpPort }}
+      targetPort: http
+      protocol: TCP
     - name: health
       port: {{ .Values.service.healthPort }}
       targetPort: health

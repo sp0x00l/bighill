@@ -9,6 +9,7 @@ serviceAccount:
   annotations: {}
 service:
   type: ClusterIP
+  httpPort: 8085
   healthPort: 5058
 ingress:
   enabled: false
@@ -26,13 +27,19 @@ env:
   kafkaBaseGroupId: "training"
   kafkaAutoOffsetReset: "earliest"
   topic: "training"
-  dataRegistrySubscriberTopic: "data_registry"
   inferenceSubscriberTopic: "inference"
   dlq: "http://localhost:4566/training-dev-env-queue/"
-  baseModel: "local-dev-base-model"
+  httpClientTimeoutSeconds: "10"
+  dataRegistryHttpHost: "data-registry-service"
+  dataRegistryHttpPort: "8081"
+  modelRegistryHttpHost: "model-registry-service"
+  modelRegistryHttpPort: "8084"
+  evaluationProfileName: "ragas-default@v1"
   evaluationProfile: "smoke"
+  dpoTrainingProfileName: "dpo-default@v1"
+  dpoEvaluationProfileName: "dpo-default@v1"
   dpoEvaluationProfile: '{"metric_suite":"preference","evaluator_name":"pairwise-judge","evaluator_version":"v1"}'
-  trainingProfileName: "local-dev-qlora"
+  trainingProfileName: "sft-default@v1"
   trainingProfileTrainer: "sft"
   trainingProfileAdapter: "qlora"
   trainingProfileQuantization: "4bit"

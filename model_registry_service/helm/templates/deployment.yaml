@@ -22,6 +22,9 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+              protocol: TCP
             - name: health
               containerPort: {{ .Values.service.healthPort }}
               protocol: TCP
@@ -32,6 +35,8 @@ spec:
               value: {{ .Values.env.otelExporterEndpoint | quote }}
             - name: MODEL_REGISTRY_SERVICE_NAME
               value: {{ .Values.env.serviceName | quote }}
+            - name: MODEL_REGISTRY_SERVICE_API_HTTP_PORT
+              value: {{ .Values.service.httpPort | quote }}
             - name: MODEL_REGISTRY_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
             - name: MODEL_REGISTRY_SERVICE_DB_NAME

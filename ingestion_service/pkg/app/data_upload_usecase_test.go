@@ -522,7 +522,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(session.Source).To(Equal("hugging_face"))
+		Expect(session.Source).To(Equal("HUGGING_FACE"))
 		Expect(session.ArtifactType).To(Equal("BASE_MODEL"))
 		Expect(session.ManifestLocation).To(ContainSubstring("/manifest.json"))
 		Expect(sessions.recordedModel).To(Equal(session))
@@ -534,7 +534,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		var event ingestionpb.ModelArtifactIngestedEvent
 		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
-		Expect(event.Source).To(Equal("hugging_face"))
+		Expect(event.Source).To(Equal("HUGGING_FACE"))
 		Expect(event.HfCommitSha).To(Equal("abc123"))
 		Expect(event.SourceMetadata).To(ContainSubstring(session.UploadID.String()))
 	})

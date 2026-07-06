@@ -30,8 +30,13 @@ func (e *ServiceError) Is(target error) bool {
 }
 
 var (
-	ErrValidationFailed = &ServiceError{Code: "validation_failed", Message: "validation failed"}
-	ErrPrepareDataset   = &ServiceError{Code: "prepare_dataset_failed", Message: "prepare dataset failed"}
-	ErrTrainModel       = &ServiceError{Code: "train_model_failed", Message: "train model failed"}
-	ErrEvaluateModel    = &ServiceError{Code: "evaluate_model_failed", Message: "evaluate model failed"}
+	ErrValidationFailed    = &ServiceError{Code: "validation_failed", Message: "validation failed"}
+	ErrPrepareDataset      = &ServiceError{Code: "prepare_dataset_failed", Message: "prepare dataset failed"}
+	ErrTrainModel          = &ServiceError{Code: "train_model_failed", Message: "train model failed"}
+	ErrEvaluateModel       = &ServiceError{Code: "evaluate_model_failed", Message: "evaluate model failed"}
+	ErrTrainingRunNotFound = &ServiceError{
+		Code:    "training_run_not_found",
+		Message: "training run not found",
+	}
+	ErrDependencyFailed = &ServiceError{Code: "dependency_failed", Message: "dependency failed"}
 )

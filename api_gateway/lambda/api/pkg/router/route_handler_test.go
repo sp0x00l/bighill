@@ -64,9 +64,11 @@ func responseWithBody(status int, body string) *http.Response {
 
 func testRouter(client *routerHTTPClientMock) func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	return NewRouter(client, http.NewRequest, Config{
-		DataRegistryServiceRoute: "http://data-registry.service",
-		IngestionServiceRoute:    "http://ingestion.service",
-		ProfileServiceRoute:      "http://profile.service",
+		DataRegistryServiceRoute:  "http://data-registry.service",
+		IngestionServiceRoute:     "http://ingestion.service",
+		ModelRegistryServiceRoute: "http://model-registry.service",
+		ProfileServiceRoute:       "http://profile.service",
+		TrainingServiceRoute:      "http://training.service",
 	})
 }
 
@@ -120,19 +122,23 @@ var _ = Describe("NewRouter", func() {
 			responseWithBody(http.StatusAccepted, `{"upload":"accepted"}`),
 			responseWithBody(http.StatusCreated, `{"upload_id":"session-1"}`),
 			responseWithBody(http.StatusCreated, `{"upload_id":"model-session-1"}`),
+			responseWithBody(http.StatusCreated, `{"resource_id":"model-1"}`),
+			responseWithBody(http.StatusOK, `{"resources":[]}`),
+			responseWithBody(http.StatusOK, `{"id":"model-1"}`),
+			responseWithBody(http.StatusAccepted, `{"training_run_id":"run-1"}`),
 		}
 		handler := testRouter(client)
 
 		registryResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod: http.MethodGet,
-			Path:       "/v1/data/registry",
+			Path:       "/v1/private/data/registry",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(registryResp.StatusCode).To(Equal(http.StatusOK))
 
 		ingestionResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod:      http.MethodPost,
-			Path:            "/v1/data/store/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			Path:            "/v1/private/data/store/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
 			Body:            base64.StdEncoding.EncodeToString([]byte("file-bytes")),
 			IsBase64Encoded: true,
 			Headers:         map[string]string{"Content-Type": "multipart/form-data; boundary=test"},
@@ -142,7 +148,7 @@ var _ = Describe("NewRouter", func() {
 
 		sessionResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod: http.MethodPost,
-			Path:       "/v1/data/uploads/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			Path:       "/v1/private/data/uploads/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
 			Body:       `{"file_name":"dataset.csv"}`,
 			Headers:    map[string]string{"Content-Type": "application/json"},
 		})
@@ -151,14 +157,60 @@ var _ = Describe("NewRouter", func() {
 
 		modelSessionResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod: http.MethodPost,
-			Path:       "/v1/models/uploads",
+			Path:       "/v1/private/models/uploads",
 			Body:       `{"file_name":"adapter.safetensors"}`,
 			Headers:    map[string]string{"Content-Type": "application/json"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(modelSessionResp.StatusCode).To(Equal(http.StatusCreated))
 
-		Expect(client.requests).To(HaveLen(4))
+		hfOnboardResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodPost,
+			Path:       "/v1/private/models/onboard/huggingface",
+			Body:       `{"repo_id":"bigscience/bloom-560m"}`,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(hfOnboardResp.StatusCode).To(Equal(http.StatusCreated))
+
+		modelListResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:            http.MethodGet,
+			Path:                  "/v1/private/models",
+			QueryStringParameters: map[string]string{"source": "HUGGING_FACE", "limit": "10"},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(modelListResp.StatusCode).To(Equal(http.StatusOK))
+
+		modelReadResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodGet,
+			Path:       "/v1/private/models/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(modelReadResp.StatusCode).To(Equal(http.StatusOK))
+
+		trainingResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodPost,
+			Path:       "/v1/private/training-runs",
+			Body:       `{"dataset_id":"dataset-1","source_model_id":"model-1"}`,
+			Headers:    map[string]string{"Content-Type": "application/json", "X-Request-ID": "request-1"},
+			RequestContext: events.APIGatewayProxyRequestContext{
+				Authorizer: map[string]any{"userId": "user-123"},
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(trainingResp.StatusCode).To(Equal(http.StatusAccepted))
+
+		trainingReadResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodGet,
+			Path:       "/v1/private/training-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			RequestContext: events.APIGatewayProxyRequestContext{
+				Authorizer: map[string]any{"userId": "user-123"},
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(trainingReadResp.StatusCode).To(Equal(http.StatusOK))
+
+		Expect(client.requests).To(HaveLen(9))
 		Expect(client.requests[0].url).To(Equal("http://data-registry.service/v1/data/registry"))
 		Expect(client.requests[1].url).To(Equal("http://ingestion.service/v1/data/store/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
 		Expect(client.requests[1].body).To(Equal("file-bytes"))
@@ -166,6 +218,16 @@ var _ = Describe("NewRouter", func() {
 		Expect(client.requests[2].body).To(Equal(`{"file_name":"dataset.csv"}`))
 		Expect(client.requests[3].url).To(Equal("http://ingestion.service/v1/models/uploads"))
 		Expect(client.requests[3].body).To(Equal(`{"file_name":"adapter.safetensors"}`))
+		Expect(client.requests[4].url).To(Equal("http://ingestion.service/v1/models/onboard/huggingface"))
+		Expect(client.requests[4].body).To(Equal(`{"repo_id":"bigscience/bloom-560m"}`))
+		Expect(client.requests[5].url).To(Equal("http://model-registry.service/v1/models?limit=10&source=HUGGING_FACE"))
+		Expect(client.requests[6].url).To(Equal("http://model-registry.service/v1/models/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[7].url).To(Equal("http://training.service/v1/training-runs"))
+		Expect(client.requests[7].body).To(Equal(`{"dataset_id":"dataset-1","source_model_id":"model-1"}`))
+		Expect(client.requests[7].headers.Get("X-Request-ID")).To(Equal("request-1"))
+		Expect(client.requests[7].headers.Get(userHeader)).To(Equal("user-123"))
+		Expect(client.requests[8].url).To(Equal("http://training.service/v1/training-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[8].headers.Get(userHeader)).To(Equal("user-123"))
 	})
 
 	It("forwards authenticated user and session context to profile logout", func() {
@@ -173,7 +235,7 @@ var _ = Describe("NewRouter", func() {
 
 		resp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod: http.MethodPost,
-			Path:       "/private/v1/profiles/logout",
+			Path:       "/v1/private/profiles/logout",
 			RequestContext: events.APIGatewayProxyRequestContext{
 				Authorizer: map[string]any{
 					"userId": "user-123",
@@ -194,7 +256,7 @@ var _ = Describe("NewRouter", func() {
 
 		resp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod: http.MethodGet,
-			Path:       "/private/v1/profiles",
+			Path:       "/v1/private/profiles",
 			RequestContext: events.APIGatewayProxyRequestContext{
 				Authorizer: map[string]any{
 					"userId": "user-123",
@@ -216,7 +278,7 @@ var _ = Describe("NewRouter", func() {
 
 			resp, err := handler(ctx, events.APIGatewayProxyRequest{
 				HTTPMethod: http.MethodGet,
-				Path:       "/private/v1/profiles",
+				Path:       "/v1/private/profiles",
 				Headers:    headers,
 			})
 
@@ -234,7 +296,7 @@ var _ = Describe("NewRouter", func() {
 
 		resp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod: http.MethodOptions,
-			Path:       "/v1/data/registry",
+			Path:       "/v1/private/data/registry",
 			Headers:    map[string]string{"Origin": "https://app.example"},
 		})
 
@@ -252,7 +314,7 @@ var _ = Describe("NewRouter", func() {
 
 		resp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod: http.MethodGet,
-			Path:       "/v1/data/registry",
+			Path:       "/v1/private/data/registry",
 		})
 
 		Expect(err).NotTo(HaveOccurred())

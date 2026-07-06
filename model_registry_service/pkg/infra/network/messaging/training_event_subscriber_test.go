@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	transport "lib/shared_lib/transport"
 	"model_registry_service/pkg/domain/model"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 
@@ -39,6 +40,14 @@ func (r *recordingModelRegistryUsecase) RegisterModel(context.Context, *model.Mo
 
 func (r *recordingModelRegistryUsecase) ReadModel(context.Context, uuid.UUID) (*model.Model, error) {
 	return nil, nil
+}
+
+func (r *recordingModelRegistryUsecase) ReadModelForUser(context.Context, uuid.UUID, uuid.UUID) (*model.Model, error) {
+	return nil, nil
+}
+
+func (r *recordingModelRegistryUsecase) ListModels(context.Context, uuid.UUID, transport.Pagination, model.ListFilter) ([]*model.Model, int, error) {
+	return nil, 0, nil
 }
 
 func (r *recordingModelRegistryUsecase) MarkModelReady(context.Context, uuid.UUID, string) (*model.Model, error) {

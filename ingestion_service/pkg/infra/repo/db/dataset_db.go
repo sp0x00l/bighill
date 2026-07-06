@@ -34,8 +34,8 @@ func (db *DatasetDB) Upsert(ctx context.Context, dataset *model.Dataset) error {
 		dataset_id, user_id, storage_location, table_namespace, table_name, table_format,
 		catalog_provider, processing_profile, schema_version, schema_metadata, blacklisted
 	) VALUES (
-		@dataset_id, @user_id, @storage_location, @table_namespace, @table_name, @table_format,
-		@catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, false
+		@dataset_id, @user_id, @storage_location, @table_namespace, @table_name, @table_format::table_format_enum,
+		@catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @schema_version, @schema_metadata::jsonb, false
 	)
 	ON CONFLICT (dataset_id) DO UPDATE SET
 		user_id = EXCLUDED.user_id,
@@ -97,7 +97,7 @@ func (db *DatasetDB) ReadForUpload(ctx context.Context, datasetID, userID uuid.U
 	log.Trace("DatasetDB ReadForUpload")
 
 	query := `SELECT dataset_id::text, user_id::text, storage_location, table_namespace, table_name,
-		table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text
+		table_format::text, catalog_provider::text, processing_profile::text, schema_version, schema_metadata::text
 		FROM ` + db.Name + `.datasets
 		WHERE dataset_id = @dataset_id AND user_id = @user_id AND blacklisted = false`
 	dataset, err := scanDataset(db.Pool.QueryRow(ctx, query, IDsToDAO(datasetID, userID)))

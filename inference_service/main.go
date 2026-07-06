@@ -23,6 +23,7 @@ import (
 	inferencedb "inference_service/pkg/infra/repo/db"
 	"inference_service/pkg/infra/retrieval"
 
+	coreBucket "lib/shared_lib/bucket"
 	coreDB "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	coreHealthCheck "lib/shared_lib/healthcheck"
@@ -309,6 +310,10 @@ func readInferenceConfig() inferenceConfig {
 		env.WithDefaultString("PGSSLMODE", "disable"),
 		env.WithDefaultInt("INFERENCE_SERVICE_DB_MAX_CONNECTIONS", "20"),
 	)
+	defaultPreferenceBucketRegion := "eu-west-1"
+	if env.IsDevEnv() {
+		defaultPreferenceBucketRegion = coreBucket.LocalDevS3Region
+	}
 	return inferenceConfig{
 		ServiceName:        env.WithDefaultString("INFERENCE_SERVICE_NAME", "inference-service"),
 		DBName:             dbName,
@@ -361,7 +366,7 @@ func readInferenceConfig() inferenceConfig {
 			URITemplate:      env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE", "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl"),
 			MinExamples:      env.WithDefaultInt("INFERENCE_SERVICE_PREFERENCE_DATASET_MIN_EXAMPLES", "1"),
 			Limit:            env.WithDefaultInt("INFERENCE_SERVICE_PREFERENCE_DATASET_LIMIT", "1000"),
-			BucketRegion:     env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION", "eu-west-1"),
+			BucketRegion:     env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION", defaultPreferenceBucketRegion),
 			UploadPartSizeMB: env.WithDefaultInt64("INFERENCE_SERVICE_PREFERENCE_DATASET_UPLOAD_PART_SIZE_MB", "10"),
 		},
 		GRPCPort: env.WithDefaultInt("INFERENCE_SERVICE_API_GRPC_PORT", "7073"),

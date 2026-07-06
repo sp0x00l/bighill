@@ -44,21 +44,21 @@ var _ = Describe("Profile API", Ordered, func() {
 			"country":      "United Kingdom",
 		}
 
-		status, body := doJSON(http.MethodPut, "/private/v1/profiles", updatedProfile, user.Token, uuid.Nil)
+		status, body := doJSON(http.MethodPut, "/v1/private/profiles", updatedProfile, user.Token, uuid.Nil)
 		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 		updated := decodeObject(body)
 		Expect(updated["email"]).To(Equal(user.Email))
 		Expect(updated["firstName"]).To(Equal("Ada"))
 		Expect(updated["lastName"]).To(Equal("Lovelace"))
 
-		status, body = doJSON(http.MethodGet, "/private/v1/profiles", nil, user.Token, uuid.Nil)
+		status, body = doJSON(http.MethodGet, "/v1/private/profiles", nil, user.Token, uuid.Nil)
 		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 		read := decodeObject(body)
 		Expect(read["id"]).To(Equal(user.ID.String()))
 		Expect(read["email"]).To(Equal(user.Email))
 		Expect(read["firstName"]).To(Equal("Ada"))
 
-		status, body = doJSON(http.MethodPost, "/private/v1/profiles/logout", nil, user.Token, uuid.Nil)
+		status, body = doJSON(http.MethodPost, "/v1/private/profiles/logout", nil, user.Token, uuid.Nil)
 		Expect(status).To(Equal(http.StatusNoContent), "body: %s", string(body))
 	})
 })

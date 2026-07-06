@@ -50,6 +50,13 @@ Parameters:
   IngestionServiceHttpPort:
     Type: String
     Default: "8086"
+  ModelRegistryServiceHttpDomain:
+    Type: String
+    Default: host.docker.internal
+    Description: The model registry service host name
+  ModelRegistryServiceHttpPort:
+    Type: String
+    Default: 8084
   ProfileServiceHttpDomain:
     Type: String
     Default: host.docker.internal
@@ -57,6 +64,13 @@ Parameters:
   ProfileServiceHttpPort:
     Type: String
     Default: "8082"
+  TrainingServiceHttpDomain:
+    Type: String
+    Default: host.docker.internal
+    Description: The training service host name
+  TrainingServiceHttpPort:
+    Type: String
+    Default: "8085"
   OtlpCollectorUrl:
     Type: String
     Default: ""
@@ -155,8 +169,12 @@ Resources:
           DATA_REGISTRY_SERVICE_HTTP_PORT: !Ref DataRegistryServiceHttpPort
           INGESTION_SERVICE_HTTP_HOST: !Ref IngestionServiceHttpDomain
           INGESTION_SERVICE_HTTP_PORT: !Ref IngestionServiceHttpPort
+          MODEL_REGISTRY_SERVICE_HTTP_HOST: !Ref ModelRegistryServiceHttpDomain
+          MODEL_REGISTRY_SERVICE_HTTP_PORT: !Ref ModelRegistryServiceHttpPort
           PROFILE_SERVICE_HTTP_HOST: !Ref ProfileServiceHttpDomain
           PROFILE_SERVICE_HTTP_PORT: !Ref ProfileServiceHttpPort
+          TRAINING_SERVICE_HTTP_HOST: !Ref TrainingServiceHttpDomain
+          TRAINING_SERVICE_HTTP_PORT: !Ref TrainingServiceHttpPort
           OTEL_EXPORTER_OTLP_ENDPOINT: !Ref OtlpCollectorUrl
           OTEL_EXPORTER_OTLP_PORT: !Ref OtlpCollectorPort
       Policies:
@@ -175,31 +193,37 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /private/v1/profiles
+            Path: /v1/private/profiles
             Method: put
         DeletePrivateProfile:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /private/v1/profiles
+            Path: /v1/private/profiles
             Method: delete
         GetPrivateProfile:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /private/v1/profiles
+            Path: /v1/private/profiles
             Method: get
         PutPrivateProfilePassword:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /private/v1/profiles/password
+            Path: /v1/private/profiles/password
+            Method: put
+        PutPrivateProfileHuggingFaceToken:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/private/profiles/huggingface-token
             Method: put
         PostPrivateProfileLogout:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /private/v1/profiles/logout
+            Path: /v1/private/profiles/logout
             Method: post
         PostPublicProfilePasswordVerify:
           Type: Api
@@ -230,98 +254,124 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry
+            Path: /v1/private/data/registry
             Method: post
         GetDatasets:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry
+            Path: /v1/private/data/registry
             Method: get
         GetDatasetByID:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry/{datasetId}
+            Path: /v1/private/data/registry/{datasetId}
             Method: get
         DeleteDataset:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry/{datasetId}
+            Path: /v1/private/data/registry/{datasetId}
             Method: delete
         PutDataset:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry/{datasetId}
+            Path: /v1/private/data/registry/{datasetId}
             Method: put
         PatchPublishDataset:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry/{datasetId}/publish
+            Path: /v1/private/data/registry/{datasetId}/publish
             Method: patch
         PostSourceConnector:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry/connector/{type}
+            Path: /v1/private/data/registry/connector/{type}
             Method: post
         GetSourceConnector:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry/connector/{type}/{connectorId}
+            Path: /v1/private/data/registry/connector/{type}/{connectorId}
             Method: get
         PutSourceConnector:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry/connector/{type}/{connectorId}
+            Path: /v1/private/data/registry/connector/{type}/{connectorId}
             Method: put
         DeleteSourceConnector:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/registry/connector/{type}/{connectorId}
+            Path: /v1/private/data/registry/connector/{type}/{connectorId}
             Method: delete
         PostDataFile:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/store/{id}
+            Path: /v1/private/data/store/{id}
             Method: post
         PostDataUpload:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/uploads/{id}
+            Path: /v1/private/data/uploads/{id}
             Method: post
         PostDataUploadComplete:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/data/uploads/{id}/complete
+            Path: /v1/private/data/uploads/{id}/complete
             Method: post
         PostModelUpload:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/models/uploads
+            Path: /v1/private/models/uploads
             Method: post
         PostModelUploadComplete:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/models/uploads/{id}/complete
+            Path: /v1/private/models/uploads/{id}/complete
             Method: post
         PostHuggingFaceModelOnboard:
           Type: Api
           Properties:
             RestApiId: !Ref BighillApi
-            Path: /v1/models/onboard/huggingface
+            Path: /v1/private/models/onboard/huggingface
             Method: post
+        GetModels:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/private/models
+            Method: get
+        GetModel:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/private/models/{id}
+            Method: get
+        PostTrainingRun:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            RequestParameters:
+              method.request.header.X-Request-ID: true
+            Path: /v1/private/training-runs
+            Method: post
+        GetTrainingRun:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/private/training-runs/{id}
+            Method: get
   BighillApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -355,7 +405,7 @@ Resources:
                 uri:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security: []
-          /private/v1/profiles:
+          /v1/private/profiles:
             put:
               consumes:
                 - application/json
@@ -391,7 +441,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /private/v1/profiles/password:
+          /v1/private/profiles/password:
             put:
               consumes:
                 - application/json
@@ -405,7 +455,21 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /private/v1/profiles/logout:
+          /v1/private/profiles/huggingface-token:
+            put:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/profiles/logout:
             post:
               consumes:
                 - application/json
@@ -482,7 +546,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security: []
           # Data services
-          /v1/data/registry:
+          /v1/private/data/registry:
             get:
               produces:
                 - application/vnd.bighill.api-v1+json
@@ -512,7 +576,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/data/registry/{datasetId}:
+          /v1/private/data/registry/{datasetId}:
             get:
               produces:
                 - application/vnd.bighill.api-v1+json
@@ -548,7 +612,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/data/registry/{datasetId}/publish:
+          /v1/private/data/registry/{datasetId}/publish:
             patch:
               consumes:
                 - application/vnd.bighill.api-v1+json
@@ -562,7 +626,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/data/registry/connector/{type}:
+          /v1/private/data/registry/connector/{type}:
             post:
               consumes:
                 - application/vnd.bighill.api-v1+json
@@ -581,7 +645,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/data/registry/connector/{type}/{connectorId}:
+          /v1/private/data/registry/connector/{type}/{connectorId}:
             get:
               produces:
                 - application/vnd.bighill.api-v1+json
@@ -617,7 +681,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/data/store/{id}:
+          /v1/private/data/store/{id}:
             post:
               consumes:
                 - multipart/form-data
@@ -631,7 +695,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/data/uploads/{id}:
+          /v1/private/data/uploads/{id}:
             post:
               consumes:
                 - application/vnd.bighill.api-v1+json
@@ -645,7 +709,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/data/uploads/{id}/complete:
+          /v1/private/data/uploads/{id}/complete:
             post:
               consumes:
                 - application/vnd.bighill.api-v1+json
@@ -659,7 +723,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/models/uploads:
+          /v1/private/models/uploads:
             post:
               consumes:
                 - application/vnd.bighill.api-v1+json
@@ -673,7 +737,7 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/models/uploads/{id}/complete:
+          /v1/private/models/uploads/{id}/complete:
             post:
               consumes:
                 - application/vnd.bighill.api-v1+json
@@ -687,10 +751,69 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
-          /v1/models/onboard/huggingface:
+          /v1/private/models/onboard/huggingface:
             post:
               consumes:
                 - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/models:
+            get:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/models/{id}:
+            get:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/training-runs:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              parameters:
+                - name: X-Request-ID
+                  in: header
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/training-runs/{id}:
+            get:
               produces:
                 - application/vnd.bighill.api-v1+json
               responses: {}

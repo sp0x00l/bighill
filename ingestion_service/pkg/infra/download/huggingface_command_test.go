@@ -23,17 +23,22 @@ func TestDownload(t *testing.T) {
 var _ = Describe("HuggingFaceCommandDownloader", func() {
 	It("runs the configured command and maps the JSON result", func() {
 		dir := GinkgoT().TempDir()
+		workingDirectory := filepath.Join(dir, "workdir")
+		Expect(os.MkdirAll(workingDirectory, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(workingDirectory, ".hf-working-directory"), []byte("ok"), 0o644)).To(Succeed())
 		script := filepath.Join(dir, "hf-download")
 		Expect(os.WriteFile(script, []byte(`#!/usr/bin/env sh
 test "$INGESTION_SERVICE_HUGGINGFACE_TOKEN" = "hf-token" || exit 7
+test -f .hf-working-directory || exit 8
 printf '{"resource_id":"%s","storage_location":"s3://bucket/models/%s/snapshot","manifest_location":"s3://bucket/models/%s/manifest.json","artifact_type":"BASE_MODEL","artifact_format":"HF_MODEL","artifact_size_bytes":12,"artifact_checksum":"sha256:test","model_name":"llama","model_version":"1","base_model":"meta-llama/Llama","source_uri":"https://huggingface.co/meta-llama/Llama","hf_repo_id":"meta-llama/Llama","hf_revision":"main","hf_commit_sha":"abc"}' "$INGESTION_SERVICE_MODEL_RESOURCE_ID" "$INGESTION_SERVICE_MODEL_RESOURCE_ID" "$INGESTION_SERVICE_MODEL_RESOURCE_ID"
 `), 0o755)).To(Succeed())
 		resourceID := uuid.New()
 		downloader, err := download.NewHuggingFaceCommandDownloader(download.HuggingFaceCommandDownloaderConfig{
-			Command:   script,
-			OutputURI: "s3://bucket/models",
-			Timeout:   10 * time.Second,
-			EnvKeys:   testHuggingFaceJobEnvKeys(),
+			Command:          script,
+			WorkingDirectory: workingDirectory,
+			OutputURI:        "s3://bucket/models",
+			Timeout:          10 * time.Second,
+			EnvKeys:          testHuggingFaceJobEnvKeys(),
 		})
 		Expect(err).NotTo(HaveOccurred())
 

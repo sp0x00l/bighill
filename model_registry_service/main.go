@@ -15,9 +15,11 @@ import (
 	"time"
 
 	"model_registry_service/pkg/app"
+	registryadapter "model_registry_service/pkg/infra/network/adapter"
 	registrykubernetes "model_registry_service/pkg/infra/network/kubernetes"
 	localserving "model_registry_service/pkg/infra/network/kubernetes/localserving"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
+	registryrest "model_registry_service/pkg/infra/network/rest"
 	modeldb "model_registry_service/pkg/infra/repo/db"
 
 	coreDB "lib/shared_lib/db"
@@ -25,6 +27,7 @@ import (
 	coreHealthCheck "lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
+	serializers "lib/shared_lib/serializer"
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
 	shareduow "lib/shared_lib/uow"
@@ -36,6 +39,7 @@ var Version string
 
 type registryConfig struct {
 	ServiceName        string
+	HTTPPort           int
 	DBName             string
 	DBConnectionString string
 	Messaging          messagingConn.MessengerConfig
@@ -163,6 +167,9 @@ func main() {
 	}
 	modelEventBuilder := registrymessaging.NewModelEventBuilder(cfg.Topics.ModelRegistry)
 	modelUsecase := app.NewModelRegistryUsecase(modelRepository, modelUnitOfWork, modelEventBuilder, modelUsecaseOptions...)
+	modelDTOAdapter := registryadapter.NewModelDTOAdapter(serializers.NewJSONSerializer())
+	modelRoutes := registryrest.NewModelHandlers(modelUsecase, modelDTOAdapter).GetRoutes()
+	restService := registryrest.NewService(modelRoutes, cfg.HTTPPort, serviceName)
 	if cfg.Serving.Enabled {
 		servingObserver, err = newServingObserver(cfg.Serving, servingDeployer, modelUsecase)
 		if err != nil {
@@ -218,6 +225,14 @@ func main() {
 	})
 
 	go func() {
+		if err := restService.Connect(); err != nil {
+			if err != http.ErrServerClosed {
+				log.Fatalf("unable to start the %s rest service: %v", serviceName, err)
+			}
+			quit <- syscall.SIGTERM
+		}
+	}()
+	go func() {
 		if err := healthCheck.Connect(cancelCtx); err != nil {
 			if err != http.ErrServerClosed {
 				log.Fatalf("unable to start health check for the %s service: %v", serviceName, err)
@@ -237,6 +252,7 @@ func main() {
 	<-quit
 
 	cancelFtn()
+	restService.Close()
 	healthCheck.Close()
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
@@ -255,6 +271,7 @@ func readModelRegistryConfig() registryConfig {
 	)
 	return registryConfig{
 		ServiceName:        env.WithDefaultString("MODEL_REGISTRY_SERVICE_NAME", "model-registry-service"),
+		HTTPPort:           env.WithDefaultInt("MODEL_REGISTRY_SERVICE_API_HTTP_PORT", "8084"),
 		DBName:             dbName,
 		DBConnectionString: dbConnectionString,
 		Messaging: messagingConn.MessengerConfig{

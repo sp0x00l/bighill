@@ -72,6 +72,129 @@ work stays in batch jobs behind clean boundaries.
 
 ---
 
+## End-to-end flow
+
+This is the main path from a user logging in to a self-improving model serving inference. Solid
+arrows (`──▶`) are **synchronous** calls (HTTP through the gateway, gRPC, Temporal activities);
+dashed arrows (`⤍`) are **asynchronous events** delivered over Kafka via each service's Postgres
+outbox (so an event never exists without the state behind it). Event names are the real message
+types from `data_contracts` / `shared_lib/messaging`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User / Client
+    participant GW as api_gateway
+    participant PR as profile_service
+    participant IN as ingestion_service
+    participant DR as data_registry
+    participant FM as feature_materializer
+    participant TR as training_service
+    participant RAY as Ray / training_jobs
+    participant MR as model_registry
+    participant SV as model_serving
+    participant IF as inference_service
+
+    Note over U,PR: 1 · Authenticate
+    U->>GW: POST /login
+    GW->>PR: authenticate
+    PR-->>U: session token
+
+    Note over U,FM: 2 · Ingest & materialize data
+    U->>GW: register dataset + request upload
+    GW->>DR: create dataset / source
+    GW->>IN: open presigned upload session
+    U->>IN: upload files (PDF / CSV / Parquet / …)
+    IN-->>FM: raw_snapshot_ready
+    FM->>FM: extract · chunk · embed → pgvector
+    FM-->>DR: feature_snapshot_ready / embedding_snapshot_ready
+    DR-->>TR: dataset_updated (FEATURE_MATERIALIZED)
+
+    Note over U,MR: 3 · Onboard / select a base model
+    U->>GW: upload / onboard base model
+    GW->>IN: model artifact upload
+    IN-->>MR: model_artifact_ingested
+    U->>GW: GET /v1/models
+    GW->>MR: list trainable models
+
+    Note over U,RAY: 4 · Trigger training (user intent)
+    U->>GW: POST /v1/training-runs {dataset_id, source_model_id, profiles}
+    GW->>TR: start training run
+    TR->>DR: resolve materialized dataset
+    TR->>MR: resolve trainable source model
+    TR-->>U: 202 {training_run_id, status_url}
+
+    Note over TR,RAY: 5 · Train → evaluate (Temporal workflow)
+    TR->>RAY: prepare data · train (Axolotl) · evaluate
+    RAY-->>TR: artifact + evaluation report
+    TR-->>MR: model_training_completed
+
+    Note over MR,RAY: 6 · Promotion gate
+    MR->>MR: register CANDIDATE
+    MR-->>TR: promotion_requested (candidate + champion)
+    TR->>RAY: promotion_report (Deepchecks / Evidently)
+    RAY-->>TR: report
+    TR-->>MR: promotion_report_ready
+    MR->>MR: gate — floors · champion/challenger · evidence
+    alt candidate wins
+        MR->>MR: status EVALUATED + serving intent
+    else candidate loses
+        MR->>MR: status FAILED
+    end
+
+    Note over MR,SV: 7 · Serve
+    MR-->>SV: model_updated (serving intent)
+    SV->>SV: reconcile vLLM deployment
+    SV-->>MR: serving status → READY / LOADED (champion)
+    MR-->>IF: model_updated (ready model)
+
+    Note over U,RAY: 8 · Inference + feedback loop
+    U->>GW: POST query (RAG)
+    GW->>IF: infer
+    IF->>FM: vector search (pgvector)
+    IF->>SV: generate (vLLM)
+    IF-->>U: answer + full audit trail
+    U->>IF: feedback (rating / preference)
+    IF-->>TR: preference_dataset_ready
+    TR->>RAY: DPO retrain → re-enter step 5
+```
+
+**Walking the flow:**
+
+1. **Authenticate.** Everything enters through `api_gateway`, which delegates auth to
+   `profile_service` and injects the tenant identity that every downstream service uses for
+   row-level isolation.
+2. **Ingest & materialize.** A dataset and its source are registered in `data_registry`;
+   `ingestion_service` hands back a presigned upload session and lands the raw files.
+   `feature_materializer` picks up `raw_snapshot_ready`, extracts and chunks documents, embeds them,
+   and writes vectors to **pgvector** — content-addressed, so re-runs don't duplicate work. When the
+   snapshot is materialized, `data_registry` publishes `dataset_updated`.
+3. **Onboard / select a base model.** Base models are uploaded through `ingestion_service` and
+   registered in `model_registry` (`model_artifact_ingested`); the UI lists trainable models via
+   `GET /v1/models` (tenant-scoped: shared bases plus your own).
+4. **Trigger training.** Training is **user intent, not a hidden default** — the client POSTs the
+   dataset, the source model, and named profiles. `training_service` resolves the materialized
+   dataset and the trainable source model, validates them, and returns a `training_run_id`
+   immediately. The base model is carried as *data*, never as service config.
+5. **Train → evaluate.** A durable Temporal workflow prepares the data, runs the GPU training job on
+   Ray (`training_jobs`, Axolotl-style recipes), evaluates the result, and emits
+   `model_training_completed`.
+6. **Promotion gate.** `model_registry` records the new model as a **CANDIDATE** — it is *not* served
+   yet — and asks `training_service` for a promotion report (Deepchecks / Evidently). The gate then
+   compares the candidate against the current **champion** for that lineage (absolute floors +
+   no-regression + evidence). It promotes to `EVALUATED` or rejects to `FAILED`. This is the guard
+   that makes the retrain loop safe.
+7. **Serve.** On promotion, `model_registry` records serving intent; `model_serving` reconciles a
+   vLLM deployment and reports back until the model is `READY / LOADED` — at which point it becomes
+   the new champion. Inference services learn the ready model via `model_updated`.
+8. **Inference + feedback loop.** `inference_service` answers RAG queries — retrieval from pgvector,
+   rerank, query rewrite, generation on vLLM — with a full audit trail. Captured feedback becomes a
+   preference dataset; `preference_dataset_ready` kicks off **automatic DPO retraining** (the source
+   model resolved from lineage, not config), which re-enters step 5 and closes the self-improving
+   loop.
+
+---
+
 ## What's in the repo
 
 | Path | What it does |

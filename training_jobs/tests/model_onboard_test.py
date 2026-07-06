@@ -73,6 +73,43 @@ class ModelOnboardTests(unittest.TestCase):
             manifest_path = local_s3 / "bucket" / "models" / "huggingface" / payload["resource_id"] / "manifest.json"
             self.assertTrue(manifest_path.is_file())
 
+    def test_main_uses_local_fixture_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_s3 = root / "local_s3"
+            fixture = root / "fixtures" / "bighill" / "rag-e2e-huggingface-base"
+            fixture.mkdir(parents=True)
+            (fixture / "config.json").write_text("{}", encoding="utf-8")
+            (fixture / "model.safetensors").write_bytes(b"weights")
+
+            with EnvPatch(
+                {
+                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(local_s3),
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
+                    "INGESTION_SERVICE_HUGGINGFACE_LOCAL_FIXTURE_ROOT": str(root / "fixtures"),
+                    "INGESTION_SERVICE_MODEL_RESOURCE_ID": "22222222-2222-2222-2222-222222222222",
+                    "INGESTION_SERVICE_MODEL_NAME": "rag-e2e-huggingface-base",
+                    "INGESTION_SERVICE_MODEL_VERSION": "1",
+                    "INGESTION_SERVICE_MODEL_BASE_MODEL": "bighill/rag-e2e-huggingface-base",
+                    "INGESTION_SERVICE_MODEL_ARTIFACT_TYPE": "BASE_MODEL",
+                    "INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT": "HF_MODEL",
+                    "INGESTION_SERVICE_HUGGINGFACE_REPO_ID": "bighill/rag-e2e-huggingface-base",
+                    "INGESTION_SERVICE_HUGGINGFACE_REVISION": "main",
+                    "INGESTION_SERVICE_HUGGINGFACE_TOKEN": "hf_test",
+                    "INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI": "s3://bucket/models/huggingface",
+                }
+            ), mock.patch.object(model_onboard, "resolve_commit_sha") as resolve_commit, mock.patch.object(
+                model_onboard, "snapshot_download"
+            ) as download, mock.patch("builtins.print") as printed:
+                model_onboard.main()
+
+            resolve_commit.assert_not_called()
+            download.assert_not_called()
+            payload = json.loads(printed.call_args.args[0])
+            self.assertEqual(payload["hf_repo_id"], "bighill/rag-e2e-huggingface-base")
+            self.assertEqual(payload["hf_commit_sha"], "local-main")
+            self.assertTrue((local_s3 / "bucket" / "models" / "huggingface" / payload["resource_id"] / "snapshot" / "config.json").is_file())
+
     def test_validate_snapshot_rejects_missing_weights(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             snapshot = Path(tmp)

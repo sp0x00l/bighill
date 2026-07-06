@@ -18,13 +18,11 @@ import (
 type trainingPublishClientStub struct {
 	topic   string
 	message shared.Message
-	payload proto.Message
 }
 
 func (s *trainingPublishClientStub) Publish(_ context.Context, topic string, message shared.Message, payload proto.Message) error {
 	s.topic = topic
 	s.message = message
-	s.payload = payload
 	return nil
 }
 
@@ -67,8 +65,8 @@ var _ = Describe("TrainingEventPublisher", func() {
 		Expect(client.topic).To(Equal("training"))
 		Expect(client.message.ResourceKey).To(Equal(datasetID))
 		Expect(client.message.MsgType).To(Equal(shared.MsgTypeModelTrainingCompleted))
-		event, ok := client.payload.(*trainingpb.ModelTrainingCompletedEvent)
-		Expect(ok).To(BeTrue())
+		event := &trainingpb.ModelTrainingCompletedEvent{}
+		Expect(proto.Unmarshal(client.message.Payload, event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.ModelId).To(Equal(modelID.String()))
@@ -107,8 +105,8 @@ var _ = Describe("TrainingEventPublisher", func() {
 		Expect(client.topic).To(Equal("training"))
 		Expect(client.message.ResourceKey).To(Equal(datasetID))
 		Expect(client.message.MsgType).To(Equal(shared.MsgTypeModelTrainingFailed))
-		event, ok := client.payload.(*trainingpb.ModelTrainingFailedEvent)
-		Expect(ok).To(BeTrue())
+		event := &trainingpb.ModelTrainingFailedEvent{}
+		Expect(proto.Unmarshal(client.message.Payload, event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.ModelId).To(Equal(modelID.String()))
@@ -139,8 +137,8 @@ var _ = Describe("TrainingEventPublisher", func() {
 		Expect(client.topic).To(Equal("training"))
 		Expect(client.message.ResourceKey).To(Equal(modelID))
 		Expect(client.message.MsgType).To(Equal(shared.MsgTypePromotionReportReady))
-		event, ok := client.payload.(*trainingpb.PromotionReportReadyEvent)
-		Expect(ok).To(BeTrue())
+		event := &trainingpb.PromotionReportReadyEvent{}
+		Expect(proto.Unmarshal(client.message.Payload, event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
 		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.TrainingRunId).To(Equal(trainingRunID.String()))

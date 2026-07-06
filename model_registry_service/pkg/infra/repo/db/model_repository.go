@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
 	coreDB "lib/shared_lib/db"
+	transport "lib/shared_lib/transport"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
@@ -38,13 +40,13 @@ func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel
 		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status,
-		metrics_metadata, promotion_report_uri, promotion_deltas, promotion_decision, status, failure_reason
+		metrics_metadata, promotion_report_uri, promotion_deltas, promotion_decision, promotion_reason, status, failure_reason
 	) VALUES (
-		@model_id, @user_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind, @source, @source_uri, @source_metadata::jsonb,
+		@model_id, @user_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind::model_kind_enum, @source::model_source_enum, @source_uri, @source_metadata::jsonb,
 		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
-		@adapter_uri, @serving_target, @serving_model, @serving_load_status,
-		@metrics_metadata::jsonb, @promotion_report_uri, @promotion_deltas::jsonb, @promotion_decision, @status, @failure_reason
+		@adapter_uri, @serving_target, @serving_model, @serving_load_status::model_load_status_enum,
+		@metrics_metadata::jsonb, @promotion_report_uri, @promotion_deltas::jsonb, NULLIF(@promotion_decision, '')::promotion_decision_enum, @promotion_reason, @status::model_status_enum, @failure_reason
 	)
 	RETURNING ` + modelColumns()
 
@@ -102,9 +104,9 @@ func (r *ModelRepository) ReadChampion(ctx context.Context, lineage model.Lineag
 	query := `SELECT ` + modelColumns() + ` FROM ` + r.Name + `.models
 		WHERE user_id = @user_id
 			AND name = @name
-			AND status = @status
-			AND serving_load_status = @serving_load_status
-		ORDER BY model_version DESC
+			AND status = @status::model_status_enum
+			AND serving_load_status = @serving_load_status::model_load_status_enum
+		ORDER BY model_version DESC, created_at DESC, model_id DESC
 		LIMIT 1`
 	modelRecord, err := scanModel(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"user_id":             pgtype.UUID{Bytes: lineage.UserID, Valid: lineage.UserID != uuid.Nil},
@@ -122,11 +124,41 @@ func (r *ModelRepository) ReadChampion(ctx context.Context, lineage model.Lineag
 	return modelRecord, nil
 }
 
+func (r *ModelRepository) List(ctx context.Context, pagination transport.Pagination, filter model.ListFilter) ([]*model.Model, int, error) {
+	log.Trace("ModelRepository List")
+
+	args := modelListArgs(pagination, filter)
+	where := ` WHERE (@model_kind = '' OR model_kind::text = @model_kind)
+		AND (@source = '' OR source::text = @source)
+		AND (@status = '' OR status::text = @status)`
+	countQuery := `SELECT count(*) FROM ` + r.Name + `.models` + where
+	var total int
+	if err := r.Pool.QueryRow(ctx, countQuery, args).Scan(&total); err != nil {
+		r.LogPoolStatsOnError(ctx, "count models failed", err)
+		return nil, 0, fmt.Errorf("count models: %w", err)
+	}
+
+	query := `SELECT ` + modelColumns() + ` FROM ` + r.Name + `.models` + where + `
+		ORDER BY updated_at DESC, model_version DESC, name ASC
+		LIMIT @limit OFFSET @offset`
+	rows, err := r.Pool.Query(ctx, query, args)
+	if err != nil {
+		r.LogPoolStatsOnError(ctx, "list models failed", err)
+		return nil, 0, fmt.Errorf("list models: %w", err)
+	}
+	models, err := scanModels(rows)
+	if err != nil {
+		r.LogPoolStatsOnError(ctx, "scan models failed", err)
+		return nil, 0, fmt.Errorf("scan models: %w", err)
+	}
+	return models, total, nil
+}
+
 func (r *ModelRepository) UpdateStatus(ctx context.Context, tx pgx.Tx, modelID uuid.UUID, status model.ModelStatus, artifactLocation string, failureReason string) (*model.Model, error) {
 	log.Trace("ModelRepository UpdateStatus")
 
 	query := `UPDATE ` + r.Name + `.models
-		SET status = @status,
+		SET status = @status::model_status_enum,
 			artifact_location = COALESCE(NULLIF(@artifact_location, ''), artifact_location),
 			failure_reason = @failure_reason
 		WHERE model_id = @model_id
@@ -151,8 +183,8 @@ func (r *ModelRepository) UpdateServingStatus(ctx context.Context, tx pgx.Tx, mo
 	log.Trace("ModelRepository UpdateServingStatus")
 
 	query := `UPDATE ` + r.Name + `.models
-		SET status = @status,
-			serving_load_status = @serving_load_status,
+		SET status = @status::model_status_enum,
+			serving_load_status = @serving_load_status::model_load_status_enum,
 			serving_target = @serving_target,
 			serving_model = @serving_model,
 			failure_reason = @failure_reason,
@@ -160,8 +192,8 @@ func (r *ModelRepository) UpdateServingStatus(ctx context.Context, tx pgx.Tx, mo
 		WHERE model_id = @model_id
 			AND serving_status_idempotency_key IS DISTINCT FROM @serving_status_idempotency_key
 			AND (
-				status IS DISTINCT FROM @status
-				OR serving_load_status IS DISTINCT FROM @serving_load_status
+				status IS DISTINCT FROM @status::model_status_enum
+				OR serving_load_status IS DISTINCT FROM @serving_load_status::model_load_status_enum
 				OR serving_target IS DISTINCT FROM @serving_target
 				OR serving_model IS DISTINCT FROM @serving_model
 				OR failure_reason IS DISTINCT FROM @failure_reason
@@ -182,19 +214,22 @@ func (r *ModelRepository) UpdatePromotionDecision(ctx context.Context, tx pgx.Tx
 	log.Trace("ModelRepository UpdatePromotionDecision")
 
 	query := `UPDATE ` + r.Name + `.models
-		SET status = @status,
+		SET status = @status::model_status_enum,
 			promotion_report_uri = @promotion_report_uri,
 			promotion_deltas = @promotion_deltas::jsonb,
-			promotion_decision = @promotion_decision,
+			promotion_decision = NULLIF(@promotion_decision, '')::promotion_decision_enum,
+			promotion_reason = @promotion_reason,
 			failure_reason = @failure_reason
 		WHERE model_id = @model_id
 		RETURNING ` + modelColumns()
+	promotionOutcome, promotionReason := splitPromotionDecision(promotionDecision)
 	modelRecord, err := scanModel(tx.QueryRow(ctx, query, pgx.NamedArgs{
 		"model_id":             pgtype.UUID{Bytes: modelID, Valid: true},
 		"status":               status.String(),
 		"promotion_report_uri": promotionReportURI,
 		"promotion_deltas":     withDefaultJSON(promotionDeltas),
-		"promotion_decision":   promotionDecision,
+		"promotion_decision":   promotionOutcome,
+		"promotion_reason":     promotionReason,
 		"failure_reason":       failureReason,
 	}))
 	if err != nil {
@@ -240,7 +275,8 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 		"metrics_metadata":     registeredModel.MetricsMetadata,
 		"promotion_report_uri": registeredModel.PromotionReportURI,
 		"promotion_deltas":     withDefaultJSON(registeredModel.PromotionDeltas),
-		"promotion_decision":   registeredModel.PromotionDecision,
+		"promotion_decision":   promotionDecisionOutcome(registeredModel.PromotionDecision),
+		"promotion_reason":     registeredModel.PromotionReason,
 		"status":               registeredModel.Status.String(),
 		"failure_reason":       registeredModel.FailureReason,
 	}
@@ -260,6 +296,30 @@ func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadS
 	}
 }
 
+func modelListArgs(pagination transport.Pagination, filter model.ListFilter) pgx.NamedArgs {
+	log.Trace("modelListArgs")
+
+	modelKind := ""
+	if filter.KindSet {
+		modelKind = filter.Kind.String()
+	}
+	source := ""
+	if filter.SourceSet {
+		source = filter.Source.String()
+	}
+	status := ""
+	if filter.StatusSet {
+		status = filter.Status.String()
+	}
+	return pgx.NamedArgs{
+		"model_kind": modelKind,
+		"source":     source,
+		"status":     status,
+		"limit":      pagination.Limit,
+		"offset":     pagination.GetOffset(),
+	}
+}
+
 func modelColumns() string {
 	log.Trace("modelColumns")
 
@@ -267,7 +327,25 @@ func modelColumns() string {
 		model_kind::text, source::text, source_uri, source_metadata::text, name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status::text,
-		metrics_metadata::text, promotion_report_uri, promotion_deltas::text, promotion_decision, status::text, failure_reason`
+		metrics_metadata::text, promotion_report_uri, promotion_deltas::text, COALESCE(promotion_decision::text, ''), promotion_reason, status::text, failure_reason`
+}
+
+func scanModels(rows pgx.Rows) ([]*model.Model, error) {
+	log.Trace("scanModels")
+
+	defer rows.Close()
+	models := []*model.Model{}
+	for rows.Next() {
+		modelRecord, err := scanModel(rows)
+		if err != nil {
+			return nil, err
+		}
+		models = append(models, modelRecord)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return models, nil
 }
 
 func scanModel(row pgx.Row) (*model.Model, error) {
@@ -299,6 +377,7 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 		&modelRecord.PromotionReportURI,
 		&modelRecord.PromotionDeltas,
 		&modelRecord.PromotionDecision,
+		&modelRecord.PromotionReason,
 		&statusRaw,
 		&modelRecord.FailureReason,
 	); err != nil {
@@ -357,4 +436,23 @@ func withDefaultJSON(value string) string {
 		return "{}"
 	}
 	return value
+}
+
+func promotionDecisionOutcome(decision string) string {
+	log.Trace("promotionDecisionOutcome")
+
+	outcome, _ := splitPromotionDecision(decision)
+	return outcome
+}
+
+func splitPromotionDecision(decision string) (string, string) {
+	log.Trace("splitPromotionDecision")
+
+	parts := strings.SplitN(strings.TrimSpace(decision), ":", 2)
+	outcome := strings.TrimSpace(parts[0])
+	reason := ""
+	if len(parts) > 1 {
+		reason = strings.TrimSpace(parts[1])
+	}
+	return outcome, reason
 }

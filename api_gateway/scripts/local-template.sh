@@ -29,6 +29,8 @@ yq "
   (.Parameters.IngestionServiceHttpPort.Default) = \"${INGESTION_SERVICE_HTTP_PORT}\" |
   (.Parameters.ProfileServiceHttpDomain.Default) = \"${PROFILE_SERVICE_HTTP_HOST}\" |
   (.Parameters.ProfileServiceHttpPort.Default) = \"${PROFILE_SERVICE_HTTP_PORT}\" |
+  (.Parameters.TrainingServiceHttpDomain.Default) = \"${TRAINING_SERVICE_HTTP_HOST}\" |
+  (.Parameters.TrainingServiceHttpPort.Default) = \"${TRAINING_SERVICE_HTTP_PORT}\" |
   (.Parameters.RedisHost.Default) = \"${REDIS_HOST}\" |
   (.Parameters.RedisPort.Default) = \"${REDIS_PORT}\" |
   (.Parameters.RedisTLS.Default) = \"${REDIS_TLS}\" |

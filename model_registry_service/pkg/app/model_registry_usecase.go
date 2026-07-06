@@ -10,6 +10,7 @@ import (
 	"model_registry_service/pkg/domain/model"
 
 	"lib/shared_lib/ctxutil"
+	transport "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
@@ -22,6 +23,8 @@ import (
 type ModelRegistryUsecase interface {
 	RegisterModel(ctx context.Context, registeredModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
 	ReadModel(ctx context.Context, modelID uuid.UUID) (*model.Model, error)
+	ReadModelForUser(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.Model, error)
+	ListModels(ctx context.Context, userID uuid.UUID, pagination transport.Pagination, filter model.ListFilter) ([]*model.Model, int, error)
 	MarkModelReady(ctx context.Context, modelID uuid.UUID, artifactLocation string) (*model.Model, error)
 	MarkModelFailed(ctx context.Context, modelID uuid.UUID, failureReason string) (*model.Model, error)
 	RecordModelTrainingCompleted(ctx context.Context, trainedModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
@@ -103,6 +106,33 @@ func (u *modelRegistryUsecase) ReadModel(ctx context.Context, modelID uuid.UUID)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	return u.repo.ReadByID(ctx, modelID)
+}
+
+func (u *modelRegistryUsecase) ReadModelForUser(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (out *model.Model, err error) {
+	log.Trace("ModelRegistryUsecase ReadModelForUser")
+
+	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.read_for_user",
+		attribute.String("user_id", userID.String()),
+		attribute.String("model_id", modelID.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	return u.repo.ReadByID(ctx, modelID)
+}
+
+func (u *modelRegistryUsecase) ListModels(ctx context.Context, userID uuid.UUID, pagination transport.Pagination, filter model.ListFilter) (out []*model.Model, total int, err error) {
+	log.Trace("ModelRegistryUsecase ListModels")
+
+	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.list",
+		attribute.String("user_id", userID.String()),
+		attribute.Int("page", pagination.Page),
+		attribute.Int("limit", pagination.Limit),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	return u.repo.List(ctx, pagination, filter)
 }
 
 func (u *modelRegistryUsecase) MarkModelReady(ctx context.Context, modelID uuid.UUID, artifactLocation string) (out *model.Model, err error) {

@@ -40,15 +40,19 @@ type HttpClient interface {
 type newRequestFunc func(method, url string, body io.Reader) (*http.Request, error)
 
 type Config struct {
-	DataRegistryServiceRoute string
-	IngestionServiceRoute    string
-	ProfileServiceRoute      string
+	DataRegistryServiceRoute  string
+	IngestionServiceRoute     string
+	ModelRegistryServiceRoute string
+	ProfileServiceRoute       string
+	TrainingServiceRoute      string
 }
 
 type routeResolver struct {
-	dataRegistryServiceRoute string
-	ingestionServiceRoute    string
-	profileServiceRoute      string
+	dataRegistryServiceRoute  string
+	ingestionServiceRoute     string
+	modelRegistryServiceRoute string
+	profileServiceRoute       string
+	trainingServiceRoute      string
 }
 
 type routeContext struct {
@@ -72,9 +76,11 @@ func (e *routeStatusError) Error() string {
 
 func DefaultConfig() Config {
 	return Config{
-		DataRegistryServiceRoute: serviceBaseRoute("127.0.0.1", "8081"),
-		IngestionServiceRoute:    serviceBaseRoute("127.0.0.1", "8086"),
-		ProfileServiceRoute:      serviceBaseRoute("127.0.0.1", "8082"),
+		DataRegistryServiceRoute:  serviceBaseRoute("127.0.0.1", "8081"),
+		IngestionServiceRoute:     serviceBaseRoute("127.0.0.1", "8086"),
+		ModelRegistryServiceRoute: serviceBaseRoute("127.0.0.1", "8084"),
+		ProfileServiceRoute:       serviceBaseRoute("127.0.0.1", "8082"),
+		TrainingServiceRoute:      serviceBaseRoute("127.0.0.1", "8085"),
 	}
 }
 
@@ -89,13 +95,21 @@ func (cfg Config) resolver() (routeResolver, error) {
 	if cfg.IngestionServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing ingestion service route")
 	}
+	if cfg.ModelRegistryServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing model registry service route")
+	}
 	if cfg.ProfileServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing profile service route")
 	}
+	if cfg.TrainingServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing training service route")
+	}
 	return routeResolver{
-		dataRegistryServiceRoute: cfg.DataRegistryServiceRoute,
-		ingestionServiceRoute:    cfg.IngestionServiceRoute,
-		profileServiceRoute:      cfg.ProfileServiceRoute,
+		dataRegistryServiceRoute:  cfg.DataRegistryServiceRoute,
+		ingestionServiceRoute:     cfg.IngestionServiceRoute,
+		modelRegistryServiceRoute: cfg.ModelRegistryServiceRoute,
+		profileServiceRoute:       cfg.ProfileServiceRoute,
+		trainingServiceRoute:      cfg.TrainingServiceRoute,
 	}, nil
 }
 
@@ -171,7 +185,7 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 					userID = s
 				}
 			}
-			if request.HTTPMethod == http.MethodPost && request.Path == "/private/v1/profiles/logout" {
+			if request.HTTPMethod == http.MethodPost && isProfileLogoutPath(request.Path) {
 				if v, ok := authorizerContext["sid"]; ok {
 					if s, ok := v.(string); ok {
 						sessionID = s
@@ -242,20 +256,26 @@ func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver)
 	if err != nil {
 		return "", err
 	}
+	path := backendPath(routeCtx)
 	switch routeCtx.resource {
 	case "profiles":
-		return fmt.Sprintf("%s%s", resolver.profileServiceRoute, routeCtx.path), nil
+		return fmt.Sprintf("%s%s", resolver.profileServiceRoute, profileBackendPath(routeCtx)), nil
 	case "data":
 		if len(routeCtx.segments) > routeCtx.resourceIndex+1 &&
 			(routeCtx.segments[routeCtx.resourceIndex+1] == "store" || routeCtx.segments[routeCtx.resourceIndex+1] == "uploads") {
-			return fmt.Sprintf("%s%s", resolver.ingestionServiceRoute, routeCtx.path), nil
+			return fmt.Sprintf("%s%s", resolver.ingestionServiceRoute, path), nil
 		}
-		return fmt.Sprintf("%s%s", resolver.dataRegistryServiceRoute, routeCtx.path), nil
+		return fmt.Sprintf("%s%s", resolver.dataRegistryServiceRoute, path), nil
 	case "models":
-		if len(routeCtx.segments) > routeCtx.resourceIndex+1 && routeCtx.segments[routeCtx.resourceIndex+1] == "uploads" {
-			return fmt.Sprintf("%s%s", resolver.ingestionServiceRoute, routeCtx.path), nil
+		if len(routeCtx.segments) > routeCtx.resourceIndex+1 {
+			switch routeCtx.segments[routeCtx.resourceIndex+1] {
+			case "uploads", "onboard":
+				return fmt.Sprintf("%s%s", resolver.ingestionServiceRoute, path), nil
+			}
 		}
-		return "", fmt.Errorf("invalid model resource path: %s", routeCtx.path)
+		return fmt.Sprintf("%s%s", resolver.modelRegistryServiceRoute, path), nil
+	case "training-runs":
+		return fmt.Sprintf("%s%s", resolver.trainingServiceRoute, path), nil
 	default:
 		return "", fmt.Errorf("invalid resource: %s", routeCtx.resource)
 	}
@@ -278,8 +298,8 @@ func parseRouteContext(request events.APIGatewayProxyRequest) (routeContext, err
 		scope = segments[0]
 		version = segments[1]
 		resourceIndex = 2
-	} else if segments[1] == publicEndpoint {
-		scope = publicEndpoint
+	} else if segments[1] == publicEndpoint || segments[1] == privateEndpoint {
+		scope = segments[1]
 		resourceIndex = 2
 	}
 	if len(segments) <= resourceIndex {
@@ -295,6 +315,28 @@ func parseRouteContext(request events.APIGatewayProxyRequest) (routeContext, err
 		resourceIndex: resourceIndex,
 		segments:      segments,
 	}, nil
+}
+
+func backendPath(routeCtx routeContext) string {
+	log.Trace("API Gateway Router backendPath")
+
+	if routeCtx.scope == privateEndpoint && routeCtx.resourceIndex == 2 && len(routeCtx.segments) > 2 {
+		return "/" + routeCtx.version + "/" + strings.Join(routeCtx.segments[2:], "/")
+	}
+	return routeCtx.path
+}
+
+func profileBackendPath(routeCtx routeContext) string {
+	log.Trace("API Gateway Router profileBackendPath")
+
+	if routeCtx.scope == privateEndpoint && routeCtx.resourceIndex == 2 && len(routeCtx.segments) > 2 {
+		return "/" + privateEndpoint + "/" + routeCtx.version + "/" + strings.Join(routeCtx.segments[2:], "/")
+	}
+	return routeCtx.path
+}
+
+func isProfileLogoutPath(path string) bool {
+	return path == "/private/v1/profiles/logout" || path == "/v1/private/profiles/logout"
 }
 
 func newRequestWithBody(ctx context.Context, request events.APIGatewayProxyRequest, serviceRoute, verb string, genProxyRequest newRequestFunc) (*http.Request, error) {

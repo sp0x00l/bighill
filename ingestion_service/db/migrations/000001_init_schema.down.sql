@@ -12,4 +12,11 @@ DROP INDEX IF EXISTS index_dataset_user_id;
 DROP TABLE IF EXISTS bighill_ingestion_db.datasets;
 DROP TABLE IF EXISTS bighill_ingestion_db.tenants;
 
+DROP TYPE IF EXISTS upload_resource_type_enum;
+DROP TYPE IF EXISTS upload_session_status_enum;
+DROP TYPE IF EXISTS model_source_enum;
+DROP TYPE IF EXISTS processing_profile_enum;
+DROP TYPE IF EXISTS catalog_provider_enum;
+DROP TYPE IF EXISTS table_format_enum;
+
 DROP FUNCTION IF EXISTS updated_at_column();

@@ -32,19 +32,19 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
+		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		created := decodeObject(body)
 		datasetID := stringField(created, "id")
 
 		csv := []byte("title,views\nIntro,10\nNext,20\n")
 		Eventually(func(g Gomega) {
-			status, body := doMultipartFile(http.MethodPost, "/v1/data/store/"+datasetID, "file", "movies.csv", csv, user.Token, uuid.New())
+			status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "movies.csv", csv, user.Token, uuid.New())
 			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 
 		Eventually(func(g Gomega) {
-			status, body := doJSON(http.MethodGet, "/v1/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
+			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
 			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 
 			read := decodeObject(body)
@@ -73,7 +73,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "GENERIC_PARQUET_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
+		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		created := decodeObject(body)
 		datasetID := uuid.MustParse(stringField(created, "id"))
@@ -83,12 +83,12 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		Expect(openDataset).NotTo(BeEmpty())
 
 		Eventually(func(g Gomega) {
-			status, body := doMultipartFile(http.MethodPost, "/v1/data/store/"+datasetID.String(), "file", "open_iris.csv", openDataset, user.Token, uuid.New())
+			status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID.String(), "file", "open_iris.csv", openDataset, user.Token, uuid.New())
 			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 
 		Eventually(func(g Gomega) {
-			status, body := doJSON(http.MethodGet, "/v1/data/registry/"+datasetID.String(), nil, user.Token, uuid.Nil)
+			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID.String(), nil, user.Token, uuid.Nil)
 			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 
 			read := decodeObject(body)
@@ -131,7 +131,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
+		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		created := decodeObject(body)
 		datasetID := stringField(created, "id")
@@ -147,7 +147,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 				"declared_size_bytes": len(csv),
 				"client_nonce":        "presigned-" + datasetID,
 			}
-			status, body := doJSON(http.MethodPost, "/v1/data/uploads/"+datasetID, initiatePayload, user.Token, uuid.New())
+			status, body := doJSON(http.MethodPost, "/v1/private/data/uploads/"+datasetID, initiatePayload, user.Token, uuid.New())
 			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 			initiated := decodeObject(body)
 			uploadID = stringField(initiated, "upload_id")
@@ -161,7 +161,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 
 		writeLocalS3Object("local-dev-bucket", fields["key"].(string), "text/csv", csv)
 
-		status, body = doJSON(http.MethodPost, "/v1/data/uploads/"+uploadID+"/complete", nil, user.Token, uuid.New())
+		status, body = doJSON(http.MethodPost, "/v1/private/data/uploads/"+uploadID+"/complete", nil, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		completed := decodeObject(body)
 		Expect(completed["status"]).To(Equal("PROMOTED"))
@@ -169,7 +169,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		Expect(completed["actual_size_bytes"]).To(BeNumerically("==", len(csv)))
 
 		Eventually(func(g Gomega) {
-			status, body := doJSON(http.MethodGet, "/v1/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
+			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
 			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 
 			read := decodeObject(body)
@@ -198,7 +198,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
+		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		created := decodeObject(body)
 		datasetID := stringField(created, "id")
@@ -207,12 +207,12 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pdf).NotTo(BeEmpty())
 		Eventually(func(g Gomega) {
-			status, body := doMultipartFile(http.MethodPost, "/v1/data/store/"+datasetID, "file", "example_PDF_1MB.pdf", pdf, user.Token, uuid.New())
+			status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "example_PDF_1MB.pdf", pdf, user.Token, uuid.New())
 			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 
 		Eventually(func(g Gomega) {
-			status, body := doJSON(http.MethodGet, "/v1/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
+			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
 			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 
 			read := decodeObject(body)
@@ -248,19 +248,19 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/data/registry", createPayload, user.Token, uuid.New())
+		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		created := decodeObject(body)
 		datasetID := stringField(created, "id")
 
 		html := []byte("<!doctype html><html><head><title>Ignored title</title><script>alert('x')</script></head><body><main><h1>Guide</h1><p>HTML knowledge content.</p></main></body></html>")
 		Eventually(func(g Gomega) {
-			status, body := doMultipartFile(http.MethodPost, "/v1/data/store/"+datasetID, "file", "knowledge.html", html, user.Token, uuid.New())
+			status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "knowledge.html", html, user.Token, uuid.New())
 			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		}, 30*time.Second, 1*time.Second).Should(Succeed())
 
 		Eventually(func(g Gomega) {
-			status, body := doJSON(http.MethodGet, "/v1/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
+			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
 			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 
 			read := decodeObject(body)
@@ -285,7 +285,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 	It("rejects uploads for datasets that were not announced by the registry topic", func() {
 		csv := []byte("title,views\nIntro,10\n")
 
-		status, body := doMultipartFile(http.MethodPost, "/v1/data/store/"+uuid.NewString(), "file", "movies.csv", csv, user.Token, uuid.New())
+		status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+uuid.NewString(), "file", "movies.csv", csv, user.Token, uuid.New())
 
 		Expect(status).To(Equal(http.StatusNotFound), "body: %s", string(body))
 	})

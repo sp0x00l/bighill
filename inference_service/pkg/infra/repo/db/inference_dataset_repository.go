@@ -39,8 +39,8 @@ func (r *InferenceDatasetRepository) UpsertDataset(ctx context.Context, dataset 
 		embedding_chunker_name, embedding_chunker_version, embedding_chunk_size, embedding_chunk_overlap,
 		embedding_provider, embedding_model
 	) VALUES (
-		@dataset_id, @user_id, @idempotency_key, @dataset_version, @processing_state, @storage_location,
-		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @schema_version,
+		@dataset_id, @user_id, @idempotency_key, @dataset_version, @processing_state::inference_dataset_processing_state_enum, @storage_location,
+		@table_namespace, @table_name, @table_format::table_format_enum, @catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @schema_version,
 		@schema_metadata::jsonb, @raw_snapshot_id, @feature_snapshot_id, @embedding_snapshot_id, @vector_store,
 		@collection_name, @embedding_dimensions, @embedding_count, @embedding_strategy_version,
 		@embedding_chunker_name, @embedding_chunker_version, @embedding_chunk_size, @embedding_chunk_overlap,
@@ -112,7 +112,7 @@ func datasetColumns() string {
 	log.Trace("datasetColumns")
 
 	return `dataset_id::text, user_id::text, dataset_version, processing_state::text, storage_location,
-		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version,
+		table_namespace, table_name, table_format::text, catalog_provider::text, processing_profile::text, schema_version,
 		schema_metadata::text, COALESCE(raw_snapshot_id::text, ''), COALESCE(feature_snapshot_id::text, ''),
 		COALESCE(embedding_snapshot_id::text, ''), vector_store, collection_name, embedding_dimensions,
 		embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,

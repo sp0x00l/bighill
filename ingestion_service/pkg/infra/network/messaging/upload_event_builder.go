@@ -103,7 +103,7 @@ func sourceOrDefault(value string) string {
 	log.Trace("sourceOrDefault")
 
 	if value == "" {
-		return "upload"
+		return "UPLOAD"
 	}
 	return value
 }

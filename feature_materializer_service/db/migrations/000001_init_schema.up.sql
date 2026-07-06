@@ -10,6 +10,13 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TYPE snapshot_status_enum AS ENUM ('PENDING', 'READY', 'FAILED');
+CREATE TYPE table_format_enum AS ENUM ('PARQUET', 'ICEBERG');
+CREATE TYPE catalog_provider_enum AS ENUM ('LOCAL', 'POLARIS');
+CREATE TYPE processing_profile_enum AS ENUM (
+    'GENERIC_PARQUET_PROCESSING_PROFILE',
+    'TEXT_RAG_PROCESSING_PROFILE',
+    'INSTRUCTION_TUNING_PROCESSING_PROFILE'
+);
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.tenants (
     id uuid PRIMARY KEY,
@@ -39,9 +46,9 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.raw_snapshots (
     file_extension text NOT NULL,
     table_namespace text NOT NULL,
     table_name text NOT NULL,
-    table_format text NOT NULL,
-    catalog_provider text NOT NULL,
-    processing_profile text NOT NULL DEFAULT 'GENERIC_PARQUET_PROCESSING_PROFILE',
+    table_format table_format_enum NOT NULL,
+    catalog_provider catalog_provider_enum NOT NULL,
+    processing_profile processing_profile_enum NOT NULL DEFAULT 'GENERIC_PARQUET_PROCESSING_PROFILE',
     schema_version integer NOT NULL DEFAULT 1,
     schema_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     status snapshot_status_enum NOT NULL DEFAULT 'PENDING',
@@ -67,9 +74,9 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.feature_snapshots (
     storage_location text NOT NULL DEFAULT '',
     table_namespace text NOT NULL,
     table_name text NOT NULL,
-    table_format text NOT NULL,
-    catalog_provider text NOT NULL,
-    processing_profile text NOT NULL DEFAULT 'GENERIC_PARQUET_PROCESSING_PROFILE',
+    table_format table_format_enum NOT NULL,
+    catalog_provider catalog_provider_enum NOT NULL,
+    processing_profile processing_profile_enum NOT NULL DEFAULT 'GENERIC_PARQUET_PROCESSING_PROFILE',
     schema_version integer NOT NULL DEFAULT 1,
     schema_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     status snapshot_status_enum NOT NULL DEFAULT 'PENDING',

@@ -1,5 +1,16 @@
 CREATE EXTENSION IF NOT EXISTS citext;
 
+CREATE TYPE table_format_enum AS ENUM ('PARQUET', 'ICEBERG');
+CREATE TYPE catalog_provider_enum AS ENUM ('LOCAL', 'POLARIS');
+CREATE TYPE processing_profile_enum AS ENUM (
+    'GENERIC_PARQUET_PROCESSING_PROFILE',
+    'TEXT_RAG_PROCESSING_PROFILE',
+    'INSTRUCTION_TUNING_PROCESSING_PROFILE'
+);
+CREATE TYPE upload_session_status_enum AS ENUM ('PENDING', 'PROMOTED', 'REJECTED', 'EXPIRED');
+CREATE TYPE upload_resource_type_enum AS ENUM ('DATA_FILE', 'MODEL_ARTIFACT');
+CREATE TYPE model_source_enum AS ENUM ('TRAINING', 'UPLOAD', 'HUGGING_FACE');
+
 CREATE OR REPLACE FUNCTION updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -29,11 +40,11 @@ CREATE TABLE IF NOT EXISTS bighill_ingestion_db.datasets(
     dataset_id uuid NOT NULL UNIQUE,
     user_id uuid NOT NULL REFERENCES bighill_ingestion_db.tenants(id),
     storage_location text NOT NULL DEFAULT '',
-    table_namespace text NOT NULL,
-    table_name text NOT NULL,
-    table_format text NOT NULL,
-    catalog_provider text NOT NULL,
-    processing_profile text NOT NULL,
+    table_namespace text NOT NULL DEFAULT '',
+    table_name text NOT NULL DEFAULT '',
+    table_format table_format_enum NOT NULL DEFAULT 'PARQUET',
+    catalog_provider catalog_provider_enum NOT NULL DEFAULT 'LOCAL',
+    processing_profile processing_profile_enum NOT NULL DEFAULT 'GENERIC_PARQUET_PROCESSING_PROFILE',
     schema_version integer NOT NULL DEFAULT 0,
     schema_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
 
@@ -74,7 +85,7 @@ ON bighill_ingestion_db.outbox_messages(resource_key, created_at);
 
 CREATE TABLE IF NOT EXISTS bighill_ingestion_db.upload_sessions (
     upload_id uuid PRIMARY KEY,
-    resource_type text NOT NULL DEFAULT 'DATA_FILE',
+    resource_type upload_resource_type_enum NOT NULL DEFAULT 'DATA_FILE',
     resource_id uuid NOT NULL,
     dataset_id uuid REFERENCES bighill_ingestion_db.datasets(dataset_id),
     user_id uuid NOT NULL REFERENCES bighill_ingestion_db.tenants(id),
@@ -88,17 +99,17 @@ CREATE TABLE IF NOT EXISTS bighill_ingestion_db.upload_sessions (
     declared_size_bytes bigint NOT NULL DEFAULT 0,
     actual_size_bytes bigint NOT NULL DEFAULT 0,
     checksum text NOT NULL DEFAULT '',
-    status text NOT NULL,
-    table_namespace text NOT NULL,
-    table_name text NOT NULL,
-    table_format text NOT NULL,
-    catalog_provider text NOT NULL,
-    processing_profile text NOT NULL,
+    status upload_session_status_enum NOT NULL,
+    table_namespace text NOT NULL DEFAULT '',
+    table_name text NOT NULL DEFAULT '',
+    table_format table_format_enum,
+    catalog_provider catalog_provider_enum,
+    processing_profile processing_profile_enum,
     artifact_type text NOT NULL DEFAULT '',
     model_name text NOT NULL DEFAULT '',
     model_version text NOT NULL DEFAULT '',
     base_model text NOT NULL DEFAULT '',
-    source text NOT NULL DEFAULT 'upload',
+    source model_source_enum NOT NULL DEFAULT 'UPLOAD',
     source_uri text NOT NULL DEFAULT '',
     manifest_location text NOT NULL DEFAULT '',
     hf_repo_id text NOT NULL DEFAULT '',
@@ -106,9 +117,7 @@ CREATE TABLE IF NOT EXISTS bighill_ingestion_db.upload_sessions (
     hf_commit_sha text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    expires_at timestamptz NOT NULL,
-    CONSTRAINT upload_sessions_status_check CHECK (status IN ('PENDING', 'PROMOTED', 'REJECTED', 'EXPIRED')),
-    CONSTRAINT upload_sessions_resource_type_check CHECK (resource_type IN ('DATA_FILE', 'MODEL_ARTIFACT'))
+    expires_at timestamptz NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS index_upload_sessions_dataset_user

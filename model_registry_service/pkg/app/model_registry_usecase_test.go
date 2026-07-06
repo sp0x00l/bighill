@@ -12,6 +12,7 @@ import (
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 
 	msgConn "lib/shared_lib/messaging"
+	transport "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
@@ -59,6 +60,13 @@ func (s *modelRepositoryStub) ReadByTrainingRunID(context.Context, uuid.UUID) (*
 
 func (s *modelRepositoryStub) ReadChampion(context.Context, model.Lineage) (*model.Model, error) {
 	return s.champion, s.championErr
+}
+
+func (s *modelRepositoryStub) List(context.Context, transport.Pagination, model.ListFilter) ([]*model.Model, int, error) {
+	if s.readModel == nil {
+		return nil, 0, s.readErr
+	}
+	return []*model.Model{s.readModel}, 1, s.readErr
 }
 
 func (s *modelRepositoryStub) UpdateStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, _ string, failureReason string) (*model.Model, error) {

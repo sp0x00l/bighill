@@ -225,7 +225,7 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 		ModelName:           strings.TrimSpace(request.ModelName),
 		ModelVersion:        strings.TrimSpace(request.ModelVersion),
 		BaseModel:           strings.TrimSpace(request.BaseModel),
-		Source:              "upload",
+		Source:              "UPLOAD",
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(u.uploadSessionTTL),
 	}
@@ -297,7 +297,7 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		ModelName:           strings.TrimSpace(downloaded.ModelName),
 		ModelVersion:        strings.TrimSpace(downloaded.ModelVersion),
 		BaseModel:           strings.TrimSpace(downloaded.BaseModel),
-		Source:              "hugging_face",
+		Source:              "HUGGING_FACE",
 		SourceURI:           strings.TrimSpace(downloaded.SourceURI),
 		ManifestLocation:    strings.TrimSpace(downloaded.ManifestLocation),
 		HFRepoID:            strings.TrimSpace(downloaded.HFRepoID),
