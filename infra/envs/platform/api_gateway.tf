@@ -78,10 +78,16 @@ module "api_gateway" {
 
   data_registry_service_http_domain  = var.data_registry_service_http_domain
   data_registry_service_http_port    = var.data_registry_service_http_port
-  ingestion_service_http_domain = var.ingestion_service_http_domain
-  ingestion_service_http_port   = var.ingestion_service_http_port
+  ingestion_service_http_domain      = var.ingestion_service_http_domain
+  ingestion_service_http_port        = var.ingestion_service_http_port
+  model_registry_service_http_domain = var.model_registry_service_http_domain
+  model_registry_service_http_port   = var.model_registry_service_http_port
   profile_service_http_domain        = var.profile_service_http_domain
   profile_service_http_port          = var.profile_service_http_port
+  training_service_http_domain       = var.training_service_http_domain
+  training_service_http_port         = var.training_service_http_port
+  inference_service_http_domain      = var.inference_service_http_domain
+  inference_service_http_port        = var.inference_service_http_port
 
   redis_host     = var.redis_host
   redis_port     = tostring(var.redis_port)

@@ -102,6 +102,23 @@ variable "ingestion_service_http_port" {
   default     = "8086"
 }
 
+variable "model_registry_service_http_domain" {
+  description = "Model registry service host"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = length(trimspace(var.model_registry_service_http_domain)) > 0
+    error_message = "Set model_registry_service_http_domain to the reachable hostname for the model registry service."
+  }
+}
+
+variable "model_registry_service_http_port" {
+  description = "Model registry service port"
+  type        = string
+  default     = "8084"
+}
+
 variable "profile_service_http_domain" {
   description = "Profile service host"
   type        = string
@@ -117,6 +134,40 @@ variable "profile_service_http_port" {
   description = "Profile service port"
   type        = string
   default     = "8082"
+}
+
+variable "training_service_http_domain" {
+  description = "Training service host"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = length(trimspace(var.training_service_http_domain)) > 0
+    error_message = "Set training_service_http_domain to the reachable hostname for the training service."
+  }
+}
+
+variable "training_service_http_port" {
+  description = "Training service port"
+  type        = string
+  default     = "8085"
+}
+
+variable "inference_service_http_domain" {
+  description = "Inference service host"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = length(trimspace(var.inference_service_http_domain)) > 0
+    error_message = "Set inference_service_http_domain to the reachable hostname for the inference service."
+  }
+}
+
+variable "inference_service_http_port" {
+  description = "Inference service port"
+  type        = string
+  default     = "8087"
 }
 
 variable "otlp_collector_url" {

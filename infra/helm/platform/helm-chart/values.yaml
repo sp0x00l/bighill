@@ -1,0 +1,141 @@
+postgres:
+  dbnames: ""
+  adminUser: "bighill_admin"
+  adminPassword: ""
+  migrationsUser: "bighill_user"
+  password: ""
+  credentialsSecret:
+    name: ""
+    adminPasswordKey: "admin_password"
+    appPasswordKey: "bighill_db_password"
+  host: ""
+  port: "5432"
+  sslmode: "require"
+  image:
+    repository: "postgres"
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
+  extensions:
+    vector: false
+
+migrations:
+  image:
+    repository: "migrations"
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  backoffLimit: 1
+
+redis:
+  enabled: true
+  image:
+    repository: "redis"
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    annotations: {}
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+kafka:
+  enabled: true
+  image:
+    repository: "bitnami/kafka"
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    port: 9092
+  persistence:
+    enabled: false
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+temporal:
+  enabled: true
+  image:
+    repository: "temporalio/admin-tools"
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    grpcPort: 7233
+    uiPort: 8233
+  namespace: "default"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+polaris:
+  enabled: true
+  rootClientId: "root"
+  rootClientSecret: "s3cr3t"
+  catalog: "bighill"
+  warehouse: "s3://bighill-mlops-lakehouse/"
+  region: "eu-west-1"
+  storageEndpoint: "http://polaris-object-store:9000"
+  storageAccessKeyId: "polaris_root"
+  storageSecretAccessKey: "polaris_pass"
+  storagePathStyle: "true"
+  objectStore:
+    image:
+      repository: "minio/minio"
+      tag: "RELEASE.2025-09-07T16-13-09Z"
+      pullPolicy: IfNotPresent
+    persistence:
+      enabled: false
+      size: 20Gi
+  bucketSetup:
+    image:
+      repository: "amazon/aws-cli"
+      tag: "2.35.11"
+      pullPolicy: IfNotPresent
+  catalogService:
+    image:
+      repository: "apache/polaris"
+      tag: "1.0.0-incubating"
+      pullPolicy: IfNotPresent
+  bootstrap:
+    image:
+      repository: "python"
+      tag: "3.12-alpine"
+      pullPolicy: IfNotPresent
+    servicePrincipal: "bighill-services"
+    principalRole: "bighill-services"
+    catalogRole: "bighill-catalog-writer"
+    serviceCredential: "root:s3cr3t"
+
+tei:
+  enabled: true
+  image:
+    repository: "ghcr.io/huggingface/text-embeddings-inference"
+    tag: "cpu-1.8"
+    pullPolicy: IfNotPresent
+  embeddings:
+    serviceName: "text-embeddings-inference"
+    modelId: "BAAI/bge-small-en-v1.5"
+    port: 80
+  reranker:
+    serviceName: "text-embeddings-inference-reranker"
+    modelId: "BAAI/bge-reranker-large"
+    port: 80
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"

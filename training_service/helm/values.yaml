@@ -7,6 +7,12 @@ serviceAccount:
   create: false
   name: "training-service"
   annotations: {}
+rayJobServiceAccount:
+  create: false
+  name: "training-jobs"
+  annotations: {}
+rayJobRbac:
+  create: true
 service:
   type: ClusterIP
   httpPort: 8085

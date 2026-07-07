@@ -1,0 +1,32 @@
+replicaCount: 1
+image:
+  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops"
+  tag: "training-service-0.0.1-prod"
+  pullPolicy: Always
+service:
+  type: ClusterIP
+  httpPort: 8085
+  healthPort: 5058
+ingress:
+  enabled: true
+  host: "training.internal.bighill.example"
+env:
+  environment: "prod"
+  temporalAddress: "temporal:7233"
+  temporalNamespace: "default"
+  temporalTaskQueue: "training-service"
+  kafkaBroker: "kafka:9092"
+  kafkaBaseGroupId: "training"
+  kafkaAutoOffsetReset: "earliest"
+  topic: "training"
+  inferenceSubscriberTopic: "inference"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-prod-training-dlq"
+  httpClientTimeoutSeconds: "10"
+  dataRegistryHttpHost: "data-registry-service"
+  dataRegistryHttpPort: "8081"
+  modelRegistryHttpHost: "model-registry-service"
+  modelRegistryHttpPort: "8084"
+  artifactBucketRegion: "eu-west-1"
+  modelUriPrefix: "s3://bighill-mlops-lakehouse/models"
+  evaluationUriPrefix: "s3://bighill-mlops-lakehouse/evaluations"
+  promotionReportUriPrefix: "s3://bighill-mlops-lakehouse/promotion-reports"

@@ -10,6 +10,7 @@ serviceAccount:
 service:
   type: ClusterIP
   healthPort: 5059
+  httpPort: 8087
   grpcPort: 7073
 lifecycle:
   terminationGracePeriodSeconds: 45

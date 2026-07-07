@@ -14,8 +14,8 @@ ingress:
 
 env:
   environment: "staging"
-  kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
-  redisAddress: "redis.bighill-staging.svc.cluster.local:6379"
+  kafkaBroker: "kafka:9092"
+  redisAddress: "redis:6379"
   topic: "ingestion"
   dataRegistrySubscriberTopic: "data_registry"
   dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-ingestion-dlq"
@@ -34,9 +34,9 @@ env:
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   dbCredentialsSecret:
     name: "aurora-creds-staging"
-    userKey: "ingestion_db_user"
-    passwordKey: "ingestion_db_password"
+    userKey: "bighill_ingestion_db_user"
+    passwordKey: "bighill_ingestion_db_password"
     hostKey: "pg_host"
     portKey: "pg_port"
     sslmodeKey: "pg_sslmode"
-    nameKey: "ingestion_db_name"
+    nameKey: "bighill_ingestion_db"

@@ -1,0 +1,21 @@
+redis:
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+
+kafka:
+  persistence:
+    enabled: true
+
+polaris:
+  objectStore:
+    persistence:
+      enabled: true
+
+migrations:
+  image:
+    repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops"
+    tag: "migrations-0.0.1-staging"
+    pullPolicy: Always

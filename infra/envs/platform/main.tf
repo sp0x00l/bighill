@@ -23,6 +23,17 @@ data "aws_ec2_managed_prefix_list" "s3" {
   name = "com.amazonaws.${var.region}.s3"
 }
 
+resource "terraform_data" "cluster_admin_guard" {
+  input = var.env_name
+
+  lifecycle {
+    precondition {
+      condition     = !contains(["staging", "prod"], var.env_name) || length(var.cluster_admin_arns) > 0
+      error_message = "cluster_admin_arns must contain at least one IAM principal before applying staging/prod. EKS cluster-creator admin access is intentionally disabled."
+    }
+  }
+}
+
 locals {
   namespace = var.kubernetes_namespace != "" ? var.kubernetes_namespace : "ml-ops-${var.env_name}"
   tags = {

@@ -326,7 +326,7 @@ variable "lambda_artifacts_bucket_name" {
 variable "data_registry_service_http_domain" {
   description = "Data registry service hostname reachable from API Lambda"
   type        = string
-  default     = "data-registry-service.internal.bighill.example"
+  default     = "data-registry.internal.bighill.example"
 }
 
 variable "data_registry_service_http_port" {
@@ -338,7 +338,7 @@ variable "data_registry_service_http_port" {
 variable "ingestion_service_http_domain" {
   description = "Ingestion service hostname reachable from API Lambda"
   type        = string
-  default     = "ingestion-service.internal.bighill.example"
+  default     = "ingestion.internal.bighill.example"
 }
 
 variable "ingestion_service_http_port" {
@@ -347,14 +347,50 @@ variable "ingestion_service_http_port" {
   default     = "80"
 }
 
+variable "model_registry_service_http_domain" {
+  description = "Model registry service hostname reachable from API Lambda"
+  type        = string
+  default     = "model-registry.internal.bighill.example"
+}
+
+variable "model_registry_service_http_port" {
+  description = "Model registry service HTTP port"
+  type        = string
+  default     = "80"
+}
+
 variable "profile_service_http_domain" {
   description = "Profile service hostname reachable from API Lambda"
   type        = string
-  default     = "profile-service.internal.bighill.example"
+  default     = "profile.internal.bighill.example"
 }
 
 variable "profile_service_http_port" {
   description = "Profile service HTTP port"
+  type        = string
+  default     = "80"
+}
+
+variable "training_service_http_domain" {
+  description = "Training service hostname reachable from API Lambda"
+  type        = string
+  default     = "training.internal.bighill.example"
+}
+
+variable "training_service_http_port" {
+  description = "Training service HTTP port"
+  type        = string
+  default     = "80"
+}
+
+variable "inference_service_http_domain" {
+  description = "Inference service hostname reachable from API Lambda"
+  type        = string
+  default     = "inference.internal.bighill.example"
+}
+
+variable "inference_service_http_port" {
+  description = "Inference service HTTP port"
   type        = string
   default     = "80"
 }

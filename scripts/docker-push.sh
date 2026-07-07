@@ -62,7 +62,7 @@ push_service_image() {
 
   local LOCAL_IMAGE="${SERVICE_NAME}:${SERVICE_VERSION}"
   local TAG_SERVICE_NAME
-  TAG_SERVICE_NAME=$(echo "$SERVICE_NAME" | sed 's/_/-/g')  # event_service -> event-service
+  TAG_SERVICE_NAME=$(echo "$SERVICE_NAME" | sed 's/_/-/g')
   local REMOTE_TAG="${TAG_SERVICE_NAME}-${SERVICE_VERSION}-${ENVIRONMENT}"
   local REMOTE_IMAGE="${ECR_URI}:${REMOTE_TAG}"
 

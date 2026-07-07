@@ -4,7 +4,6 @@ set -euo pipefail
 ENVIRONMENT="${1:-}"
 REGION="${AWS_REGION:-eu-west-1}"
 ONLY_SYNC_SECRETS="${ONLY_SYNC_SECRETS:-false}"
-SKIP_PRICE_ORACLE_ERCOT_SECRET_SYNC="${SKIP_PRICE_ORACLE_ERCOT_SECRET_SYNC:-false}"
 
 if [ -z "$ENVIRONMENT" ]; then
   echo "Usage: $0 [staging|prod]"
@@ -14,9 +13,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 NAMESPACE="ml-ops-$ENVIRONMENT"
-CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+CLUSTER_NAME="bighill-${ENVIRONMENT}"
 INTERNAL_ROOT_DOMAIN="${INTERNAL_ROOT_DOMAIN:-internal.bighill.example}"
-PUBLIC_ROOT_DOMAIN="${PUBLIC_ROOT_DOMAIN:-bighill.example}"
 
 # shellcheck disable=SC1091
 source "$PROJECT_ROOT/scripts/common.sh"
@@ -148,69 +146,6 @@ discover_profile_oauth_credentials() {
   echo "Resolved profile OAuth credentials from Secrets Manager."
 }
 
-discover_price_oracle_ercot_credentials() {
-  local SECRET_NAME="bighill/${ENVIRONMENT}/price-oracle-ercot"
-  local SECRET_ARN
-  local SECRET_JSON
-
-  if [ -n "${PRICE_ORACLE_SERVICE_ERCOT_USERNAME:-}" ] || [ -n "${PRICE_ORACLE_SERVICE_ERCOT_PASSWORD:-}" ] || [ -n "${PRICE_ORACLE_SERVICE_ERCOT_PUBLIC_SUBSCRIPTION_KEY:-}" ] || [ -n "${PRICE_ORACLE_SERVICE_ERCOT_ESR_SUBSCRIPTION_KEY:-}" ]; then
-    if [ -z "${PRICE_ORACLE_SERVICE_ERCOT_USERNAME:-}" ] || [ -z "${PRICE_ORACLE_SERVICE_ERCOT_PASSWORD:-}" ] || [ -z "${PRICE_ORACLE_SERVICE_ERCOT_PUBLIC_SUBSCRIPTION_KEY:-}" ] || [ -z "${PRICE_ORACLE_SERVICE_ERCOT_ESR_SUBSCRIPTION_KEY:-}" ]; then
-      echo "Error: PRICE_ORACLE_SERVICE_ERCOT_USERNAME, PRICE_ORACLE_SERVICE_ERCOT_PASSWORD, PRICE_ORACLE_SERVICE_ERCOT_PUBLIC_SUBSCRIPTION_KEY, and PRICE_ORACLE_SERVICE_ERCOT_ESR_SUBSCRIPTION_KEY must all be set together."
-      exit 1
-    fi
-
-    echo "Syncing price-oracle ERCOT credentials from config to AWS Secrets Manager..."
-    SECRET_JSON=$(jq -n \
-      --arg ercot_username "$PRICE_ORACLE_SERVICE_ERCOT_USERNAME" \
-      --arg ercot_password "$PRICE_ORACLE_SERVICE_ERCOT_PASSWORD" \
-      --arg ercot_public_subscription_key "$PRICE_ORACLE_SERVICE_ERCOT_PUBLIC_SUBSCRIPTION_KEY" \
-      --arg ercot_esr_subscription_key "$PRICE_ORACLE_SERVICE_ERCOT_ESR_SUBSCRIPTION_KEY" \
-      '{
-        ercot_username: $ercot_username,
-        ercot_password: $ercot_password,
-        ercot_public_subscription_key: $ercot_public_subscription_key,
-        ercot_esr_subscription_key: $ercot_esr_subscription_key
-      }')
-    upsert_json_secret "$SECRET_NAME" "$SECRET_JSON"
-    PRICE_ORACLE_ERCOT_USERNAME="$PRICE_ORACLE_SERVICE_ERCOT_USERNAME"
-    PRICE_ORACLE_ERCOT_PASSWORD="$PRICE_ORACLE_SERVICE_ERCOT_PASSWORD"
-    PRICE_ORACLE_ERCOT_PUBLIC_SUBSCRIPTION_KEY="$PRICE_ORACLE_SERVICE_ERCOT_PUBLIC_SUBSCRIPTION_KEY"
-    PRICE_ORACLE_ERCOT_ESR_SUBSCRIPTION_KEY="$PRICE_ORACLE_SERVICE_ERCOT_ESR_SUBSCRIPTION_KEY"
-    return
-  fi
-
-  echo "Discovering price-oracle ERCOT credentials from Secrets Manager..."
-
-  SECRET_ARN=$(aws secretsmanager list-secrets \
-    --query 'SecretList[?contains(Name, `bighill/'"${ENVIRONMENT}"'/price-oracle-ercot`)].ARN | [0]' \
-    --output text 2>/dev/null || true)
-
-  if [ -z "$SECRET_ARN" ] || [ "$SECRET_ARN" = "None" ]; then
-    echo "Error: No price-oracle ERCOT secret found in Secrets Manager matching 'bighill/${ENVIRONMENT}/price-oracle-ercot'"
-    exit 1
-  fi
-
-  SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" \
-    --query 'SecretString' --output text 2>/dev/null || true)
-
-  if [ -z "$SECRET_JSON" ] || [ "$SECRET_JSON" = "None" ]; then
-    echo "Error: Failed to retrieve price-oracle ERCOT secret value"
-    exit 1
-  fi
-
-  PRICE_ORACLE_ERCOT_USERNAME=$(echo "$SECRET_JSON" | jq -r '.ercot_username // empty')
-  PRICE_ORACLE_ERCOT_PASSWORD=$(echo "$SECRET_JSON" | jq -r '.ercot_password // empty')
-  PRICE_ORACLE_ERCOT_PUBLIC_SUBSCRIPTION_KEY=$(echo "$SECRET_JSON" | jq -r '.ercot_public_subscription_key // empty')
-  PRICE_ORACLE_ERCOT_ESR_SUBSCRIPTION_KEY=$(echo "$SECRET_JSON" | jq -r '.ercot_esr_subscription_key // empty')
-
-  if [ -z "$PRICE_ORACLE_ERCOT_USERNAME" ] || [ -z "$PRICE_ORACLE_ERCOT_PASSWORD" ] || [ -z "$PRICE_ORACLE_ERCOT_PUBLIC_SUBSCRIPTION_KEY" ] || [ -z "$PRICE_ORACLE_ERCOT_ESR_SUBSCRIPTION_KEY" ]; then
-    echo "Error: Price-oracle ERCOT secret must contain ercot_username, ercot_password, ercot_public_subscription_key, and ercot_esr_subscription_key."
-    exit 1
-  fi
-
-  echo "Resolved ERCOT credentials for price-oracle from Secrets Manager."
-}
-
 create_k8s_aurora_secret() {
   SECRET_NAME="aurora-creds-${ENVIRONMENT}"
   local DB_NAME_VARS=()
@@ -249,6 +184,9 @@ create_k8s_aurora_secret() {
       continue
     fi
 
+    DB_LITERAL_ARGS+=("--from-literal=${DB_NAME_VALUE}=${DB_NAME_VALUE}")
+    DB_LITERAL_ARGS+=("--from-literal=${DB_USER_VALUE}=${DB_USER_VALUE}")
+    DB_LITERAL_ARGS+=("--from-literal=${DB_NAME_VALUE}_password=${BIGHILL_DB_PASSWORD}")
     DB_LITERAL_ARGS+=("--from-literal=${SERVICE_KEY}_db_name=${DB_NAME_VALUE}")
     DB_LITERAL_ARGS+=("--from-literal=${SERVICE_KEY}_db_user=${DB_USER_VALUE}")
     DB_LITERAL_ARGS+=("--from-literal=${SERVICE_KEY}_db_password=${BIGHILL_DB_PASSWORD}")
@@ -273,18 +211,6 @@ create_k8s_aurora_secret() {
     --dry-run=client -o yaml | kubectl apply -f -
 }
 
-create_k8s_price_oracle_ercot_secret() {
-  local SECRET_NAME="price-oracle-ercot-creds-${ENVIRONMENT}"
-
-  echo "Creating Kubernetes secret '${SECRET_NAME}'..."
-  kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
-    --from-literal=ercot_username="$PRICE_ORACLE_ERCOT_USERNAME" \
-    --from-literal=ercot_password="$PRICE_ORACLE_ERCOT_PASSWORD" \
-    --from-literal=ercot_public_subscription_key="$PRICE_ORACLE_ERCOT_PUBLIC_SUBSCRIPTION_KEY" \
-    --from-literal=ercot_esr_subscription_key="$PRICE_ORACLE_ERCOT_ESR_SUBSCRIPTION_KEY" \
-    --dry-run=client -o yaml | kubectl apply -f -
-}
-
 create_k8s_profile_oauth_secret() {
   local SECRET_NAME="profile-oauth-creds-${ENVIRONMENT}"
 
@@ -301,7 +227,7 @@ copy_db_init_scripts() {
   TARGET_DIR="$PROJECT_ROOT/infra/helm/platform/helm-chart/tmp/docker-entrypoint-initdb.d"
   rm -rf "$TARGET_DIR"
   mkdir -p "$TARGET_DIR"
-  cp "$PROJECT_ROOT/database/scripts/setup/common/"* "$TARGET_DIR/"
+  cp "$PROJECT_ROOT/database/scripts/setup/common/"*.sh "$TARGET_DIR/"
 }
 
 deploy_shared_infra() {
@@ -312,18 +238,17 @@ deploy_shared_infra() {
     VALUES_ARGS="$VALUES_ARGS -f ./infra/helm/platform/helm-chart/${ENVIRONMENT}-values.yaml"
   fi
 
-  INIT_CM="ml-ops-infra-ml-ops-services-postgres-init-scripts"
+  INIT_CM="bighill-infra-bighill-platform-postgres-init-scripts"
   kubectl -n "$NAMESPACE" delete configmap "$INIT_CM" --ignore-not-found || true
 
   echo "Deploying shared infra to namespace '$NAMESPACE'..."
-  if ! helm upgrade --install ml-ops-infra "$PROJECT_ROOT/infra/helm/platform/helm-chart" \
+  if ! helm upgrade --install bighill-infra "$PROJECT_ROOT/infra/helm/platform/helm-chart" \
     -n "$NAMESPACE" \
     $VALUES_ARGS \
     --set postgres.dbnames="${BIGHILL_DB_NAMES}" \
     --set postgres.adminUser="$BIGHILL_DB_ADMIN" \
-    --set postgres.adminPassword="$BIGHILL_DB_ADMIN_PASSWORD" \
     --set postgres.migrationsUser="$BIGHILL_DB_MIGRATIONS_USER" \
-    --set postgres.password="$BIGHILL_DB_PASSWORD" \
+    --set postgres.credentialsSecret.name="aurora-creds-${ENVIRONMENT}" \
     --set postgres.host="$PGHOST" \
     --set postgres.port="$PGPORT" \
     --set postgres.image.repository="pgvector/pgvector" \
@@ -335,7 +260,7 @@ deploy_shared_infra() {
     --debug
   then
     echo "Helm upgrade failed. Collecting migration hook diagnostics..."
-    local MIGRATE_JOB="ml-ops-infra-ml-ops-services-postgres-migrate-job"
+    local MIGRATE_JOB="bighill-infra-bighill-platform-postgres-migrate-job"
     kubectl get job -n "$NAMESPACE" "$MIGRATE_JOB" -o wide 2>/dev/null || true
     kubectl get pods -n "$NAMESPACE" -l job-name="$MIGRATE_JOB" -o wide 2>/dev/null || true
     kubectl describe job -n "$NAMESPACE" "$MIGRATE_JOB" 2>/dev/null | tail -n 120 || true
@@ -361,15 +286,10 @@ export_env_configs "$ENVIRONMENT" "$PROJECT_ROOT"
 # For staging/prod, always resolve Aurora connectivity from Secrets Manager.
 discover_aurora_credentials
 discover_profile_oauth_credentials
-if [ "$SKIP_PRICE_ORACLE_ERCOT_SECRET_SYNC" != "true" ]; then
-  discover_price_oracle_ercot_credentials
-else
-  echo "Skipping price-oracle ERCOT secret discovery (SKIP_PRICE_ORACLE_ERCOT_SECRET_SYNC=true)."
-fi
 
 verify_migrations() {
   echo "Verifying migration job status..."
-  local MIGRATE_JOB="ml-ops-infra-ml-ops-services-postgres-migrate-job"
+  local MIGRATE_JOB="bighill-infra-bighill-platform-postgres-migrate-job"
   local RETRIES=12
   local STATUS=""
   local FAILED=""
@@ -528,66 +448,6 @@ EOF
   fi
 }
 
-create_events_dns_record() {
-  echo "Creating events service DNS record..."
-  
-  # Get the event-service ingress ALB hostname
-  local EVENTS_ALB_HOSTNAME
-  EVENTS_ALB_HOSTNAME=$(kubectl get ingress -n "${NAMESPACE}" event-service-ingress \
-    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
-  
-  if [ -z "$EVENTS_ALB_HOSTNAME" ]; then
-    echo "WARNING: Event service ingress not found or has no ALB assigned yet."
-    return 1
-  fi
-  
-  echo "Found events ALB: $EVENTS_ALB_HOSTNAME"
-  
-  # Get the PUBLIC hosted zone ID for the environment public domain.
-  local PUBLIC_DOMAIN="${ENVIRONMENT}.${PUBLIC_ROOT_DOMAIN}"
-  local ZONE_ID
-  ZONE_ID=$(aws route53 list-hosted-zones \
-    --query "HostedZones[?Name=='${PUBLIC_DOMAIN}.' && Config.PrivateZone==\`false\`].Id | [0]" \
-    --output text 2>/dev/null | sed 's|/hostedzone/||' || echo "")
-  
-  if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" = "None" ]; then
-    echo "WARNING: Could not find public hosted zone for ${PUBLIC_DOMAIN}"
-    return 1
-  fi
-  
-  echo "Found public hosted zone: $ZONE_ID"
-  
-  # Create CNAME record for events.<environment-domain> -> ALB hostname
-  local EVENTS_DNS="events.${PUBLIC_DOMAIN}"
-  
-  cat > /tmp/events-dns-change.json <<EOF
-{
-  "Changes": [{
-    "Action": "UPSERT",
-    "ResourceRecordSet": {
-      "Name": "${EVENTS_DNS}",
-      "Type": "CNAME",
-      "TTL": 300,
-      "ResourceRecords": [{"Value": "${EVENTS_ALB_HOSTNAME}"}]
-    }
-  }]
-}
-EOF
-  
-  if aws route53 change-resource-record-sets \
-    --hosted-zone-id "$ZONE_ID" \
-    --change-batch file:///tmp/events-dns-change.json \
-    --output text >/dev/null 2>&1; then
-    echo "Events DNS record created: ${EVENTS_DNS} -> ${EVENTS_ALB_HOSTNAME}"
-    rm -f /tmp/events-dns-change.json
-    return 0
-  else
-    echo "WARNING: Failed to create events DNS record"
-    rm -f /tmp/events-dns-change.json
-    return 1
-  fi
-}
-
 update_lambda_redis_config() {
   if [ -z "${REDIS_NLB_HOSTNAME:-}" ]; then
     echo "WARNING: Redis NLB hostname not set, skipping Lambda update."
@@ -596,7 +456,7 @@ update_lambda_redis_config() {
   
   echo "Updating Lambda Redis configuration..."
   
-  local STACK_NAME="ml-ops-${ENVIRONMENT}-api-gateway"
+  local STACK_NAME="bighill-${ENVIRONMENT}-api-gateway"
   
   # Get Lambda function names from CloudFormation
   local API_FUNCTION_NAME=""
@@ -952,11 +812,6 @@ cleanup_stale_stateful_resources() {
 copy_db_init_scripts
 create_k8s_aurora_secret
 create_k8s_profile_oauth_secret
-if [ "$SKIP_PRICE_ORACLE_ERCOT_SECRET_SYNC" != "true" ]; then
-  create_k8s_price_oracle_ercot_secret
-else
-  echo "Skipping price-oracle ERCOT secret sync (SKIP_PRICE_ORACLE_ERCOT_SECRET_SYNC=true)."
-fi
 if [ "$ONLY_SYNC_SECRETS" = "true" ]; then
   echo "ONLY_SYNC_SECRETS=true; skipping infra Helm deploy and rollout checks."
   exit 0
@@ -974,8 +829,5 @@ if discover_redis_nlb; then
   create_redis_dns_record || true
   update_lambda_redis_config
 fi
-
-# Create events service DNS record (external-dns should do this, but as fallback)
-create_events_dns_record || true
 
 echo "Infrastructure deployment complete."

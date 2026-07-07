@@ -10,7 +10,7 @@ if [ -z "${ENVIRONMENT}" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+CLUSTER_NAME="bighill-${ENVIRONMENT}"
 NAMESPACE="observability"
 RESET_TIMEOUT="${OBSERVABILITY_RESET_TIMEOUT:-180s}"
 

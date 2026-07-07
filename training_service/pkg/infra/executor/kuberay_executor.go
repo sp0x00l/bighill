@@ -340,6 +340,17 @@ func (e *KubeRayExecutor) podSpec(containerName string, includeGPU bool) map[str
 	if e.serviceAccountName != "" {
 		spec["serviceAccountName"] = e.serviceAccountName
 	}
+	if includeGPU && e.gpuResource != "" && e.gpu != "" {
+		spec["nodeSelector"] = map[string]any{"workload": "gpu"}
+		spec["tolerations"] = []any{
+			map[string]any{
+				"key":      "nvidia.com/gpu",
+				"operator": "Equal",
+				"value":    "true",
+				"effect":   "NoSchedule",
+			},
+		}
+	}
 	return spec
 }
 

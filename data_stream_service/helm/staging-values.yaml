@@ -9,12 +9,12 @@ serviceAccount:
   annotations: {}
 
 ingress:
-  enabled: true
-  host: "data-stream.internal.northern.bighill"
+  enabled: false
+  host: ""
 
 env:
   environment: "staging"
-  kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
+  kafkaBroker: "kafka:9092"
   dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-data-stream-dlq"
   outbox: "postgres"
   outboxRelayPollMs: "250"

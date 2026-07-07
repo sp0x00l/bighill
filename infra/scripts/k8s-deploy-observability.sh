@@ -11,7 +11,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+CLUSTER_NAME="bighill-${ENVIRONMENT}"
 NAMESPACE="observability"
 PUBLIC_ROOT_DOMAIN="${PUBLIC_ROOT_DOMAIN:-bighill.example}"
 GRAFANA_HOSTNAME="observability.${ENVIRONMENT}.${PUBLIC_ROOT_DOMAIN}"
@@ -108,7 +108,7 @@ apply_grafana_dashboards() {
       --dry-run=client -o yaml \
       | kubectl label --local -f - -o yaml \
           grafana_dashboard=1 \
-          app.kubernetes.io/managed-by=ml-ops-infra \
+          app.kubernetes.io/managed-by=bighill-infra \
       | kubectl annotate --local -f - -o yaml \
           grafana_folder=/tmp/dashboards/BigHill \
       | kubectl apply -f -

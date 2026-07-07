@@ -44,6 +44,7 @@ var _ = Describe("Runtime", func() {
 		Expect(state.Ready).To(BeTrue())
 		Expect(state.ServingTarget).To(Equal("http://ollama.local"))
 		Expect(state.ServingModel).To(Equal("llama3.1:8b"))
+		Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOllamaGenerate))
 		Expect(state.ReadyReplicas).To(Equal(int32(1)))
 	})
 
@@ -86,7 +87,7 @@ var _ = Describe("Runtime", func() {
 
 			Expect(err).NotTo(HaveOccurred(), baseModel)
 			Expect(state.ServingModel).To(Equal(baseModel), baseModel)
-			Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions), baseModel)
+			Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOllamaGenerate), baseModel)
 		}
 	})
 

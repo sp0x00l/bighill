@@ -3,9 +3,9 @@ set -euo pipefail
 
 ENV="${1:-staging}"
 NAMESPACE="ml-ops-${ENV}"
-RELEASE_NAME="ml-ops-infra"
+RELEASE_NAME="bighill-infra"
 REGION="${AWS_REGION:-eu-west-1}"
-CLUSTER_NAME="ml-ops-${ENV}"
+CLUSTER_NAME="bighill-${ENV}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -99,6 +99,7 @@ run_migrations() {
     -n "$NAMESPACE_ARG" \
     -f "$VALUES_BASE_FILE" \
     -f "$VALUES_ENV_FILE" \
+    --set postgres.credentialsSecret.name="aurora-creds-${ENV}" \
     --reuse-values \
     --wait \
     --timeout 5m; then

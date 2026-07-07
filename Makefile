@@ -8,7 +8,7 @@ GO_BIN ?= $(shell go env GOPATH)/bin
 
 export PATH := $(GO_BIN):$(PATH)
 
-.PHONY: install install-dev install-all build-all build-query-engine test test-query-engine start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api kafka-clean kafka-create-topics kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka upgrade-go kafka-clean-test-topics k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
+.PHONY: install install-dev install-all build-all build-query-engine test test-query-engine start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api kafka-clean kafka-create-topics kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka upgrade-go kafka-clean-test-topics k8s-validate k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
 
 install: install-all
 
@@ -182,6 +182,9 @@ reinstall-kafka:
 	@scripts/kafka/kafka-config.sh
 	@scripts/kafka/kafka-restart.sh
 	@scripts/kafka/kafka-create-topics.sh
+
+k8s-validate:
+	@infra/scripts/validate-deploy.sh
 
 k8s-deploy:
 	@infra/scripts/k8s-deploy-infra.sh $(ENV)

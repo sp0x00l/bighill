@@ -1,12 +1,15 @@
 replicaCount: 1
 image:
-  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops/training-service"
-  tag: "0.0.1"
+  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops"
+  tag: "training-service-0.0.1-staging"
   pullPolicy: Always
 service:
   type: ClusterIP
   httpPort: 8085
   healthPort: 5058
+ingress:
+  enabled: true
+  host: "training.internal.bighill.example"
 env:
   environment: "staging"
   temporalAddress: "temporal:7233"

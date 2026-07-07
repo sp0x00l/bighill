@@ -1,0 +1,42 @@
+image:
+  repository: 385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops
+  tag: "ingestion-service-0.0.1-prod"
+  pullPolicy: Always
+
+serviceAccount:
+  create: true
+  name: "ingestion-service"
+  annotations: {}
+
+ingress:
+  enabled: true
+  host: "ingestion.internal.bighill.example"
+
+env:
+  environment: "prod"
+  kafkaBroker: "kafka:9092"
+  redisAddress: "redis:6379"
+  topic: "ingestion"
+  dataRegistrySubscriberTopic: "data_registry"
+  profileSubscriberTopic: "profile"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-prod-ingestion-dlq"
+  outbox: "postgres"
+  authKmsKeyId: "alias/bighill-prod-jwt-signing"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  filesBucketName: "bighill-mlops-lakehouse"
+  filesBucketRegion: "eu-west-1"
+  huggingFaceDownloadMode: "kubernetes"
+  huggingFaceJobNamespace: "ml-ops-prod"
+  huggingFaceJobImage: "training-jobs:0.0.1"
+  huggingFaceJobImagePullPolicy: "Always"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  dbCredentialsSecret:
+    name: "aurora-creds-prod"
+    userKey: "bighill_ingestion_db_user"
+    passwordKey: "bighill_ingestion_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_ingestion_db"

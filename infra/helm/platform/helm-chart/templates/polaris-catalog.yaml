@@ -1,0 +1,114 @@
+{{- if .Values.polaris.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: polaris-client-credentials
+  labels:
+    app: polaris-catalog
+type: Opaque
+stringData:
+  credential: {{ .Values.polaris.bootstrap.serviceCredential | quote }}
+  token: ""
+  client_id: {{ .Values.polaris.rootClientId | quote }}
+  client_secret: {{ .Values.polaris.rootClientSecret | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: polaris-catalog
+  labels:
+    app: polaris-catalog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: polaris-catalog
+  template:
+    metadata:
+      labels:
+        app: polaris-catalog
+    spec:
+      initContainers:
+        - name: bucket-setup
+          image: "{{ .Values.polaris.bucketSetup.image.repository }}:{{ .Values.polaris.bucketSetup.image.tag }}"
+          imagePullPolicy: {{ .Values.polaris.bucketSetup.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              until aws --endpoint-url "$AWS_ENDPOINT_URL" s3 ls >/dev/null 2>&1; do
+                echo "Waiting for polaris object store..."
+                sleep 2
+              done
+              aws --endpoint-url "$AWS_ENDPOINT_URL" s3 mb {{ .Values.polaris.warehouse | quote }} || true
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: {{ .Values.polaris.storageAccessKeyId | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              value: {{ .Values.polaris.storageSecretAccessKey | quote }}
+            - name: AWS_ENDPOINT_URL
+              value: {{ .Values.polaris.storageEndpoint | quote }}
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.polaris.region | quote }}
+      containers:
+        - name: polaris
+          image: "{{ .Values.polaris.catalogService.image.repository }}:{{ .Values.polaris.catalogService.image.tag }}"
+          imagePullPolicy: {{ .Values.polaris.catalogService.image.pullPolicy }}
+          ports:
+            - name: api
+              containerPort: 8181
+            - name: health
+              containerPort: 8182
+            - name: debug
+              containerPort: 5005
+          env:
+            - name: AWS_REGION
+              value: {{ .Values.polaris.region | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              value: {{ .Values.polaris.storageAccessKeyId | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              value: {{ .Values.polaris.storageSecretAccessKey | quote }}
+            - name: AWS_ENDPOINT_URL
+              value: {{ .Values.polaris.storageEndpoint | quote }}
+            - name: AWS_ENDPOINT_URL_S3
+              value: {{ .Values.polaris.storageEndpoint | quote }}
+            - name: AWS_S3_FORCE_PATH_STYLE
+              value: {{ .Values.polaris.storagePathStyle | quote }}
+            - name: AWS_S3_PATH_STYLE_ACCESS
+              value: {{ .Values.polaris.storagePathStyle | quote }}
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Daws.s3.pathStyleAccess={{ .Values.polaris.storagePathStyle }}"
+            - name: POLARIS_BOOTSTRAP_CREDENTIALS
+              value: "POLARIS,{{ .Values.polaris.rootClientId }},{{ .Values.polaris.rootClientSecret }}"
+            - name: polaris.realm-context.realms
+              value: "POLARIS"
+            - name: polaris.features.SKIP_CREDENTIAL_SUBSCOPING_INDIRECTION
+              value: "true"
+            - name: quarkus.otel.sdk.disabled
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /q/health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: polaris-catalog
+  labels:
+    app: polaris-catalog
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: 8181
+      targetPort: api
+    - name: health
+      port: 8182
+      targetPort: health
+  selector:
+    app: polaris-catalog
+{{- end }}

@@ -1,17 +1,25 @@
 replicaCount: 1
 image:
-  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops/model-registry-service"
-  tag: "0.0.1"
+  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops"
+  tag: "model-registry-service-0.0.1-staging"
   pullPolicy: Always
 service:
   type: ClusterIP
   httpPort: 8084
   healthPort: 5060
+ingress:
+  enabled: true
+  host: "model-registry.internal.bighill.example"
 env:
   environment: "staging"
-  pgHost: "postgres.ml-ops-staging.svc.cluster.local"
-  pgPort: "5432"
-  pgSslMode: "require"
+  dbCredentialsSecret:
+    name: "aurora-creds-staging"
+    userKey: "bighill_model_registry_db_user"
+    passwordKey: "bighill_model_registry_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_model_registry_db"
   kafkaBroker: "kafka:9092"
   kafkaBaseGroupId: "model-registry"
   kafkaAutoOffsetReset: "earliest"

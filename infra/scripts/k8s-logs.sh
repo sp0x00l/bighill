@@ -18,7 +18,7 @@ if [ -z "$ENVIRONMENT" ]; then
 fi
 
 NAMESPACE="ml-ops-${ENVIRONMENT}"
-CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+CLUSTER_NAME="bighill-${ENVIRONMENT}"
 
 # Discover services from repo structure. macOS still ships Bash 3.2, which
 # does not include mapfile/readarray.

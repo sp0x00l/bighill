@@ -14,7 +14,7 @@ ingress:
 
 env:
   environment: "staging"
-  kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
+  kafkaBroker: "kafka:9092"
   dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-data-registry-dlq"
   outbox: "postgres"
   outboxRelayPollMs: "250"
@@ -24,9 +24,9 @@ env:
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   dbCredentialsSecret:
     name: "aurora-creds-staging"
-    userKey: "data_registry_db_user"
-    passwordKey: "data_registry_db_password"
+    userKey: "bighill_data_registry_db_user"
+    passwordKey: "bighill_data_registry_db_password"
     hostKey: "pg_host"
     portKey: "pg_port"
     sslmodeKey: "pg_sslmode"
-    nameKey: "data_registry_db_name"
+    nameKey: "bighill_data_registry_db"

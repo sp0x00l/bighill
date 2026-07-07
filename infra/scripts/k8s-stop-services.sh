@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/k8s-common.sh"
 ENV="${1:-staging}"
 NAMESPACE="ml-ops-${ENV}"
 REGION="${AWS_REGION:-eu-west-1}"
-CLUSTER_NAME="ml-ops-${ENV}"
+CLUSTER_NAME="bighill-${ENV}"
 
 configure_kubectl() {
   local CLUSTER="$1"

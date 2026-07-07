@@ -39,42 +39,42 @@ Parameters:
     Description: Security group ID for Lambda VPC access
   DataRegistryServiceHttpDomain:
     Type: String
-    Default: host.docker.internal
+    Default: data-registry.internal.bighill.example
     Description: The data registry service host name
   DataRegistryServiceHttpPort:
     Type: String
     Default: 8081
   IngestionServiceHttpDomain:
     Type: String
-    Default: host.docker.internal
+    Default: ingestion.internal.bighill.example
     Description: The ingestion service host name
   IngestionServiceHttpPort:
     Type: String
     Default: 8086
   ModelRegistryServiceHttpDomain:
     Type: String
-    Default: host.docker.internal
+    Default: model-registry.internal.bighill.example
     Description: The model registry service host name
   ModelRegistryServiceHttpPort:
     Type: String
     Default: 8084
   ProfileServiceHttpDomain:
     Type: String
-    Default: host.docker.internal
+    Default: profile.internal.bighill.example
     Description: The profile service host name
   ProfileServiceHttpPort:
     Type: String
     Default: 8082
   TrainingServiceHttpDomain:
     Type: String
-    Default: host.docker.internal
+    Default: training.internal.bighill.example
     Description: The training service host name
   TrainingServiceHttpPort:
     Type: String
     Default: 8085
   InferenceServiceHttpDomain:
     Type: String
-    Default: host.docker.internal
+    Default: inference.internal.bighill.example
     Description: The inference service host name
   InferenceServiceHttpPort:
     Type: String
@@ -89,7 +89,7 @@ Parameters:
     Description: In production, configure the OTLP exporter to send traces to Grafana Tempo. In local-dev, leave this value empty.
   RedisHost:
     Type: String
-    Default: host.docker.internal
+    Default: redis.internal.bighill.example
     Description: Redis hostname or IP
   RedisPort:
     Type: String

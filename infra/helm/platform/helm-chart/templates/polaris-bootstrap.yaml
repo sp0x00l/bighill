@@ -1,0 +1,67 @@
+{{- if .Values.polaris.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bighill-platform.fullname" . }}-polaris-bootstrap
+  labels:
+    app: polaris-catalog
+data:
+  polaris_bootstrap.py: |-
+{{ .Files.Get "files/polaris_bootstrap.py" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "bighill-platform.fullname" . }}-polaris-bootstrap
+  labels:
+    app: polaris-catalog
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: polaris-catalog
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: polaris-bootstrap
+          image: "{{ .Values.polaris.bootstrap.image.repository }}:{{ .Values.polaris.bootstrap.image.tag }}"
+          imagePullPolicy: {{ .Values.polaris.bootstrap.image.pullPolicy }}
+          command: ["python", "/bootstrap/polaris_bootstrap.py"]
+          env:
+            - name: POLARIS_BASE_URL
+              value: "http://polaris-catalog:8181"
+            - name: POLARIS_ROOT_CLIENT_ID
+              value: {{ .Values.polaris.rootClientId | quote }}
+            - name: POLARIS_ROOT_CLIENT_SECRET
+              value: {{ .Values.polaris.rootClientSecret | quote }}
+            - name: POLARIS_CATALOG
+              value: {{ .Values.polaris.catalog | quote }}
+            - name: POLARIS_WAREHOUSE
+              value: {{ .Values.polaris.warehouse | quote }}
+            - name: POLARIS_STORAGE_ENDPOINT
+              value: {{ .Values.polaris.storageEndpoint | quote }}
+            - name: POLARIS_STORAGE_REGION
+              value: {{ .Values.polaris.region | quote }}
+            - name: POLARIS_STORAGE_PATH_STYLE
+              value: {{ .Values.polaris.storagePathStyle | quote }}
+            - name: POLARIS_SERVICE_PRINCIPAL
+              value: {{ .Values.polaris.bootstrap.servicePrincipal | quote }}
+            - name: POLARIS_PRINCIPAL_ROLE
+              value: {{ .Values.polaris.bootstrap.principalRole | quote }}
+            - name: POLARIS_CATALOG_ROLE
+              value: {{ .Values.polaris.bootstrap.catalogRole | quote }}
+            - name: POLARIS_SERVICE_CREDENTIAL
+              value: {{ .Values.polaris.bootstrap.serviceCredential | quote }}
+          volumeMounts:
+            - name: bootstrap
+              mountPath: /bootstrap
+      volumes:
+        - name: bootstrap
+          configMap:
+              name: {{ include "bighill-platform.fullname" . }}-polaris-bootstrap
+{{- end }}

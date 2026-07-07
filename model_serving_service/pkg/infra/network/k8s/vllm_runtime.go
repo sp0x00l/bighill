@@ -472,6 +472,17 @@ func (r *VLLMRuntime) podSpec(servedModel *model.ServedModel, servingModel strin
 	if r.serviceAccount != "" {
 		spec["serviceAccountName"] = r.serviceAccount
 	}
+	if r.gpuResource != "" && r.gpu != "" {
+		spec["nodeSelector"] = map[string]any{"workload": "gpu"}
+		spec["tolerations"] = []any{
+			map[string]any{
+				"key":      "nvidia.com/gpu",
+				"operator": "Equal",
+				"value":    "true",
+				"effect":   "NoSchedule",
+			},
+		}
+	}
 	return spec
 }
 

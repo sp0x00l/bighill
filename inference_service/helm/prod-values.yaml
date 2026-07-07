@@ -1,0 +1,30 @@
+replicaCount: 1
+image:
+  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops"
+  tag: "inference-service-0.0.1-prod"
+  pullPolicy: Always
+service:
+  type: ClusterIP
+  healthPort: 5059
+  httpPort: 8087
+  grpcPort: 7073
+ingress:
+  enabled: true
+  host: "inference.internal.bighill.example"
+env:
+  environment: "prod"
+  dbCredentialsSecret:
+    name: "aurora-creds-prod"
+    userKey: "bighill_inference_db_user"
+    passwordKey: "bighill_inference_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_inference_db"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-prod-inference-dlq"
+  rerankerProvider: "tei"
+  rerankerUrl: "http://text-embeddings-inference-reranker:80"
+  rerankerModel: "bge-reranker-large"
+  queryTransformerProvider: ""
+  preferenceDatasetUriTemplate: "s3://bighill-mlops-lakehouse/preferences/{dataset_id}/{preference_dataset_id}.jsonl"
+  preferenceDatasetBucketRegion: "eu-west-1"

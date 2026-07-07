@@ -62,11 +62,16 @@ kafka_reset_storage_on_disk_full() {
   kubectl -n "$namespace" scale statefulset/kafka --replicas="$replicas"
 }
 
+kafka_topics_command() {
+  local args="$1"
+  printf 'if [ -x /opt/bitnami/kafka/bin/kafka-topics.sh ]; then topics_cmd=/opt/bitnami/kafka/bin/kafka-topics.sh; else topics_cmd=/opt/kafka/bin/kafka-topics.sh; fi; "$topics_cmd" %s' "$args"
+}
+
 kafka_admin_ready() {
   local namespace="$1"
 
   kubectl -n "$namespace" exec "$KAFKA_POD" -- sh -c \
-    "/opt/kafka/bin/kafka-topics.sh --list --bootstrap-server kafka:9092 >/dev/null" \
+    "$(kafka_topics_command "--list --bootstrap-server kafka:9092 >/dev/null")" \
     >/dev/null 2>&1
 }
 

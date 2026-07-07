@@ -1,0 +1,34 @@
+replicaCount: 1
+image:
+  repository: "385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops"
+  tag: "model-registry-service-0.0.1-prod"
+  pullPolicy: Always
+service:
+  type: ClusterIP
+  httpPort: 8084
+  healthPort: 5060
+ingress:
+  enabled: true
+  host: "model-registry.internal.bighill.example"
+env:
+  environment: "prod"
+  dbCredentialsSecret:
+    name: "aurora-creds-prod"
+    userKey: "bighill_model_registry_db_user"
+    passwordKey: "bighill_model_registry_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_model_registry_db"
+  kafkaBroker: "kafka:9092"
+  kafkaBaseGroupId: "model-registry"
+  kafkaAutoOffsetReset: "earliest"
+  topic: "model_registry"
+  trainingSubscriberTopic: "training"
+  ingestionSubscriberTopic: "ingestion"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-prod-model-registry-dlq"
+  outbox: "postgres"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  servingBackend: "kubernetes"

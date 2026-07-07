@@ -35,9 +35,9 @@ purge_k8s_topics() {
     echo " - $topic"
     local DEL_OUT DEL_RC
     DEL_OUT=$(kubectl -n "$namespace" exec "$KAFKA_POD" -- sh -c \
-      "/opt/kafka/bin/kafka-topics.sh --delete \
+      "$(kafka_topics_command "--delete \
         --topic '$topic' \
-        --bootstrap-server kafka:9092" 2>&1) && DEL_RC=0 || DEL_RC=$?
+        --bootstrap-server kafka:9092")" 2>&1) && DEL_RC=0 || DEL_RC=$?
     if [[ "$DEL_RC" -ne 0 ]]; then
       # UnknownTopicOrPartitionException is benign (already absent)
       if echo "$DEL_OUT" | grep -qE "UnknownTopicOrPartitionException|does not exist"; then
@@ -59,7 +59,7 @@ wait_for_topic_deletions() {
     [[ -z "$topic" ]] && continue
     for _ in $(seq 1 30); do
       if ! kubectl -n "$namespace" exec "$KAFKA_POD" -- sh -c \
-        "/opt/kafka/bin/kafka-topics.sh --list --bootstrap-server kafka:9092 | grep -Fx '$topic'" >/dev/null 2>&1; then
+        "$(kafka_topics_command "--list --bootstrap-server kafka:9092 | grep -Fx '$topic'")" >/dev/null 2>&1; then
         break
       fi
       sleep 1

@@ -11,12 +11,12 @@ serviceAccount:
 
 ingress:
   enabled: true
-  host: "profile.internal.northern.bighill"
+  host: "profile.internal.bighill.example"
 
 env:
   environment: "staging"
-  kafkaBroker: "kafka.bighill-staging.svc.cluster.local:9092"
-  redisAddress: "redis.bighill-staging.svc.cluster.local:6379"
+  kafkaBroker: "kafka:9092"
+  redisAddress: "redis:6379"
   dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-profile-dlq"
   outbox: "postgres"
   # KMS key for JWT signing - created by Terraform
@@ -25,12 +25,12 @@ env:
   otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   dbCredentialsSecret:
     name: "aurora-creds-staging"
-    userKey: "profile_db_user"
-    passwordKey: "profile_db_password"
+    userKey: "bighill_profile_db_user"
+    passwordKey: "bighill_profile_db_password"
     hostKey: "pg_host"
     portKey: "pg_port"
     sslmodeKey: "pg_sslmode"
-    nameKey: "profile_db_name"
+    nameKey: "bighill_profile_db"
   oauthCredentialsSecret:
     name: "profile-oauth-creds-staging"
     googleClientIdKey: "google_client_id"

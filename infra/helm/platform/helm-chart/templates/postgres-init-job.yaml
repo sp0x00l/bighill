@@ -1,0 +1,71 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "bighill-platform.fullname" . }}-postgres-bootstrap
+  labels:
+    app: {{ include "bighill-platform.fullname" . }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: {{ include "bighill-platform.fullname" . }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: postgres-bootstrap
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              for script in /docker-entrypoint-initdb.d/*; do
+                [ -f "$script" ] || continue
+                echo "Running $script"
+                sh "$script"
+              done
+          env:
+            - name: PGHOST
+              value: {{ .Values.postgres.host | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgres.port | quote }}
+            - name: PGDATABASE
+              value: "postgres"
+            - name: PGSSLMODE
+              value: {{ .Values.postgres.sslmode | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.adminUser | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "postgres.credentialsSecret.name is required" .Values.postgres.credentialsSecret.name }}
+                  key: {{ .Values.postgres.credentialsSecret.adminPasswordKey }}
+            - name: BIGHILL_DB_NAMES
+              value: {{ .Values.postgres.dbnames | quote }}
+            - name: BIGHILL_DB_ADMIN
+              value: {{ .Values.postgres.adminUser | quote }}
+            - name: BIGHILL_DB_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "postgres.credentialsSecret.name is required" .Values.postgres.credentialsSecret.name }}
+                  key: {{ .Values.postgres.credentialsSecret.adminPasswordKey }}
+            - name: BIGHILL_DB_MIGRATIONS_USER
+              value: {{ .Values.postgres.migrationsUser | quote }}
+            - name: BIGHILL_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "postgres.credentialsSecret.name is required" .Values.postgres.credentialsSecret.name }}
+                  key: {{ .Values.postgres.credentialsSecret.appPasswordKey }}
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: {{ include "bighill-platform.fullname" . }}-postgres-init-scripts
+            defaultMode: 0755

@@ -67,7 +67,7 @@ func (r *Runtime) EnsureServedModel(ctx context.Context, servedModel *model.Serv
 		Ready:           true,
 		ServingTarget:   servingTarget,
 		ServingModel:    servingModel,
-		ServingProtocol: model.ServingProtocolOpenAIChatCompletions,
+		ServingProtocol: model.ServingProtocolOllamaGenerate,
 		ReadyReplicas:   1,
 	}, nil
 }

@@ -9,7 +9,7 @@ if [ -z "$ENVIRONMENT" ]; then
   exit 1
 fi
 
-CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+CLUSTER_NAME="bighill-${ENVIRONMENT}"
 NAMESPACE="kube-system"
 INTERNAL_ROOT_DOMAIN="${INTERNAL_ROOT_DOMAIN:-internal.bighill.example}"
 PUBLIC_ROOT_DOMAIN="${PUBLIC_ROOT_DOMAIN:-bighill.example}"
@@ -113,7 +113,7 @@ install_external_dns() {
     --set provider=aws \
     --set policy=sync \
     --set registry=txt \
-    --set txtOwnerId="ml-ops-${ENV_ARG}-external-dns" \
+  --set txtOwnerId="bighill-${ENV_ARG}-external-dns" \
     --set "domainFilters[0]=${INTERNAL_DOMAIN_ARG}" \
     --set "domainFilters[1]=${PUBLIC_DOMAIN_ARG}" \
     --set "sources[0]=ingress" \
@@ -164,8 +164,8 @@ configure_kubectl "$CLUSTER_NAME" "$REGION"
 
 create_ebs_storage_class
 
-ALB_ROLE_ARN=$(fetch_role_arn "ml-ops-${ENVIRONMENT}-alb-controller")
-DNS_ROLE_ARN=$(fetch_role_arn "ml-ops-${ENVIRONMENT}-external-dns")
+ALB_ROLE_ARN=$(fetch_role_arn "bighill-${ENVIRONMENT}-alb-controller")
+DNS_ROLE_ARN=$(fetch_role_arn "bighill-${ENVIRONMENT}-external-dns")
 
 if [ -z "$ALB_ROLE_ARN" ] || [ "$ALB_ROLE_ARN" = "None" ]; then
   echo "Error: ALB controller IAM role not found. Run Terraform first."
@@ -192,7 +192,30 @@ wait_for_alb_webhook "$NAMESPACE"
 install_external_dns "$ENVIRONMENT" "$NAMESPACE" "$INTERNAL_DOMAIN" "$PUBLIC_DOMAIN" "$DNS_ROLE_ARN"
 verify_installations "$NAMESPACE"
 
-echo "Done. ALB Controller and ExternalDNS installed."
+install_gpu_and_ray_addons() {
+  echo "Installing NVIDIA device plugin and KubeRay operator..."
+
+  helm repo add nvidia https://nvidia.github.io/k8s-device-plugin 2>/dev/null || true
+  helm repo update nvidia
+  helm upgrade --install nvidia-device-plugin nvidia/k8s-device-plugin \
+    --namespace kube-system \
+    --set "tolerations[0].key=nvidia.com/gpu" \
+    --set "tolerations[0].operator=Equal" \
+    --set "tolerations[0].value=true" \
+    --set "tolerations[0].effect=NoSchedule"
+
+  helm repo add kuberay https://ray-project.github.io/kuberay-helm/ 2>/dev/null || true
+  helm repo update kuberay
+  helm upgrade --install kuberay-operator kuberay/kuberay-operator \
+    --namespace kuberay-system \
+    --create-namespace \
+    --wait \
+    --timeout 5m
+}
+
+install_gpu_and_ray_addons
+
+echo "Done. ALB Controller, ExternalDNS, NVIDIA device plugin, and KubeRay operator installed."
 echo "ExternalDNS is configured for domains: ${INTERNAL_DOMAIN}, ${PUBLIC_DOMAIN}"
 
 # Install Scalar API docs if enabled

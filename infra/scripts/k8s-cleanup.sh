@@ -17,7 +17,7 @@ if [ -z "$ENVIRONMENT" ]; then
 fi
 
 NAMESPACE="ml-ops-${ENVIRONMENT}"
-CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+CLUSTER_NAME="bighill-${ENVIRONMENT}"
 
 configure_kubectl() {
   local CLUSTER="$1"
@@ -38,7 +38,8 @@ configure_kubectl() {
 
 uninstall_bighill_infra() {
   local TARGET_NAMESPACE="$1"
-  echo "Uninstalling ml-ops-infra helm chart..."
+  echo "Uninstalling BigHill infra helm chart..."
+  helm uninstall bighill-infra -n "$TARGET_NAMESPACE" --wait 2>/dev/null || true
   helm uninstall ml-ops-infra -n "$TARGET_NAMESPACE" --wait 2>/dev/null || true
 }
 

@@ -1,0 +1,93 @@
+{{- if .Values.tei.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.tei.embeddings.serviceName }}
+  labels:
+    app: {{ .Values.tei.embeddings.serviceName }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.tei.embeddings.serviceName }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.tei.embeddings.serviceName }}
+    spec:
+      containers:
+        - name: tei
+          image: "{{ .Values.tei.image.repository }}:{{ .Values.tei.image.tag }}"
+          imagePullPolicy: {{ .Values.tei.image.pullPolicy }}
+          args:
+            - "--model-id"
+            - {{ .Values.tei.embeddings.modelId | quote }}
+            - "--port"
+            - {{ .Values.tei.embeddings.port | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.tei.embeddings.port }}
+          resources:
+            {{- toYaml .Values.tei.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.tei.embeddings.serviceName }}
+  labels:
+    app: {{ .Values.tei.embeddings.serviceName }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    app: {{ .Values.tei.embeddings.serviceName }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.tei.reranker.serviceName }}
+  labels:
+    app: {{ .Values.tei.reranker.serviceName }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.tei.reranker.serviceName }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.tei.reranker.serviceName }}
+    spec:
+      containers:
+        - name: tei
+          image: "{{ .Values.tei.image.repository }}:{{ .Values.tei.image.tag }}"
+          imagePullPolicy: {{ .Values.tei.image.pullPolicy }}
+          args:
+            - "--model-id"
+            - {{ .Values.tei.reranker.modelId | quote }}
+            - "--port"
+            - {{ .Values.tei.reranker.port | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.tei.reranker.port }}
+          resources:
+            {{- toYaml .Values.tei.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.tei.reranker.serviceName }}
+  labels:
+    app: {{ .Values.tei.reranker.serviceName }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  selector:
+    app: {{ .Values.tei.reranker.serviceName }}
+{{- end }}

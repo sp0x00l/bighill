@@ -1,0 +1,32 @@
+{{- if .Values.rayJobRbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "training-service.fullname" . }}-rayjobs
+  labels:
+    app: {{ include "training-service.fullname" . }}
+rules:
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["ray.io"]
+    resources: ["rayjobs/status"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "training-service.fullname" . }}-rayjobs
+  labels:
+    app: {{ include "training-service.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name | default "training-service" }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "training-service.fullname" . }}-rayjobs
+{{- end }}

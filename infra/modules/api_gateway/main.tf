@@ -18,10 +18,10 @@ resource "aws_cloudformation_stack" "api_gateway" {
 
   parameters = {
     StageNameParam                     = var.stage_name
-    BigHillApiFunctionMemorySize       = var.bighill_api_function_memory_size
-    BigHillApiFunctionTimeout          = var.bighill_api_function_timeout
-    BigHillApiHttpClientTimeoutSeconds = var.bighill_api_http_client_timeout_seconds
-    BigHillApiLogLevel                 = var.bighill_api_log_level
+    BighillApiFunctionMemorySize       = var.bighill_api_function_memory_size
+    BighillApiFunctionTimeout          = var.bighill_api_function_timeout
+    BighillApiHttpClientTimeoutSeconds = var.bighill_api_http_client_timeout_seconds
+    BighillApiLogLevel                 = var.bighill_api_log_level
 
     BigHillApiCodeUri  = local.api_code_uri
     BigHillAuthCodeUri = local.auth_code_uri
@@ -31,10 +31,16 @@ resource "aws_cloudformation_stack" "api_gateway" {
 
     DataRegistryServiceHttpDomain  = var.data_registry_service_http_domain
     DataRegistryServiceHttpPort    = var.data_registry_service_http_port
-    IngestionServiceHttpDomain = var.ingestion_service_http_domain
-    IngestionServiceHttpPort   = var.ingestion_service_http_port
+    IngestionServiceHttpDomain     = var.ingestion_service_http_domain
+    IngestionServiceHttpPort       = var.ingestion_service_http_port
+    ModelRegistryServiceHttpDomain = var.model_registry_service_http_domain
+    ModelRegistryServiceHttpPort   = var.model_registry_service_http_port
     ProfileServiceHttpDomain       = var.profile_service_http_domain
     ProfileServiceHttpPort         = var.profile_service_http_port
+    TrainingServiceHttpDomain      = var.training_service_http_domain
+    TrainingServiceHttpPort        = var.training_service_http_port
+    InferenceServiceHttpDomain     = var.inference_service_http_domain
+    InferenceServiceHttpPort       = var.inference_service_http_port
 
     RedisHost     = var.redis_host
     RedisPort     = var.redis_port

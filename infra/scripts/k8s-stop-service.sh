@@ -8,7 +8,7 @@ ENV="${1:-staging}"
 SERVICE_INPUT="${2:-}"
 NAMESPACE="ml-ops-${ENV}"
 REGION="${AWS_REGION:-eu-west-1}"
-CLUSTER_NAME="ml-ops-${ENV}"
+CLUSTER_NAME="bighill-${ENV}"
 
 if [ -z "${SERVICE_INPUT}" ]; then
   echo "Error: service name required"

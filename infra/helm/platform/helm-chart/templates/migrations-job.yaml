@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "bighill-platform.fullname" . }}-postgres-migrate-job
+  labels:
+    app: {{ include "bighill-platform.fullname" . }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "bighill-platform.fullname" . }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrations
+          image: "{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag }}"
+          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+          env:
+            - name: PGHOST
+              value: {{ .Values.postgres.host | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgres.port | quote }}
+            - name: PGSSLMODE
+              value: {{ .Values.postgres.sslmode | quote }}
+            - name: BIGHILL_DB_NAMES
+              value: {{ .Values.postgres.dbnames | quote }}
+            - name: BIGHILL_DB_ADMIN
+              value: {{ .Values.postgres.adminUser | quote }}
+            - name: BIGHILL_DB_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "postgres.credentialsSecret.name is required" .Values.postgres.credentialsSecret.name }}
+                  key: {{ .Values.postgres.credentialsSecret.adminPasswordKey }}
+            - name: BIGHILL_DB_MIGRATIONS_USER
+              value: {{ .Values.postgres.migrationsUser | quote }}
+            - name: BIGHILL_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "postgres.credentialsSecret.name is required" .Values.postgres.credentialsSecret.name }}
+                  key: {{ .Values.postgres.credentialsSecret.appPasswordKey }}

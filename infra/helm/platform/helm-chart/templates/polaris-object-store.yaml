@@ -1,0 +1,82 @@
+{{- if .Values.polaris.enabled }}
+{{- if .Values.polaris.objectStore.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: polaris-object-store-data
+  labels:
+    app: polaris-object-store
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.polaris.objectStore.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: polaris-object-store
+  labels:
+    app: polaris-object-store
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: polaris-object-store
+  template:
+    metadata:
+      labels:
+        app: polaris-object-store
+    spec:
+      containers:
+        - name: minio
+          image: "{{ .Values.polaris.objectStore.image.repository }}:{{ .Values.polaris.objectStore.image.tag }}"
+          imagePullPolicy: {{ .Values.polaris.objectStore.image.pullPolicy }}
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - name: s3
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.polaris.storageAccessKeyId | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              value: {{ .Values.polaris.storageSecretAccessKey | quote }}
+            - name: MINIO_REGION_NAME
+              value: {{ .Values.polaris.region | quote }}
+            - name: MINIO_REGION
+              value: {{ .Values.polaris.region | quote }}
+            - name: MINIO_DOMAIN
+              value: "polaris-object-store"
+          volumeMounts:
+            - name: polaris-object-store-data
+              mountPath: /data
+      volumes:
+        - name: polaris-object-store-data
+{{- if .Values.polaris.objectStore.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: polaris-object-store-data
+{{- else }}
+          emptyDir: {}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: polaris-object-store
+  labels:
+    app: polaris-object-store
+spec:
+  type: ClusterIP
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: s3
+    - name: console
+      port: 9001
+      targetPort: console
+  selector:
+    app: polaris-object-store
+{{- end }}

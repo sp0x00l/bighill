@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ENVIRONMENT="${1:-}"
-JOB_NAME="${2:-ml-ops-infra-ml-ops-services-postgres-bootstrap}"
+JOB_NAME="${2:-bighill-infra-bighill-platform-postgres-bootstrap}"
 REGION="${AWS_REGION:-eu-west-1}"
 
 if [ -z "$ENVIRONMENT" ]; then
@@ -11,7 +11,7 @@ if [ -z "$ENVIRONMENT" ]; then
 fi
 
 NAMESPACE="ml-ops-${ENVIRONMENT}"
-CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+CLUSTER_NAME="bighill-${ENVIRONMENT}"
 
 configure_kubectl() {
   local CLUSTER="$1"

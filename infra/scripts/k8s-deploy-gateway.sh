@@ -42,7 +42,7 @@ resolve_bucket_name() {
 
   ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text --region "$REGION" 2>/dev/null || true)"
   if [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ]; then
-    echo "ml-ops-${ENVIRONMENT}-${ACCOUNT_ID}-${SUFFIX}"
+      echo "bighill-${ENVIRONMENT}-${ACCOUNT_ID}-${SUFFIX}"
     return
   fi
 
@@ -90,12 +90,13 @@ upload_lambda_artifacts() {
 apply_terraform() {
   local ROOT="$1"
   local ENV_ARG="$2"
-  local STACK_NAME="ml-ops-${ENV_ARG}-api-gateway"
+  local STACK_NAME="bighill-${ENV_ARG}-api-gateway"
 
   echo "Applying Terraform for API Gateway..."
   cd "$ROOT/infra/envs/platform"
   tofu init -reconfigure -backend-config="${ENV_ARG}-account.hcl"
   if ! tofu apply -var-file="${ENV_ARG}.tfvars" \
+    -var deploy_api_gateway=true \
     -target=aws_s3_object.api_lambda_zip \
     -target=aws_s3_object.auth_lambda_zip \
     -target=module.api_gateway \
@@ -116,7 +117,7 @@ update_lambda_code() {
   local BUCKET="$3"
 
   echo "Updating Lambda function code..."
-  local STACK_NAME="ml-ops-${ENV_ARG}-api-gateway"
+  local STACK_NAME="bighill-${ENV_ARG}-api-gateway"
 
   local API_FUNCTION_NAME=$(aws cloudformation describe-stack-resources \
     --stack-name "$STACK_NAME" \

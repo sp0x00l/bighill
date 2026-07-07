@@ -12,9 +12,9 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 NAMESPACE="ml-ops-${ENVIRONMENT}"
-CLUSTER_NAME="ml-ops-${ENVIRONMENT}"
+CLUSTER_NAME="bighill-${ENVIRONMENT}"
 COMMON_SCRIPT="${PROJECT_ROOT}/scripts/common.sh"
-PUBLIC_ROOT_DOMAIN="${PUBLIC_ROOT_DOMAIN:-bighill.example}"
+INTERNAL_ROOT_DOMAIN="${INTERNAL_ROOT_DOMAIN:-internal.bighill.example}"
 
 # shellcheck disable=SC1090
 . "${COMMON_SCRIPT}"
@@ -45,7 +45,7 @@ get_acm_certificate_arn() {
   fi
 
   if command -v tofu >/dev/null 2>&1; then
-    CERT_ARN="$(cd "${PLATFORM_DIR}" && tofu output -raw public_env_certificate_arn 2>/dev/null || true)"
+    CERT_ARN="$(cd "${PLATFORM_DIR}" && tofu output -raw internal_certificate_arn 2>/dev/null || true)"
   fi
 
   if [ -n "${CERT_ARN}" ] && [ "${CERT_ARN}" != "None" ] && [ "${CERT_ARN}" != "null" ]; then
@@ -53,20 +53,11 @@ get_acm_certificate_arn() {
     return
   fi
 
-  # Prefer the wildcard certificate for public service ALBs.
+  # Prefer the wildcard certificate for internal service ALBs.
   CERT_ARN=$(aws acm list-certificates \
-    --query "CertificateSummaryList[?DomainName=='*.${DOMAIN}.${PUBLIC_ROOT_DOMAIN}'].CertificateArn | [0]" \
+    --query "CertificateSummaryList[?DomainName=='*.${INTERNAL_ROOT_DOMAIN}'].CertificateArn | [0]" \
     --output text \
     --region "${REGION}" 2>/dev/null || echo "")
-
-  if [ -z "${CERT_ARN}" ] || [ "${CERT_ARN}" = "None" ] || [ "${CERT_ARN}" = "null" ]; then
-    # Fallback only to an exact events certificate. Do not select unrelated
-    # docs/app certs for the same environment domain.
-    CERT_ARN=$(aws acm list-certificates \
-      --query "CertificateSummaryList[?DomainName=='events.${DOMAIN}.${PUBLIC_ROOT_DOMAIN}'].CertificateArn | [0]" \
-      --output text \
-      --region "${REGION}" 2>/dev/null || echo "")
-  fi
 
   if [ "${CERT_ARN}" = "None" ] || [ "${CERT_ARN}" = "null" ]; then
     CERT_ARN=""
@@ -89,7 +80,7 @@ get_jwt_signing_key_id() {
   
   # Fallback: query AWS KMS directly by alias
   KEY_ID=$(aws kms describe-key \
-    --key-id "alias/ml-ops-${ENVIRONMENT}-jwt-signing" \
+    --key-id "alias/bighill-${ENVIRONMENT}-jwt-signing" \
     --query 'KeyMetadata.KeyId' \
     --region "${REGION}" \
     --output text 2>/dev/null || echo "")
@@ -111,7 +102,7 @@ get_profile_service_role_arn() {
   
   # Fallback: query AWS IAM directly
   ROLE_ARN=$(aws iam get-role \
-    --role-name "ml-ops-${ENVIRONMENT}-profile-service" \
+    --role-name "bighill-${ENVIRONMENT}-profile-service" \
     --query 'Role.Arn' \
     --region "${REGION}" \
     --output text 2>/dev/null || echo "")
@@ -119,46 +110,43 @@ get_profile_service_role_arn() {
   echo "$ROLE_ARN"
 }
 
-# Get event-service IAM role ARN for IRSA
-get_event_service_role_arn() {
-  # First try Terraform output (works locally)
-  cd "$PROJECT_ROOT/infra/envs/platform"
+get_object_store_role_arn() {
+  local SERVICE_ACCOUNT="$1"
+  local PLATFORM_DIR="$PROJECT_ROOT/infra/envs/platform"
   local ROLE_ARN=""
-  ROLE_ARN=$(tofu output -raw event_service_role_arn 2>/dev/null || echo "")
-  
-  if [ -n "$ROLE_ARN" ] && [ "$ROLE_ARN" != "" ]; then
+
+  if command -v tofu >/dev/null 2>&1; then
+    ROLE_ARN="$(cd "$PLATFORM_DIR" && tofu output -json object_store_service_role_arns 2>/dev/null | jq -r --arg name "$SERVICE_ACCOUNT" '.[$name] // empty' 2>/dev/null || true)"
+  fi
+
+  if [ -n "$ROLE_ARN" ] && [ "$ROLE_ARN" != "null" ] && [ "$ROLE_ARN" != "None" ]; then
     echo "$ROLE_ARN"
     return
   fi
-  
-  # Fallback: query AWS IAM directly
+
   ROLE_ARN=$(aws iam get-role \
-    --role-name "ml-ops-${ENVIRONMENT}-event-service" \
+    --role-name "bighill-${ENVIRONMENT}-${SERVICE_ACCOUNT}" \
     --query 'Role.Arn' \
     --region "${REGION}" \
     --output text 2>/dev/null || echo "")
-  
+
+  if [ "$ROLE_ARN" = "None" ] || [ "$ROLE_ARN" = "null" ]; then
+    ROLE_ARN=""
+  fi
+
   echo "$ROLE_ARN"
 }
 
-# Get comms-service IAM role ARN for IRSA
-get_comms_service_role_arn() {
-  cd "$PROJECT_ROOT/infra/envs/platform"
-  local ROLE_ARN=""
-  ROLE_ARN=$(tofu output -raw comms_service_role_arn 2>/dev/null || echo "")
+object_store_extra_args() {
+  local SERVICE_ACCOUNT="$1"
+  local ROLE_ARN
+  ROLE_ARN="$(get_object_store_role_arn "$SERVICE_ACCOUNT")"
 
-  if [ -n "$ROLE_ARN" ] && [ "$ROLE_ARN" != "" ]; then
-    echo "$ROLE_ARN"
-    return
+  if [ -z "$ROLE_ARN" ]; then
+    return 0
   fi
 
-  ROLE_ARN=$(aws iam get-role \
-    --role-name "ml-ops-${ENVIRONMENT}-comms-service" \
-    --query 'Role.Arn' \
-    --output text \
-    --region "${REGION}" 2>/dev/null || echo "")
-
-  echo "$ROLE_ARN"
+  echo "--set serviceAccount.create=true --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${ROLE_ARN}"
 }
 
 ensure_eks_context() {
@@ -349,29 +337,48 @@ build_service_extra_args() {
     echo "Warning: Profile service IAM role not found, IRSA disabled"
   fi
 
-  EVENT_EXTRA_ARGS="${KMS_EXTRA_ARGS}"
-  if [ -n "$EVENT_SERVICE_ROLE_ARN" ]; then
-    echo "Using event-service IAM role: ${EVENT_SERVICE_ROLE_ARN}"
-    EVENT_EXTRA_ARGS="${EVENT_EXTRA_ARGS} --set serviceAccount.create=true --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${EVENT_SERVICE_ROLE_ARN}"
-  else
-    echo "Warning: Event service IAM role not found, IRSA disabled"
-  fi
-  if [ -n "$ACM_CERT_ARN" ]; then
-    EVENT_EXTRA_ARGS="${EVENT_EXTRA_ARGS} --set ingress.certificateArn=${ACM_CERT_ARN}"
-  fi
-
-  COMMS_EXTRA_ARGS=""
-  if [ -n "$COMMS_SERVICE_ROLE_ARN" ]; then
-    echo "Using comms-service IAM role: ${COMMS_SERVICE_ROLE_ARN}"
-    COMMS_EXTRA_ARGS="${COMMS_EXTRA_ARGS} --set serviceAccount.create=true --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${COMMS_SERVICE_ROLE_ARN}"
-  else
-    echo "Warning: Comms service IAM role not found, IRSA disabled"
-  fi
-
   INGESTION_EXTRA_ARGS="${KMS_EXTRA_ARGS}"
   INGESTION_EXTRA_ARGS="${INGESTION_EXTRA_ARGS} --set env.huggingFaceDownloadMode=kubernetes"
   INGESTION_EXTRA_ARGS="${INGESTION_EXTRA_ARGS} --set env.huggingFaceJobNamespace=${NAMESPACE}"
   INGESTION_EXTRA_ARGS="${INGESTION_EXTRA_ARGS} --set env.huggingFaceJobImage=${INGESTION_SERVICE_HUGGINGFACE_JOB_IMAGE:-training-jobs:0.0.1}"
+}
+
+append_service_extra_args() {
+  local SERVICE_DIR="$1"
+  local EXTRA_ARGS="${2:-}"
+  local SERVICE_ACCOUNT
+  SERVICE_ACCOUNT="$(service_dir_to_name "${SERVICE_DIR}")"
+
+  case "${SERVICE_DIR}" in
+    ingestion_service|data_stream_service|feature_materializer_service|inference_service|model_registry_service|training_service)
+      local IRSA_ARGS
+      IRSA_ARGS="$(object_store_extra_args "$SERVICE_ACCOUNT")"
+      if [ -n "$IRSA_ARGS" ]; then
+        EXTRA_ARGS="${EXTRA_ARGS} ${IRSA_ARGS}"
+      fi
+      ;;
+  esac
+
+  if [ "${SERVICE_DIR}" = "training_service" ]; then
+    EXTRA_ARGS="${EXTRA_ARGS} --set env.kubeRayNamespace=${NAMESPACE}"
+    EXTRA_ARGS="${EXTRA_ARGS} --set rayJobServiceAccount.create=true"
+    EXTRA_ARGS="${EXTRA_ARGS} --set rayJobServiceAccount.name=training-jobs"
+    local TRAINING_JOB_ROLE_ARN
+    TRAINING_JOB_ROLE_ARN="$(get_object_store_role_arn "training-service")"
+    if [ -n "$TRAINING_JOB_ROLE_ARN" ]; then
+      EXTRA_ARGS="${EXTRA_ARGS} --set rayJobServiceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${TRAINING_JOB_ROLE_ARN}"
+    fi
+  fi
+
+  if [ -n "$ACM_CERT_ARN" ]; then
+    case "${SERVICE_DIR}" in
+      data_registry_service|ingestion_service|profile_service|model_registry_service|training_service|inference_service)
+        EXTRA_ARGS="${EXTRA_ARGS} --set ingress.certificateArn=${ACM_CERT_ARN}"
+        ;;
+    esac
+  fi
+
+  echo "$EXTRA_ARGS"
 }
 
 deploy_services() {
@@ -390,13 +397,11 @@ deploy_services() {
 
     if [ "${SERVICE_DIR}" = "profile_service" ]; then
       EXTRA_ARGS="${PROFILE_EXTRA_ARGS}"
-    elif [ "${SERVICE_DIR}" = "event_service" ]; then
-      EXTRA_ARGS="${EVENT_EXTRA_ARGS}"
-    elif [ "${SERVICE_DIR}" = "comms_service" ]; then
-      EXTRA_ARGS="${COMMS_EXTRA_ARGS}"
     elif [ "${SERVICE_DIR}" = "ingestion_service" ]; then
       EXTRA_ARGS="${INGESTION_EXTRA_ARGS}"
     fi
+
+    EXTRA_ARGS="$(append_service_extra_args "${SERVICE_DIR}" "${EXTRA_ARGS}")"
 
     local REPLICA_ARGS
     REPLICA_ARGS="$(preserve_targeted_replica_count_args "${SERVICE_DIR}")"
@@ -443,8 +448,8 @@ wait_for_rollouts() {
   done
 }
 
-# Services that are internal-only and don't have ingresses/ALBs
-INTERNAL_ONLY_SERVICES="price-oracle-service market-maker-service settlement-service"
+# Services that are internal-only and do not expose gateway-routed HTTP ingress.
+INTERNAL_ONLY_SERVICES="data-stream-service feature-materializer-service model-serving-service"
 
 service_needs_alb() {
   local SERVICE="$1"
@@ -512,8 +517,8 @@ wait_for_albs() {
   echo "WARNING: ALBs may not be fully provisioned yet. Check ingress status."
 }
 
-# Verify event-service ALB is resolvable
-verify_event_service_alb() {
+# Verify service ALBs are resolvable
+verify_service_albs() {
   echo "Verifying service ALBs are accessible..."
   
   local SERVICES
@@ -638,7 +643,7 @@ wait_for_dns_sync() {
 refresh_lambda_environments() {
   echo "Refreshing Lambda execution environments to pick up DNS changes..."
   
-  local STACK_NAME="ml-ops-${ENVIRONMENT}-api-gateway"
+  local STACK_NAME="bighill-${ENVIRONMENT}-api-gateway"
   
   # Get Lambda function names from CloudFormation
   local API_FUNCTION_NAME=""
@@ -708,15 +713,13 @@ wait_for_infra_ready
 
 JWT_SIGNING_KEY_ID=$(get_jwt_signing_key_id)
 PROFILE_SERVICE_ROLE_ARN=$(get_profile_service_role_arn)
-EVENT_SERVICE_ROLE_ARN=$(get_event_service_role_arn)
-COMMS_SERVICE_ROLE_ARN=$(get_comms_service_role_arn)
 
 echo "Fetching ACM certificate ARN..."
 ACM_CERT_ARN=$(get_acm_certificate_arn "$ENVIRONMENT")
 if [ -n "$ACM_CERT_ARN" ] && [ "$ACM_CERT_ARN" != "None" ] && [ "$ACM_CERT_ARN" != "null" ]; then
   echo "Using ACM certificate: ${ACM_CERT_ARN}"
 else
-  echo "Warning: No ACM certificate found for *.${ENVIRONMENT}.${PUBLIC_ROOT_DOMAIN}"
+  echo "Warning: No ACM certificate found for *.${INTERNAL_ROOT_DOMAIN}; service ALBs will stay HTTP-only."
   ACM_CERT_ARN=""
 fi
 
@@ -724,7 +727,7 @@ build_service_extra_args
 deploy_services
 wait_for_rollouts
 wait_for_albs
-verify_event_service_alb
+verify_service_albs
 echo "Service deployment complete."
 
 restart_external_dns

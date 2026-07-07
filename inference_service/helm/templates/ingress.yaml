@@ -1,13 +1,27 @@
-{{- if .Values.ingress.enabled -}}
+{{- if and .Values.ingress.enabled (eq .Values.service.type "ClusterIP") }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "inference-service.fullname" . }}-ingress
   labels:
     app: {{ include "inference-service.fullname" . }}
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-port: "{{ .Values.service.healthPort }}"
+    external-dns.alpha.kubernetes.io/hostname: {{ .Values.ingress.host }}
+{{- if .Values.ingress.certificateArn }}
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+{{- end }}
 spec:
+  ingressClassName: alb
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    - host: {{ .Values.ingress.host }}
       http:
         paths:
           - path: /
@@ -16,5 +30,11 @@ spec:
               service:
                 name: {{ include "inference-service.fullname" . }}
                 port:
-                  number: {{ .Values.service.healthPort }}
+                  name: http
+  {{- if .Values.ingress.certificateArn }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ include "inference-service.fullname" . }}-tls-placeholder
+  {{- end }}
 {{- end }}

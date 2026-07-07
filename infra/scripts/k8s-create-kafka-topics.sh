@@ -28,11 +28,11 @@ create_k8s_topics() {
     echo " - $TOPIC"
     local CREATE_OUT CREATE_RC
     CREATE_OUT=$(kubectl -n "$NAMESPACE" exec "$KAFKA_POD" -- sh -c \
-      "/opt/kafka/bin/kafka-topics.sh --create \
+      "$(kafka_topics_command "--create \
         --topic '$TOPIC' \
         --partitions 3 \
         --replication-factor 1 \
-        --bootstrap-server kafka:9092" 2>&1) && CREATE_RC=0 || CREATE_RC=$?
+        --bootstrap-server kafka:9092")" 2>&1) && CREATE_RC=0 || CREATE_RC=$?
     if [[ "$CREATE_RC" -ne 0 ]]; then
       # TopicExistsException is benign (idempotent re-run); anything else is fatal
       if echo "$CREATE_OUT" | grep -q "TopicExistsException"; then
@@ -49,7 +49,7 @@ create_k8s_topics() {
   local LISTED MISSING ATTEMPT
   for ATTEMPT in $(seq 1 30); do
     LISTED=$(kubectl -n "$NAMESPACE" exec "$KAFKA_POD" -- sh -c \
-      "/opt/kafka/bin/kafka-topics.sh --list --bootstrap-server kafka:9092" 2>&1) || {
+      "$(kafka_topics_command "--list --bootstrap-server kafka:9092")" 2>&1) || {
       echo "Error: failed to list topics for verification:" >&2
       echo "$LISTED" >&2
       return 1

@@ -1,0 +1,40 @@
+image:
+  repository: 385800116362.dkr.ecr.eu-west-1.amazonaws.com/bighill/mlops
+  tag: "data-stream-service-0.0.1-prod"
+  pullPolicy: Always
+
+serviceAccount:
+  create: true
+  name: "data-stream-service"
+  annotations: {}
+
+ingress:
+  enabled: false
+  host: ""
+
+env:
+  environment: "prod"
+  kafkaBroker: "kafka:9092"
+  dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-prod-data-stream-dlq"
+  outbox: "postgres"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  flightAuthToken: ""
+  flightAllowAnonymous: "false"
+  flightTlsCertPath: ""
+  flightTlsKeyPath: ""
+  flightTlsClientCaCertPath: ""
+  flightTlsRequireClientCert: "false"
+  queryEngineMode: "hybrid"
+  queryEngineDataRoot: "tmp/local_s3_storage"
+  queryEngineBinaryPath: "/usr/local/bin/datafusion_query_engine"
+  queryEngineTimeoutSeconds: "30"
+  dataRegistryGrpcAddress: "data-registry-service:7071"
+  dataRegistryGrpcDialTimeoutMs: "500"
+  dataRegistryGrpcCallTimeoutMs: "15000"
+  dataRegistryGrpcRetryCount: "3"
+  polarisBaseUrl: "http://polaris-catalog:8181"
+  polarisCatalog: "bighill"
+  polarisWarehouse: "s3://bighill-mlops-lakehouse/"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
