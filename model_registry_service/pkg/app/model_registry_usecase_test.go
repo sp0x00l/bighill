@@ -82,7 +82,7 @@ func (s *modelRepositoryStub) UpdateStatus(_ context.Context, _ pgx.Tx, _ uuid.U
 	return s.readModel, s.updateErr
 }
 
-func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _, _, _ string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
+func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _ string, _ string, _ model.ServingProtocol, _ string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
 	s.status = status
 	s.loadStatus = loadStatus
 	s.servingKey = idempotencyKey

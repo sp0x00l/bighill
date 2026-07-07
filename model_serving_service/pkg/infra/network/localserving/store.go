@@ -128,6 +128,7 @@ func (s *Store) UpdateStatus(ctx context.Context, resourceName string, status *m
 		ServingLoadStatus:  status.ServingLoadStatus.String(),
 		ServingTarget:      status.ServingTarget,
 		ServingModel:       status.ServingModel,
+		ServingProtocol:    status.ServingProtocol.String(),
 		FailureReason:      status.FailureReason,
 		ObservedGeneration: status.ObservedGeneration,
 		ReadyReplicas:      status.ReadyReplicas,
@@ -153,6 +154,10 @@ func recordToServedModel(record localstore.Record) (*model.ServedModel, error) {
 	if err != nil {
 		return nil, err
 	}
+	servingProtocol, err := model.ToServingProtocol(record.Spec.ServingProtocol)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid local served model protocol: %w", domain.ErrValidationFailed, err)
+	}
 	return &model.ServedModel{
 		ResourceName:     record.Name,
 		Namespace:        record.Namespace,
@@ -160,6 +165,7 @@ func recordToServedModel(record localstore.Record) (*model.ServedModel, error) {
 		ModelID:          modelID,
 		TrainingRunID:    trainingRunID,
 		DatasetID:        datasetID,
+		ModelKind:        record.Spec.ModelKind,
 		Name:             record.Spec.Name,
 		ModelVersion:     record.Spec.ModelVersion,
 		BaseModel:        record.Spec.BaseModel,
@@ -169,6 +175,7 @@ func recordToServedModel(record localstore.Record) (*model.ServedModel, error) {
 		AdapterURI:       record.Spec.AdapterURI,
 		ServingTarget:    record.Spec.ServingTarget,
 		ServingModel:     record.Spec.ServingModel,
+		ServingProtocol:  servingProtocol,
 		Status:           status,
 	}, nil
 }
@@ -183,10 +190,15 @@ func recordStatusToServedModelStatus(status localstore.Status) (*model.ServedMod
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid local served model load status: %w", domain.ErrValidationFailed, err)
 	}
+	servingProtocol, err := model.ToServingProtocol(status.ServingProtocol)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid local served model protocol: %w", domain.ErrValidationFailed, err)
+	}
 	return &model.ServedModelStatus{
 		ServingLoadStatus:  loadStatus,
 		ServingTarget:      status.ServingTarget,
 		ServingModel:       status.ServingModel,
+		ServingProtocol:    servingProtocol,
 		FailureReason:      status.FailureReason,
 		ObservedGeneration: status.ObservedGeneration,
 		ReadyReplicas:      status.ReadyReplicas,
@@ -241,6 +253,7 @@ func recordToObject(record localstore.Record) *unstructured.Unstructured {
 			"modelID":          record.Spec.ModelID,
 			"trainingRunID":    record.Spec.TrainingRunID,
 			"datasetID":        record.Spec.DatasetID,
+			"modelKind":        record.Spec.ModelKind,
 			"name":             record.Spec.Name,
 			"modelVersion":     int64(record.Spec.ModelVersion),
 			"baseModel":        record.Spec.BaseModel,

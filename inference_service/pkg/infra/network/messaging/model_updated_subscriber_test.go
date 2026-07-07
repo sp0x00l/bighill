@@ -109,6 +109,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 			AdapterUri:        "s3://local-dev-bucket/models/model-1",
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v2",
+			ServingProtocol:   "OPENAI_CHAT_COMPLETIONS",
 			ServingLoadStatus: "LOADED",
 			MetricsMetadata:   `{"accuracy":0.9}`,
 			Status:            "READY",
@@ -124,6 +125,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(uc.model.Source).To(Equal(model.ModelSourceTraining))
 		Expect(uc.model.Status).To(Equal(model.ModelStatusReady))
 		Expect(uc.model.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
+		Expect(uc.model.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
 		Expect(uc.model.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/model-1"))
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
@@ -148,6 +150,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 			ArtifactSizeBytes: 42,
 			ServingTarget:     "vllm-local",
 			ServingModel:      "uploaded-base-v1",
+			ServingProtocol:   "OPENAI_CHAT_COMPLETIONS",
 			ServingLoadStatus: "LOADED",
 			Status:            "READY",
 		})
@@ -160,6 +163,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(uc.model.DatasetID).To(Equal(uuid.Nil))
 		Expect(uc.model.ModelKind).To(Equal(model.ModelKindBase))
 		Expect(uc.model.Source).To(Equal(model.ModelSourceUpload))
+		Expect(uc.model.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
 		Expect(uc.model.SourceURI).To(Equal("s3://local-dev-bucket/models/base-model"))
 		Expect(uc.model.SourceMetadata).To(MatchJSON(`{"upload_id":"u1"}`))
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))

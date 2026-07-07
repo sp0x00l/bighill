@@ -44,6 +44,16 @@ def resolve_commit_sha(*, repo_id: str, revision: str, token: str) -> str:
     return sha
 
 
+def validate_login(*, token: str) -> str:
+    from huggingface_hub import HfApi
+
+    info = HfApi().whoami(token=token)
+    name = str(info.get("name") or info.get("email") or "").strip()
+    if not name:
+        raise RuntimeError("Hugging Face token login validation failed")
+    return name
+
+
 def resolve_local_fixture_snapshot(*, repo_id: str, revision: str) -> tuple[Path, str] | None:
     root = optional_env(local_fixture_env)
     if not root:
@@ -82,6 +92,7 @@ def main() -> None:
         if fixture is not None:
             snapshot_path, commit = fixture
         else:
+            validate_login(token=token)
             commit = resolve_commit_sha(repo_id=repo_id, revision=revision, token=token)
             snapshot_path = Path(snapshot_download(repo_id=repo_id, revision=revision, token=token, local_dir=local_dir))
         validate_snapshot(snapshot_path)

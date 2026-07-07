@@ -55,6 +55,7 @@ var _ = Describe("InferenceRequestRepository", func() {
 				HaveKeyWithValue("retrieved_contexts", request.RetrievedContexts),
 				HaveKeyWithValue("prompt_text", request.PromptText),
 				HaveKeyWithValue("answer_text", request.AnswerText),
+				HaveKeyWithValue("generation_protocol", request.GenerationProtocol),
 				HaveKeyWithValue("status", model.InferenceRequestStatusCompleted.String()),
 			))
 		})
@@ -104,7 +105,7 @@ func validInferenceRequest() *model.InferenceRequest {
 		PromptText:            "Use the retrieved context to answer.",
 		AnswerText:            "The policy mentions seven years of retention.",
 		PromptStrategyVersion: "rag-default-v1",
-		GenerationProvider:    "ollama",
+		GenerationProtocol:    "OPENAI_CHAT_COMPLETIONS",
 		GenerationModel:       "llama3.2",
 		LatencyMs:             123,
 		Status:                model.InferenceRequestStatusCompleted,

@@ -100,6 +100,23 @@ Be careful with base Helm values: several local-dev charts still default to Kube
 orchestrators, while the service scripts select local substitutes. Use environment-specific values
 when the target is a non-Kubernetes local loop.
 
+### Model-family serving boundary
+
+BigHill is model-family agnostic only inside the supported serving runtimes and protocols. Llama,
+Mistral, Qwen, DeepSeek, Gemma, and similar open model families are carried as model data
+(`base_model`, `serving_model`, artifact URI, adapter URI), not as new service enums.
+
+The hard limitation is the serving protocol and runtime implementation boundary:
+
+- supported generation protocols today are `OPENAI_CHAT_COMPLETIONS` and `OLLAMA_GENERATE`;
+- adding another model family should not require schema or code changes if it can run on one of
+  those protocol/runtime implementations;
+- adding a new wire protocol does require a DB enum update, Go enum update, provisioning
+  implementation, inference adapter registration, and tests;
+- local-dev does not yet load fine-tuned `HF_PEFT_ADAPTER` artifacts into Ollama. It only verifies
+  base/shared model tags. Fine-tuned local serving needs HF-PEFT to GGUF conversion plus
+  `ollama create`.
+
 ---
 
 ## End-to-end flow

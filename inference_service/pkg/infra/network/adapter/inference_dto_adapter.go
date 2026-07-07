@@ -29,10 +29,12 @@ type RetrievedContextDTO struct {
 }
 
 type GenerateResponseDTO struct {
-	RequestID string                `json:"request_id"`
-	QueryText string                `json:"query_text"`
-	Answer    string                `json:"answer"`
-	Contexts  []RetrievedContextDTO `json:"contexts"`
+	RequestID          string                `json:"request_id"`
+	QueryText          string                `json:"query_text"`
+	Answer             string                `json:"answer"`
+	GenerationProtocol string                `json:"generation_protocol"`
+	GenerationModel    string                `json:"generation_model"`
+	Contexts           []RetrievedContextDTO `json:"contexts"`
 }
 
 type FeedbackRequestDTO struct {
@@ -111,10 +113,12 @@ func (a *inferenceDTOAdapter) ToGenerateDTO(ctx context.Context, response *model
 		})
 	}
 	encoded, err := a.encoder.EncodeDataToString(GenerateResponseDTO{
-		RequestID: response.RequestID.String(),
-		QueryText: response.QueryText,
-		Answer:    response.Answer,
-		Contexts:  contexts,
+		RequestID:          response.RequestID.String(),
+		QueryText:          response.QueryText,
+		Answer:             response.Answer,
+		GenerationProtocol: response.GenerationProtocol,
+		GenerationModel:    response.GenerationModel,
+		Contexts:           contexts,
 	})
 	if err != nil {
 		return nil, err

@@ -21,6 +21,7 @@ DROP TYPE IF EXISTS processing_profile_enum;
 DROP TYPE IF EXISTS catalog_provider_enum;
 DROP TYPE IF EXISTS table_format_enum;
 DROP TYPE IF EXISTS inference_dataset_processing_state_enum;
+DROP TYPE IF EXISTS serving_protocol_enum;
 DROP TYPE IF EXISTS inference_model_source_enum;
 DROP TYPE IF EXISTS inference_model_kind_enum;
 DROP TYPE IF EXISTS inference_model_load_status_enum;

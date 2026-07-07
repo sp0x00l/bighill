@@ -205,6 +205,7 @@ func validInferenceModel() *model.InferenceModel {
 		AdapterURI:        "s3://models/fraud-rag-ranker/7",
 		ServingTarget:     "vllm-local",
 		ServingModel:      "fraud-rag-ranker-v7",
+		ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 		ServingLoadStatus: model.ModelLoadStatusLoaded,
 		MetricsMetadata:   `{"accuracy":0.93}`,
 		Status:            model.ModelStatusReady,
@@ -233,6 +234,7 @@ func inferenceModelRow(inferenceModel *model.InferenceModel) pgx.Row {
 		inferenceModel.AdapterURI,
 		inferenceModel.ServingTarget,
 		inferenceModel.ServingModel,
+		inferenceModel.ServingProtocol.String(),
 		inferenceModel.ServingLoadStatus.String(),
 		inferenceModel.MetricsMetadata,
 		inferenceModel.Status.String(),
@@ -290,6 +292,7 @@ var _ = Describe("InferenceModelRepository", func() {
 				HaveKeyWithValue("adapter_uri", inferenceModel.AdapterURI),
 				HaveKeyWithValue("serving_target", inferenceModel.ServingTarget),
 				HaveKeyWithValue("serving_model", inferenceModel.ServingModel),
+				HaveKeyWithValue("serving_protocol", inferenceModel.ServingProtocol.String()),
 				HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()),
 				HaveKeyWithValue("metrics_metadata", inferenceModel.MetricsMetadata),
 				HaveKeyWithValue("status", model.ModelStatusReady.String()),
@@ -383,7 +386,7 @@ var _ = Describe("InferenceModelRepository", func() {
 		It("surfaces invalid persisted status values", func() {
 			inferenceModel := validInferenceModel()
 			row := inferenceModelRow(inferenceModel).(*repositoryRow)
-			row.values[21] = "BROKEN"
+			row.values[22] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
 			record, err := repository.ReadByID(ctx, inferenceModel.OrgID, inferenceModel.ModelID)
@@ -395,7 +398,7 @@ var _ = Describe("InferenceModelRepository", func() {
 		It("surfaces invalid persisted serving load status values", func() {
 			inferenceModel := validInferenceModel()
 			row := inferenceModelRow(inferenceModel).(*repositoryRow)
-			row.values[19] = "BROKEN"
+			row.values[20] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
 			record, err := repository.ReadByID(ctx, inferenceModel.OrgID, inferenceModel.ModelID)

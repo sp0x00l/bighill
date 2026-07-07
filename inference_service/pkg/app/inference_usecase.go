@@ -42,7 +42,7 @@ type inferenceUsecase struct {
 	contextPacker             ContextPacker
 	reranker                  Reranker
 	promptBuilder             PromptBuilder
-	generator                 GenerationAdapter
+	generationAdapters        map[string]GenerationAdapter
 	preferenceDatasetWriter   PreferenceDatasetWriter
 	promptStrategy            model.PromptStrategy
 	rerankCandidateMultiplier int
@@ -155,11 +155,11 @@ func WithPromptStrategy(strategy model.PromptStrategy) InferenceOption {
 	}
 }
 
-func WithGenerationAdapter(generator GenerationAdapter) InferenceOption {
-	log.Trace("WithGenerationAdapter")
+func WithGenerationAdapters(adapters map[string]GenerationAdapter) InferenceOption {
+	log.Trace("WithGenerationAdapters")
 
 	return func(u *inferenceUsecase) {
-		u.generator = generator
+		u.generationAdapters = adapters
 	}
 }
 
@@ -348,27 +348,36 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	if err != nil {
 		return nil, err
 	}
-	generationProvider := u.generator.Provider()
-	generationModel := u.generator.Model()
+	generationProtocol := strings.TrimSpace(inferenceModel.ServingProtocol.String())
+	generationModel := strings.TrimSpace(inferenceModel.ServingModel)
 	if inferenceModel.Status != model.ModelStatusReady {
 		err = domain.ErrModelNotReady.Extend("model is not ready")
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	if inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
 		err = domain.ErrModelNotReady.Extend("model is not loaded by serving layer")
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	if generationProtocol == "" {
+		err = domain.ErrModelNotReady.Extend("serving protocol is required")
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	generator := u.generationAdapters[generationProtocol]
+	if generator == nil {
+		err = domain.ErrModelNotReady.Extend(fmt.Sprintf("serving protocol %q is not supported", generationProtocol))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	if inferenceModel.RequiresDatasetMatch() && inferenceModel.DatasetID != request.DatasetID {
 		err = domain.ErrModelMismatch.Extend("model dataset does not match request dataset")
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	if !dataset.IsRAGReady() {
 		err = domain.ErrDatasetNotReady.Extend("dataset embeddings are not materialized")
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	if !dataset.HasSupportedEmbeddingProvider() {
 		err = domain.ErrDatasetNotReady.Extend(fmt.Sprintf("dataset embedding provider %q is not supported", dataset.EmbeddingProvider))
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 
 	retrievalQuery := request.QueryText
@@ -403,13 +412,13 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	contexts, err = u.retrievalClient.SearchEmbeddings(ctx, request.UserID, request.DatasetID, retrievalQuery, candidateK, retrievalFilters)
 	if err != nil {
 		err = fmt.Errorf("%w: %w", domain.ErrRetrievalFailed, err)
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	if u.reranker != nil {
 		contexts, err = u.reranker.Rerank(ctx, retrievalQuery, contexts, request.TopK)
 		if err != nil {
 			err = fmt.Errorf("%w: %w", domain.ErrRerankFailed, err)
-			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 		}
 	}
 	contexts, err = u.contextPacker.Pack(ctx, model.ContextPackRequest{
@@ -417,7 +426,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		Contexts: contexts,
 	})
 	if err != nil {
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	promptPackage, err := u.promptBuilder.BuildPrompt(ctx, model.PromptBuildRequest{
 		Query:    request.QueryText,
@@ -426,10 +435,10 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		Contexts: contexts,
 	})
 	if err != nil {
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	promptText = promptPackage.Prompt
-	answer, err := u.generator.Generate(ctx, model.GenerationRequest{
+	answer, err := generator.Generate(ctx, model.GenerationRequest{
 		RequestID:             request.RequestID,
 		Dataset:               dataset,
 		Model:                 inferenceModel,
@@ -440,7 +449,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	})
 	if err != nil {
 		err = fmt.Errorf("%w: %w", domain.ErrGenerationFailed, err)
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	answerText = answer
 
@@ -453,10 +462,10 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		Answer:                answer,
 		Contexts:              contexts,
 		PromptStrategyVersion: promptPackage.Strategy.Version,
-		GenerationProvider:    generationProvider,
+		GenerationProtocol:    generationProtocol,
 		GenerationModel:       generationModel,
 	}
-	if err := u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusCompleted, ""); err != nil {
+	if err := u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusCompleted, ""); err != nil {
 		return nil, err
 	}
 	return response, nil
@@ -607,10 +616,10 @@ func mergeMetadataFilters(base map[string]string, overrides map[string]string) m
 	return out
 }
 
-func (u *inferenceUsecase) recordInferenceRequest(ctx context.Context, request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, promptText string, answerText string, startedAt time.Time, generationProvider string, generationModel string, status model.InferenceRequestStatus, errorMessage string) error {
+func (u *inferenceUsecase) recordInferenceRequest(ctx context.Context, request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, promptText string, answerText string, startedAt time.Time, generationProtocol string, generationModel string, status model.InferenceRequestStatus, errorMessage string) error {
 	log.Trace("InferenceUsecase recordInferenceRequest")
 
-	record, err := inferenceRequestRecord(request, dataset, inferenceModel, contexts, promptText, answerText, u.promptStrategy, startedAt, generationProvider, generationModel, status, errorMessage)
+	record, err := inferenceRequestRecord(request, dataset, inferenceModel, contexts, promptText, answerText, u.promptStrategy, startedAt, generationProtocol, generationModel, status, errorMessage)
 	if err != nil {
 		return err
 	}
@@ -620,7 +629,7 @@ func (u *inferenceUsecase) recordInferenceRequest(ctx context.Context, request m
 	return nil
 }
 
-func inferenceRequestRecord(request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, promptText string, answerText string, strategy model.PromptStrategy, startedAt time.Time, generationProvider string, generationModel string, status model.InferenceRequestStatus, errorMessage string) (*model.InferenceRequest, error) {
+func inferenceRequestRecord(request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, promptText string, answerText string, strategy model.PromptStrategy, startedAt time.Time, generationProtocol string, generationModel string, status model.InferenceRequestStatus, errorMessage string) (*model.InferenceRequest, error) {
 	log.Trace("inferenceRequestRecord")
 
 	metadataFilters, err := marshalMetadataFilters(request.MetadataFilters)
@@ -650,7 +659,7 @@ func inferenceRequestRecord(request model.GenerateRequest, dataset *model.Infere
 		PromptText:            promptText,
 		AnswerText:            answerText,
 		PromptStrategyVersion: strategy.Version,
-		GenerationProvider:    generationProvider,
+		GenerationProtocol:    generationProtocol,
 		GenerationModel:       generationModel,
 		LatencyMs:             time.Since(startedAt).Milliseconds(),
 		Status:                status,

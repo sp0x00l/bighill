@@ -44,6 +44,7 @@ env:
   vllmGpuResource: "nvidia.com/gpu"
   vllmGpu: "1"
   vllmRequestTimeoutMs: "5000"
+  localOllamaEndpoint: "http://localhost:11434"
 resources:
   requests:
     memory: "128Mi"

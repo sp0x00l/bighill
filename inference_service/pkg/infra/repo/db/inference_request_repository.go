@@ -30,11 +30,11 @@ func (r *InferenceRequestRepository) RecordInferenceRequest(ctx context.Context,
 	query := `INSERT INTO ` + r.Name + `.inference_requests (
 		request_id, user_id, org_id, dataset_id, model_id, embedding_snapshot_id, query_text, top_k,
 		metadata_filters, retrieved_context_ids, retrieved_contexts, prompt_text, answer_text,
-		prompt_strategy_version, generation_provider, generation_model, latency_ms, status, error_message
+		prompt_strategy_version, generation_protocol, generation_model, latency_ms, status, error_message
 	) VALUES (
 		@request_id, @user_id, @org_id, @dataset_id, @model_id, @embedding_snapshot_id, @query_text, @top_k,
 		@metadata_filters::jsonb, @retrieved_context_ids::jsonb, @retrieved_contexts::jsonb, @prompt_text, @answer_text,
-		@prompt_strategy_version, @generation_provider, @generation_model, @latency_ms, @status::inference_request_status_enum, @error_message
+		@prompt_strategy_version, @generation_protocol, @generation_model, @latency_ms, @status::inference_request_status_enum, @error_message
 	)
 	ON CONFLICT (request_id) DO UPDATE SET
 		user_id = EXCLUDED.user_id,
@@ -50,7 +50,7 @@ func (r *InferenceRequestRepository) RecordInferenceRequest(ctx context.Context,
 		prompt_text = EXCLUDED.prompt_text,
 		answer_text = EXCLUDED.answer_text,
 		prompt_strategy_version = EXCLUDED.prompt_strategy_version,
-		generation_provider = EXCLUDED.generation_provider,
+		generation_protocol = EXCLUDED.generation_protocol,
 		generation_model = EXCLUDED.generation_model,
 		latency_ms = EXCLUDED.latency_ms,
 		status = EXCLUDED.status,
@@ -84,7 +84,7 @@ func inferenceRequestArgs(request *model.InferenceRequest) pgx.NamedArgs {
 		"prompt_text":             request.PromptText,
 		"answer_text":             request.AnswerText,
 		"prompt_strategy_version": request.PromptStrategyVersion,
-		"generation_provider":     request.GenerationProvider,
+		"generation_protocol":     request.GenerationProtocol,
 		"generation_model":        request.GenerationModel,
 		"latency_ms":              request.LatencyMs,
 		"status":                  request.Status.String(),

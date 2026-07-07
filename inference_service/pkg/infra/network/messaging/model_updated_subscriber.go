@@ -181,6 +181,10 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	servingProtocol, err := model.ToServingProtocol(strings.TrimSpace(payload.GetServingProtocol()))
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	inferenceModel := &model.InferenceModel{
 		ModelID:           modelID,
 		UserID:            userID,
@@ -201,6 +205,7 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		AdapterURI:        strings.TrimSpace(payload.GetAdapterUri()),
 		ServingTarget:     strings.TrimSpace(payload.GetServingTarget()),
 		ServingModel:      strings.TrimSpace(payload.GetServingModel()),
+		ServingProtocol:   servingProtocol,
 		ServingLoadStatus: servingLoadStatus,
 		MetricsMetadata:   withDefaultJSON(payload.GetMetricsMetadata()),
 		Status:            status,
@@ -217,6 +222,7 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		inferenceModel.Source.String(),
 		status.String(),
 		inferenceModel.ArtifactChecksum,
+		inferenceModel.ServingProtocol.String(),
 	}, ":")))
 	return inferenceModel, idempotencyKey, nil
 }
@@ -265,6 +271,9 @@ func validateModelUpdatedEvent(inferenceModel *model.InferenceModel) error {
 	}
 	if inferenceModel.Status == model.ModelStatusReady && inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
 		return fmt.Errorf("ready models must be loaded by the serving layer")
+	}
+	if inferenceModel.ServingLoadStatus == model.ModelLoadStatusLoaded && strings.TrimSpace(inferenceModel.ServingProtocol.String()) == "" {
+		return fmt.Errorf("loaded models require a serving protocol")
 	}
 	if inferenceModel.Status == model.ModelStatusFailed && strings.TrimSpace(inferenceModel.FailureReason) == "" {
 		return fmt.Errorf("failure reason is required for failed models")

@@ -16,7 +16,8 @@ It also exports preference datasets from feedback so the training loop can impro
 - Query transformation/self-query before retrieval.
 - TEI-compatible reranker support.
 - Token-aware context packing.
-- Generator adapters for Ollama-style HTTP generation and vLLM/OpenAI-compatible serving.
+- Generation adapters selected by the serving protocol recorded on each model projection.
+- Self-hosted runtime support for Ollama-style HTTP generation and OpenAI-compatible chat completions.
 
 ## How It Fits
 
@@ -28,4 +29,6 @@ It also exports preference datasets from feedback so the training loop can impro
 
 ## Local Development
 
-Local and CI use the same runtime contract as staging and production: configure a supported generator, reranker, and query transformer through `INFERENCE_SERVICE_` env vars. The service fails startup when provider names, endpoints, or models are missing.
+Local and CI use the same runtime contract as staging and production: generation protocol, endpoint, and served model name come from the model record projected from `model_registry_service`. The service fails closed when a loaded model is missing `serving_protocol`, `serving_target`, or `serving_model`.
+
+`INFERENCE_SERVICE_QUERY_TRANSFORMER_*` config is only for the optional utility model used by self-query retrieval. It is not a fallback generator for user inference.

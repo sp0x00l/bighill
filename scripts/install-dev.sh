@@ -302,6 +302,6 @@ echo "  1. Run make install to generate module replacements and protobuf output.
 echo "  2. Run make start-infra for Postgres with pgvector, Redis, Kafka, Temporal, Polaris, the local TEI-compatible embedding endpoint, and local data sources."
 echo "  3. Run make start-test to start the local services and API gateway."
 echo "  4. Run make build-query-engine to rebuild DATA_STREAM_SERVICE_QUERY_ENGINE_MODE=datafusion after Rust changes."
-echo "  5. Start Ollama and pull the configured local model before using local inference generation: brew services start ollama && ollama pull llama3.1:8b."
+echo "  5. Start Ollama and pull the local e2e base model before using local inference generation: brew services start ollama && ollama pull llama3.1:8b."
 
 cd "$ROOT_DIR"

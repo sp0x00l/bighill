@@ -34,6 +34,7 @@ var _ = Describe("Store", func() {
 
 		Expect(registryStore.UpsertSpec("served-model-one", "default", servedmodel.Spec{
 			ModelID:      "4f4b8258-f9af-49f8-b5a8-f84d75891f3b",
+			ModelKind:    "BASE",
 			Name:         "ranker",
 			ModelVersion: 1,
 			BaseModel:    "mistral",
@@ -43,6 +44,7 @@ var _ = Describe("Store", func() {
 		records, _, err := servingStore.List("default")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(records).To(HaveLen(1))
+		Expect(records[0].Spec.ModelKind).To(Equal("BASE"))
 		Expect(records[0].Spec.AdapterURI).To(Equal("s3://models/run"))
 
 		Expect(servingStore.UpdateStatus("served-model-one", servedmodel.Status{

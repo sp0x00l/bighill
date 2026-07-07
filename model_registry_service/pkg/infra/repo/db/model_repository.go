@@ -40,13 +40,13 @@ func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel
 		model_id, user_id, org_id, idempotency_key, training_run_id, dataset_id, model_kind, source, source_uri, source_metadata,
 		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
-		adapter_uri, serving_target, serving_model, serving_load_status,
+		adapter_uri, serving_target, serving_model, serving_protocol, serving_load_status,
 		metrics_metadata, promotion_report_uri, promotion_deltas, promotion_decision, promotion_reason, status, failure_reason
 	) VALUES (
 		@model_id, @user_id, @org_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind::model_kind_enum, @source::model_source_enum, @source_uri, @source_metadata::jsonb,
 		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
-		@adapter_uri, @serving_target, @serving_model, @serving_load_status::model_load_status_enum,
+		@adapter_uri, @serving_target, @serving_model, NULLIF(@serving_protocol, '')::serving_protocol_enum, @serving_load_status::model_load_status_enum,
 		@metrics_metadata::jsonb, @promotion_report_uri, @promotion_deltas::jsonb, NULLIF(@promotion_decision, '')::promotion_decision_enum, @promotion_reason, @status::model_status_enum, @failure_reason
 	)
 	RETURNING ` + modelColumns()
@@ -190,7 +190,7 @@ func (r *ModelRepository) UpdateStatus(ctx context.Context, tx pgx.Tx, modelID u
 	return modelRecord, nil
 }
 
-func (r *ModelRepository) UpdateServingStatus(ctx context.Context, tx pgx.Tx, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
+func (r *ModelRepository) UpdateServingStatus(ctx context.Context, tx pgx.Tx, modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, servingProtocol model.ServingProtocol, failureReason string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
 	log.Trace("ModelRepository UpdateServingStatus")
 
 	query := `UPDATE ` + r.Name + `.models
@@ -198,6 +198,7 @@ func (r *ModelRepository) UpdateServingStatus(ctx context.Context, tx pgx.Tx, mo
 			serving_load_status = @serving_load_status::model_load_status_enum,
 			serving_target = @serving_target,
 			serving_model = @serving_model,
+			serving_protocol = NULLIF(@serving_protocol, '')::serving_protocol_enum,
 			failure_reason = @failure_reason,
 			serving_status_idempotency_key = @serving_status_idempotency_key
 		WHERE model_id = @model_id
@@ -207,10 +208,11 @@ func (r *ModelRepository) UpdateServingStatus(ctx context.Context, tx pgx.Tx, mo
 				OR serving_load_status IS DISTINCT FROM @serving_load_status::model_load_status_enum
 				OR serving_target IS DISTINCT FROM @serving_target
 				OR serving_model IS DISTINCT FROM @serving_model
+				OR serving_protocol IS DISTINCT FROM NULLIF(@serving_protocol, '')::serving_protocol_enum
 				OR failure_reason IS DISTINCT FROM @failure_reason
 			)
 		RETURNING ` + modelColumns()
-	modelRecord, err := scanModel(tx.QueryRow(ctx, query, servingStatusArgs(modelID, status, servingLoadStatus, servingTarget, servingModel, failureReason, idempotencyKey)))
+	modelRecord, err := scanModel(tx.QueryRow(ctx, query, servingStatusArgs(modelID, status, servingLoadStatus, servingTarget, servingModel, servingProtocol, failureReason, idempotencyKey)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			existing, readErr := readModelByIDTx(ctx, tx, r.Name, modelID)
@@ -283,6 +285,7 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 		"adapter_uri":          registeredModel.AdapterURI,
 		"serving_target":       registeredModel.ServingTarget,
 		"serving_model":        registeredModel.ServingModel,
+		"serving_protocol":     registeredModel.ServingProtocol.String(),
 		"serving_load_status":  registeredModel.ServingLoadStatus.String(),
 		"metrics_metadata":     registeredModel.MetricsMetadata,
 		"promotion_report_uri": registeredModel.PromotionReportURI,
@@ -294,7 +297,7 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 	}
 }
 
-func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, failureReason string, idempotencyKey uuid.UUID) pgx.NamedArgs {
+func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadStatus model.ModelLoadStatus, servingTarget string, servingModel string, servingProtocol model.ServingProtocol, failureReason string, idempotencyKey uuid.UUID) pgx.NamedArgs {
 	log.Trace("servingStatusArgs")
 
 	return pgx.NamedArgs{
@@ -303,6 +306,7 @@ func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadS
 		"serving_load_status":            servingLoadStatus.String(),
 		"serving_target":                 servingTarget,
 		"serving_model":                  servingModel,
+		"serving_protocol":               servingProtocol.String(),
 		"failure_reason":                 failureReason,
 		"serving_status_idempotency_key": pgtype.UUID{Bytes: idempotencyKey, Valid: true},
 	}
@@ -340,7 +344,7 @@ func modelColumns() string {
 	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(org_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
 		model_kind::text, source::text, source_uri, source_metadata::text, name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
-		adapter_uri, serving_target, serving_model, serving_load_status::text,
+		adapter_uri, serving_target, serving_model, COALESCE(serving_protocol::text, ''), serving_load_status::text,
 		metrics_metadata::text, promotion_report_uri, promotion_deltas::text, COALESCE(promotion_decision::text, ''), promotion_reason, status::text, failure_reason`
 }
 
@@ -365,7 +369,7 @@ func scanModels(rows pgx.Rows) ([]*model.Model, error) {
 func scanModel(row pgx.Row) (*model.Model, error) {
 	log.Trace("scanModel")
 
-	var modelID, userID, orgID, trainingRunID, datasetID, modelKindRaw, modelSourceRaw, statusRaw, servingLoadStatusRaw string
+	var modelID, userID, orgID, trainingRunID, datasetID, modelKindRaw, modelSourceRaw, statusRaw, servingProtocolRaw, servingLoadStatusRaw string
 	modelRecord := &model.Model{}
 	if err := row.Scan(
 		&modelID,
@@ -387,6 +391,7 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 		&modelRecord.AdapterURI,
 		&modelRecord.ServingTarget,
 		&modelRecord.ServingModel,
+		&servingProtocolRaw,
 		&servingLoadStatusRaw,
 		&modelRecord.MetricsMetadata,
 		&modelRecord.PromotionReportURI,
@@ -406,6 +411,10 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	servingProtocol, err := model.ToServingProtocol(servingProtocolRaw)
+	if err != nil {
+		return nil, err
+	}
 	modelRecord.ModelID = uuid.MustParse(modelID)
 	if userID != "" {
 		modelRecord.UserID = uuid.MustParse(userID)
@@ -422,6 +431,7 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 	modelRecord.ModelKind = model.ToModelKind(modelKindRaw)
 	modelRecord.Source = model.ToModelSource(modelSourceRaw)
 	modelRecord.Status = status
+	modelRecord.ServingProtocol = servingProtocol
 	modelRecord.ServingLoadStatus = servingLoadStatus
 	return modelRecord, nil
 }

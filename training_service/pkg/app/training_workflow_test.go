@@ -230,6 +230,7 @@ var _ = Describe("TrainModelWorkflow", func() {
 			DatasetID:         "dataset-ray",
 			DatasetVersion:    "7",
 			FeatureSnapshotID: "feature-snapshot-ray",
+			DatasetURI:        "s3://features/dataset-ray.parquet",
 			ModelName:         "rag-adapter",
 			ModelVersion:      "v1",
 			BaseModel:         "mistral-7b",

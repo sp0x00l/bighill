@@ -71,6 +71,4 @@ type PromptBuilder interface {
 
 type GenerationAdapter interface {
 	Generate(ctx context.Context, request model.GenerationRequest) (string, error)
-	Provider() string
-	Model() string
 }

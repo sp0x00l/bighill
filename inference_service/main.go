@@ -61,9 +61,6 @@ type inferenceConfig struct {
 }
 
 type generationConfig struct {
-	Provider         string
-	Endpoint         string
-	Model            string
 	RequestTimeout   time.Duration
 	PromptStrategy   string
 	MaxContextTokens int
@@ -79,7 +76,11 @@ type rerankerConfig struct {
 }
 
 type queryTransformerConfig struct {
-	Provider string
+	Provider        string
+	UtilityProtocol string
+	UtilityEndpoint string
+	UtilityModel    string
+	RequestTimeout  time.Duration
 }
 
 type preferenceDatasetConfig struct {
@@ -167,15 +168,12 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create feature materializer client")
 	}
-	generator, err := newGenerationAdapter(cfg.Generation)
-	if err != nil {
-		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create generation adapter")
-	}
+	generationAdapters := newGenerationAdapters(cfg.Generation)
 	reranker, err := newRerankerAdapter(cfg.Reranker)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create reranker adapter")
 	}
-	queryTransformer, err := newQueryTransformer(cfg.QueryTransformer, generator)
+	queryTransformer, err := newQueryTransformer(cfg.QueryTransformer)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create query transformer")
 	}
@@ -191,7 +189,7 @@ func main() {
 		app.WithInferenceFeedbackRepository(feedbackRepository),
 		app.WithInferenceUnitOfWork(inferenceUnitOfWork, preferenceEventBuilder),
 		app.WithRetrievalClient(retrievalClient),
-		app.WithGenerationAdapter(generator),
+		app.WithGenerationAdapters(generationAdapters),
 		app.WithPromptStrategy(promptStrategy),
 		app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 		app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -365,9 +363,6 @@ func readInferenceConfig() inferenceConfig {
 			RetryCount:    env.WithDefaultInt("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT", "3"),
 		},
 		Generation: generationConfig{
-			Provider:         env.WithDefaultString("INFERENCE_SERVICE_GENERATION_PROVIDER", ""),
-			Endpoint:         env.WithDefaultString("INFERENCE_SERVICE_GENERATION_ENDPOINT", "http://localhost:11434"),
-			Model:            env.WithDefaultString("INFERENCE_SERVICE_GENERATION_MODEL", "llama3.1:8b"),
 			RequestTimeout:   secondsFromEnv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS", "60"),
 			PromptStrategy:   env.WithDefaultString("INFERENCE_SERVICE_PROMPT_STRATEGY_VERSION", "rag-prompt-v1"),
 			MaxContextTokens: env.WithDefaultInt("INFERENCE_SERVICE_PROMPT_MAX_CONTEXT_TOKENS", "3000"),
@@ -381,7 +376,11 @@ func readInferenceConfig() inferenceConfig {
 			CandidateMultiplier: env.WithDefaultInt("INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER", "5"),
 		},
 		QueryTransformer: queryTransformerConfig{
-			Provider: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", ""),
+			Provider:        env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", ""),
+			UtilityProtocol: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_PROTOCOL", ""),
+			UtilityEndpoint: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_ENDPOINT", ""),
+			UtilityModel:    env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_MODEL", ""),
+			RequestTimeout:  secondsFromEnv("INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS", "30"),
 		},
 		PreferenceDataset: preferenceDatasetConfig{
 			ExportEnabled:    preferenceDatasetExportEnabled,
@@ -439,19 +438,8 @@ func validateInferenceConfig(cfg inferenceConfig) error {
 func validateGenerationConfig(cfg generationConfig) error {
 	log.Trace("validateGenerationConfig")
 
-	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
-	switch provider {
-	case "":
-		return fmt.Errorf("INFERENCE_SERVICE_GENERATION_PROVIDER is required")
-	case "ollama", "vllm":
-		if strings.TrimSpace(cfg.Endpoint) == "" {
-			return fmt.Errorf("INFERENCE_SERVICE_GENERATION_ENDPOINT is required for %s generation", provider)
-		}
-		if strings.TrimSpace(cfg.Model) == "" {
-			return fmt.Errorf("INFERENCE_SERVICE_GENERATION_MODEL is required for %s generation", provider)
-		}
-	default:
-		return fmt.Errorf("unsupported generation provider %q", cfg.Provider)
+	if cfg.RequestTimeout <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS must be greater than zero")
 	}
 	return nil
 }
@@ -485,30 +473,43 @@ func validateQueryTransformerConfig(cfg queryTransformerConfig) error {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	switch provider {
 	case "":
-		return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER is required")
+		return nil
 	case "self_query":
+		if strings.TrimSpace(cfg.UtilityProtocol) == "" {
+			return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_PROTOCOL is required for self_query")
+		}
+		if strings.TrimSpace(cfg.UtilityEndpoint) == "" {
+			return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_ENDPOINT is required for self_query")
+		}
+		if strings.TrimSpace(cfg.UtilityModel) == "" {
+			return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_MODEL is required for self_query")
+		}
+		if cfg.RequestTimeout <= 0 {
+			return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+		}
 	default:
 		return fmt.Errorf("unsupported query transformer provider %q", cfg.Provider)
 	}
 	return nil
 }
 
-func newGenerationAdapter(cfg generationConfig) (app.GenerationAdapter, error) {
-	log.Trace("newGenerationAdapter")
+func newGenerationAdapters(cfg generationConfig) map[string]app.GenerationAdapter {
+	log.Trace("newGenerationAdapters")
 
-	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
-	case "ollama", "vllm":
-		return generation.NewHTTPGenerator(strings.ToLower(strings.TrimSpace(cfg.Provider)), cfg.Endpoint, cfg.Model, cfg.RequestTimeout), nil
-	default:
-		return nil, fmt.Errorf("unsupported generation provider %q", cfg.Provider)
+	return map[string]app.GenerationAdapter{
+		model.ServingProtocolOpenAIChatCompletions.String(): generation.NewOpenAIChatCompletionsGenerator(cfg.RequestTimeout),
+		model.ServingProtocolOllamaGenerate.String():        generation.NewOllamaGenerateGenerator(cfg.RequestTimeout),
 	}
 }
 
-func newQueryTransformer(cfg queryTransformerConfig, generator app.GenerationAdapter) (app.QueryTransformer, error) {
+func newQueryTransformer(cfg queryTransformerConfig) (app.QueryTransformer, error) {
 	log.Trace("newQueryTransformer")
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "":
+		return nil, nil
 	case "self_query":
+		generator := generation.NewHTTPUtilityGenerator(strings.TrimSpace(cfg.UtilityProtocol), cfg.UtilityEndpoint, cfg.UtilityModel, cfg.RequestTimeout)
 		return retrieval.NewSelfQueryTransformer(generator), nil
 	default:
 		return nil, fmt.Errorf("unsupported query transformer provider %q", cfg.Provider)

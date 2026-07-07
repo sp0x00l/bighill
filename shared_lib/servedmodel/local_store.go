@@ -23,6 +23,7 @@ type Spec struct {
 	ModelID          string `json:"model_id"`
 	TrainingRunID    string `json:"training_run_id"`
 	DatasetID        string `json:"dataset_id"`
+	ModelKind        string `json:"model_kind"`
 	Name             string `json:"name"`
 	ModelVersion     int    `json:"model_version"`
 	BaseModel        string `json:"base_model"`
@@ -32,12 +33,14 @@ type Spec struct {
 	AdapterURI       string `json:"adapter_uri"`
 	ServingTarget    string `json:"serving_target"`
 	ServingModel     string `json:"serving_model"`
+	ServingProtocol  string `json:"serving_protocol"`
 }
 
 type Status struct {
 	ServingLoadStatus  string `json:"serving_load_status"`
 	ServingTarget      string `json:"serving_target"`
 	ServingModel       string `json:"serving_model"`
+	ServingProtocol    string `json:"serving_protocol"`
 	FailureReason      string `json:"failure_reason"`
 	ObservedGeneration int64  `json:"observed_generation"`
 	ReadyReplicas      int32  `json:"ready_replicas"`

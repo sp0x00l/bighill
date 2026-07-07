@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,8 +14,6 @@ import (
 	"time"
 
 	inferencepb "lib/data_contracts_lib/inference"
-	modelregistrypb "lib/data_contracts_lib/model_registry"
-	sharedmessaging "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -23,7 +22,11 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-const defaultInferenceGRPCAddress = "localhost:7073"
+const (
+	defaultInferenceGRPCAddress  = "localhost:7073"
+	defaultRAGE2EGenerationModel = "llama3.1:8b"
+	e2eGenerationModelEnv        = "E2E_GENERATION_MODEL"
+)
 
 var _ = Describe("RAG inference workflow", Ordered, func() {
 	var user profileTestUser
@@ -37,8 +40,8 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 		uploadRAGInferenceDocument(user, datasetID)
 		waitForRAGDatasetMaterialized(user, datasetID)
 
-		modelID := uuid.New()
-		publishReadyModelForInference(modelID, user.ID, user.OrgID, uuid.MustParse(datasetID))
+		modelID := uploadBaseModelThroughIngestion(user)
+		selectedModel := assertModelSelectable(user, modelID, "UPLOAD", "rag-e2e-uploaded-base")
 
 		client, closeClient := newInferenceClient()
 		defer closeClient()
@@ -60,14 +63,14 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 				TopK:      3,
 			})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(response.GetAnswer()).To(ContainSubstring("Based on the retrieved context:"))
+			g.Expect(strings.TrimSpace(response.GetAnswer())).NotTo(BeEmpty())
 			expectRAGVerificationContext(g, response)
 		}, 45*time.Second, 1*time.Second).Should(Succeed())
 
 		Expect(response.GetDatasetId()).To(Equal(datasetID))
 		Expect(response.GetModelId()).To(Equal(modelID.String()))
-		Expect(response.GetGenerationProvider()).To(Equal("ollama"))
-		Expect(response.GetGenerationModel()).To(Equal("llama3.1:8b"))
+		Expect(response.GetGenerationProtocol()).To(Equal(stringField(selectedModel, "serving_protocol")))
+		Expect(response.GetGenerationModel()).To(Equal(stringField(selectedModel, "serving_model")))
 		Expect(response.GetPromptStrategyVersion()).To(Equal("rag-prompt-v1"))
 		Expect(response.GetContexts()[0].GetEmbeddingRecordId()).NotTo(BeEmpty())
 		Expect(response.GetContexts()[0].GetEmbeddingSnapshotId()).NotTo(BeEmpty())
@@ -115,7 +118,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 		waitForRAGDatasetMaterialized(user, datasetID)
 
 		modelID := uploadBaseModelThroughIngestion(user)
-		assertModelSelectable(user, modelID, "UPLOAD", "rag-e2e-uploaded-base")
+		selectedModel := assertModelSelectable(user, modelID, "UPLOAD", "rag-e2e-uploaded-base")
 		client, closeClient := newInferenceClient()
 		defer closeClient()
 
@@ -135,12 +138,14 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 				TopK:      3,
 			})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(response.GetAnswer()).To(ContainSubstring("Based on the retrieved context:"))
+			g.Expect(strings.TrimSpace(response.GetAnswer())).NotTo(BeEmpty())
 			expectRAGVerificationContext(g, response)
 		}, 75*time.Second, 1*time.Second).Should(Succeed())
 
 		Expect(response.GetDatasetId()).To(Equal(datasetID))
 		Expect(response.GetModelId()).To(Equal(modelID.String()))
+		Expect(response.GetGenerationProtocol()).To(Equal(stringField(selectedModel, "serving_protocol")))
+		Expect(response.GetGenerationModel()).To(Equal(stringField(selectedModel, "serving_model")))
 	})
 
 	It("selects a base model and starts an idempotent training run for a materialized dataset", func() {
@@ -177,7 +182,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 
 		replaceHuggingFaceToken(user, "hf_api_e2e_token")
 		modelID := onboardHuggingFaceBaseModel(user)
-		assertModelSelectable(user, modelID, "HUGGING_FACE", "rag-e2e-huggingface-base")
+		selectedModel := assertModelSelectable(user, modelID, "HUGGING_FACE", "rag-e2e-huggingface-base")
 
 		client, closeClient := newInferenceClient()
 		defer closeClient()
@@ -198,12 +203,14 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 				TopK:      3,
 			})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(response.GetAnswer()).To(ContainSubstring("Based on the retrieved context:"))
+			g.Expect(strings.TrimSpace(response.GetAnswer())).NotTo(BeEmpty())
 			expectRAGVerificationContext(g, response)
 		}, 75*time.Second, 1*time.Second).Should(Succeed())
 
 		Expect(response.GetDatasetId()).To(Equal(datasetID))
 		Expect(response.GetModelId()).To(Equal(modelID.String()))
+		Expect(response.GetGenerationProtocol()).To(Equal(stringField(selectedModel, "serving_protocol")))
+		Expect(response.GetGenerationModel()).To(Equal(stringField(selectedModel, "serving_model")))
 	})
 
 	It("rejects invalid model archive uploads before they become selectable", func() {
@@ -286,43 +293,43 @@ func ragResponseContextText(response *inferencepb.GenerateResponse) string {
 	return strings.Join(contexts, "\n")
 }
 
-func publishReadyModelForInference(modelID uuid.UUID, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func expectLocalOllamaModelAvailable(modelName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	publisher, err := sharedmessaging.NewPublisher(kafkaBroker())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:11434/api/tags", nil)
 	Expect(err).NotTo(HaveOccurred())
-	defer publisher.Close()
+	resp, err := http.DefaultClient.Do(req)
+	Expect(err).NotTo(HaveOccurred(), "local Ollama must be running for full-stack RAG e2e")
+	defer resp.Body.Close()
+	Expect(resp.StatusCode).To(Equal(http.StatusOK))
+	var payload map[string]any
+	Expect(json.NewDecoder(resp.Body).Decode(&payload)).To(Succeed())
+	models, ok := payload["models"].([]any)
+	Expect(ok).To(BeTrue(), "ollama tags payload: %#v", payload)
+	for _, candidate := range models {
+		object, ok := candidate.(map[string]any)
+		if ok && ollamaTagMatches(fmt.Sprint(object["name"]), modelName) {
+			return
+		}
+	}
+	Fail(fmt.Sprintf("local Ollama model %q is not available; run `ollama pull %s`", modelName, modelName))
+}
 
-	err = publisher.Publish(ctx, modelRegistryTopic(), sharedmessaging.Message{
-		ResourceKey: modelID,
-		MsgType:     sharedmessaging.MsgTypeModelUpdated,
-	}, &modelregistrypb.ModelUpdatedEvent{
-		ModelId:           modelID.String(),
-		UserId:            userID.String(),
-		OrgId:             orgID.String(),
-		TrainingRunId:     uuid.NewString(),
-		DatasetId:         datasetID.String(),
-		ModelKind:         "FINE_TUNED",
-		Source:            "TRAINING",
-		SourceMetadata:    "{}",
-		Name:              "rag-e2e-generator",
-		ModelVersion:      1,
-		BaseModel:         "deterministic",
-		ArtifactLocation:  "s3://local-dev-bucket/models/" + modelID.String(),
-		ArtifactFormat:    "DETERMINISTIC",
-		ArtifactChecksum:  "sha256:" + strings.ReplaceAll(modelID.String(), "-", ""),
-		ArtifactSizeBytes: 1,
-		MetricsMetadata:   `{"passed":true}`,
-		Status:            "READY",
-		AdapterUri:        "s3://local-dev-bucket/models/" + modelID.String(),
-		ServingLoadStatus: "LOADED",
-	})
-	Expect(err).NotTo(HaveOccurred())
+func ollamaTagMatches(candidate string, expected string) bool {
+	return normalizeOllamaTag(candidate) == normalizeOllamaTag(expected)
+}
+
+func normalizeOllamaTag(tag string) string {
+	trimmed := strings.TrimSpace(tag)
+	if trimmed == "" || strings.Contains(trimmed, ":") {
+		return trimmed
+	}
+	return trimmed + ":latest"
 }
 
 func uploadBaseModelThroughIngestion(user profileTestUser) uuid.UUID {
 	archive := minimalHFModelArchive()
+	baseModel := ragE2EGenerationModel()
 	initiatePayload := map[string]any{
 		"file_name":           "rag-base-model.zip",
 		"artifact_type":       "BASE_MODEL",
@@ -332,7 +339,7 @@ func uploadBaseModelThroughIngestion(user profileTestUser) uuid.UUID {
 		"client_nonce":        "rag-base-model-" + uuid.NewString(),
 		"model_name":          "rag-e2e-uploaded-base",
 		"model_version":       "1",
-		"base_model":          "bighill/rag-e2e-uploaded-base",
+		"base_model":          baseModel,
 	}
 
 	var uploadID string
@@ -365,7 +372,7 @@ func uploadBaseModelThroughIngestion(user profileTestUser) uuid.UUID {
 	Expect(completed["artifact_format"]).To(Equal("hf_model"))
 	Expect(completed["model_name"]).To(Equal("rag-e2e-uploaded-base"))
 	Expect(completed["model_version"]).To(Equal("1"))
-	Expect(completed["base_model"]).To(Equal("bighill/rag-e2e-uploaded-base"))
+	Expect(completed["base_model"]).To(Equal(baseModel))
 	Expect(completed["storage_location"]).To(MatchRegexp(`^s3://local-dev-bucket/models/artifacts/`))
 	Expect(completed["checksum"]).To(MatchRegexp(`^sha256:[0-9a-f]{64}$`))
 	Expect(completed["actual_size_bytes"]).To(BeNumerically("==", len(archive)))
@@ -393,13 +400,14 @@ func replaceHuggingFaceToken(user profileTestUser, token string) {
 }
 
 func onboardHuggingFaceBaseModel(user profileTestUser) uuid.UUID {
+	baseModel := ragE2EGenerationModel()
 	payload := map[string]any{
 		"repo_id":       "bighill/rag-e2e-huggingface-base",
 		"revision":      "main",
 		"client_nonce":  "rag-hf-base-" + uuid.NewString(),
 		"model_name":    "rag-e2e-huggingface-base",
 		"model_version": "1",
-		"base_model":    "bighill/rag-e2e-huggingface-base",
+		"base_model":    baseModel,
 	}
 
 	var resourceID uuid.UUID
@@ -420,7 +428,8 @@ func onboardHuggingFaceBaseModel(user profileTestUser) uuid.UUID {
 	return resourceID
 }
 
-func assertModelSelectable(user profileTestUser, modelID uuid.UUID, source string, name string) {
+func assertModelSelectable(user profileTestUser, modelID uuid.UUID, source string, name string) map[string]any {
+	var selected map[string]any
 	Eventually(func(g Gomega) {
 		status, body := doJSON(http.MethodGet, "/v1/private/models?source="+source+"&kind=BASE&status=READY&limit=25&page=1", nil, user.Token, uuid.Nil)
 		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
@@ -433,21 +442,30 @@ func assertModelSelectable(user profileTestUser, modelID uuid.UUID, source strin
 			HaveKeyWithValue("model_kind", "BASE"),
 			HaveKeyWithValue("status", "READY"),
 			HaveKeyWithValue("serving_load_status", "LOADED"),
+			HaveKeyWithValue("serving_model", ragE2EGenerationModel()),
+			HaveKey("serving_protocol"),
 			HaveKeyWithValue("name", name),
 		)))
 
 		status, body = doJSON(http.MethodGet, "/v1/private/models/"+modelID.String(), nil, user.Token, uuid.Nil)
 		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
-		selected := decodeObject(body)
+		selected = decodeObject(body)
 		g.Expect(selected).To(SatisfyAll(
 			HaveKeyWithValue("id", modelID.String()),
 			HaveKeyWithValue("source", source),
 			HaveKeyWithValue("model_kind", "BASE"),
 			HaveKeyWithValue("status", "READY"),
 			HaveKeyWithValue("serving_load_status", "LOADED"),
+			HaveKeyWithValue("serving_model", ragE2EGenerationModel()),
+			HaveKey("serving_protocol"),
 			HaveKeyWithValue("name", name),
 		))
 	}, 75*time.Second, 1*time.Second).Should(Succeed())
+	return selected
+}
+
+func ragE2EGenerationModel() string {
+	return envOrDefault(e2eGenerationModelEnv, defaultRAGE2EGenerationModel)
 }
 
 func minimalHFModelArchive() []byte {
@@ -504,20 +522,4 @@ func inferenceGRPCAddress() string {
 		return defaultInferenceGRPCAddress
 	}
 	return fmt.Sprintf("%s:%s", host, port)
-}
-
-func kafkaBroker() string {
-	broker := strings.TrimSpace(os.Getenv("KAFKA_BROKER"))
-	if broker == "" {
-		return "localhost:9092"
-	}
-	return broker
-}
-
-func modelRegistryTopic() string {
-	topic := strings.TrimSpace(os.Getenv("INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC"))
-	if topic == "" {
-		return "model_registry"
-	}
-	return topic
 }

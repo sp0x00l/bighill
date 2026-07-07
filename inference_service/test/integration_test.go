@@ -76,7 +76,9 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			app.WithInferenceFeedbackRepository(feedbacks),
 			app.WithInferenceUnitOfWork(shareduow.New(database.Pool), inferencemessaging.NewPreferenceDatasetEventBuilder("inference")),
 			app.WithRetrievalClient(&integrationRetrievalClient{}),
-			app.WithGenerationAdapter(integrationGenerationAdapter{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): integrationGenerationAdapter{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -160,6 +162,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			AdapterUri:        "s3://local-dev-bucket/models/" + modelID.String(),
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v1",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions.String(),
 			ServingLoadStatus: model.ModelLoadStatusLoaded.String(),
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			Status:            "READY",
@@ -237,6 +240,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			AdapterURI:        "s3://local-dev-bucket/models/" + modelID.String(),
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v1",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 			ServingLoadStatus: model.ModelLoadStatusLoaded,
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			Status:            model.ModelStatusReady,
@@ -310,7 +314,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(response.GetAnswer()).To(ContainSubstring("integration retrieved context"))
 		Expect(response.GetRequestId()).NotTo(BeEmpty())
-		Expect(response.GetGenerationProvider()).To(Equal("integration-generator"))
+		Expect(response.GetGenerationProtocol()).To(Equal(model.ServingProtocolOpenAIChatCompletions.String()))
 		Expect(response.GetContexts()).To(HaveLen(1))
 
 		feedbackID := uuid.New()
@@ -363,6 +367,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			AdapterURI:        "s3://local-dev-bucket/models/" + modelID.String(),
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v1",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 			ServingLoadStatus: model.ModelLoadStatusLoaded,
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			Status:            model.ModelStatusReady,
@@ -396,7 +401,9 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			app.WithRetrievalClient(retrieval),
 			app.WithReranker(reranker),
 			app.WithRerankCandidateMultiplier(5),
-			app.WithGenerationAdapter(integrationGenerationAdapter{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): integrationGenerationAdapter{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -452,14 +459,6 @@ func (a integrationGenerationAdapter) Generate(_ context.Context, request model.
 		return "", fmt.Errorf("retrieved context is required")
 	}
 	return "Based on the retrieved context: " + request.Contexts[0].SourceText, nil
-}
-
-func (a integrationGenerationAdapter) Provider() string {
-	return "integration-generator"
-}
-
-func (a integrationGenerationAdapter) Model() string {
-	return "integration-model"
 }
 
 type rerankIntegrationRetrievalClient struct {

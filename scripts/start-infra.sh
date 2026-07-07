@@ -224,7 +224,7 @@ wait_for_tei_health() {
     echo "TEI-compatible embedding endpoint health is available on port ${TEI_PORT}"
 }
 
-wait_for_ollama_health() {
+check_ollama_health() {
     local OLLAMA_PORT="$1"
     local RETRIES="${2:-30}"
     local DELAY="${3:-1}"
@@ -273,38 +273,6 @@ local_start_tei() {
     wait_for_tei_health "$TEI_PORT" 10 1
 }
 
-local_start_ollama() {
-    local OLLAMA_PORT=11434
-    local OLLAMA_DIR="$PROJECT_ROOT/tmp/ollama-generation"
-    local OLLAMA_PID_FILE="$OLLAMA_DIR/ollama-generation.pid"
-    local OLLAMA_LOG_FILE="$OLLAMA_DIR/ollama-generation.log"
-    local OLLAMA_SCRIPT="$PROJECT_ROOT/scripts/docker/services/ollama_stub.py"
-    local PYTHON_BIN="${PYTHON:-python3}"
-
-    if nc -z localhost "$OLLAMA_PORT" >/dev/null 2>&1; then
-        echo "Ollama-compatible generation endpoint is already available on port ${OLLAMA_PORT}"
-        wait_for_ollama_health "$OLLAMA_PORT" 10 1
-        return
-    fi
-
-    if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-        if command -v python >/dev/null 2>&1; then
-            PYTHON_BIN=python
-        else
-            echo "Error: python3 is required to start the local Ollama-compatible generation endpoint."
-            exit 1
-        fi
-    fi
-
-    mkdir -p "$OLLAMA_DIR"
-    rm -f "$OLLAMA_PID_FILE"
-    echo "Starting local Ollama-compatible generation endpoint..."
-    "$PYTHON_BIN" "$OLLAMA_SCRIPT" --port "$OLLAMA_PORT" --daemonize --pid-file "$OLLAMA_PID_FILE" --log-file "$OLLAMA_LOG_FILE"
-
-    wait_for_port "$OLLAMA_PORT" "Ollama-compatible generation endpoint" 60 2
-    wait_for_ollama_health "$OLLAMA_PORT" 10 1
-}
-
 cicd_start_infra() {
     local COMPOSE_FILE="$PROJECT_ROOT/docker-compose-services.yml"
     
@@ -332,7 +300,7 @@ cicd_start_infra() {
     wait_for_port 8181 "Polaris catalog"
     wait_for_port 8182 "Polaris health"
     local_start_tei
-    local_start_ollama
+    check_ollama_health 11434 10 1
     compose_bootstrap_polaris "$COMPOSE_FILE"
 
     compose_wait_for_postgres_ready "$COMPOSE_FILE"
@@ -351,10 +319,9 @@ local_start_infra() {
     local_start_temporal
     compose_start_polaris "$PROJECT_ROOT/docker-compose-services.yml"
     local_start_tei
-    local_start_ollama
     "$PROJECT_ROOT/scripts/start-data-sources.sh"
     wait_for_tei_health 8080 10 1
-    wait_for_ollama_health 11434 10 1
+    check_ollama_health 11434 10 1
 }
 
 case "$ENVIRONMENT" in

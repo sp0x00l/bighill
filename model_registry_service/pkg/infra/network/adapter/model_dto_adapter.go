@@ -30,6 +30,7 @@ type ModelDTO struct {
 	AdapterURI         string        `json:"adapter_uri,omitempty"`
 	ServingTarget      string        `json:"serving_target,omitempty"`
 	ServingModel       string        `json:"serving_model,omitempty"`
+	ServingProtocol    string        `json:"serving_protocol,omitempty"`
 	ServingLoadStatus  string        `json:"serving_load_status"`
 	PromotionReportURI string        `json:"promotion_report_uri,omitempty"`
 	PromotionDeltas    string        `json:"promotion_deltas,omitempty"`
@@ -105,6 +106,7 @@ func (a *modelDTOAdapter) toDTO(modelRecord *model.Model, baseURL string) *Model
 		AdapterURI:         modelRecord.AdapterURI,
 		ServingTarget:      modelRecord.ServingTarget,
 		ServingModel:       modelRecord.ServingModel,
+		ServingProtocol:    modelRecord.ServingProtocol.String(),
 		ServingLoadStatus:  modelRecord.ServingLoadStatus.String(),
 		PromotionReportURI: modelRecord.PromotionReportURI,
 		PromotionDeltas:    modelRecord.PromotionDeltas,

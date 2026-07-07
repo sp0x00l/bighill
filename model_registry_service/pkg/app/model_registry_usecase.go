@@ -512,7 +512,7 @@ func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedMo
 
 	var modelRecord *model.Model
 	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
-		updated, changed, err := u.repo.UpdateServingStatus(ctx, tx, servedModelStatus.ModelID, status, servedModelStatus.ServingLoadStatus, servedModelStatus.ServingTarget, servedModelStatus.ServingModel, failureReason, idempotencyKey)
+		updated, changed, err := u.repo.UpdateServingStatus(ctx, tx, servedModelStatus.ModelID, status, servedModelStatus.ServingLoadStatus, servedModelStatus.ServingTarget, servedModelStatus.ServingModel, servedModelStatus.ServingProtocol, failureReason, idempotencyKey)
 		if err != nil {
 			return err
 		}

@@ -309,7 +309,7 @@ func generateResponseToPB(response *model.GenerateResponse) *inferencepb.Generat
 		Contexts:              contexts,
 		RequestId:             response.RequestID.String(),
 		PromptStrategyVersion: response.PromptStrategyVersion,
-		GenerationProvider:    response.GenerationProvider,
+		GenerationProtocol:    response.GenerationProtocol,
 		GenerationModel:       response.GenerationModel,
 	}
 }

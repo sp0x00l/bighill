@@ -226,6 +226,7 @@ type modelRow struct {
 	AdapterURI         string
 	ServingTarget      string
 	ServingModel       string
+	ServingProtocol    string
 	ServingLoadStatus  string
 	MetricsMetadata    string
 	PromotionReportURI string
@@ -256,14 +257,15 @@ func (r modelRow) Scan(dest ...any) error {
 	*(dest[16].(*string)) = r.AdapterURI
 	*(dest[17].(*string)) = r.ServingTarget
 	*(dest[18].(*string)) = r.ServingModel
-	*(dest[19].(*string)) = r.ServingLoadStatus
-	*(dest[20].(*string)) = r.MetricsMetadata
-	*(dest[21].(*string)) = r.PromotionReportURI
-	*(dest[22].(*string)) = r.PromotionDeltas
-	*(dest[23].(*string)) = r.PromotionDecision
-	*(dest[24].(*string)) = r.PromotionReason
-	*(dest[25].(*string)) = r.Status
-	*(dest[26].(*string)) = r.FailureReason
+	*(dest[19].(*string)) = r.ServingProtocol
+	*(dest[20].(*string)) = r.ServingLoadStatus
+	*(dest[21].(*string)) = r.MetricsMetadata
+	*(dest[22].(*string)) = r.PromotionReportURI
+	*(dest[23].(*string)) = r.PromotionDeltas
+	*(dest[24].(*string)) = r.PromotionDecision
+	*(dest[25].(*string)) = r.PromotionReason
+	*(dest[26].(*string)) = r.Status
+	*(dest[27].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -313,6 +315,7 @@ var _ = Describe("ModelRepository", func() {
 			AdapterURI:        "s3://local-dev-bucket/models/run",
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v7",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 			ServingLoadStatus: model.ModelLoadStatusLoaded,
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			Status:            model.ModelStatusReady,
@@ -491,7 +494,7 @@ var _ = Describe("ModelRepository", func() {
 			ready.PromotionReason = "candidate beats champion gate"
 			poolMock.NextRows = []pgx.Row{newModelRow(&ready)}
 
-			modelRecord, changed, err := repository.UpdateServingStatus(ctx, tx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, "", idempotencyKey)
+			modelRecord, changed, err := repository.UpdateServingStatus(ctx, tx, modelID, model.ModelStatusReady, model.ModelLoadStatusLoaded, ready.ServingTarget, ready.ServingModel, ready.ServingProtocol, "", idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(changed).To(BeTrue())
@@ -509,6 +512,7 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
 			Expect(args).To(HaveKeyWithValue("serving_target", ready.ServingTarget))
 			Expect(args).To(HaveKeyWithValue("serving_model", ready.ServingModel))
+			Expect(args).To(HaveKeyWithValue("serving_protocol", ready.ServingProtocol.String()))
 			Expect(args).To(HaveKeyWithValue("serving_status_idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}))
 		})
 
@@ -518,7 +522,7 @@ var _ = Describe("ModelRepository", func() {
 				newModelRow(registered),
 			}
 
-			modelRecord, changed, err := repository.UpdateServingStatus(ctx, tx, modelID, registered.Status, registered.ServingLoadStatus, registered.ServingTarget, registered.ServingModel, "", idempotencyKey)
+			modelRecord, changed, err := repository.UpdateServingStatus(ctx, tx, modelID, registered.Status, registered.ServingLoadStatus, registered.ServingTarget, registered.ServingModel, registered.ServingProtocol, "", idempotencyKey)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.ModelID).To(Equal(modelID))
@@ -580,6 +584,7 @@ func newModelRow(modelRecord *model.Model) modelRow {
 		AdapterURI:         modelRecord.AdapterURI,
 		ServingTarget:      modelRecord.ServingTarget,
 		ServingModel:       modelRecord.ServingModel,
+		ServingProtocol:    modelRecord.ServingProtocol.String(),
 		ServingLoadStatus:  modelRecord.ServingLoadStatus.String(),
 		MetricsMetadata:    modelRecord.MetricsMetadata,
 		PromotionReportURI: modelRecord.PromotionReportURI,

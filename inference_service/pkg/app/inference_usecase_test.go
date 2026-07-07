@@ -147,14 +147,6 @@ func (s *generationAdapterStub) Generate(_ context.Context, request model.Genera
 	return "generated answer", nil
 }
 
-func (s *generationAdapterStub) Provider() string {
-	return "stub"
-}
-
-func (s *generationAdapterStub) Model() string {
-	return "stub-model"
-}
-
 type inferenceRequestRepositoryStub struct {
 	request *model.InferenceRequest
 	err     error
@@ -566,7 +558,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(datasetRepository),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithRetrievalClient(retrieval),
-			app.WithGenerationAdapter(generator),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -602,15 +596,16 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(response.Answer).To(Equal("generated answer"))
 		Expect(response.RequestID).To(Equal(requestID))
 		Expect(response.PromptStrategyVersion).To(Equal("test-rag-prompt-v1"))
-		Expect(response.GenerationProvider).To(Equal("stub"))
-		Expect(response.GenerationModel).To(Equal("stub-model"))
+		Expect(response.GenerationProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions.String()))
+		Expect(response.GenerationModel).To(Equal(inferenceModel.ServingModel))
 		Expect(response.Contexts).To(HaveLen(1))
 		Expect(requestRepository.request).NotTo(BeNil())
 		Expect(requestRepository.request.UserID).To(Equal(dataset.UserID))
 		Expect(requestRepository.request.OrgID).To(Equal(dataset.OrgID))
 		Expect(requestRepository.request.RequestID).To(Equal(requestID))
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
-		Expect(requestRepository.request.GenerationProvider).To(Equal("stub"))
+		Expect(requestRepository.request.GenerationProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions.String()))
+		Expect(requestRepository.request.GenerationModel).To(Equal(inferenceModel.ServingModel))
 		Expect(requestRepository.request.PromptText).To(ContainSubstring("Retrieved context"))
 		Expect(requestRepository.request.PromptText).To(ContainSubstring("retrieved context"))
 		Expect(requestRepository.request.AnswerText).To(Equal("generated answer"))
@@ -646,7 +641,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
 			app.WithRetrievalClient(retrieval),
 			app.WithQueryTransformer(transformer),
-			app.WithGenerationAdapter(generator),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -693,7 +690,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
 			app.WithRetrievalClient(retrieval),
 			app.WithQueryTransformer(transformer),
-			app.WithGenerationAdapter(generator),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -735,7 +734,9 @@ var _ = Describe("InferenceUsecase", func() {
 				app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
 				app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
 				app.WithRetrievalClient(retrieval),
-				app.WithGenerationAdapter(&generationAdapterStub{}),
+				app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+					model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+				}),
 				app.WithPromptStrategy(promptStrategy),
 				app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 				app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -787,7 +788,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
 			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
 			app.WithRetrievalClient(&retrievalClientStub{}),
-			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -821,7 +824,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithRetrievalClient(retrieval),
-			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -858,7 +863,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithRetrievalClient(&retrievalClientStub{}),
-			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -892,7 +899,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithRetrievalClient(&retrievalClientStub{}),
-			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -924,7 +933,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithRetrievalClient(&retrievalClientStub{}),
-			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -967,7 +978,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithRetrievalClient(retrieval),
-			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -1009,7 +1022,9 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithRetrievalClient(retrieval),
-			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
 			app.WithPromptStrategy(promptStrategy),
 			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
@@ -1067,6 +1082,7 @@ func validInferenceModel() *model.InferenceModel {
 		AdapterURI:        "s3://local-dev-bucket/models/model-1",
 		ServingTarget:     "vllm-local",
 		ServingModel:      "sentence-transformer-v1",
+		ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 		ServingLoadStatus: model.ModelLoadStatusLoaded,
 		MetricsMetadata:   "{}",
 		Status:            model.ModelStatusReady,

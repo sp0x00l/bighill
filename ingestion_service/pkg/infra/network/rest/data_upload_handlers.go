@@ -167,17 +167,23 @@ type initiateModelUploadResponse struct {
 }
 
 type completeModelUploadResponse struct {
-	UploadID        string `json:"upload_id"`
-	ResourceID      string `json:"resource_id"`
-	StorageLocation string `json:"storage_location"`
-	Status          string `json:"status"`
-	Checksum        string `json:"checksum"`
-	ActualSizeBytes int64  `json:"actual_size_bytes"`
-	ArtifactType    string `json:"artifact_type"`
-	ArtifactFormat  string `json:"artifact_format"`
-	ModelName       string `json:"model_name"`
-	ModelVersion    string `json:"model_version"`
-	BaseModel       string `json:"base_model"`
+	UploadID         string `json:"upload_id"`
+	ResourceID       string `json:"resource_id"`
+	StorageLocation  string `json:"storage_location"`
+	Status           string `json:"status"`
+	Checksum         string `json:"checksum"`
+	ActualSizeBytes  int64  `json:"actual_size_bytes"`
+	ArtifactType     string `json:"artifact_type"`
+	ArtifactFormat   string `json:"artifact_format"`
+	ModelName        string `json:"model_name"`
+	ModelVersion     string `json:"model_version"`
+	BaseModel        string `json:"base_model"`
+	Source           string `json:"source,omitempty"`
+	SourceURI        string `json:"source_uri,omitempty"`
+	ManifestLocation string `json:"manifest_location,omitempty"`
+	HFRepoID         string `json:"hf_repo_id,omitempty"`
+	HFRevision       string `json:"hf_revision,omitempty"`
+	HFCommitSHA      string `json:"hf_commit_sha,omitempty"`
 }
 
 func (h *DataUploadHandlers) InitiateUploadSession(ctx context.Context, r *http.Request) (APIResponse, error) {
@@ -292,17 +298,23 @@ func (h *DataUploadHandlers) CompleteModelUploadSession(ctx context.Context, r *
 		return nil, h.uploadError(ctx, err, "Failed to complete model upload session")
 	}
 	return jsonResponse(http.StatusCreated, completeModelUploadResponse{
-		UploadID:        session.UploadID.String(),
-		ResourceID:      session.ResourceID.String(),
-		StorageLocation: session.StorageLocation,
-		Status:          string(session.Status),
-		Checksum:        session.Checksum,
-		ActualSizeBytes: session.ActualSizeBytes,
-		ArtifactType:    session.ArtifactType,
-		ArtifactFormat:  session.DeclaredFormat,
-		ModelName:       session.ModelName,
-		ModelVersion:    session.ModelVersion,
-		BaseModel:       session.BaseModel,
+		UploadID:         session.UploadID.String(),
+		ResourceID:       session.ResourceID.String(),
+		StorageLocation:  session.StorageLocation,
+		Status:           string(session.Status),
+		Checksum:         session.Checksum,
+		ActualSizeBytes:  session.ActualSizeBytes,
+		ArtifactType:     session.ArtifactType,
+		ArtifactFormat:   session.DeclaredFormat,
+		ModelName:        session.ModelName,
+		ModelVersion:     session.ModelVersion,
+		BaseModel:        session.BaseModel,
+		Source:           session.Source,
+		SourceURI:        session.SourceURI,
+		ManifestLocation: session.ManifestLocation,
+		HFRepoID:         session.HFRepoID,
+		HFRevision:       session.HFRevision,
+		HFCommitSHA:      session.HFCommitSHA,
 	})
 }
 
@@ -328,17 +340,23 @@ func (h *DataUploadHandlers) OnboardHuggingFaceModel(ctx context.Context, r *htt
 		return nil, h.uploadError(ctx, err, "Failed to onboard Hugging Face model")
 	}
 	return jsonResponse(http.StatusCreated, completeModelUploadResponse{
-		UploadID:        session.UploadID.String(),
-		ResourceID:      session.ResourceID.String(),
-		StorageLocation: session.StorageLocation,
-		Status:          string(session.Status),
-		Checksum:        session.Checksum,
-		ActualSizeBytes: session.ActualSizeBytes,
-		ArtifactType:    session.ArtifactType,
-		ArtifactFormat:  session.DeclaredFormat,
-		ModelName:       session.ModelName,
-		ModelVersion:    session.ModelVersion,
-		BaseModel:       session.BaseModel,
+		UploadID:         session.UploadID.String(),
+		ResourceID:       session.ResourceID.String(),
+		StorageLocation:  session.StorageLocation,
+		Status:           string(session.Status),
+		Checksum:         session.Checksum,
+		ActualSizeBytes:  session.ActualSizeBytes,
+		ArtifactType:     session.ArtifactType,
+		ArtifactFormat:   session.DeclaredFormat,
+		ModelName:        session.ModelName,
+		ModelVersion:     session.ModelVersion,
+		BaseModel:        session.BaseModel,
+		Source:           session.Source,
+		SourceURI:        session.SourceURI,
+		ManifestLocation: session.ManifestLocation,
+		HFRepoID:         session.HFRepoID,
+		HFRevision:       session.HFRevision,
+		HFCommitSHA:      session.HFCommitSHA,
 	})
 }
 

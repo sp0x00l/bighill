@@ -28,6 +28,7 @@ message ModelUpdatedEvent {
   string promotion_report_uri = 23;
   string promotion_deltas = 24;
   string org_id = 25;
+  string serving_protocol = 26;
 }
 
 message PromotionRequestedEvent {

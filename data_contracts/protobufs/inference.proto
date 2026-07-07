@@ -29,7 +29,7 @@ message GenerateResponse {
   repeated RetrievedContext contexts = 5;
   string request_id = 6;
   string prompt_strategy_version = 7;
-  string generation_provider = 8;
+  string generation_protocol = 8;
   string generation_model = 9;
   string org_id = 10;
 }

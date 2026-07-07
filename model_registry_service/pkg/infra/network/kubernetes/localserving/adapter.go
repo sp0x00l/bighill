@@ -46,6 +46,7 @@ func (a *Adapter) EnsureServedModel(ctx context.Context, registeredModel *model.
 		ModelID:          registeredModel.ModelID.String(),
 		TrainingRunID:    registeredModel.TrainingRunID.String(),
 		DatasetID:        registeredModel.DatasetID.String(),
+		ModelKind:        registeredModel.ModelKind.String(),
 		Name:             registeredModel.Name,
 		ModelVersion:     registeredModel.ModelVersion,
 		BaseModel:        registeredModel.BaseModel,
@@ -55,6 +56,7 @@ func (a *Adapter) EnsureServedModel(ctx context.Context, registeredModel *model.
 		AdapterURI:       registeredModel.AdapterURI,
 		ServingTarget:    registeredModel.ServingTarget,
 		ServingModel:     registeredModel.ServingModel,
+		ServingProtocol:  registeredModel.ServingProtocol.String(),
 	})
 }
 
@@ -157,10 +159,16 @@ func (o *StatusObserver) processRecord(ctx context.Context, record localstore.Re
 		log.WithContext(ctx).WithError(err).WithField("served_model", record.Name).Error("local served model load status ignored")
 		return
 	}
+	servingProtocol, err := model.ToServingProtocol(record.Status.ServingProtocol)
+	if err != nil {
+		log.WithContext(ctx).WithError(err).WithField("served_model", record.Name).Error("local served model protocol ignored")
+		return
+	}
 	status := &model.ServedModelStatus{
 		ModelID:           modelID,
 		ServingTarget:     record.Status.ServingTarget,
 		ServingModel:      record.Status.ServingModel,
+		ServingProtocol:   servingProtocol,
 		ServingLoadStatus: loadStatus,
 		FailureReason:     record.Status.FailureReason,
 	}
@@ -178,6 +186,6 @@ func (o *StatusObserver) processRecord(ctx context.Context, record localstore.Re
 func servedModelStatusID(status *model.ServedModelStatus, generation int64) uuid.UUID {
 	log.Trace("localserving servedModelStatusID")
 
-	input := fmt.Sprintf("served-model:%s:%s:%s:%s:%s:%d", status.ModelID, status.ServingLoadStatus.String(), status.ServingTarget, status.ServingModel, status.FailureReason, generation)
+	input := fmt.Sprintf("served-model:%s:%s:%s:%s:%s:%s:%d", status.ModelID, status.ServingLoadStatus.String(), status.ServingTarget, status.ServingModel, status.ServingProtocol, status.FailureReason, generation)
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(input))
 }

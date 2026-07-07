@@ -50,6 +50,7 @@ func (b *ModelEventBuilder) ModelUpdatedMessage(modelRecord *model.Model) msgCon
 		AdapterUri:         modelRecord.AdapterURI,
 		ServingTarget:      modelRecord.ServingTarget,
 		ServingModel:       modelRecord.ServingModel,
+		ServingProtocol:    modelRecord.ServingProtocol.String(),
 		ServingLoadStatus:  modelRecord.ServingLoadStatus.String(),
 		MetricsMetadata:    modelRecord.MetricsMetadata,
 		Status:             modelRecord.Status.String(),

@@ -185,6 +185,10 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	servingProtocol, err := model.ToServingProtocol(strings.TrimSpace(payload.GetServingProtocol()))
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	trainedModel := &model.Model{
 		ModelID:           modelID,
 		UserID:            userID,
@@ -201,6 +205,7 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 		AdapterURI:        strings.TrimSpace(payload.GetAdapterUri()),
 		ServingTarget:     strings.TrimSpace(payload.GetServingTarget()),
 		ServingModel:      strings.TrimSpace(payload.GetServingModel()),
+		ServingProtocol:   servingProtocol,
 		MetricsMetadata:   metricsMetadata,
 	}
 	trainedModel.ServingLoadStatus, err = model.ToModelLoadStatus(strings.TrimSpace(payload.GetServingLoadStatus()))

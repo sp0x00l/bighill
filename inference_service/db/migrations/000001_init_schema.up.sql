@@ -2,6 +2,7 @@ CREATE TYPE inference_model_status_enum AS ENUM ('PENDING', 'CANDIDATE', 'EVALUA
 CREATE TYPE inference_model_load_status_enum AS ENUM ('NOT_LOADED', 'LOADED', 'FAILED');
 CREATE TYPE inference_model_kind_enum AS ENUM ('BASE', 'FINE_TUNED');
 CREATE TYPE inference_model_source_enum AS ENUM ('TRAINING', 'UPLOAD', 'HUGGING_FACE');
+CREATE TYPE serving_protocol_enum AS ENUM ('OLLAMA_GENERATE', 'OPENAI_CHAT_COMPLETIONS');
 CREATE TYPE inference_dataset_processing_state_enum AS ENUM ('PENDING', 'RAW_MATERIALIZED', 'FEATURE_MATERIALIZED', 'EMBEDDINGS_MATERIALIZED', 'FAILED');
 CREATE TYPE inference_request_status_enum AS ENUM ('COMPLETED', 'FAILED');
 CREATE TYPE table_format_enum AS ENUM ('PARQUET', 'ICEBERG');
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     adapter_uri text NOT NULL DEFAULT '',
     serving_target text NOT NULL DEFAULT '',
     serving_model text NOT NULL DEFAULT '',
+    serving_protocol serving_protocol_enum,
     serving_load_status inference_model_load_status_enum NOT NULL DEFAULT 'NOT_LOADED',
     metrics_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     status inference_model_status_enum NOT NULL,
@@ -70,6 +72,14 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     CONSTRAINT inference_models_tenant_ownership_ck CHECK (
         (model_kind = 'BASE' AND user_id IS NULL AND org_id IS NULL)
         OR (model_kind <> 'BASE' AND user_id IS NOT NULL AND org_id IS NOT NULL)
+    ),
+    CONSTRAINT inference_models_loaded_serving_runtime_ck CHECK (
+        serving_load_status <> 'LOADED'
+        OR (
+            serving_protocol IS NOT NULL
+            AND btrim(serving_target) <> ''
+            AND btrim(serving_model) <> ''
+        )
     )
 );
 
@@ -155,7 +165,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_requests (
     prompt_text text NOT NULL DEFAULT '',
     answer_text text NOT NULL DEFAULT '',
     prompt_strategy_version text NOT NULL,
-    generation_provider text NOT NULL,
+    generation_protocol text NOT NULL DEFAULT '',
     generation_model text NOT NULL,
     latency_ms bigint NOT NULL,
     status inference_request_status_enum NOT NULL,

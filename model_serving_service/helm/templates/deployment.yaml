@@ -89,6 +89,8 @@ spec:
               value: {{ .Values.env.vllmGpu | quote }}
             - name: MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS
               value: {{ .Values.env.vllmRequestTimeoutMs | quote }}
+            - name: MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT
+              value: {{ .Values.env.localOllamaEndpoint | quote }}
           resources:
             requests:
               memory: {{ .Values.resources.requests.memory | quote }}

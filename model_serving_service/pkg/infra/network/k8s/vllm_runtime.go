@@ -136,11 +136,12 @@ func (r *VLLMRuntime) EnsureServedModel(ctx context.Context, servedModel *model.
 		return nil, err
 	}
 	state := &model.ServingRuntimeState{
-		Failed:        failed,
-		ServingTarget: servingTarget,
-		ServingModel:  loadedServingModel,
-		FailureReason: failureReason,
-		ReadyReplicas: readyReplicas,
+		Failed:          failed,
+		ServingTarget:   servingTarget,
+		ServingModel:    loadedServingModel,
+		ServingProtocol: model.ServingProtocolOpenAIChatCompletions,
+		FailureReason:   failureReason,
+		ReadyReplicas:   readyReplicas,
 	}
 	if failed || !deploymentReady {
 		return state, nil

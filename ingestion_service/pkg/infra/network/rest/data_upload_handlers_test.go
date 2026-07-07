@@ -332,6 +332,8 @@ var _ = Describe("DataUploadHandlers", func() {
 			ModelName:        "llama",
 			ModelVersion:     "1",
 			BaseModel:        "meta-llama/Llama-3.1-8B",
+			Source:           "HUGGING_FACE",
+			SourceURI:        "https://huggingface.co/meta-llama/Llama-3.1-8B",
 			HFRepoID:         "meta-llama/Llama-3.1-8B",
 			HFRevision:       "main",
 			HFCommitSHA:      "abc123",
@@ -350,6 +352,11 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(json.Unmarshal(response.Payload(), &body)).To(Succeed())
 		Expect(body).To(HaveKeyWithValue("resource_id", resourceID.String()))
 		Expect(body).To(HaveKeyWithValue("artifact_type", "BASE_MODEL"))
+		Expect(body).To(HaveKeyWithValue("source", "HUGGING_FACE"))
+		Expect(body).To(HaveKeyWithValue("source_uri", "https://huggingface.co/meta-llama/Llama-3.1-8B"))
+		Expect(body).To(HaveKeyWithValue("hf_repo_id", "meta-llama/Llama-3.1-8B"))
+		Expect(body).To(HaveKeyWithValue("hf_revision", "main"))
+		Expect(body).To(HaveKeyWithValue("hf_commit_sha", "abc123"))
 	})
 
 	It("accepts PDF uploads at the REST boundary", func() {

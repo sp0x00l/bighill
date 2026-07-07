@@ -37,6 +37,7 @@ func (r *servedModelReconciler) Reconcile(ctx context.Context, servedModel *mode
 			ServingLoadStatus:  model.ModelLoadStatusFailed,
 			ServingTarget:      servedModel.ServingTarget,
 			ServingModel:       servedModel.ServingModel,
+			ServingProtocol:    servedModel.ServingProtocol,
 			FailureReason:      err.Error(),
 			ObservedGeneration: servedModel.Generation,
 		}
@@ -56,6 +57,7 @@ func (r *servedModelReconciler) Reconcile(ctx context.Context, servedModel *mode
 		ServingLoadStatus:  loadStatus,
 		ServingTarget:      state.ServingTarget,
 		ServingModel:       state.ServingModel,
+		ServingProtocol:    state.ServingProtocol,
 		FailureReason:      state.FailureReason,
 		ObservedGeneration: servedModel.Generation,
 		ReadyReplicas:      state.ReadyReplicas,

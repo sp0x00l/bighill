@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -59,12 +60,15 @@ class ModelOnboardTests(unittest.TestCase):
                     "INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI": "s3://bucket/models/huggingface",
                 }
             ), mock.patch.object(
+                model_onboard, "validate_login", return_value="test-user"
+            ) as validate_login, mock.patch.object(
                 model_onboard, "resolve_commit_sha", return_value="resolvedabc123"
             ), mock.patch.object(
                 model_onboard, "snapshot_download", side_effect=fake_snapshot_download
             ), mock.patch("builtins.print") as printed:
                 model_onboard.main()
 
+            validate_login.assert_called_once_with(token="hf_test")
             payload = json.loads(printed.call_args.args[0])
             self.assertEqual(payload["hf_repo_id"], "org/model")
             self.assertEqual(payload["hf_commit_sha"], "resolvedabc123")
@@ -100,9 +104,10 @@ class ModelOnboardTests(unittest.TestCase):
                 }
             ), mock.patch.object(model_onboard, "resolve_commit_sha") as resolve_commit, mock.patch.object(
                 model_onboard, "snapshot_download"
-            ) as download, mock.patch("builtins.print") as printed:
+            ) as download, mock.patch.object(model_onboard, "validate_login") as validate_login, mock.patch("builtins.print") as printed:
                 model_onboard.main()
 
+            validate_login.assert_not_called()
             resolve_commit.assert_not_called()
             download.assert_not_called()
             payload = json.loads(printed.call_args.args[0])
@@ -117,6 +122,58 @@ class ModelOnboardTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "safetensors"):
                 model_onboard.validate_snapshot(snapshot)
+
+    def test_validate_login_uses_hugging_face_identity(self) -> None:
+        api_cls = mock.Mock()
+        api_cls.return_value.whoami.return_value = {"name": "hf-user"}
+
+        with mock.patch.dict("sys.modules", {"huggingface_hub": types.SimpleNamespace(HfApi=api_cls)}):
+            login = model_onboard.validate_login(token="hf_test")
+
+        self.assertEqual(login, "hf-user")
+        api_cls.return_value.whoami.assert_called_once_with(token="hf_test")
+
+    def test_validate_login_rejects_empty_identity(self) -> None:
+        api_cls = mock.Mock()
+        api_cls.return_value.whoami.return_value = {}
+
+        with mock.patch.dict("sys.modules", {"huggingface_hub": types.SimpleNamespace(HfApi=api_cls)}):
+            with self.assertRaisesRegex(RuntimeError, "login validation failed"):
+                model_onboard.validate_login(token="hf_test")
+
+    def test_main_stops_before_download_when_login_validation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_s3 = root / "local_s3"
+
+            with EnvPatch(
+                {
+                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(local_s3),
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
+                    "INGESTION_SERVICE_MODEL_RESOURCE_ID": "33333333-3333-3333-3333-333333333333",
+                    "INGESTION_SERVICE_MODEL_NAME": "llama-test",
+                    "INGESTION_SERVICE_MODEL_VERSION": "1",
+                    "INGESTION_SERVICE_MODEL_BASE_MODEL": "org/model",
+                    "INGESTION_SERVICE_MODEL_ARTIFACT_TYPE": "BASE_MODEL",
+                    "INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT": "HF_MODEL",
+                    "INGESTION_SERVICE_HUGGINGFACE_REPO_ID": "org/model",
+                    "INGESTION_SERVICE_HUGGINGFACE_REVISION": "main",
+                    "INGESTION_SERVICE_HUGGINGFACE_TOKEN": "hf_bad",
+                    "INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI": "s3://bucket/models/huggingface",
+                }
+            ), mock.patch.object(
+                model_onboard, "validate_login", side_effect=RuntimeError("bad Hugging Face token")
+            ) as validate_login, mock.patch.object(
+                model_onboard, "resolve_commit_sha"
+            ) as resolve_commit, mock.patch.object(
+                model_onboard, "snapshot_download"
+            ) as download:
+                with self.assertRaisesRegex(RuntimeError, "bad Hugging Face token"):
+                    model_onboard.main()
+
+            validate_login.assert_called_once_with(token="hf_bad")
+            resolve_commit.assert_not_called()
+            download.assert_not_called()
 
 
 if __name__ == "__main__":

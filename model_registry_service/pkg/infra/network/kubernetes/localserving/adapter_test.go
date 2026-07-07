@@ -44,6 +44,7 @@ var _ = Describe("Local serving adapter", func() {
 			ModelID:           modelID,
 			TrainingRunID:     trainingRunID,
 			DatasetID:         datasetID,
+			ModelKind:         model.ModelKindBase,
 			Name:              "llama",
 			ModelVersion:      3,
 			BaseModel:         "meta-llama/Llama",
@@ -63,6 +64,7 @@ var _ = Describe("Local serving adapter", func() {
 		Expect(record.Spec.ModelID).To(Equal(modelID.String()))
 		Expect(record.Spec.TrainingRunID).To(Equal(trainingRunID.String()))
 		Expect(record.Spec.DatasetID).To(Equal(datasetID.String()))
+		Expect(record.Spec.ModelKind).To(Equal(model.ModelKindBase.String()))
 		Expect(record.Spec.BaseModel).To(Equal("meta-llama/Llama"))
 	})
 
@@ -83,6 +85,7 @@ var _ = Describe("Local serving adapter", func() {
 		modelID := uuid.New()
 		Expect(adapter.EnsureServedModel(context.Background(), &model.Model{
 			ModelID:      modelID,
+			ModelKind:    model.ModelKindBase,
 			Name:         "llama",
 			ModelVersion: 1,
 			BaseModel:    "meta-llama/Llama",

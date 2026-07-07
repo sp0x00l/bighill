@@ -3,6 +3,7 @@ CREATE TYPE model_load_status_enum AS ENUM ('NOT_LOADED', 'LOADED', 'FAILED');
 CREATE TYPE model_kind_enum AS ENUM ('BASE', 'FINE_TUNED');
 CREATE TYPE model_source_enum AS ENUM ('TRAINING', 'UPLOAD', 'HUGGING_FACE');
 CREATE TYPE promotion_decision_enum AS ENUM ('PROMOTION_ACCEPTED', 'PROMOTION_REJECTED');
+CREATE TYPE serving_protocol_enum AS ENUM ('OLLAMA_GENERATE', 'OPENAI_CHAT_COMPLETIONS');
 
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     adapter_uri text NOT NULL DEFAULT '',
     serving_target text NOT NULL DEFAULT '',
     serving_model text NOT NULL DEFAULT '',
+    serving_protocol serving_protocol_enum,
     serving_load_status model_load_status_enum NOT NULL DEFAULT 'NOT_LOADED',
     serving_status_idempotency_key uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     metrics_metadata jsonb NOT NULL,
@@ -67,6 +69,14 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     CONSTRAINT models_tenant_ownership_ck CHECK (
         (model_kind = 'BASE' AND user_id IS NULL AND org_id IS NULL)
         OR (model_kind <> 'BASE' AND user_id IS NOT NULL AND org_id IS NOT NULL)
+    ),
+    CONSTRAINT models_loaded_serving_runtime_ck CHECK (
+        serving_load_status <> 'LOADED'
+        OR (
+            serving_protocol IS NOT NULL
+            AND btrim(serving_target) <> ''
+            AND btrim(serving_model) <> ''
+        )
     )
 );
 

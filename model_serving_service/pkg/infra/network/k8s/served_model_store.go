@@ -138,12 +138,14 @@ func servedModelStatusMatches(obj *unstructured.Unstructured, status *model.Serv
 	loadStatus, _, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
 	servingTarget, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
 	servingModel, _, _ := unstructured.NestedString(obj.Object, "status", "servingModel")
+	servingProtocol, _, _ := unstructured.NestedString(obj.Object, "status", "servingProtocol")
 	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
 	observedGeneration, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
 	readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
 	return loadStatus == status.ServingLoadStatus.String() &&
 		servingTarget == status.ServingTarget &&
 		servingModel == status.ServingModel &&
+		servingProtocol == status.ServingProtocol.String() &&
 		failureReason == status.FailureReason &&
 		observedGeneration == status.ObservedGeneration &&
 		readyReplicas == int64(status.ReadyReplicas)
@@ -169,6 +171,10 @@ func servedModelFromObject(obj *unstructured.Unstructured, namespace string) (*m
 	if err != nil {
 		return nil, err
 	}
+	servingProtocol, err := model.ToServingProtocol(specString(obj, "servingProtocol"))
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid served model protocol: %w", domain.ErrValidationFailed, err)
+	}
 	return &model.ServedModel{
 		ResourceName:     obj.GetName(),
 		Namespace:        namespace,
@@ -176,6 +182,7 @@ func servedModelFromObject(obj *unstructured.Unstructured, namespace string) (*m
 		ModelID:          modelID,
 		TrainingRunID:    trainingRunID,
 		DatasetID:        datasetID,
+		ModelKind:        specString(obj, "modelKind"),
 		Name:             specString(obj, "name"),
 		ModelVersion:     int(modelVersion),
 		BaseModel:        specString(obj, "baseModel"),
@@ -185,6 +192,7 @@ func servedModelFromObject(obj *unstructured.Unstructured, namespace string) (*m
 		AdapterURI:       specString(obj, "adapterURI"),
 		ServingTarget:    specString(obj, "servingTarget"),
 		ServingModel:     specString(obj, "servingModel"),
+		ServingProtocol:  servingProtocol,
 		Status:           status,
 	}, nil
 }
@@ -202,6 +210,11 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 	}
 	servingTarget, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
 	servingModel, _, _ := unstructured.NestedString(obj.Object, "status", "servingModel")
+	servingProtocol, _, _ := unstructured.NestedString(obj.Object, "status", "servingProtocol")
+	parsedServingProtocol, err := model.ToServingProtocol(servingProtocol)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid served model protocol: %w", domain.ErrValidationFailed, err)
+	}
 	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
 	observedGeneration, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
 	readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
@@ -209,6 +222,7 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 		ServingLoadStatus:  loadStatus,
 		ServingTarget:      servingTarget,
 		ServingModel:       servingModel,
+		ServingProtocol:    parsedServingProtocol,
 		FailureReason:      failureReason,
 		ObservedGeneration: observedGeneration,
 		ReadyReplicas:      int32(readyReplicas),
@@ -221,6 +235,7 @@ func setStatusFields(obj *unstructured.Unstructured, status *model.ServedModelSt
 	_ = unstructured.SetNestedField(obj.Object, status.ServingLoadStatus.String(), "status", "servingLoadStatus")
 	_ = unstructured.SetNestedField(obj.Object, status.ServingTarget, "status", "servingTarget")
 	_ = unstructured.SetNestedField(obj.Object, status.ServingModel, "status", "servingModel")
+	_ = unstructured.SetNestedField(obj.Object, status.ServingProtocol.String(), "status", "servingProtocol")
 	_ = unstructured.SetNestedField(obj.Object, status.FailureReason, "status", "failureReason")
 	_ = unstructured.SetNestedField(obj.Object, status.ObservedGeneration, "status", "observedGeneration")
 	_ = unstructured.SetNestedField(obj.Object, int64(status.ReadyReplicas), "status", "readyReplicas")

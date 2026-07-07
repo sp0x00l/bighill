@@ -17,30 +17,29 @@ import (
 )
 
 const (
-	generationProviderOllama = "ollama"
-	generationProviderVLLM   = "vllm"
-	httpHeaderContentType    = "Content-Type"
-	jsonContentType          = "application/json"
-	ollamaGeneratePath       = "/api/generate"
-	vllmChatCompletionsPath  = "/v1/chat/completions"
-	vllmUserRole             = "user"
-	httpErrorBodyLimitBytes  = 4096
+	servingProtocolOllamaGenerate        = "OLLAMA_GENERATE"
+	servingProtocolOpenAIChatCompletions = "OPENAI_CHAT_COMPLETIONS"
+	httpHeaderContentType                = "Content-Type"
+	jsonContentType                      = "application/json"
+	ollamaGeneratePath                   = "/api/generate"
+	openAIChatCompletionsPath            = "/v1/chat/completions"
+	openAIUserRole                       = "user"
+	httpErrorBodyLimitBytes              = 4096
 )
 
 type HTTPGenerator struct {
-	provider string
-	endpoint string
-	model    string
-	client   *http.Client
+	protocol  string
+	endpoint  string
+	modelName string
+	client    *http.Client
 }
 
-func NewHTTPGenerator(provider, endpoint, modelName string, timeout time.Duration) *HTTPGenerator {
+func NewHTTPGenerator(protocol, endpoint string, timeout time.Duration) *HTTPGenerator {
 	log.Trace("NewHTTPGenerator")
 
 	return &HTTPGenerator{
-		provider: strings.ToLower(strings.TrimSpace(provider)),
+		protocol: strings.ToUpper(strings.TrimSpace(protocol)),
 		endpoint: strings.TrimRight(strings.TrimSpace(endpoint), "/"),
-		model:    strings.TrimSpace(modelName),
 		client: &http.Client{
 			Timeout:   timeout,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
@@ -48,29 +47,37 @@ func NewHTTPGenerator(provider, endpoint, modelName string, timeout time.Duratio
 	}
 }
 
+func NewHTTPUtilityGenerator(protocol, endpoint, modelName string, timeout time.Duration) *HTTPGenerator {
+	log.Trace("NewHTTPUtilityGenerator")
+
+	generator := NewHTTPGenerator(protocol, endpoint, timeout)
+	generator.modelName = strings.TrimSpace(modelName)
+	return generator
+}
+
+func NewOpenAIChatCompletionsGenerator(timeout time.Duration) *HTTPGenerator {
+	log.Trace("NewOpenAIChatCompletionsGenerator")
+
+	return NewHTTPGenerator(servingProtocolOpenAIChatCompletions, "", timeout)
+}
+
+func NewOllamaGenerateGenerator(timeout time.Duration) *HTTPGenerator {
+	log.Trace("NewOllamaGenerateGenerator")
+
+	return NewHTTPGenerator(servingProtocolOllamaGenerate, "", timeout)
+}
+
 func (g *HTTPGenerator) Generate(ctx context.Context, request model.GenerationRequest) (string, error) {
 	log.Trace("HTTPGenerator Generate")
 
-	switch g.provider {
-	case generationProviderOllama:
+	switch g.protocol {
+	case servingProtocolOllamaGenerate:
 		return g.generateWithOllama(ctx, request)
-	case generationProviderVLLM:
-		return g.generateWithVLLM(ctx, request)
+	case servingProtocolOpenAIChatCompletions:
+		return g.generateWithOpenAIChatCompletions(ctx, request)
 	default:
-		return "", fmt.Errorf("unsupported generation provider %q", g.provider)
+		return "", fmt.Errorf("unsupported serving protocol %q", g.protocol)
 	}
-}
-
-func (g *HTTPGenerator) Provider() string {
-	log.Trace("HTTPGenerator Provider")
-
-	return g.provider
-}
-
-func (g *HTTPGenerator) Model() string {
-	log.Trace("HTTPGenerator Model")
-
-	return g.model
 }
 
 func (g *HTTPGenerator) generateWithOllama(ctx context.Context, request model.GenerationRequest) (string, error) {
@@ -80,16 +87,20 @@ func (g *HTTPGenerator) generateWithOllama(ctx context.Context, request model.Ge
 	if prompt == "" {
 		return "", fmt.Errorf("prompt is required")
 	}
+	modelName, endpoint, err := g.servingTarget(request)
+	if err != nil {
+		return "", err
+	}
 
 	body, err := json.Marshal(ollamaGenerateRequest{
-		Model:  g.model,
+		Model:  modelName,
 		Prompt: prompt,
 		Stream: false,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal ollama request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint+ollamaGeneratePath, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+ollamaGeneratePath, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build ollama request: %w", err)
 	}
@@ -116,63 +127,77 @@ func (g *HTTPGenerator) generateWithOllama(ctx context.Context, request model.Ge
 	return answer, nil
 }
 
-func (g *HTTPGenerator) generateWithVLLM(ctx context.Context, request model.GenerationRequest) (string, error) {
-	log.Trace("HTTPGenerator generateWithVLLM")
+func (g *HTTPGenerator) generateWithOpenAIChatCompletions(ctx context.Context, request model.GenerationRequest) (string, error) {
+	log.Trace("HTTPGenerator generateWithOpenAIChatCompletions")
 
 	prompt := strings.TrimSpace(request.Prompt)
 	if prompt == "" {
 		return "", fmt.Errorf("prompt is required")
 	}
-	modelName := g.model
-	endpoint := g.endpoint
-	if request.Model != nil && strings.TrimSpace(request.Model.ServingModel) != "" {
-		modelName = strings.TrimSpace(request.Model.ServingModel)
+	modelName, endpoint, err := g.servingTarget(request)
+	if err != nil {
+		return "", err
 	}
-	if request.Model != nil && strings.TrimSpace(request.Model.ServingTarget) != "" {
-		endpoint = strings.TrimRight(strings.TrimSpace(request.Model.ServingTarget), "/")
-	}
-	body, err := json.Marshal(vllmChatCompletionRequest{
+	body, err := json.Marshal(openAIChatCompletionRequest{
 		Model: modelName,
-		Messages: []vllmChatMessage{{
-			Role:    vllmUserRole,
+		Messages: []openAIChatMessage{{
+			Role:    openAIUserRole,
 			Content: prompt,
 		}},
 		Temperature: 0,
 	})
 	if err != nil {
-		return "", fmt.Errorf("marshal vllm request: %w", err)
+		return "", fmt.Errorf("marshal chat completions request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+vllmChatCompletionsPath, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+openAIChatCompletionsPath, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("build vllm request: %w", err)
+		return "", fmt.Errorf("build chat completions request: %w", err)
 	}
 	httpReq.Header.Set(httpHeaderContentType, jsonContentType)
 
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("vllm generate request failed: %w", err)
+		return "", fmt.Errorf("chat completions request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, httpErrorBodyLimitBytes))
-		return "", fmt.Errorf("vllm generate failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return "", fmt.Errorf("chat completions failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
-	var parsed vllmChatCompletionResponse
+	var parsed openAIChatCompletionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", fmt.Errorf("decode vllm response: %w", err)
+		return "", fmt.Errorf("decode chat completions response: %w", err)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("vllm returned no choices")
+		return "", fmt.Errorf("chat completions returned no choices")
 	}
 	answer := strings.TrimSpace(parsed.Choices[0].Message.Content)
 	if answer == "" {
 		answer = strings.TrimSpace(parsed.Choices[0].Text)
 	}
 	if answer == "" {
-		return "", fmt.Errorf("vllm returned an empty response")
+		return "", fmt.Errorf("chat completions returned an empty response")
 	}
 	return answer, nil
+}
+
+func (g *HTTPGenerator) servingTarget(request model.GenerationRequest) (string, string, error) {
+	log.Trace("HTTPGenerator servingTarget")
+
+	modelName := strings.TrimSpace(g.modelName)
+	endpoint := strings.TrimRight(strings.TrimSpace(g.endpoint), "/")
+	if request.Model != nil {
+		modelName = strings.TrimSpace(request.Model.ServingModel)
+		endpoint = strings.TrimRight(strings.TrimSpace(request.Model.ServingTarget), "/")
+	}
+	if modelName == "" {
+		return "", "", fmt.Errorf("served model name is required")
+	}
+	if endpoint == "" {
+		return "", "", fmt.Errorf("generation endpoint is required")
+	}
+	return modelName, endpoint, nil
 }
 
 type ollamaGenerateRequest struct {
@@ -185,22 +210,22 @@ type ollamaGenerateResponse struct {
 	Response string `json:"response"`
 }
 
-type vllmChatCompletionRequest struct {
-	Model       string            `json:"model"`
-	Messages    []vllmChatMessage `json:"messages"`
-	Temperature float64           `json:"temperature"`
+type openAIChatCompletionRequest struct {
+	Model       string              `json:"model"`
+	Messages    []openAIChatMessage `json:"messages"`
+	Temperature float64             `json:"temperature"`
 }
 
-type vllmChatMessage struct {
+type openAIChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-type vllmChatCompletionResponse struct {
-	Choices []vllmChoice `json:"choices"`
+type openAIChatCompletionResponse struct {
+	Choices []openAIChoice `json:"choices"`
 }
 
-type vllmChoice struct {
-	Message vllmChatMessage `json:"message"`
-	Text    string          `json:"text"`
+type openAIChoice struct {
+	Message openAIChatMessage `json:"message"`
+	Text    string            `json:"text"`
 }

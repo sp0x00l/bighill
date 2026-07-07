@@ -270,6 +270,7 @@ func (a *ServedModelAdapter) servedModelObject(name string, registeredModel *mod
 			"modelID":          registeredModel.ModelID.String(),
 			"trainingRunID":    uuidutil.StringOrEmpty(registeredModel.TrainingRunID),
 			"datasetID":        uuidutil.StringOrEmpty(registeredModel.DatasetID),
+			"modelKind":        registeredModel.ModelKind.String(),
 			"name":             registeredModel.Name,
 			"modelVersion":     int64(registeredModel.ModelVersion),
 			"baseModel":        registeredModel.BaseModel,
@@ -279,6 +280,7 @@ func (a *ServedModelAdapter) servedModelObject(name string, registeredModel *mod
 			"adapterURI":       registeredModel.AdapterURI,
 			"servingTarget":    registeredModel.ServingTarget,
 			"servingModel":     registeredModel.ServingModel,
+			"servingProtocol":  registeredModel.ServingProtocol.String(),
 		},
 	}}
 }
@@ -307,11 +309,20 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 	if servingModel == "" {
 		servingModel, _, _ = unstructured.NestedString(obj.Object, "spec", "servingModel")
 	}
+	servingProtocol, _, _ := unstructured.NestedString(obj.Object, "status", "servingProtocol")
+	if servingProtocol == "" {
+		servingProtocol, _, _ = unstructured.NestedString(obj.Object, "spec", "servingProtocol")
+	}
+	parsedServingProtocol, err := model.ToServingProtocol(servingProtocol)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: served model status %s has invalid serving protocol: %w", domain.ErrValidationFailed, obj.GetName(), err)
+	}
 	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
 	return &model.ServedModelStatus{
 		ModelID:           modelID,
 		ServingTarget:     servingTarget,
 		ServingModel:      servingModel,
+		ServingProtocol:   parsedServingProtocol,
 		ServingLoadStatus: loadStatus,
 		FailureReason:     failureReason,
 	}, true, nil
@@ -320,7 +331,7 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 func servedModelStatusID(status *model.ServedModelStatus, generation int64) uuid.UUID {
 	log.Trace("servedModelStatusID")
 
-	input := fmt.Sprintf("served-model:%s:%s:%s:%s:%s:%d", status.ModelID, status.ServingLoadStatus.String(), status.ServingTarget, status.ServingModel, status.FailureReason, generation)
+	input := fmt.Sprintf("served-model:%s:%s:%s:%s:%s:%s:%d", status.ModelID, status.ServingLoadStatus.String(), status.ServingTarget, status.ServingModel, status.ServingProtocol, status.FailureReason, generation)
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(input))
 }
 

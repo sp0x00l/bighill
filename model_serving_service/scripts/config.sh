@@ -38,6 +38,7 @@ export MODEL_SERVING_SERVICE_VLLM_MEMORY=4Gi
 export MODEL_SERVING_SERVICE_VLLM_GPU_RESOURCE=nvidia.com/gpu
 export MODEL_SERVING_SERVICE_VLLM_GPU=1
 export MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS=5000
+export MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT=http://localhost:11434
 
 # The following are variables set at build time, intended to be used at runtime.
 # IMPORTANT: This IDs the K8s deployment instance and is used in the templates.

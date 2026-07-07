@@ -38,9 +38,11 @@ var _ = Describe("ServedModelAdapter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(obj.GetLabels()).To(HaveKeyWithValue("bighill.io/model-id", modelRecord.ModelID.String()))
 		modelID, _, _ := unstructured.NestedString(obj.Object, "spec", "modelID")
+		modelKind, _, _ := unstructured.NestedString(obj.Object, "spec", "modelKind")
 		adapterURI, _, _ := unstructured.NestedString(obj.Object, "spec", "adapterURI")
 		servingTarget, _, _ := unstructured.NestedString(obj.Object, "spec", "servingTarget")
 		Expect(modelID).To(Equal(modelRecord.ModelID.String()))
+		Expect(modelKind).To(Equal(modelRecord.ModelKind.String()))
 		Expect(adapterURI).To(Equal(modelRecord.AdapterURI))
 		Expect(servingTarget).To(Equal(modelRecord.ServingTarget))
 	})
@@ -224,6 +226,7 @@ func validRegistryModel() *model.Model {
 		ModelID:           uuid.New(),
 		TrainingRunID:     uuid.New(),
 		DatasetID:         uuid.New(),
+		ModelKind:         model.ModelKindFineTuned,
 		Name:              "movie-ranker",
 		ModelVersion:      1,
 		BaseModel:         "mistral-7b",
@@ -249,6 +252,7 @@ func servedModelObject(modelRecord *model.Model) *unstructured.Unstructured {
 		},
 		"spec": map[string]any{
 			"modelID":       modelRecord.ModelID.String(),
+			"modelKind":     modelRecord.ModelKind.String(),
 			"adapterURI":    modelRecord.AdapterURI,
 			"servingTarget": modelRecord.ServingTarget,
 			"servingModel":  modelRecord.ServingModel,

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -x "scripts/git-protect-secrets.sh" ]; then
+  scripts/git-protect-secrets.sh --cached
+else
+  echo "pre-commit: missing scripts/git-protect-secrets.sh" >&2
+  exit 1
+fi

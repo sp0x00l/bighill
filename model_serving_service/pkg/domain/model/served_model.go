@@ -9,6 +9,7 @@ type ServedModel struct {
 	ModelID          uuid.UUID
 	TrainingRunID    uuid.UUID
 	DatasetID        uuid.UUID
+	ModelKind        string
 	Name             string
 	ModelVersion     int
 	BaseModel        string
@@ -18,22 +19,25 @@ type ServedModel struct {
 	AdapterURI       string
 	ServingTarget    string
 	ServingModel     string
+	ServingProtocol  ServingProtocol
 	Status           *ServedModelStatus
 }
 
 type ServingRuntimeState struct {
-	Ready         bool
-	Failed        bool
-	ServingTarget string
-	ServingModel  string
-	FailureReason string
-	ReadyReplicas int32
+	Ready           bool
+	Failed          bool
+	ServingTarget   string
+	ServingModel    string
+	ServingProtocol ServingProtocol
+	FailureReason   string
+	ReadyReplicas   int32
 }
 
 type ServedModelStatus struct {
 	ServingLoadStatus  ModelLoadStatus
 	ServingTarget      string
 	ServingModel       string
+	ServingProtocol    ServingProtocol
 	FailureReason      string
 	ObservedGeneration int64
 	ReadyReplicas      int32

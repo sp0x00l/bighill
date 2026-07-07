@@ -46,17 +46,18 @@ type servedModelConfig struct {
 }
 
 type runtimeConfig struct {
-	Image           string
-	ImagePullPolicy string
-	ServiceAccount  string
-	MultiTenant     bool
-	Replicas        int32
-	Port            int32
-	CPU             string
-	Memory          string
-	GPUResource     string
-	GPU             string
-	RequestTimeout  time.Duration
+	Image               string
+	ImagePullPolicy     string
+	ServiceAccount      string
+	MultiTenant         bool
+	Replicas            int32
+	Port                int32
+	CPU                 string
+	Memory              string
+	GPUResource         string
+	GPU                 string
+	RequestTimeout      time.Duration
+	LocalOllamaEndpoint string
 }
 
 type healthConfig struct {
@@ -127,17 +128,18 @@ func readModelServingConfig() modelServingConfig {
 			Resource: env.WithDefaultString("MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_RESOURCE", "servedmodels"),
 		},
 		Runtime: runtimeConfig{
-			Image:           env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_IMAGE", "vllm/vllm-openai:latest"),
-			ImagePullPolicy: env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_IMAGE_PULL_POLICY", "IfNotPresent"),
-			ServiceAccount:  env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_SERVICE_ACCOUNT", ""),
-			MultiTenant:     env.WithDefaultBool("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED", false),
-			Replicas:        int32(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_REPLICAS", "1")),
-			Port:            int32(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_PORT", "8000")),
-			CPU:             env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_CPU", "1"),
-			Memory:          env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_MEMORY", "4Gi"),
-			GPUResource:     env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_GPU_RESOURCE", "nvidia.com/gpu"),
-			GPU:             env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_GPU", "1"),
-			RequestTimeout:  time.Duration(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS", "5000")) * time.Millisecond,
+			Image:               env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_IMAGE", "vllm/vllm-openai:latest"),
+			ImagePullPolicy:     env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_IMAGE_PULL_POLICY", "IfNotPresent"),
+			ServiceAccount:      env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_SERVICE_ACCOUNT", ""),
+			MultiTenant:         env.WithDefaultBool("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED", false),
+			Replicas:            int32(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_REPLICAS", "1")),
+			Port:                int32(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_PORT", "8000")),
+			CPU:                 env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_CPU", "1"),
+			Memory:              env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_MEMORY", "4Gi"),
+			GPUResource:         env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_GPU_RESOURCE", "nvidia.com/gpu"),
+			GPU:                 env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_GPU", "1"),
+			RequestTimeout:      time.Duration(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS", "5000")) * time.Millisecond,
+			LocalOllamaEndpoint: env.WithDefaultString("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT", "http://localhost:11434"),
 		},
 		Health: healthConfig{
 			CpuThresholdPercentage:     env.WithDefaultInt("MODEL_SERVING_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
@@ -169,7 +171,7 @@ func newServingBackend(cfg modelServingConfig) (servingk8s.ServedModelRepository
 		if err != nil {
 			return nil, nil, err
 		}
-		return store, localserving.NewRuntime(cfg.Namespace, cfg.Runtime.Port), nil
+		return store, localserving.NewRuntime(cfg.Namespace, cfg.Runtime.Port, cfg.Runtime.LocalOllamaEndpoint), nil
 	case "kubernetes":
 		client, err := servingk8s.NewDynamicClient()
 		if err != nil {

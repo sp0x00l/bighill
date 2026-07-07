@@ -22,6 +22,7 @@ type Model struct {
 	AdapterURI         string
 	ServingTarget      string
 	ServingModel       string
+	ServingProtocol    ServingProtocol
 	ServingLoadStatus  ModelLoadStatus
 	MetricsMetadata    string
 	PromotionReportURI string

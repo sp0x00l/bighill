@@ -18,21 +18,23 @@ func TestInferenceMain(t *testing.T) {
 }
 
 var _ = Describe("staging Helm values", func() {
-	It("configures local inference adapters", func() {
+	It("does not configure a global generation provider", func() {
 		values := readTextFile("helm/values.yaml")
 
-		Expect(values).To(ContainSubstring(`generationProvider: "ollama"`))
 		Expect(values).To(ContainSubstring(`rerankerProvider: "tei"`))
-		Expect(values).To(ContainSubstring(`queryTransformerProvider: "self_query"`))
+		Expect(values).To(ContainSubstring(`queryTransformerProvider: ""`))
+		Expect(values).NotTo(ContainSubstring("generationProvider"))
+		Expect(values).NotTo(ContainSubstring("generationEndpoint"))
 	})
 
 	It("does not inherit local generation and retrieval adapters", func() {
 		values := readTextFile("helm/staging-values.yaml")
 
-		Expect(values).To(ContainSubstring(`generationProvider: "vllm"`))
 		Expect(values).To(ContainSubstring(`rerankerProvider: "tei"`))
-		Expect(values).To(ContainSubstring(`queryTransformerProvider: "self_query"`))
+		Expect(values).To(ContainSubstring(`queryTransformerProvider: ""`))
 		Expect(values).To(ContainSubstring(`preferenceDatasetUriTemplate: "s3://bighill-mlops-lakehouse/preferences/{dataset_id}/{preference_dataset_id}.jsonl"`))
+		Expect(values).NotTo(ContainSubstring("generationProvider"))
+		Expect(values).NotTo(ContainSubstring("generationEndpoint"))
 		Expect(values).NotTo(ContainSubstring("local-dev-bucket"))
 		Expect(values).NotTo(ContainSubstring("localhost:4566"))
 	})
@@ -60,9 +62,6 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_API_GRPC_PORT")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_BASE_GROUP_ID")).To(Succeed())
-		Expect(os.Setenv("INFERENCE_SERVICE_GENERATION_PROVIDER", "ollama")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_ENDPOINT")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_MODEL")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Setenv("INFERENCE_SERVICE_RERANKER_PROVIDER", "tei")).To(Succeed())
 		Expect(os.Setenv("INFERENCE_SERVICE_RERANKER_URL", "http://tei.local")).To(Succeed())
@@ -70,6 +69,10 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER")).To(Succeed())
 		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", "self_query")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_PROTOCOL", "OPENAI_CHAT_COMPLETIONS")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_ENDPOINT", "http://ollama.local")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_MODEL", "llama3.1:8b")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PREFERENCE_DATASET_MIN_EXAMPLES")).To(Succeed())
@@ -95,9 +98,6 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Topics.DataRegistry).To(Equal("data_registry"))
 		Expect(cfg.ProfileTopic).To(Equal("profile"))
 		Expect(cfg.FeatureMaterializer.Address).To(Equal("localhost:7072"))
-		Expect(cfg.Generation.Provider).To(Equal("ollama"))
-		Expect(cfg.Generation.Endpoint).To(Equal("http://localhost:11434"))
-		Expect(cfg.Generation.Model).To(Equal("llama3.1:8b"))
 		Expect(cfg.Reranker.Provider).To(Equal("tei"))
 		Expect(cfg.Reranker.URL).To(Equal("http://tei.local"))
 		Expect(cfg.Reranker.Model).To(Equal("bge-reranker"))
@@ -113,6 +113,10 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Generation.MaxContextTokens).To(Equal(3000))
 		Expect(cfg.Generation.MaxContextChunks).To(Equal(8))
 		Expect(cfg.QueryTransformer.Provider).To(Equal("self_query"))
+		Expect(cfg.QueryTransformer.UtilityProtocol).To(Equal("OPENAI_CHAT_COMPLETIONS"))
+		Expect(cfg.QueryTransformer.UtilityEndpoint).To(Equal("http://ollama.local"))
+		Expect(cfg.QueryTransformer.UtilityModel).To(Equal("llama3.1:8b"))
+		Expect(cfg.QueryTransformer.RequestTimeout).To(Equal(30 * time.Second))
 		Expect(cfg.GRPCPort).To(Equal(7073))
 		Expect(cfg.Health.HealthCheckPort).To(Equal(5059))
 	})
@@ -126,29 +130,16 @@ var _ = Describe("readInferenceConfig", func() {
 	})
 })
 
-var _ = Describe("newGenerationAdapter", func() {
+var _ = Describe("newGenerationAdapters", func() {
 	BeforeEach(func() {
 		configureLocalEnv()
 	})
 
-	It("rejects unsupported providers", func() {
-		_, err := newGenerationAdapter(generationConfig{Provider: "unknown"})
+	It("registers supported serving protocols", func() {
+		adapters := newGenerationAdapters(generationConfig{RequestTimeout: time.Second})
 
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("unsupported generation provider"))
-	})
-
-	It("creates a vLLM HTTP generator", func() {
-		generator, err := newGenerationAdapter(generationConfig{
-			Provider:       "vllm",
-			Endpoint:       "http://vllm.local",
-			Model:          "base-model",
-			RequestTimeout: time.Second,
-		})
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(generator.Provider()).To(Equal("vllm"))
-		Expect(generator.Model()).To(Equal("base-model"))
+		Expect(adapters).To(HaveKey("OPENAI_CHAT_COMPLETIONS"))
+		Expect(adapters).To(HaveKey("OLLAMA_GENERATE"))
 	})
 })
 
@@ -195,10 +186,10 @@ var _ = Describe("runtime ML provider validation", func() {
 		configureLocalEnv()
 	})
 
-	It("rejects unknown generation providers", func() {
-		err := validateGenerationConfig(generationConfig{Provider: "unknown"})
+	It("rejects non-positive generation timeouts", func() {
+		err := validateGenerationConfig(generationConfig{})
 
-		Expect(err).To(MatchError(ContainSubstring("unsupported generation provider")))
+		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS must be greater than zero")))
 	})
 
 	It("rejects unknown reranking providers", func() {

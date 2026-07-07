@@ -5,6 +5,8 @@ test_results
 build
 tmp
 .env
+.env.*
+!.env.example
 .idea
 **/go.mod
 **/go.sum

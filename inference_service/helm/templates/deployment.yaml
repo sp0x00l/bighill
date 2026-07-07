@@ -134,12 +134,6 @@ spec:
               value: {{ .Values.env.featureMaterializerGrpcCallTimeoutMs | quote }}
             - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT
               value: {{ .Values.env.featureMaterializerGrpcRetryCount | quote }}
-            - name: INFERENCE_SERVICE_GENERATION_PROVIDER
-              value: {{ .Values.env.generationProvider | quote }}
-            - name: INFERENCE_SERVICE_GENERATION_ENDPOINT
-              value: {{ .Values.env.generationEndpoint | quote }}
-            - name: INFERENCE_SERVICE_GENERATION_MODEL
-              value: {{ .Values.env.generationModel | quote }}
             - name: INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.generationRequestTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_RERANKER_PROVIDER
@@ -154,6 +148,14 @@ spec:
               value: {{ .Values.env.rerankerCandidateMultiplier | quote }}
             - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER
               value: {{ .Values.env.queryTransformerProvider | quote }}
+            - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_PROTOCOL
+              value: {{ .Values.env.queryTransformerUtilityProtocol | quote }}
+            - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_ENDPOINT
+              value: {{ .Values.env.queryTransformerUtilityEndpoint | quote }}
+            - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_MODEL
+              value: {{ .Values.env.queryTransformerUtilityModel | quote }}
+            - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.env.queryTransformerRequestTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED
               value: {{ .Values.env.preferenceDatasetExportEnabled | quote }}
             - name: INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE

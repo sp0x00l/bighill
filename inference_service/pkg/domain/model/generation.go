@@ -27,7 +27,7 @@ type GenerateResponse struct {
 	Answer                string
 	Contexts              []RetrievedContext
 	PromptStrategyVersion string
-	GenerationProvider    string
+	GenerationProtocol    string
 	GenerationModel       string
 }
 
@@ -138,7 +138,7 @@ type InferenceRequest struct {
 	PromptText            string
 	AnswerText            string
 	PromptStrategyVersion string
-	GenerationProvider    string
+	GenerationProtocol    string
 	GenerationModel       string
 	LatencyMs             int64
 	Status                InferenceRequestStatus

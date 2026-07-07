@@ -39,6 +39,7 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_IMAGE")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT")).To(Succeed())
 	})
 
 	It("uses operator defaults", func() {
@@ -60,6 +61,7 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(cfg.Runtime.MultiTenant).To(BeFalse())
 		Expect(cfg.Runtime.RequestTimeout.String()).To(Equal("5s"))
 		Expect(cfg.Runtime.Port).To(Equal(int32(8000)))
+		Expect(cfg.Runtime.LocalOllamaEndpoint).To(Equal("http://localhost:11434"))
 	})
 
 	It("reads explicit runtime config", func() {
@@ -76,6 +78,7 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_IMAGE", "vllm/vllm-openai:v1")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED", "true")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS", "2500")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT", "http://ollama.local")).To(Succeed())
 
 		cfg := readModelServingConfig()
 
@@ -91,6 +94,7 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(cfg.Runtime.Image).To(Equal("vllm/vllm-openai:v1"))
 		Expect(cfg.Runtime.MultiTenant).To(BeTrue())
 		Expect(cfg.Runtime.RequestTimeout.String()).To(Equal("2.5s"))
+		Expect(cfg.Runtime.LocalOllamaEndpoint).To(Equal("http://ollama.local"))
 	})
 
 	It("uses the local backend without reading kubeconfig", func() {

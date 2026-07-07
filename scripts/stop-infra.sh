@@ -64,25 +64,8 @@ local_stop_tei() {
     fi
 }
 
-local_stop_ollama() {
-    local OLLAMA_PID_FILE="$PROJECT_ROOT/tmp/ollama-generation/ollama-generation.pid"
-    local OLLAMA_SCRIPT="$PROJECT_ROOT/scripts/docker/services/ollama_stub.py"
-
-    if [ -f "$OLLAMA_PID_FILE" ]; then
-        echo "Stopping local Ollama-compatible generation endpoint..."
-        kill "$(cat "$OLLAMA_PID_FILE")" >/dev/null 2>&1 || true
-        rm -f "$OLLAMA_PID_FILE"
-        return
-    fi
-
-    if command -v pgrep >/dev/null 2>&1; then
-        pgrep -f "$OLLAMA_SCRIPT" | xargs kill 2>/dev/null || true
-    fi
-}
-
 local_stop_services() {
     local_stop_tei
-    local_stop_ollama
     local_stop_polaris
     local_stop_temporal
 
@@ -106,7 +89,6 @@ local_stop_services() {
 
 cicd_stop_services() {
     local_stop_tei
-    local_stop_ollama
 
     if check_docker; then
         echo "Stopping docker-compose infra..."

@@ -3,7 +3,10 @@ package localserving
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	localstore "lib/shared_lib/servedmodel"
@@ -24,29 +27,125 @@ func TestLocalServing(t *testing.T) {
 var _ = Describe("Runtime", func() {
 	It("returns a ready local runtime state for base-backed served models", func() {
 		modelID := uuid.New()
-		runtime := NewRuntime("default", 8080)
+		runtime := NewRuntime("default", 8080, "http://ollama.local")
+		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"llama3.1:8b"}]}`, func(req *http.Request) {
+			Expect(req.URL.Path).To(Equal("/api/tags"))
+		})}
 
 		state, err := runtime.EnsureServedModel(context.Background(), &model.ServedModel{
 			ModelID:      modelID,
+			ModelKind:    "BASE",
 			Name:         "llama",
 			ModelVersion: 2,
-			BaseModel:    "meta-llama/Llama",
+			BaseModel:    "llama3.1:8b",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(state.Ready).To(BeTrue())
-		Expect(state.ServingTarget).To(Equal("http://local-model-serving.default.local:8080"))
-		Expect(state.ServingModel).To(ContainSubstring(modelID.String()[:8]))
+		Expect(state.ServingTarget).To(Equal("http://ollama.local"))
+		Expect(state.ServingModel).To(Equal("llama3.1:8b"))
 		Expect(state.ReadyReplicas).To(Equal(int32(1)))
 	})
 
+	It("matches Ollama tags that omit the explicit latest suffix", func() {
+		runtime := NewRuntime("default", 8080, "http://ollama.local")
+		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"llama3.1:latest"}]}`, nil)}
+
+		state, err := runtime.EnsureServedModel(context.Background(), &model.ServedModel{
+			ModelID:      uuid.New(),
+			ModelKind:    "BASE",
+			Name:         "llama",
+			ModelVersion: 1,
+			BaseModel:    "llama3.1",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.ServingModel).To(Equal("llama3.1"))
+	})
+
+	It("treats major local model families as runtime data, not provider or protocol variants", func() {
+		families := []string{
+			"llama3.1:8b",
+			"mistral:7b",
+			"qwen2.5:7b",
+			"deepseek-r1:7b",
+			"gemma3:4b",
+		}
+
+		for _, baseModel := range families {
+			runtime := NewRuntime("default", 8080, "http://ollama.local")
+			runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"`+baseModel+`"}]}`, nil)}
+
+			state, err := runtime.EnsureServedModel(context.Background(), &model.ServedModel{
+				ModelID:      uuid.New(),
+				ModelKind:    "BASE",
+				Name:         "base",
+				ModelVersion: 1,
+				BaseModel:    baseModel,
+			})
+
+			Expect(err).NotTo(HaveOccurred(), baseModel)
+			Expect(state.ServingModel).To(Equal(baseModel), baseModel)
+			Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions), baseModel)
+		}
+	})
+
+	It("does not default non-base models to the base model", func() {
+		_, err := NewRuntime("default", 8080, "http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{
+			ModelID:      uuid.New(),
+			ModelKind:    "FINE_TUNED",
+			Name:         "fine-tune",
+			ModelVersion: 1,
+			BaseModel:    "llama3.1:8b",
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("serving model is required for non-base local served models")))
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+	})
+
+	It("rejects base models that are not loaded in local Ollama", func() {
+		runtime := NewRuntime("default", 8080, "http://ollama.local")
+		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"other-model"}]}`, nil)}
+
+		_, err := runtime.EnsureServedModel(context.Background(), &model.ServedModel{
+			ModelID:      uuid.New(),
+			ModelKind:    "BASE",
+			Name:         "llama",
+			ModelVersion: 1,
+			BaseModel:    "llama3.1:8b",
+		})
+
+		Expect(err).To(MatchError(ContainSubstring(`local ollama model "llama3.1:8b" is not available`)))
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+	})
+
 	It("rejects served models with no base model", func() {
-		_, err := NewRuntime("default", 8080).EnsureServedModel(context.Background(), &model.ServedModel{})
+		_, err := NewRuntime("default", 8080, "http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{})
 
 		Expect(err).To(MatchError(ContainSubstring("base model is required")))
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 })
+
+type localOllamaTagsTransport struct {
+	payload string
+	assert  func(*http.Request)
+}
+
+func newLocalOllamaTagsTransport(payload string, assert func(*http.Request)) localOllamaTagsTransport {
+	return localOllamaTagsTransport{payload: payload, assert: assert}
+}
+
+func (t localOllamaTagsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.assert != nil {
+		t.assert(req)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(t.payload)),
+		Header:     make(http.Header),
+	}, nil
+}
 
 var _ = Describe("Store record conversion", func() {
 	It("converts local store records to served models", func() {
@@ -61,6 +160,7 @@ var _ = Describe("Store record conversion", func() {
 				ModelID:       modelID.String(),
 				TrainingRunID: trainingRunID.String(),
 				DatasetID:     datasetID.String(),
+				ModelKind:     "BASE",
 				Name:          "llama",
 				ModelVersion:  1,
 				BaseModel:     "meta-llama/Llama",
@@ -80,6 +180,7 @@ var _ = Describe("Store record conversion", func() {
 		Expect(served.ModelID).To(Equal(modelID))
 		Expect(served.TrainingRunID).To(Equal(trainingRunID))
 		Expect(served.DatasetID).To(Equal(datasetID))
+		Expect(served.ModelKind).To(Equal("BASE"))
 		Expect(served.Status.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 	})
 

@@ -60,6 +60,7 @@ type InferenceModel struct {
 	AdapterURI        string
 	ServingTarget     string
 	ServingModel      string
+	ServingProtocol   ServingProtocol
 	ServingLoadStatus ModelLoadStatus
 	MetricsMetadata   string
 	Status            ModelStatus

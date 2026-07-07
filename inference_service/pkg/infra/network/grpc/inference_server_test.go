@@ -103,7 +103,7 @@ var _ = Describe("InferenceServer", func() {
 				QueryText:             "what is relevant?",
 				Answer:                "generated answer",
 				PromptStrategyVersion: "rag-prompt-v1",
-				GenerationProvider:    "ollama",
+				GenerationProtocol:    "OPENAI_CHAT_COMPLETIONS",
 				GenerationModel:       "llama3.1:8b",
 				Contexts: []model.RetrievedContext{{
 					EmbeddingRecordID:   recordID,
@@ -140,7 +140,7 @@ var _ = Describe("InferenceServer", func() {
 		Expect(response.GetAnswer()).To(Equal("generated answer"))
 		Expect(response.GetRequestId()).To(Equal(requestID.String()))
 		Expect(response.GetPromptStrategyVersion()).To(Equal("rag-prompt-v1"))
-		Expect(response.GetGenerationProvider()).To(Equal("ollama"))
+		Expect(response.GetGenerationProtocol()).To(Equal("OPENAI_CHAT_COMPLETIONS"))
 		Expect(response.GetGenerationModel()).To(Equal("llama3.1:8b"))
 		Expect(response.GetContexts()).To(HaveLen(1))
 		Expect(response.GetContexts()[0].GetEmbeddingRecordId()).To(Equal(recordID.String()))

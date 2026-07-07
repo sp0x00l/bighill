@@ -56,6 +56,7 @@ var _ = Describe("ServedModelStore", func() {
 			ServingLoadStatus:  model.ModelLoadStatusLoaded,
 			ServingTarget:      "http://served-model.default.svc.cluster.local:8000",
 			ServingModel:       "ranker-v1",
+			ServingProtocol:    model.ServingProtocolOpenAIChatCompletions,
 			ObservedGeneration: 7,
 			ReadyReplicas:      1,
 		})).To(Succeed())
@@ -64,8 +65,10 @@ var _ = Describe("ServedModelStore", func() {
 		Expect(err).NotTo(HaveOccurred())
 		statusRaw, _, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
 		target, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
+		protocol, _, _ := unstructured.NestedString(obj.Object, "status", "servingProtocol")
 		Expect(statusRaw).To(Equal("LOADED"))
 		Expect(target).To(Equal("http://served-model.default.svc.cluster.local:8000"))
+		Expect(protocol).To(Equal("OPENAI_CHAT_COMPLETIONS"))
 	})
 
 	It("skips ServedModel status writes when status has not changed", func() {
@@ -74,6 +77,7 @@ var _ = Describe("ServedModelStore", func() {
 		Expect(unstructured.SetNestedField(existing.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
 		Expect(unstructured.SetNestedField(existing.Object, "http://served-model.default.svc.cluster.local:8000", "status", "servingTarget")).To(Succeed())
 		Expect(unstructured.SetNestedField(existing.Object, "ranker-v1", "status", "servingModel")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, "OPENAI_CHAT_COMPLETIONS", "status", "servingProtocol")).To(Succeed())
 		Expect(unstructured.SetNestedField(existing.Object, "", "status", "failureReason")).To(Succeed())
 		Expect(unstructured.SetNestedField(existing.Object, int64(7), "status", "observedGeneration")).To(Succeed())
 		Expect(unstructured.SetNestedField(existing.Object, int64(1), "status", "readyReplicas")).To(Succeed())
@@ -92,6 +96,7 @@ var _ = Describe("ServedModelStore", func() {
 			ServingLoadStatus:  model.ModelLoadStatusLoaded,
 			ServingTarget:      "http://served-model.default.svc.cluster.local:8000",
 			ServingModel:       "ranker-v1",
+			ServingProtocol:    model.ServingProtocolOpenAIChatCompletions,
 			ObservedGeneration: 7,
 			ReadyReplicas:      1,
 		})).To(Succeed())
@@ -155,6 +160,7 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(state.Ready).To(BeFalse())
 		Expect(state.ServingModel).To(Equal("ranker-v1"))
 		Expect(state.ServingTarget).To(Equal("http://served-model-4f4b8258-f9af-49f8-b5a8-f84d75891f3b.default.svc.cluster.local:8000"))
+		Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
 		deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingk8s.WorkloadName(servedModel), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
@@ -166,6 +172,40 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(err).NotTo(HaveOccurred())
 		ports, _, _ := unstructured.NestedSlice(service.Object, "spec", "ports")
 		Expect(ports[0].(map[string]any)["port"]).To(Equal(int64(8000)))
+	})
+
+	It("treats major open model families as runtime data, not provider or protocol variants", func() {
+		families := []string{
+			"meta-llama/Llama-3-8B",
+			"mistralai/Mistral-7B-Instruct-v0.3",
+			"Qwen/Qwen2.5-7B-Instruct",
+			"deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+			"google/gemma-2-9b-it",
+		}
+
+		for _, baseModel := range families {
+			servedModel := validServedModel()
+			servedModel.ModelID = uuid.New()
+			servedModel.ResourceName = ""
+			servedModel.BaseModel = baseModel
+			servedModel.AdapterURI = ""
+			client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+			runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+			Expect(err).NotTo(HaveOccurred())
+
+			state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions), baseModel)
+			deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingk8s.WorkloadName(servedModel), metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+			args := containers[0].(map[string]any)["args"].([]any)
+			Expect(args).To(ContainElement("--model"), baseModel)
+			Expect(args).To(ContainElement(baseModel), baseModel)
+			Expect(args).To(ContainElement("--served-model-name"), baseModel)
+			Expect(args).To(ContainElement(servingk8s.ServingModelName(servedModel)), baseModel)
+		}
 	})
 
 	It("uses a shared base runtime and dynamically loads adapters in multi-tenant mode", func() {
@@ -202,6 +242,7 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(loadRequests).To(Equal(1))
 		Expect(state.ServingTarget).To(Equal("http://vllm.test"))
 		Expect(state.ServingModel).To(Equal("ranker-v1"))
+		Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
 		deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
@@ -285,6 +326,7 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(state.Ready).To(BeTrue())
 		Expect(state.ReadyReplicas).To(Equal(int32(1)))
+		Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
 	})
 
 	It("does not report loaded when vLLM does not list the adapter model", func() {
@@ -478,6 +520,7 @@ func validServedModel() *model.ServedModel {
 		ModelID:       uuid.MustParse("4f4b8258-f9af-49f8-b5a8-f84d75891f3b"),
 		TrainingRunID: uuid.MustParse("76b4da89-7fdb-459a-a842-9f866152efad"),
 		DatasetID:     uuid.MustParse("6629d88a-05af-411e-8439-7497620e41df"),
+		ModelKind:     "FINE_TUNED",
 		Name:          "ranker",
 		ModelVersion:  1,
 		BaseModel:     "mistral-7b",
@@ -498,6 +541,7 @@ func servedModelCR(servedModel *model.ServedModel) *unstructured.Unstructured {
 			"modelID":       servedModel.ModelID.String(),
 			"trainingRunID": servedModel.TrainingRunID.String(),
 			"datasetID":     servedModel.DatasetID.String(),
+			"modelKind":     servedModel.ModelKind,
 			"name":          servedModel.Name,
 			"modelVersion":  int64(servedModel.ModelVersion),
 			"baseModel":     servedModel.BaseModel,
