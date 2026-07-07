@@ -66,6 +66,6 @@ Embedding snapshots are derived from feature snapshots and an embedding strategy
 
 ## Local Development
 
-Local and CI use deterministic embedding defaults so tests do not require a GPU embedding server. Staging/prod can point `FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL` at TEI or another compatible embedding endpoint.
+Local and CI use the same runtime embedding contract as staging and production. Configure `FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER`, `FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL`, and `FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL` for a TEI or Ollama-compatible embedding endpoint; the service fails startup if those values are missing.
 
 The local file/object-store path is still snapshot based: tests write a dataset artifact, materialization reads it, and the service emits the same snapshot events used in deployed environments.

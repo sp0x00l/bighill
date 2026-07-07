@@ -113,15 +113,11 @@ func run(ctx context.Context, command Command, stdout io.Writer, consume func(io
 		return Result{}, err
 	}
 
-	waitDone := make(chan error, 1)
-	go func() {
-		waitDone <- cmd.Wait()
-	}()
-
 	var waitErr error
 	var consumeErr error
 	canceledByContext := false
 	if consume == nil {
+		waitDone := waitForProcess(cmd)
 		select {
 		case waitErr = <-waitDone:
 		case <-runCtx.Done():
@@ -141,21 +137,37 @@ func run(ctx context.Context, command Command, stdout io.Writer, consume func(io
 
 	select {
 	case consumeErr = <-consumeDone:
+		waitDone := waitForProcess(cmd)
 		if consumeErr != nil {
 			waitErr = terminateProcessGroup(cmd, command.TerminationGrace, waitDone)
 		} else {
-			waitErr = <-waitDone
+			select {
+			case waitErr = <-waitDone:
+			case <-runCtx.Done():
+				canceledByContext = true
+				timedOut = errors.Is(runCtx.Err(), context.DeadlineExceeded)
+				waitErr = terminateProcessGroup(cmd, command.TerminationGrace, waitDone)
+			}
 		}
-	case waitErr = <-waitDone:
-		consumeErr = <-consumeDone
 	case <-runCtx.Done():
 		canceledByContext = true
 		timedOut = errors.Is(runCtx.Err(), context.DeadlineExceeded)
+		waitDone := waitForProcess(cmd)
 		waitErr = terminateProcessGroup(cmd, command.TerminationGrace, waitDone)
 		consumeErr = <-consumeDone
 	}
 
 	return commandResult(timedOut, canceledByContext, waitErr, consumeErr, stderr.String())
+}
+
+func waitForProcess(cmd *exec.Cmd) <-chan error {
+	log.Trace("processrunner waitForProcess")
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- cmd.Wait()
+	}()
+	return waitDone
 }
 
 func commandResult(timedOut bool, canceledByContext bool, waitErr error, consumeErr error, stderr string) (Result, error) {

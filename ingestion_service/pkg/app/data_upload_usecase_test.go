@@ -129,6 +129,10 @@ type stubUploadSessionRepository struct {
 	recordErr        error
 }
 
+func (s *stubUploadSessionRepository) ReserveID(context.Context, pgx.Tx) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
 type stubUploadSessionUnitOfWork struct {
 	messages []msgConn.OutboundMessage
 	err      error
@@ -206,8 +210,22 @@ func (s *stubModelDownloader) DownloadHuggingFaceModel(_ context.Context, reques
 }
 
 func (s *stubUploadSessionRepository) CreateUploadSession(_ context.Context, _ pgx.Tx, session *model.UploadSession) (*model.UploadSession, error) {
-	s.created = session
-	return session, s.createErr
+	if s.created != nil &&
+		s.created.ClientNonce == session.ClientNonce &&
+		s.created.ResourceType == session.ResourceType &&
+		s.created.UserID == session.UserID &&
+		s.created.OrgID == session.OrgID {
+		return s.created, s.createErr
+	}
+	created := *session
+	if created.UploadID == uuid.Nil {
+		created.UploadID = uuid.New()
+	}
+	if created.ResourceID == uuid.Nil {
+		created.ResourceID = uuid.New()
+	}
+	s.created = &created
+	return s.created, s.createErr
 }
 
 func (s *stubUploadSessionRepository) ReadUploadSessionForComplete(ctx context.Context, uploadID, userID uuid.UUID) (*model.UploadSession, error) {
@@ -254,6 +272,9 @@ func (s *stubUploadSessionRepository) ExpireUploadSession(context.Context, pgx.T
 }
 
 func (s *stubUploadSessionRepository) RecordUploadedFile(_ context.Context, _ pgx.Tx, upload *model.DataFile, location string, uploadID uuid.UUID) (*model.UploadSession, error) {
+	if uploadID == uuid.Nil {
+		uploadID = uuid.New()
+	}
 	s.recordedUpload = upload
 	s.recordedLocation = location
 	s.recordedUploadID = uploadID
@@ -272,6 +293,12 @@ func (s *stubUploadSessionRepository) RecordUploadedFile(_ context.Context, _ pg
 }
 
 func (s *stubUploadSessionRepository) RecordModelArtifact(_ context.Context, _ pgx.Tx, session *model.UploadSession) (*model.UploadSession, error) {
+	if session.UploadID == uuid.Nil {
+		session.UploadID = uuid.New()
+	}
+	if session.ResourceID == uuid.Nil {
+		session.ResourceID = uuid.New()
+	}
 	s.recordedModel = session
 	return session, s.recordErr
 }

@@ -77,10 +77,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			HaveKeyWithValue("comment", "wrong answer"),
 			HaveKeyWithValue("preferred_answer", "corrected answer"),
 		))
-		Expect(args["preference_example_id"]).To(Equal(pgtype.UUID{
-			Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte("preference:"+idempotencyKey.String())),
-			Valid: true,
-		}))
+		Expect(args).NotTo(HaveKey("preference_example_id"))
 	})
 
 	It("wraps database failures", func() {

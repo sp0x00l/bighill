@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	env "lib/shared_lib/env"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -16,6 +18,14 @@ func TestInferenceMain(t *testing.T) {
 }
 
 var _ = Describe("staging Helm values", func() {
+	It("configures local inference adapters", func() {
+		values := readTextFile("helm/values.yaml")
+
+		Expect(values).To(ContainSubstring(`generationProvider: "ollama"`))
+		Expect(values).To(ContainSubstring(`rerankerProvider: "tei"`))
+		Expect(values).To(ContainSubstring(`queryTransformerProvider: "self_query"`))
+	})
+
 	It("does not inherit local generation and retrieval adapters", func() {
 		values := readTextFile("helm/staging-values.yaml")
 
@@ -23,9 +33,6 @@ var _ = Describe("staging Helm values", func() {
 		Expect(values).To(ContainSubstring(`rerankerProvider: "tei"`))
 		Expect(values).To(ContainSubstring(`queryTransformerProvider: "self_query"`))
 		Expect(values).To(ContainSubstring(`preferenceDatasetUriTemplate: "s3://bighill-mlops-lakehouse/preferences/{dataset_id}/{preference_dataset_id}.jsonl"`))
-		Expect(values).NotTo(ContainSubstring(`generationProvider: "deterministic"`))
-		Expect(values).NotTo(ContainSubstring(`rerankerProvider: "disabled"`))
-		Expect(values).NotTo(ContainSubstring(`queryTransformerProvider: "disabled"`))
 		Expect(values).NotTo(ContainSubstring("local-dev-bucket"))
 		Expect(values).NotTo(ContainSubstring("localhost:4566"))
 	})
@@ -39,6 +46,7 @@ func readTextFile(path string) string {
 
 var _ = Describe("readInferenceConfig", func() {
 	BeforeEach(func() {
+		configureLocalEnv()
 		Expect(os.Unsetenv("INFERENCE_SERVICE_DB_NAME")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_DB_USER")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_DB_PASSWORD")).To(Succeed())
@@ -52,15 +60,16 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_API_GRPC_PORT")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_BASE_GROUP_ID")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_PROVIDER")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_GENERATION_PROVIDER", "ollama")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_ENDPOINT")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_MODEL")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_PROVIDER")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_URL")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_MODEL")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_RERANKER_PROVIDER", "tei")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_RERANKER_URL", "http://tei.local")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_RERANKER_MODEL", "bge-reranker")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", "self_query")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PREFERENCE_DATASET_MIN_EXAMPLES")).To(Succeed())
@@ -72,7 +81,7 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PROMPT_MAX_CONTEXT_CHUNKS")).To(Succeed())
 	})
 
-	It("uses local defaults", func() {
+	It("uses explicit local ML providers", func() {
 		cfg := readInferenceConfig()
 
 		Expect(cfg.ServiceName).To(Equal("inference-service"))
@@ -86,12 +95,12 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Topics.DataRegistry).To(Equal("data_registry"))
 		Expect(cfg.ProfileTopic).To(Equal("profile"))
 		Expect(cfg.FeatureMaterializer.Address).To(Equal("localhost:7072"))
-		Expect(cfg.Generation.Provider).To(Equal("deterministic"))
+		Expect(cfg.Generation.Provider).To(Equal("ollama"))
 		Expect(cfg.Generation.Endpoint).To(Equal("http://localhost:11434"))
 		Expect(cfg.Generation.Model).To(Equal("llama3.1:8b"))
-		Expect(cfg.Reranker.Provider).To(Equal("disabled"))
-		Expect(cfg.Reranker.URL).To(BeEmpty())
-		Expect(cfg.Reranker.Model).To(BeEmpty())
+		Expect(cfg.Reranker.Provider).To(Equal("tei"))
+		Expect(cfg.Reranker.URL).To(Equal("http://tei.local"))
+		Expect(cfg.Reranker.Model).To(Equal("bge-reranker"))
 		Expect(cfg.Reranker.RequestTimeout).To(Equal(30 * time.Second))
 		Expect(cfg.Reranker.CandidateMultiplier).To(Equal(5))
 		Expect(cfg.PreferenceDataset.ExportEnabled).To(BeFalse())
@@ -103,6 +112,7 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Generation.PromptStrategy).To(Equal("rag-prompt-v1"))
 		Expect(cfg.Generation.MaxContextTokens).To(Equal(3000))
 		Expect(cfg.Generation.MaxContextChunks).To(Equal(8))
+		Expect(cfg.QueryTransformer.Provider).To(Equal("self_query"))
 		Expect(cfg.GRPCPort).To(Equal(7073))
 		Expect(cfg.Health.HealthCheckPort).To(Equal(5059))
 	})
@@ -117,11 +127,8 @@ var _ = Describe("readInferenceConfig", func() {
 })
 
 var _ = Describe("newGenerationAdapter", func() {
-	It("creates the deterministic local generator", func() {
-		generator, err := newGenerationAdapter(generationConfig{Provider: "deterministic"})
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(generator.Provider()).To(Equal("deterministic"))
+	BeforeEach(func() {
+		configureLocalEnv()
 	})
 
 	It("rejects unsupported providers", func() {
@@ -146,11 +153,8 @@ var _ = Describe("newGenerationAdapter", func() {
 })
 
 var _ = Describe("newRerankerAdapter", func() {
-	It("disables reranking when configured as disabled", func() {
-		reranker, err := newRerankerAdapter(rerankerConfig{Provider: "disabled"})
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(reranker).To(BeNil())
+	BeforeEach(func() {
+		configureLocalEnv()
 	})
 
 	It("creates a TEI reranker", func() {
@@ -185,6 +189,35 @@ var _ = Describe("newRerankerAdapter", func() {
 		Expect(err.Error()).To(ContainSubstring("unsupported reranker provider"))
 	})
 })
+
+var _ = Describe("runtime ML provider validation", func() {
+	BeforeEach(func() {
+		configureLocalEnv()
+	})
+
+	It("rejects unknown generation providers", func() {
+		err := validateGenerationConfig(generationConfig{Provider: "unknown"})
+
+		Expect(err).To(MatchError(ContainSubstring("unsupported generation provider")))
+	})
+
+	It("rejects unknown reranking providers", func() {
+		err := validateRerankerConfig(rerankerConfig{Provider: "unknown"})
+
+		Expect(err).To(MatchError(ContainSubstring("unsupported reranker provider")))
+	})
+
+	It("rejects unknown query transformation providers", func() {
+		err := validateQueryTransformerConfig(queryTransformerConfig{Provider: "unknown"})
+
+		Expect(err).To(MatchError(ContainSubstring("unsupported query transformer provider")))
+	})
+})
+
+func configureLocalEnv() {
+	Expect(os.Setenv("ENVIRONMENT", "LOCAL-DEV")).To(Succeed())
+	env.ResetEnvironmentCache()
+}
 
 var _ = Describe("promptStrategyFromConfig", func() {
 	It("builds an explicit prompt strategy from config", func() {

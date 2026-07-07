@@ -82,6 +82,9 @@ func (c *TokenWindowChunker) Chunk(_ context.Context, rows []string) ([]TextChun
 	log.Trace("TokenWindowChunker Chunk")
 
 	strategy := model.NormalizeEmbeddingStrategy(c.strategy)
+	if err := model.ValidateEmbeddingStrategy(strategy); err != nil {
+		return nil, err
+	}
 	encoding, err := c.getEncoding()
 	if err != nil {
 		return nil, err

@@ -68,6 +68,40 @@ work stays in batch jobs behind clean boundaries.
 
 ---
 
+## Runtime environments
+
+Services read the runtime mode from `ENVIRONMENT`. The accepted values are `LOCAL-DEV`, `CICD`,
+`STAGING`, and `PRODUCTION`; unset or unknown values are not treated as dev. `env.IsDevEnv()` is true
+only for `LOCAL-DEV` and `CICD`, so staging and production share the same fail-closed behavior.
+
+| Environment | `IsDevEnv()` | External ML backends | Storage policy | Failure behavior |
+|-------------|--------------|----------------------|----------------|------------------|
+| `LOCAL-DEV` | true | Ollama/vLLM-compatible generation, TEI-compatible embeddings, TEI-compatible reranking | `local-dev-bucket` is allowed | Missing provider names, endpoints, or models fail service startup |
+| `CICD` | true | Same provider contracts as local, backed by test-owned protocol-compatible services where needed | Test-local buckets are allowed | Missing provider names, endpoints, or models fail service startup |
+| `STAGING` | false | Production-parity generation, embeddings, and reranking | `local-dev-bucket` is rejected | Same fail-closed startup policy as production |
+| `PRODUCTION` | false | Production generation, embeddings, and reranking | `local-dev-bucket` is rejected | Same fail-closed startup policy as staging |
+
+The base Helm charts are local-dev oriented but still use the same runtime provider contract as
+staging and production. Local runs need reachable local-compatible services, for example Ollama for
+generation and TEI-compatible endpoints for embeddings and reranking.
+
+The Kubernetes orchestration paths are different. The local-dev and CI service-script paths use
+local substitutes for control-plane integration points that otherwise require a cluster, CRDs, GPU
+nodes, or batch-job permissions. Staging and production use the Kubernetes-backed path.
+
+| Orchestrated path | `LOCAL-DEV` / `CICD` | `STAGING` / `PRODUCTION` |
+|-------------------|----------------------|---------------------------|
+| Model serving reconciliation | Local served-model store when using service scripts; no Kubernetes/vLLM required for local loops | Kubernetes `ServedModel` CRD, vLLM Deployment/Service reconciliation |
+| Model registry serving backend | Local served-model backend when using service scripts | Kubernetes `ServedModel` backend |
+| Training execution | Direct Ray Jobs API when using service scripts | KubeRay job creation from Temporal activities |
+| Hugging Face model downloads | Local command execution | Kubernetes Job execution |
+
+Be careful with base Helm values: several local-dev charts still default to Kubernetes-backed
+orchestrators, while the service scripts select local substitutes. Use environment-specific values
+when the target is a non-Kubernetes local loop.
+
+---
+
 ## End-to-end flow
 
 This is the main path from a user logging in to a self-improving model serving inference. Solid
@@ -91,41 +125,49 @@ sequenceDiagram
     participant SV as model_serving
     participant IF as inference_service
 
-    Note over U,PR: 1 · Authenticate
-    U->>GW: POST /login
-    GW->>PR: authenticate
-    PR-->>U: session token
+    Note over U,PR: 1 · Authenticate + select org
+    U->>GW: POST /public/v1/profiles/password/verify
+    GW->>PR: verify credentials
+    PR-->>U: access token {userId, orgId, roles, permissions}
+    U->>GW: GET /v1/private/orgs/current
+    GW->>PR: read active org + membership
 
-    Note over U,FM: 2 · Ingest & materialize data
-    U->>GW: register dataset + request upload
+    Note over U,PR: 2 · Org RBAC
+    U->>GW: POST /v1/private/orgs/{org_id}/members
+    GW->>PR: add researcher / consumer membership
+    PR-->>U: member role + status
+
+    Note over U,FM: 3 · Ingest & materialize data
+    U->>GW: POST /v1/private/data/registry
     GW->>DR: create dataset / source
+    U->>GW: POST /v1/private/data/uploads/{dataset_id}
     GW->>IN: open presigned upload session
-    U->>IN: upload files (PDF / CSV / Parquet / …)
+    U->>GW: upload files (PDF / CSV / Parquet / …)
     IN-->>FM: raw_snapshot_ready
     FM->>FM: extract · chunk · embed → pgvector
     FM-->>DR: feature_snapshot_ready / embedding_snapshot_ready
     DR-->>TR: dataset_updated (FEATURE_MATERIALIZED)
 
-    Note over U,MR: 3 · Onboard / select a base model
-    U->>GW: upload / onboard base model
+    Note over U,MR: 4 · Onboard / select a base model
+    U->>GW: POST /v1/private/models/uploads or /v1/private/models/onboard/huggingface
     GW->>IN: model artifact upload
     IN-->>MR: model_artifact_ingested
-    U->>GW: GET /v1/models
+    U->>GW: GET /v1/private/models
     GW->>MR: list trainable models
 
-    Note over U,RAY: 4 · Trigger training (user intent)
-    U->>GW: POST /v1/training-runs {dataset_id, source_model_id, profiles}
+    Note over U,RAY: 5 · Trigger training (researcher permission)
+    U->>GW: POST /v1/private/training-runs {dataset_id, source_model_id, profiles}
     GW->>TR: start training run
     TR->>DR: resolve materialized dataset
     TR->>MR: resolve trainable source model
     TR-->>U: 202 {training_run_id, status_url}
 
-    Note over TR,RAY: 5 · Train → evaluate (Temporal workflow)
+    Note over TR,RAY: 6 · Train → evaluate (Temporal workflow)
     TR->>RAY: prepare data · train (Axolotl) · evaluate
     RAY-->>TR: artifact + evaluation report
     TR-->>MR: model_training_completed
 
-    Note over MR,RAY: 6 · Promotion gate
+    Note over MR,RAY: 7 · Promotion gate
     MR->>MR: register CANDIDATE
     MR-->>TR: promotion_requested (candidate + champion)
     TR->>RAY: promotion_report (Deepchecks / Evidently)
@@ -138,56 +180,68 @@ sequenceDiagram
         MR->>MR: status FAILED
     end
 
-    Note over MR,SV: 7 · Serve
+    Note over MR,SV: 8 · Serve
     MR-->>SV: model_updated (serving intent)
     SV->>SV: reconcile vLLM deployment
     SV-->>MR: serving status → READY / LOADED (champion)
     MR-->>IF: model_updated (ready model)
 
-    Note over U,RAY: 8 · Inference + feedback loop
-    U->>GW: POST query (RAG)
-    GW->>IF: infer
+    Note over U,RAY: 9 · Consumer inference + feedback
+    U->>GW: GET /v1/private/inference/endpoints
+    GW->>IF: list safe endpoint projection
+    U->>GW: POST /v1/private/inference/endpoints/{endpoint_id}/generations
+    GW->>IF: generate from endpoint (trusted X-User-ID / X-Org-ID)
     IF->>FM: vector search (pgvector)
     IF->>SV: generate (vLLM)
     IF-->>U: answer + full audit trail
-    U->>IF: feedback (rating / preference)
+    U->>GW: POST /v1/private/inference/feedback
+    GW->>IF: feedback (rating / preference)
     IF-->>TR: preference_dataset_ready
-    TR->>RAY: DPO retrain → re-enter step 5
+    TR->>RAY: DPO retrain → re-enter step 6
 ```
 
 **Walking the flow:**
 
-1. **Authenticate.** Everything enters through `api_gateway`, which delegates auth to
-   `profile_service` and injects the tenant identity that every downstream service uses for
-   row-level isolation.
-2. **Ingest & materialize.** A dataset and its source are registered in `data_registry`;
+1. **Authenticate + select org.** Everything enters through `api_gateway`, which delegates auth to
+   `profile_service`. Tokens carry the active `orgId`, role, and derived permissions. The gateway
+   injects trusted `X-User-ID` / `X-Org-ID` headers and rejects spoofed inbound identity headers.
+2. **Org RBAC.** Organization membership is managed through `GET /v1/private/orgs/current`,
+   `GET /v1/private/orgs/{org_id}/members`, `POST /v1/private/orgs/{org_id}/members`,
+   `PUT /v1/private/orgs/{org_id}/members/{user_id}`, and
+   `DELETE /v1/private/orgs/{org_id}/members/{user_id}`. `ml_researcher` can upload data/models
+   and start training; `consumer` can only list/invoke inference endpoints and submit feedback.
+3. **Ingest & materialize.** A dataset and its source are registered in `data_registry`;
    `ingestion_service` hands back a presigned upload session and lands the raw files.
    `feature_materializer` picks up `raw_snapshot_ready`, extracts and chunks documents, embeds them,
    and writes vectors to **pgvector** — content-addressed, so re-runs don't duplicate work. When the
    snapshot is materialized, `data_registry` publishes `dataset_updated`.
-3. **Onboard / select a base model.** Base models are uploaded through `ingestion_service` and
+4. **Onboard / select a base model.** Base models are uploaded through `ingestion_service` and
    registered in `model_registry` (`model_artifact_ingested`); the UI lists trainable models via
-   `GET /v1/models` (tenant-scoped: shared bases plus your own).
-4. **Trigger training.** Training is **user intent, not a hidden default** — the client POSTs the
-   dataset, the source model, and named profiles. `training_service` resolves the materialized
-   dataset and the trainable source model, validates them, and returns a `training_run_id`
-   immediately. The base model is carried as *data*, never as service config.
-5. **Train → evaluate.** A durable Temporal workflow prepares the data, runs the GPU training job on
+   `GET /v1/private/models` (org-scoped: shared bases plus your own).
+5. **Trigger training.** Training is **user intent, not a hidden default** — a researcher POSTs the
+   dataset, the source model, and named profiles to `POST /v1/private/training-runs`.
+   `training_service` resolves the materialized dataset and the trainable source model, validates
+   them, and returns a `training_run_id` immediately. The base model is carried as *data*, never as
+   service config.
+6. **Train → evaluate.** A durable Temporal workflow prepares the data, runs the GPU training job on
    Ray (`training_jobs`, Axolotl-style recipes), evaluates the result, and emits
    `model_training_completed`.
-6. **Promotion gate.** `model_registry` records the new model as a **CANDIDATE** — it is *not* served
+7. **Promotion gate.** `model_registry` records the new model as a **CANDIDATE** — it is *not* served
    yet — and asks `training_service` for a promotion report (Deepchecks / Evidently). The gate then
    compares the candidate against the current **champion** for that lineage (absolute floors +
    no-regression + evidence). It promotes to `EVALUATED` or rejects to `FAILED`. This is the guard
    that makes the retrain loop safe.
-7. **Serve.** On promotion, `model_registry` records serving intent; `model_serving` reconciles a
+8. **Serve.** On promotion, `model_registry` records serving intent; `model_serving` reconciles a
    vLLM deployment and reports back until the model is `READY / LOADED` — at which point it becomes
    the new champion. Inference services learn the ready model via `model_updated`.
-8. **Inference + feedback loop.** `inference_service` answers RAG queries — retrieval from pgvector,
-   rerank, query rewrite, generation on vLLM — with a full audit trail. Captured feedback becomes a
-   preference dataset; `preference_dataset_ready` kicks off **automatic DPO retraining** (the source
-   model resolved from lineage, not config), which re-enters step 5 and closes the self-improving
-   loop.
+9. **Consumer inference + feedback loop.** Consumers list safe endpoint projections with
+   `GET /v1/private/inference/endpoints`, invoke with
+   `POST /v1/private/inference/endpoints/{endpoint_id}/generations`, and submit feedback with
+   `POST /v1/private/inference/feedback`. Request bodies carry query controls only; `user_id`,
+   `org_id`, `model_id`, and `dataset_id` are resolved from the trusted token/header context and the
+   published endpoint. Captured feedback becomes a preference dataset; `preference_dataset_ready`
+   kicks off **automatic DPO retraining** (the source model resolved from lineage, not config), which
+   re-enters step 6 and closes the self-improving loop.
 
 ---
 

@@ -10,6 +10,7 @@ import (
 	"data_registry_service/pkg/domain/model"
 	registrymessaging "data_registry_service/pkg/infra/network/messaging"
 	featurepb "lib/data_contracts_lib/feature_materializer"
+	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 	corePagination "lib/shared_lib/transport"
 
@@ -29,6 +30,8 @@ type materializationUsecaseStub struct {
 	advancedState     model.ProcessingState
 	recordedDataset   *model.Dataset
 	recordedState     model.ProcessingState
+	recordedActorID   uuid.UUID
+	recordedOrgID     uuid.UUID
 	err               error
 }
 
@@ -41,9 +44,11 @@ func (s *materializationUsecaseStub) AdvanceDatasetProcessingState(_ context.Con
 	return &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: state}, s.err
 }
 
-func (s *materializationUsecaseStub) RecordDatasetMaterialization(_ context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error) {
+func (s *materializationUsecaseStub) RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error) {
 	s.recordedDataset = dataset
 	s.recordedState = state
+	s.recordedActorID, _ = ctxutil.TenantID(ctx)
+	s.recordedOrgID, _ = ctxutil.OrgID(ctx)
 	return dataset, s.err
 }
 
@@ -194,6 +199,8 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedDataset.RawSnapshotID).To(Equal(rawSnapshotID))
 		Expect(uc.recordedDataset.TableName).To(Equal("movies_raw"))
 		Expect(uc.recordedDataset.ProcessingProfile).To(Equal(model.TextRAGProfile))
+		Expect(uc.recordedActorID).To(Equal(userID))
+		Expect(uc.recordedOrgID).To(Equal(orgID))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingRawMaterialized))
 	})
 
@@ -232,6 +239,8 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedDataset.ProcessingProfile).To(Equal(model.TextRAGProfile))
 		Expect(uc.recordedDataset.RawSnapshotID).To(Equal(rawSnapshotID))
 		Expect(uc.recordedDataset.FeatureSnapshotID).To(Equal(featureSnapshotID))
+		Expect(uc.recordedActorID).To(Equal(userID))
+		Expect(uc.recordedOrgID).To(Equal(orgID))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingFeatureMaterialized))
 	})
 
@@ -273,6 +282,8 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedDataset.EmbeddingStrategyVersion).To(Equal("rag-v1"))
 		Expect(uc.recordedDataset.EmbeddingProvider).To(Equal("ollama"))
 		Expect(uc.recordedDataset.EmbeddingModel).To(Equal("bge-small-en-v1.5"))
+		Expect(uc.recordedActorID).To(Equal(userID))
+		Expect(uc.recordedOrgID).To(Equal(orgID))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 	})
 

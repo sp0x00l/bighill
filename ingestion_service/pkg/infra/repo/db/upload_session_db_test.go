@@ -96,13 +96,11 @@ var _ = Describe("Dataset DAO helpers", func() {
 })
 
 var _ = Describe("Upload session DAO helpers", func() {
-	It("maps upload sessions to database arguments with defaults", func() {
-		datasetID := uuid.New()
+	It("maps upload sessions to database arguments without inventing missing values", func() {
 		userID := uuid.New()
 		orgID := uuid.New()
 		session := &model.UploadSession{
 			UploadID:            uuid.New(),
-			DatasetID:           datasetID,
 			UserID:              userID,
 			OrgID:               orgID,
 			FileName:            "movies.csv",
@@ -112,11 +110,11 @@ var _ = Describe("Upload session DAO helpers", func() {
 
 		args := uploadSessionDAO(session)
 
-		Expect(args["resource_type"]).To(Equal(string(model.UploadResourceDataFile)))
-		Expect(args["resource_id"]).To(Equal(pgtype.UUID{Bytes: datasetID, Valid: true}))
+		Expect(args["resource_type"]).To(Equal(""))
+		Expect(args["resource_id"]).To(Equal(pgtype.UUID{}))
 		Expect(args["user_id"]).To(Equal(pgtype.UUID{Bytes: userID, Valid: true}))
 		Expect(args["org_id"]).To(Equal(pgtype.UUID{Bytes: orgID, Valid: true}))
-		Expect(args["source"]).To(Equal("UPLOAD"))
+		Expect(args["source"]).To(Equal(""))
 	})
 
 	It("maps upload session ids to database arguments", func() {

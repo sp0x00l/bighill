@@ -190,7 +190,7 @@ var _ = Describe("Dataset metadata normalization", func() {
 
 		model.NormalizeDatasetMetadata(dataset)
 
-		Expect(dataset.ID).NotTo(Equal(uuid.Nil))
+		Expect(dataset.ID).To(Equal(uuid.Nil))
 		Expect(dataset.TableNamespace).To(Equal("default"))
 		Expect(dataset.TableName).To(Equal("dataset_2026_movie_reviews"))
 		Expect(dataset.SchemaVersion).To(Equal(1))
@@ -221,14 +221,14 @@ var _ = Describe("Dataset metadata normalization", func() {
 		Expect(dataset.CatalogProvider).To(Equal(model.PolarisCatalog))
 	})
 
-	It("falls back to a dataset-id table name when the title sanitizes empty", func() {
+	It("falls back to a generic table name when the title sanitizes empty", func() {
 		datasetID := uuid.MustParse("4f4c95e4-9f8e-4491-a413-0d3eb9b3d67f")
 		dataset := model.NewDataset(datasetID)
 		dataset.Title = "!!!"
 
 		model.NormalizeDatasetMetadata(dataset)
 
-		Expect(dataset.TableName).To(Equal("dataset_4f4c95e4_9f8e_4491_a413_0d3eb9b3d67f"))
+		Expect(dataset.TableName).To(Equal("dataset"))
 	})
 })
 

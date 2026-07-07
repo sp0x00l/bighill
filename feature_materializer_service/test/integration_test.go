@@ -229,7 +229,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		rawWriter := materialization.NewRawSnapshotWriter(artifactStore)
 		featureBuilder := materialization.NewFeatureSnapshotBuilder(artifactStore)
 		embeddingStrategy := integrationEmbeddingStrategy()
-		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, materialization.NewDeterministicEmbeddingProvider(embeddingStrategy.EmbeddingDimensions), nil, embeddingStrategy, "pgvector", 10)
+		embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, integrationEmbeddingProvider{dimensions: embeddingStrategy.EmbeddingDimensions}, nil, embeddingStrategy, "pgvector", 10)
 		rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(rawWriter)
 		featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 		embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
@@ -324,10 +324,30 @@ func integrationEmbeddingStrategy() model.EmbeddingStrategy {
 		ChunkerVersion:      "v1",
 		ChunkSize:           512,
 		ChunkOverlap:        64,
-		EmbeddingProvider:   "deterministic",
-		EmbeddingModel:      "deterministic-test",
+		EmbeddingProvider:   "tei",
+		EmbeddingModel:      "test-model",
 		EmbeddingDimensions: 384,
 	})
+}
+
+type integrationEmbeddingProvider struct {
+	dimensions int
+}
+
+func (p integrationEmbeddingProvider) Dimensions() int {
+	return p.dimensions
+}
+
+func (p integrationEmbeddingProvider) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	vectors := make([][]float32, len(texts))
+	for textIndex := range texts {
+		vector := make([]float32, p.dimensions)
+		for i := range vector {
+			vector[i] = float32((textIndex+i)%7+1) / 10
+		}
+		vectors[textIndex] = vector
+	}
+	return vectors, nil
 }
 
 func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {

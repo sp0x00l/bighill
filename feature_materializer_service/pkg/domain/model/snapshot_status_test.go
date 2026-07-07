@@ -30,8 +30,8 @@ var _ = Describe("SnapshotStatus", func() {
 })
 
 var _ = Describe("EmbeddingStrategy", func() {
-	It("normalizes defaults and provider casing", func() {
-		strategy := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+	It("applies defaults and provider casing at the boundary", func() {
+		strategy := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
 			EmbeddingProvider: " OLLAMA ",
 			ChunkOverlap:      -1,
 		})
@@ -46,8 +46,8 @@ var _ = Describe("EmbeddingStrategy", func() {
 	})
 
 	It("includes chunking and model choices in the canonical key", func() {
-		first := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{EmbeddingModel: "bge-small-en-v1.5", ChunkSize: 512})
-		second := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{EmbeddingModel: "bge-m3", ChunkSize: 512})
+		first := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", EmbeddingModel: "bge-small-en-v1.5", ChunkSize: 512})
+		second := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", EmbeddingModel: "bge-m3", ChunkSize: 512})
 
 		Expect(first.CanonicalKey()).To(ContainSubstring("embedding_model=bge-small-en-v1.5"))
 		Expect(first.CanonicalKey()).To(ContainSubstring("extractor=go-document-extractor-suite"))
@@ -56,12 +56,20 @@ var _ = Describe("EmbeddingStrategy", func() {
 	})
 
 	It("changes the canonical key when extractor or cleaner versions change", func() {
-		first := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{ExtractorVersion: "v1", CleanerVersion: "v1"})
-		second := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{ExtractorVersion: "v2", CleanerVersion: "v1"})
-		third := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{ExtractorVersion: "v1", CleanerVersion: "v2"})
+		first := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", ExtractorVersion: "v1", CleanerVersion: "v1"})
+		second := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", ExtractorVersion: "v2", CleanerVersion: "v1"})
+		third := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", ExtractorVersion: "v1", CleanerVersion: "v2"})
 
 		Expect(first.CanonicalKey()).NotTo(Equal(second.CanonicalKey()))
 		Expect(first.CanonicalKey()).NotTo(Equal(third.CanonicalKey()))
+	})
+
+	It("rejects unsupported embedding providers", func() {
+		strategy := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "unknown"})
+
+		err := model.ValidateEmbeddingStrategy(strategy)
+
+		Expect(err).To(MatchError(ContainSubstring("embedding_provider")))
 	})
 })
 

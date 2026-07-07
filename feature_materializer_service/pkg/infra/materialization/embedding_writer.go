@@ -2,8 +2,6 @@ package materialization
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"strings"
 
@@ -14,50 +12,14 @@ import (
 )
 
 const (
-	defaultEmbeddingDimensions = 384
-	defaultVectorStore         = "pgvector"
-	chunkerGoTokenWindow       = "go-token-window"
-	chunkerGoStructureAware    = "go-structure-aware-token-window"
+	defaultVectorStore      = "pgvector"
+	chunkerGoTokenWindow    = "go-token-window"
+	chunkerGoStructureAware = "go-structure-aware-token-window"
 )
 
 type EmbeddingProvider interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 	Dimensions() int
-}
-
-type DeterministicEmbeddingProvider struct {
-	dimensions int
-}
-
-func NewDeterministicEmbeddingProvider(dimensions int) *DeterministicEmbeddingProvider {
-	log.Trace("NewDeterministicEmbeddingProvider")
-
-	if dimensions <= 0 {
-		dimensions = defaultEmbeddingDimensions
-	}
-	return &DeterministicEmbeddingProvider{dimensions: dimensions}
-}
-
-func (p *DeterministicEmbeddingProvider) Dimensions() int {
-	log.Trace("DeterministicEmbeddingProvider Dimensions")
-
-	return p.dimensions
-}
-
-func (p *DeterministicEmbeddingProvider) Embed(_ context.Context, texts []string) ([][]float32, error) {
-	log.Trace("DeterministicEmbeddingProvider Embed")
-
-	vectors := make([][]float32, len(texts))
-	for textIndex, text := range texts {
-		vector := make([]float32, p.dimensions)
-		for i := range vector {
-			hash := sha256.Sum256([]byte(fmt.Sprintf("%d:%s", i, text)))
-			raw := binary.BigEndian.Uint32(hash[:4])
-			vector[i] = (float32(raw%20000) - 10000) / 10000
-		}
-		vectors[textIndex] = normalizeVector(vector)
-	}
-	return vectors, nil
 }
 
 type EmbeddingWriter struct {
@@ -112,6 +74,9 @@ func (w *EmbeddingWriter) MaterializeEmbeddings(ctx context.Context, featureSnap
 		return nil, nil, domain.ErrEmbeddingMaterialize.Extend("embedding provider and chunker are required")
 	}
 	strategy := model.NormalizeEmbeddingStrategy(w.strategy)
+	if err := model.ValidateEmbeddingStrategy(strategy); err != nil {
+		return nil, nil, domain.ErrEmbeddingMaterialize.Extend(err.Error())
+	}
 
 	data, err := w.store.Read(ctx, featureSnapshot.StorageLocation)
 	if err != nil {

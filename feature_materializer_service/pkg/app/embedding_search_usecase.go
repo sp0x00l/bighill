@@ -58,6 +58,9 @@ func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, userID uu
 		return nil, err
 	}
 	strategy := embeddingStrategyFromSnapshot(activeSnapshot)
+	if err := model.ValidateEmbeddingStrategy(strategy); err != nil {
+		return nil, fmt.Errorf("%w: active embedding snapshot strategy is invalid: %w", domain.ErrEmbeddingSearch, err)
+	}
 	provider, err := u.providerFactory(strategy)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create query embedding provider: %w", domain.ErrEmbeddingSearch, err)
@@ -88,7 +91,7 @@ func embeddingStrategyFromSnapshot(snapshot *model.EmbeddingSnapshot) model.Embe
 	log.Trace("embeddingStrategyFromSnapshot")
 
 	if snapshot == nil {
-		return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{})
+		return model.EmbeddingStrategy{}
 	}
 	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
 		StrategyVersion:     snapshot.StrategyVersion,

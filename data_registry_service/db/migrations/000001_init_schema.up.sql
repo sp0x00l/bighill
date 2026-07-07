@@ -13,6 +13,7 @@ CREATE TYPE dataset_processing_state_enum AS ENUM (
 );
 
 CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE OR REPLACE FUNCTION updated_at_column()
 RETURNS TRIGGER AS $$
@@ -78,8 +79,8 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
 
 CREATE TABLE IF NOT EXISTS bighill_data_registry_db.connectors(
     -- the connector id is used as the stable catalog resource name.
-    -- It needs to be created before saving the db connector record.
-    id uuid UNIQUE NOT NULL PRIMARY KEY,
+    -- Callers reserve it from the database before creating the catalog resource.
+    id uuid DEFAULT uuid_generate_v4() UNIQUE NOT NULL PRIMARY KEY,
     idempotency_key uuid UNIQUE NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_data_registry_db.tenants(id),
     org_id uuid NOT NULL,

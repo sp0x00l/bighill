@@ -17,6 +17,9 @@ import (
 )
 
 type stubSourceRepository struct {
+	reserveID  uuid.UUID
+	reserveErr error
+
 	createConnector      *model.SourceConnector
 	createIdempotencyKey uuid.UUID
 	createErr            error
@@ -41,6 +44,16 @@ type stubSourceRepository struct {
 }
 
 func (s *stubSourceRepository) Close() {}
+
+func (s *stubSourceRepository) ReserveID(context.Context, pgx.Tx) (uuid.UUID, error) {
+	if s.reserveErr != nil {
+		return uuid.Nil, s.reserveErr
+	}
+	if s.reserveID == uuid.Nil {
+		s.reserveID = uuid.New()
+	}
+	return s.reserveID, nil
+}
 
 func (s *stubSourceRepository) Create(_ context.Context, _ pgx.Tx, connector *model.SourceConnector, idempotencyKey uuid.UUID) error {
 	s.createConnector = connector

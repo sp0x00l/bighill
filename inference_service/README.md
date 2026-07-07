@@ -13,10 +13,10 @@ It also exports preference datasets from feedback so the training loop can impro
 - Kafka subscribers for model and dataset update facts.
 - Postgres transactional outbox for preference-dataset-ready facts.
 - RAG retrieval over embedding search.
-- Optional query transformation/self-query before retrieval.
+- Query transformation/self-query before retrieval.
 - TEI-compatible reranker support.
 - Token-aware context packing.
-- Generator adapters for local deterministic execution, Ollama-style HTTP generation, and vLLM/OpenAI-compatible serving.
+- Generator adapters for Ollama-style HTTP generation and vLLM/OpenAI-compatible serving.
 
 ## How It Fits
 
@@ -28,4 +28,4 @@ It also exports preference datasets from feedback so the training loop can impro
 
 ## Local Development
 
-Local and CI can run with deterministic generation and local serving status. Production-like deployments should use real generator, reranker, and serving endpoints configured through `INFERENCE_SERVICE_` env vars.
+Local and CI use the same runtime contract as staging and production: configure a supported generator, reranker, and query transformer through `INFERENCE_SERVICE_` env vars. The service fails startup when provider names, endpoints, or models are missing.

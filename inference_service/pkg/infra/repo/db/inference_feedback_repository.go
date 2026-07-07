@@ -45,7 +45,7 @@ func (r *InferenceFeedbackRepository) feedbackQuery() string {
 		INSERT INTO ` + r.Name + `.inference_feedback (
 			feedback_id, idempotency_key, request_id, user_id, org_id, accepted, rating, comment, preferred_answer
 		) VALUES (
-			@feedback_id, @idempotency_key, @request_id, @user_id, @org_id, @accepted, @rating, @comment, @preferred_answer
+			COALESCE(@feedback_id, uuid_generate_v4()), @idempotency_key, @request_id, @user_id, @org_id, @accepted, @rating, @comment, @preferred_answer
 		)
 		ON CONFLICT (idempotency_key) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
@@ -57,11 +57,10 @@ func (r *InferenceFeedbackRepository) feedbackQuery() string {
 		RETURNING feedback_id::text, request_id::text, user_id::text, org_id::text, accepted, rating, comment, preferred_answer
 		), upserted_preference AS (
 			INSERT INTO ` + r.Name + `.preference_examples (
-				preference_example_id, feedback_id, request_id, user_id, org_id, dataset_id, model_id, prompt_text,
+				feedback_id, request_id, user_id, org_id, dataset_id, model_id, prompt_text,
 				accepted_answer, rejected_answer, rating, feedback_label
 			)
 		SELECT
-				@preference_example_id,
 				f.feedback_id::uuid,
 				req.request_id,
 				f.user_id::uuid,
@@ -234,16 +233,15 @@ func feedbackArgs(feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) p
 	log.Trace("feedbackArgs")
 
 	return pgx.NamedArgs{
-		"feedback_id":           nullableUUID(feedback.FeedbackID),
-		"idempotency_key":       nullableUUID(idempotencyKey),
-		"request_id":            nullableUUID(feedback.RequestID),
-		"user_id":               nullableUUID(feedback.UserID),
-		"org_id":                nullableUUID(feedback.OrgID),
-		"accepted":              feedback.Accepted,
-		"rating":                feedback.Rating,
-		"comment":               feedback.Comment,
-		"preferred_answer":      feedback.PreferredAnswer,
-		"preference_example_id": nullableUUID(uuid.NewSHA1(uuid.NameSpaceURL, []byte("preference:"+idempotencyKey.String()))),
+		"feedback_id":      nullableUUID(feedback.FeedbackID),
+		"idempotency_key":  nullableUUID(idempotencyKey),
+		"request_id":       nullableUUID(feedback.RequestID),
+		"user_id":          nullableUUID(feedback.UserID),
+		"org_id":           nullableUUID(feedback.OrgID),
+		"accepted":         feedback.Accepted,
+		"rating":           feedback.Rating,
+		"comment":          feedback.Comment,
+		"preferred_answer": feedback.PreferredAnswer,
 	}
 }
 

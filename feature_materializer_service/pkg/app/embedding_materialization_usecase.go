@@ -43,6 +43,9 @@ func (u *embeddingMaterializationUsecase) MaterializeEmbeddings(ctx context.Cont
 	log.Trace("EmbeddingMaterializationUsecase MaterializeEmbeddings")
 
 	strategy = model.NormalizeEmbeddingStrategy(strategy)
+	if err := model.ValidateEmbeddingStrategy(strategy); err != nil {
+		return nil, domain.ErrValidationFailed.Extend(err.Error())
+	}
 	ctx, span := startFeatureMaterializerSpan(ctx, "feature_materializer_service/app", "embedding.materialize",
 		attribute.String("feature_snapshot_id", featureSnapshotID.String()),
 		attribute.String("idempotency_key", idempotencyKey.String()),

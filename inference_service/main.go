@@ -314,6 +314,8 @@ func main() {
 }
 
 func readInferenceConfig() inferenceConfig {
+	env.RequireServiceEnvironment()
+
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	dbName := env.WithDefaultString("INFERENCE_SERVICE_DB_NAME", "bighill_inference_db")
 	dbConnectionString := postgresConnectionString(
@@ -334,7 +336,7 @@ func readInferenceConfig() inferenceConfig {
 	if preferenceDatasetExportEnabled && strings.TrimSpace(preferenceDatasetURITemplate) == "" {
 		log.Fatal("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE is required when preference dataset export is enabled")
 	}
-	return inferenceConfig{
+	cfg := inferenceConfig{
 		ServiceName:        env.WithDefaultString("INFERENCE_SERVICE_NAME", "inference-service"),
 		DBName:             dbName,
 		DBConnectionString: dbConnectionString,
@@ -363,7 +365,7 @@ func readInferenceConfig() inferenceConfig {
 			RetryCount:    env.WithDefaultInt("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT", "3"),
 		},
 		Generation: generationConfig{
-			Provider:         env.WithDefaultString("INFERENCE_SERVICE_GENERATION_PROVIDER", "deterministic"),
+			Provider:         env.WithDefaultString("INFERENCE_SERVICE_GENERATION_PROVIDER", ""),
 			Endpoint:         env.WithDefaultString("INFERENCE_SERVICE_GENERATION_ENDPOINT", "http://localhost:11434"),
 			Model:            env.WithDefaultString("INFERENCE_SERVICE_GENERATION_MODEL", "llama3.1:8b"),
 			RequestTimeout:   secondsFromEnv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS", "60"),
@@ -372,14 +374,14 @@ func readInferenceConfig() inferenceConfig {
 			MaxContextChunks: env.WithDefaultInt("INFERENCE_SERVICE_PROMPT_MAX_CONTEXT_CHUNKS", "8"),
 		},
 		Reranker: rerankerConfig{
-			Provider:            env.WithDefaultString("INFERENCE_SERVICE_RERANKER_PROVIDER", "disabled"),
+			Provider:            env.WithDefaultString("INFERENCE_SERVICE_RERANKER_PROVIDER", ""),
 			URL:                 env.WithDefaultString("INFERENCE_SERVICE_RERANKER_URL", ""),
 			Model:               env.WithDefaultString("INFERENCE_SERVICE_RERANKER_MODEL", ""),
 			RequestTimeout:      secondsFromEnv("INFERENCE_SERVICE_RERANKER_REQUEST_TIMEOUT_SECONDS", "30"),
 			CandidateMultiplier: env.WithDefaultInt("INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER", "5"),
 		},
 		QueryTransformer: queryTransformerConfig{
-			Provider: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", "disabled"),
+			Provider: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", ""),
 		},
 		PreferenceDataset: preferenceDatasetConfig{
 			ExportEnabled:    preferenceDatasetExportEnabled,
@@ -410,14 +412,91 @@ func readInferenceConfig() inferenceConfig {
 			CloseTimeout:     secondsFromEnv("INFERENCE_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS", "10"),
 		},
 	}
+	if err := validateInferenceConfig(cfg); err != nil {
+		log.Fatalf("invalid inference service configuration: %v", err)
+	}
+	return cfg
+}
+
+func validateInferenceConfig(cfg inferenceConfig) error {
+	log.Trace("validateInferenceConfig")
+
+	if err := validateGenerationConfig(cfg.Generation); err != nil {
+		return err
+	}
+	if err := validateRerankerConfig(cfg.Reranker); err != nil {
+		return err
+	}
+	if err := validateQueryTransformerConfig(cfg.QueryTransformer); err != nil {
+		return err
+	}
+	if !env.IsDevEnv() && strings.Contains(cfg.PreferenceDataset.URITemplate, "local-dev-bucket") {
+		return fmt.Errorf("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE must not use local-dev-bucket outside dev environments")
+	}
+	return nil
+}
+
+func validateGenerationConfig(cfg generationConfig) error {
+	log.Trace("validateGenerationConfig")
+
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	switch provider {
+	case "":
+		return fmt.Errorf("INFERENCE_SERVICE_GENERATION_PROVIDER is required")
+	case "ollama", "vllm":
+		if strings.TrimSpace(cfg.Endpoint) == "" {
+			return fmt.Errorf("INFERENCE_SERVICE_GENERATION_ENDPOINT is required for %s generation", provider)
+		}
+		if strings.TrimSpace(cfg.Model) == "" {
+			return fmt.Errorf("INFERENCE_SERVICE_GENERATION_MODEL is required for %s generation", provider)
+		}
+	default:
+		return fmt.Errorf("unsupported generation provider %q", cfg.Provider)
+	}
+	return nil
+}
+
+func validateRerankerConfig(cfg rerankerConfig) error {
+	log.Trace("validateRerankerConfig")
+
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	switch provider {
+	case "":
+		return fmt.Errorf("INFERENCE_SERVICE_RERANKER_PROVIDER is required")
+	case "tei":
+		if strings.TrimSpace(cfg.URL) == "" {
+			return fmt.Errorf("INFERENCE_SERVICE_RERANKER_URL is required for tei reranking")
+		}
+		if strings.TrimSpace(cfg.Model) == "" {
+			return fmt.Errorf("INFERENCE_SERVICE_RERANKER_MODEL is required for tei reranking")
+		}
+		if cfg.CandidateMultiplier < 2 {
+			return fmt.Errorf("reranker candidate multiplier must be at least 2")
+		}
+	default:
+		return fmt.Errorf("unsupported reranker provider %q", cfg.Provider)
+	}
+	return nil
+}
+
+func validateQueryTransformerConfig(cfg queryTransformerConfig) error {
+	log.Trace("validateQueryTransformerConfig")
+
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	switch provider {
+	case "":
+		return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER is required")
+	case "self_query":
+	default:
+		return fmt.Errorf("unsupported query transformer provider %q", cfg.Provider)
+	}
+	return nil
 }
 
 func newGenerationAdapter(cfg generationConfig) (app.GenerationAdapter, error) {
 	log.Trace("newGenerationAdapter")
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
-	case "", "deterministic":
-		return generation.NewDeterministicGenerator(), nil
 	case "ollama", "vllm":
 		return generation.NewHTTPGenerator(strings.ToLower(strings.TrimSpace(cfg.Provider)), cfg.Endpoint, cfg.Model, cfg.RequestTimeout), nil
 	default:
@@ -429,8 +508,6 @@ func newQueryTransformer(cfg queryTransformerConfig, generator app.GenerationAda
 	log.Trace("newQueryTransformer")
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
-	case "", "disabled", "none":
-		return nil, nil
 	case "self_query":
 		return retrieval.NewSelfQueryTransformer(generator), nil
 	default:
@@ -442,8 +519,6 @@ func newRerankerAdapter(cfg rerankerConfig) (app.Reranker, error) {
 	log.Trace("newRerankerAdapter")
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
-	case "", "disabled", "none":
-		return nil, nil
 	case "tei":
 		if cfg.CandidateMultiplier < 2 {
 			return nil, fmt.Errorf("reranker candidate multiplier must be at least 2")

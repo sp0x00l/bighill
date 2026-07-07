@@ -15,7 +15,6 @@ import (
 	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
-	"lib/shared_lib/idem"
 	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 
@@ -133,7 +132,7 @@ func (u *dataUploadUseCase) UploadFile(ctx context.Context, upload *model.DataFi
 	if err != nil {
 		return err
 	}
-	return u.recordUploadedFile(ctx, upload, storageLocation, uuid.New())
+	return u.recordUploadedFile(ctx, upload, storageLocation, uuid.Nil)
 }
 
 func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request model.InitiateUploadSessionRequest) (result *model.InitiatedUploadSession, err error) {
@@ -151,7 +150,10 @@ func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request m
 	}
 	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
 	now := time.Now().UTC()
-	uploadID := newUploadID(model.UploadResourceDataFile, request.DatasetID, request.UserID, request.ClientNonce)
+	uploadID, err := u.reserveID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	fileName := safeFileName(request.FileName, request.DeclaredFormat)
 	session := &model.UploadSession{
 		UploadID:            uploadID,
@@ -173,6 +175,7 @@ func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request m
 		TableFormat:         strings.TrimSpace(request.TableFormat),
 		CatalogProvider:     strings.TrimSpace(request.CatalogProvider),
 		ProcessingProfile:   strings.TrimSpace(request.ProcessingProfile),
+		Source:              "UPLOAD",
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(u.uploadSessionTTL),
 	}
@@ -212,10 +215,16 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 	now := time.Now().UTC()
 	resourceID := request.ResourceID
 	if resourceID == uuid.Nil {
-		resourceID = idem.FromParts("ingestion-model-artifact-resource", request.UserID.String(), request.DatasetID.String(), strings.TrimSpace(request.ClientNonce))
+		resourceID, err = u.reserveID(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	artifactFormat := normalizeFormat(request.ArtifactFormat)
-	uploadID := newUploadID(model.UploadResourceModelArtifact, resourceID, request.UserID, request.ClientNonce)
+	uploadID, err := u.reserveID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	fileName := safeFileName(request.FileName, artifactFormat)
 	session := &model.UploadSession{
 		UploadID:            uploadID,
@@ -271,9 +280,36 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		return nil, domain.ErrValidationFailed.Extend("org id is required")
 	}
 	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
-	if request.ResourceID == uuid.Nil {
-		request.ResourceID = idem.FromParts("ingestion-huggingface-model-resource", request.UserID.String(), request.RepoID, strings.TrimSpace(request.Revision), strings.TrimSpace(request.ClientNonce))
+	now := time.Now().UTC()
+	reservedSession := &model.UploadSession{
+		ResourceType:        model.UploadResourceModelArtifact,
+		ResourceID:          request.ResourceID,
+		DatasetID:           request.DatasetID,
+		UserID:              request.UserID,
+		OrgID:               request.OrgID,
+		ClientNonce:         strings.TrimSpace(request.ClientNonce),
+		FileName:            "huggingface-snapshot",
+		DeclaredFormat:      "hf_model",
+		DeclaredContentType: "application/octet-stream",
+		Status:              model.UploadSessionPending,
+		ArtifactType:        "BASE_MODEL",
+		ModelName:           strings.TrimSpace(request.ModelName),
+		ModelVersion:        strings.TrimSpace(request.ModelVersion),
+		BaseModel:           strings.TrimSpace(request.BaseModel),
+		Source:              "HUGGING_FACE",
+		HFRepoID:            strings.TrimSpace(request.RepoID),
+		HFRevision:          strings.TrimSpace(request.Revision),
+		CreatedAt:           now,
+		ExpiresAt:           now.Add(u.uploadSessionTTL),
 	}
+	reservedSession, err = u.createUploadSession(ctx, reservedSession)
+	if err != nil {
+		return nil, err
+	}
+	if reservedSession.Status == model.UploadSessionPromoted {
+		return reservedSession, nil
+	}
+	request.ResourceID = reservedSession.ResourceID
 	tenant, err := u.tenants.Read(ctx, request.UserID)
 	if err != nil {
 		return nil, err
@@ -289,12 +325,12 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now = time.Now().UTC()
 	if downloaded.ResourceID != request.ResourceID {
 		return nil, fmt.Errorf("downloaded model resource id does not match request")
 	}
 	session = &model.UploadSession{
-		UploadID:            newUploadID(model.UploadResourceModelArtifact, request.ResourceID, request.UserID, request.ClientNonce),
+		UploadID:            reservedSession.UploadID,
 		ResourceType:        model.UploadResourceModelArtifact,
 		ResourceID:          request.ResourceID,
 		DatasetID:           request.DatasetID,
@@ -434,6 +470,21 @@ func (u *dataUploadUseCase) createUploadSession(ctx context.Context, session *mo
 		return nil
 	})
 	return created, err
+}
+
+func (u *dataUploadUseCase) reserveID(ctx context.Context) (uuid.UUID, error) {
+	log.Trace("DataUploadUseCase reserveID")
+
+	var id uuid.UUID
+	err := u.uploadSessionUOW.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		reserved, err := u.uploadSessions.ReserveID(ctx, tx)
+		if err != nil {
+			return err
+		}
+		id = reserved
+		return nil
+	})
+	return id, err
 }
 
 func (u *dataUploadUseCase) recordUploadedFile(ctx context.Context, upload *model.DataFile, storageLocation string, uploadID uuid.UUID) error {
@@ -738,12 +789,6 @@ func validateStagedObject(session *model.UploadSession, info *model.ObjectInfo, 
 		return domain.ErrValidationFailed.Extend("uploaded content type does not match the declared content type")
 	}
 	return nil
-}
-
-func newUploadID(resourceType model.UploadResourceType, resourceID, userID uuid.UUID, clientNonce string) uuid.UUID {
-	log.Trace("newUploadID")
-
-	return idem.FromParts("ingestion-upload-session", string(resourceType), resourceID.String(), userID.String(), strings.TrimSpace(clientNonce))
 }
 
 func safeFileName(fileName, declaredFormat string) string {

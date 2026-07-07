@@ -54,24 +54,28 @@ func (u *sourceUsecase) CreateSourceConnector(ctx context.Context, sourceConnect
 		sourceConnector.OrgID = orgID
 		ctx = ctxutil.WithActorOrg(ctx, sourceConnector.UserID, sourceConnector.OrgID)
 	}
-	id := uuid.New()
-	name := id.String()
-	catalogID, err := u.catalogClient.CreateResource(ctx, name, sourceConnector.Config)
-	if err != nil {
-		return err
-	}
-	sourceConnector.ID = id
-	sourceConnector.CatalogID = catalogID
-
 	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
-		return u.sourceRepository.Create(ctx, tx, sourceConnector, idempotencyKey)
+		id, err := u.sourceRepository.ReserveID(ctx, tx)
+		if err != nil {
+			return err
+		}
+		sourceConnector.ID = id
+		catalogID, err := u.catalogClient.CreateResource(ctx, id.String(), sourceConnector.Config)
+		if err != nil {
+			return err
+		}
+		sourceConnector.CatalogID = catalogID
+		if err := u.sourceRepository.Create(ctx, tx, sourceConnector, idempotencyKey); err != nil {
+			log.WithContext(ctx).Infof("Rolling back catalog source connector. Failed to create source connector: %v", err)
+			err2 := u.catalogClient.DeleteResource(ctx, catalogID)
+			if err2 != nil {
+				log.WithContext(ctx).Errorf("MANUAL INTERVENTION REQUIRED: Failed to rollback catalog data source creation: %v", err2)
+			}
+			return err
+		}
+		return nil
 	})
 	if err != nil {
-		log.WithContext(ctx).Infof("Rolling back catalog source connector. Failed to create source connector: %v", err)
-		err2 := u.catalogClient.DeleteResource(ctx, catalogID)
-		if err2 != nil {
-			log.WithContext(ctx).Errorf("MANUAL INTERVENTION REQUIRED: Failed to rollback catalog data source creation: %v", err2)
-		}
 		return err
 	}
 	return nil

@@ -248,6 +248,8 @@ func main() {
 }
 
 func readTrainingConfig() trainingConfig {
+	env.RequireServiceEnvironment()
+
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	return trainingConfig{
 		ServiceName:            env.WithDefaultString("TRAINING_SERVICE_NAME", "training-service"),

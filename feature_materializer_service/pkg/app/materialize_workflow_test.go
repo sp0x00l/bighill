@@ -33,7 +33,7 @@ var _ = Describe("MaterializeWorkflow", func() {
 		embeddingSnapshot.UserID = datasetFile.UserID
 		embeddingSnapshot.OrgID = datasetFile.OrgID
 		rawIdempotencyKey := uuid.New()
-		strategy := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+		strategy := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
 			StrategyVersion:     "rag-v1",
 			ChunkerName:         "go-token-window",
 			ChunkerVersion:      "v1",
@@ -90,8 +90,8 @@ var _ = Describe("MaterializeWorkflow", func() {
 
 	It("derives distinct embedding idempotency keys when the strategy changes", func() {
 		featureSnapshotID := uuid.New()
-		first := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{EmbeddingProvider: "tei", EmbeddingModel: "bge-small-en-v1.5", ChunkSize: 512})
-		second := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{EmbeddingProvider: "tei", EmbeddingModel: "bge-m3", ChunkSize: 512})
+		first := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", EmbeddingModel: "bge-small-en-v1.5", ChunkSize: 512})
+		second := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", EmbeddingModel: "bge-m3", ChunkSize: 512})
 
 		Expect(usecase.EmbeddingSnapshotIdempotencyKey(featureSnapshotID, first)).NotTo(Equal(usecase.EmbeddingSnapshotIdempotencyKey(featureSnapshotID, second)))
 	})

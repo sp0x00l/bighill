@@ -806,6 +806,45 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(errors.Is(err, domain.ErrDatasetNotReady)).To(BeTrue())
 	})
 
+	It("rejects generation when the dataset embedding provider is unsupported", func() {
+		dataset := validInferenceDataset()
+		dataset.EmbeddingProvider = "unknown"
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.DatasetID = dataset.DatasetID
+		requestRepository := &inferenceRequestRepositoryStub{}
+		retrieval := &retrievalClientStub{}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithRetrievalClient(retrieval),
+			app.WithGenerationAdapter(&generationAdapterStub{}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		_, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			DatasetID: dataset.DatasetID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      4,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrDatasetNotReady)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("embedding provider"))
+		Expect(retrieval.datasetID).To(Equal(uuid.Nil))
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
+	})
+
 	It("rejects generation when the model is not ready", func() {
 		dataset := validInferenceDataset()
 		inferenceModel := validInferenceModel()

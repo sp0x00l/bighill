@@ -537,14 +537,16 @@ func (u *modelRegistryUsecase) upsertPublishedEndpoint(ctx context.Context, tx p
 		return nil
 	}
 	if modelRecord.OrgID == uuid.Nil || modelRecord.UserID == uuid.Nil || modelRecord.DatasetID == uuid.Nil {
-		return nil
+		if modelRecord.ModelKind == model.ModelKindBase && modelRecord.OrgID == uuid.Nil && modelRecord.UserID == uuid.Nil && modelRecord.DatasetID == uuid.Nil {
+			return nil
+		}
+		return fmt.Errorf("%w: published endpoint requires org_id, user_id, and dataset_id", domain.ErrValidationFailed)
 	}
 	status := model.PublishedEndpointStatusDisabled
 	if modelRecord.Status == model.ModelStatusReady && modelRecord.ServingLoadStatus == model.ModelLoadStatusLoaded {
 		status = model.PublishedEndpointStatusReady
 	}
 	return u.endpointRepository.UpsertEndpoint(ctx, tx, &model.PublishedEndpoint{
-		EndpointID:      publishedEndpointID(modelRecord),
 		OrgID:           modelRecord.OrgID,
 		ModelID:         modelRecord.ModelID,
 		DatasetID:       modelRecord.DatasetID,
@@ -552,17 +554,6 @@ func (u *modelRegistryUsecase) upsertPublishedEndpoint(ctx context.Context, tx p
 		DisplayName:     modelRecord.Name,
 		CreatedByUserID: modelRecord.UserID,
 	})
-}
-
-func publishedEndpointID(modelRecord *model.Model) uuid.UUID {
-	log.Trace("publishedEndpointID")
-
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf(
-		"published-inference-endpoint:%s:%s:%s",
-		modelRecord.OrgID.String(),
-		modelRecord.ModelID.String(),
-		modelRecord.DatasetID.String(),
-	)))
 }
 
 func contextForModel(ctx context.Context, modelRecord *model.Model) context.Context {

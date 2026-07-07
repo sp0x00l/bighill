@@ -39,9 +39,9 @@ func (db *datasetDB) Create(ctx context.Context, tx pgx.Tx, dataset *model.Datas
 
 	var id, userID, orgID, origin, status, processingState string
 	var sqlStatement = `INSERT INTO ` + db.Name +
-		`.datasets (id, user_id, org_id, title, description, location, source_type, source_connector_id, source_query, source_database, source_collection, idempotency_key, category,
+		`.datasets (user_id, org_id, title, description, location, source_type, source_connector_id, source_query, source_database, source_collection, idempotency_key, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata, processing_state)
-		VALUES (@id, @user_id, @org_id, @title, @description, @location, @source_type::storage_type_enum, @source_connector_id, @source_query, @source_database, @source_collection, @idempotency_key, @category,
+		VALUES (@user_id, @org_id, @title, @description, @location, @source_type::storage_type_enum, @source_connector_id, @source_query, @source_database, @source_collection, @idempotency_key, @category,
 		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, @processing_state)
 		RETURNING id, user_id, org_id, origin, status, processing_state;`
 

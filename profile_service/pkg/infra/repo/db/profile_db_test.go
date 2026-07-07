@@ -417,10 +417,13 @@ var _ = Describe("Profile Database", func() {
 				Expect(mockRow.ScanCalled).Should(BeTrue())
 
 				Expect(dbConnMock.QueryRowCalled).Should(BeTrue())
-				Expect(dbConnMock.QueryRowCalls).To(HaveLen(1))
+				Expect(dbConnMock.QueryRowCalls).To(HaveLen(2))
 				insertQuery := `INSERT INTO test_db.profiles (id, idempotency_key, email, phone_number, country_code, password_hash, email_verified, email_verify_token_hash, email_verify_expires_at)VALUES (uuid_generate_v4(), @idempotency_key, @email, @phone_number, @country_code, @password_hash, @email_verified, @email_verify_token_hash, @email_verify_expires_at)RETURNING id;`
 				lastQuery := strings.ReplaceAll(dbConnMock.QueryRowCalls[0], "\n\t", "")
 				Expect(lastQuery).Should(ContainSubstring(insertQuery))
+				orgInsertQuery := strings.ReplaceAll(dbConnMock.QueryRowCalls[1], "\n\t", "")
+				Expect(orgInsertQuery).Should(ContainSubstring("INSERT INTO test_db.organizations (display_name, created_by_user_id)"))
+				Expect(orgInsertQuery).Should(ContainSubstring("RETURNING id::text"))
 				Expect(dbConnMock.QueryRowArgs[0][0]).Should(SatisfyAll(
 					HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}),
 					HaveKeyWithValue("email", pgtype.Text{String: "email", Valid: true}),
@@ -431,10 +434,9 @@ var _ = Describe("Profile Database", func() {
 				tokenHash := dbConnMock.QueryRowArgs[0][0].(pgx.NamedArgs)["email_verify_token_hash"].(pgtype.Text)
 				Expect(tokenHash.Valid).To(BeTrue())
 				Expect(tokenHash.String).NotTo(Equal("token-1"))
-				Expect(dbConnMock.ExecCalls).To(HaveLen(3))
-				Expect(dbConnMock.ExecCalls[0]).To(ContainSubstring("INSERT INTO test_db.organizations"))
-				Expect(dbConnMock.ExecCalls[1]).To(ContainSubstring("INSERT INTO test_db.organization_memberships"))
-				Expect(dbConnMock.ExecCalls[2]).To(ContainSubstring("UPDATE test_db.profiles SET default_org_id"))
+				Expect(dbConnMock.ExecCalls).To(HaveLen(2))
+				Expect(dbConnMock.ExecCalls[0]).To(ContainSubstring("INSERT INTO test_db.organization_memberships"))
+				Expect(dbConnMock.ExecCalls[1]).To(ContainSubstring("UPDATE test_db.profiles SET default_org_id"))
 				Expect(profileAccount.DefaultOrgID).NotTo(Equal(uuid.Nil))
 			})
 		})

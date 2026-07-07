@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -104,14 +103,11 @@ func NormalizeDatasetMetadata(dataset *Dataset) {
 	if dataset == nil {
 		return
 	}
-	if dataset.ID == uuid.Nil {
-		dataset.ID = uuid.New()
-	}
 	if dataset.TableNamespace == "" {
 		dataset.TableNamespace = "default"
 	}
 	if dataset.TableName == "" {
-		dataset.TableName = defaultTableName(dataset.ID, dataset.Title)
+		dataset.TableName = defaultTableName(dataset.Title)
 	}
 	if dataset.SchemaVersion <= 0 {
 		dataset.SchemaVersion = 1
@@ -124,14 +120,14 @@ func NormalizeDatasetMetadata(dataset *Dataset) {
 	}
 }
 
-func defaultTableName(datasetID uuid.UUID, title string) string {
+func defaultTableName(title string) string {
 	if title != "" {
 		name := sanitizeTableIdentifier(title)
 		if name != "" {
 			return name
 		}
 	}
-	return fmt.Sprintf("dataset_%s", strings.ReplaceAll(datasetID.String(), "-", "_"))
+	return "dataset"
 }
 
 func sanitizeTableIdentifier(value string) string {

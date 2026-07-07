@@ -78,6 +78,23 @@ services:
     networks:
       - bighillnetwork
 
+  tei-embeddings:
+    image: python:3.12-alpine
+    container_name: tei-embeddings
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./scripts/docker/services/tei_stub.py:/opt/bighill/tei_stub.py:ro
+    command: ["python", "/opt/bighill/tei_stub.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks:
+      - bighillnetwork
+
   api-gateway:
     image: api-gateway
     build:
@@ -423,7 +440,7 @@ services:
       - FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION=${FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION}
       - FEATURE_MATERIALIZER_SERVICE_ARTIFACT_UPLOAD_PART_SIZE_MB=${FEATURE_MATERIALIZER_SERVICE_ARTIFACT_UPLOAD_PART_SIZE_MB}
       - FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER=${FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER}
-      - FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL=${FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL}
+      - FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL=http://tei-embeddings:8080
       - FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL=${FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL}
       - FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS=${FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS}
       - FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS=${FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS}
@@ -463,6 +480,7 @@ services:
       - bighilldb
       - temporal
       - data-stream-service
+      - tei-embeddings
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_PORT}/health"]
       interval: 30s
@@ -719,7 +737,7 @@ services:
       - INFERENCE_SERVICE_GENERATION_MODEL=${INFERENCE_SERVICE_GENERATION_MODEL}
       - INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS=${INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS}
       - INFERENCE_SERVICE_RERANKER_PROVIDER=${INFERENCE_SERVICE_RERANKER_PROVIDER}
-      - INFERENCE_SERVICE_RERANKER_URL=${INFERENCE_SERVICE_RERANKER_URL}
+      - INFERENCE_SERVICE_RERANKER_URL=http://tei-embeddings:8080
       - INFERENCE_SERVICE_RERANKER_MODEL=${INFERENCE_SERVICE_RERANKER_MODEL}
       - INFERENCE_SERVICE_RERANKER_REQUEST_TIMEOUT_SECONDS=${INFERENCE_SERVICE_RERANKER_REQUEST_TIMEOUT_SECONDS}
       - INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER=${INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER}
@@ -742,6 +760,7 @@ services:
     depends_on:
       - bighilldb
       - kafka
+      - tei-embeddings
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${INFERENCE_SERVICE_HEALTHCHECK_PORT}/health"]
       interval: 30s

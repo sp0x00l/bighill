@@ -29,6 +29,20 @@ func NewSourceConnectorDB(db *coreDB.Database) *sourceConnectorDB {
 	}
 }
 
+func (db *sourceConnectorDB) ReserveID(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
+	log.Trace("SourceConnectorDB ReserveID")
+
+	var id string
+	if err := tx.QueryRow(ctx, `SELECT uuid_generate_v4()::text`).Scan(&id); err != nil {
+		return uuid.Nil, fmt.Errorf("reserve source connector id: %w", err)
+	}
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("reserve source connector id returned invalid uuid: %w", err)
+	}
+	return parsed, nil
+}
+
 func (db *sourceConnectorDB) Create(ctx context.Context, tx pgx.Tx, sourceConnector *model.SourceConnector, idempotencyKey uuid.UUID) error {
 	log.Trace("SourceConnectorDB Create")
 

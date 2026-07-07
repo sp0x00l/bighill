@@ -81,6 +81,20 @@ var _ = Describe("processrunner", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(payload)).To(Equal("stream"))
 	})
+
+	It("does not close stdout before a slow consumer drains a fast command", func() {
+		var payload []byte
+
+		_, err := StreamStdout(context.Background(), shellCommand("printf stream"), func(reader io.Reader) error {
+			time.Sleep(100 * time.Millisecond)
+			var readErr error
+			payload, readErr = io.ReadAll(reader)
+			return readErr
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(payload)).To(Equal("stream"))
+	})
 })
 
 func shellCommand(script string) Command {

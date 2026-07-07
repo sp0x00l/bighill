@@ -351,6 +351,8 @@ func main() {
 }
 
 func readMaterializerConfig() materializerConfig {
+	env.RequireServiceEnvironment()
+
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	dbName := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_NAME", "bighill_feature_materializer_db")
 	dbConnectionString := postgresConnectionString(
@@ -363,11 +365,13 @@ func readMaterializerConfig() materializerConfig {
 		env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_DB_MAX_CONNECTIONS", "20"),
 	)
 	uploadPartSizeMB := env.WithDefaultInt64("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_UPLOAD_PART_SIZE_MB", "10")
+	defaultArtifactBucketName := ""
 	defaultArtifactBucketRegion := "eu-west-1"
 	if env.IsDevEnv() {
+		defaultArtifactBucketName = "local-dev-bucket"
 		defaultArtifactBucketRegion = coreBucket.LocalDevS3Region
 	}
-	return materializerConfig{
+	cfg := materializerConfig{
 		ServiceName:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_NAME", "feature-materializer-service"),
 		DBName:             dbName,
 		DBConnectionString: dbConnectionString,
@@ -384,12 +388,12 @@ func readMaterializerConfig() materializerConfig {
 			BatchSize:      int32(env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
 		},
 		ArtifactBucket: artifactBucketConfig{
-			Name:           env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME", "local-dev-bucket"),
+			Name:           env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME", defaultArtifactBucketName),
 			Region:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION", defaultArtifactBucketRegion),
 			UploadPartSize: uploadPartSizeMB * 1024 * 1024,
 		},
 		Embedding: embeddingConfig{
-			Provider:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER", model.DefaultEmbeddingProvider),
+			Provider:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER", ""),
 			URL:              env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL", ""),
 			Model:            env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL", model.DefaultEmbeddingModel),
 			Dimensions:       env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS", strconv.Itoa(model.DefaultEmbeddingDimensions)),
@@ -461,6 +465,48 @@ func readMaterializerConfig() materializerConfig {
 			CloseTimeout:     secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS", "10"),
 		},
 	}
+	if err := validateMaterializerConfig(cfg); err != nil {
+		log.Fatalf("invalid feature materializer service configuration: %v", err)
+	}
+	return cfg
+}
+
+func validateMaterializerConfig(cfg materializerConfig) error {
+	log.Trace("validateMaterializerConfig")
+
+	if strings.TrimSpace(cfg.ArtifactBucket.Name) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME is required")
+	}
+	if !env.IsDevEnv() && strings.TrimSpace(cfg.ArtifactBucket.Name) == "local-dev-bucket" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME must not be local-dev-bucket outside dev environments")
+	}
+	if err := validateEmbeddingConfig(cfg.Embedding); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateEmbeddingConfig(cfg embeddingConfig) error {
+	log.Trace("validateEmbeddingConfig")
+
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	switch provider {
+	case "":
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER is required")
+	case "tei", "ollama":
+		if strings.TrimSpace(cfg.URL) == "" {
+			return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL is required for %s embeddings", provider)
+		}
+		if strings.TrimSpace(cfg.Model) == "" {
+			return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL is required for %s embeddings", provider)
+		}
+	default:
+		return fmt.Errorf("unsupported embedding provider %q", cfg.Provider)
+	}
+	if cfg.Dimensions <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS must be greater than zero")
+	}
+	return nil
 }
 
 func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
@@ -487,7 +533,7 @@ func secondsFromEnv(key, defaultValue string) time.Duration {
 func embeddingStrategyFromConfig(cfg embeddingConfig) model.EmbeddingStrategy {
 	log.Trace("embeddingStrategyFromConfig")
 
-	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+	return model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
 		StrategyVersion:     cfg.StrategyVersion,
 		ExtractorName:       cfg.ExtractorName,
 		ExtractorVersion:    cfg.ExtractorVersion,
@@ -510,6 +556,9 @@ func newQueryEmbeddingProviderFactory(cfg embeddingConfig) usecase.QueryEmbeddin
 		log.Trace("queryEmbeddingProviderFactory")
 
 		strategy = model.NormalizeEmbeddingStrategy(strategy)
+		if err := model.ValidateEmbeddingStrategy(strategy); err != nil {
+			return nil, err
+		}
 		queryCfg := cfg
 		queryCfg.Provider = strategy.EmbeddingProvider
 		queryCfg.Model = strategy.EmbeddingModel
@@ -525,8 +574,8 @@ func newEmbeddingProvider(cfg embeddingConfig) (materialization.EmbeddingProvide
 	switch provider {
 	case "tei", "ollama":
 		return materialization.NewHTTPEmbeddingProvider(provider, cfg.URL, cfg.Model, cfg.Dimensions, cfg.RequestTimeout), nil
-	case "deterministic":
-		return materialization.NewDeterministicEmbeddingProvider(cfg.Dimensions), nil
+	case "":
+		return nil, fmt.Errorf("embedding provider is required")
 	default:
 		return nil, fmt.Errorf("unsupported embedding provider %q", cfg.Provider)
 	}

@@ -28,14 +28,11 @@ func (r *PublishedEndpointRepository) UpsertEndpoint(ctx context.Context, tx pgx
 	log.Trace("PublishedEndpointRepository UpsertEndpoint")
 
 	query := `INSERT INTO ` + r.Name + `.published_inference_endpoints (
-		endpoint_id, org_id, model_id, dataset_id, status, display_name, created_by_user_id
+		org_id, model_id, dataset_id, status, display_name, created_by_user_id
 	) VALUES (
-		@endpoint_id, @org_id, @model_id, @dataset_id, @status, @display_name, @created_by_user_id
+		@org_id, @model_id, @dataset_id, @status, @display_name, @created_by_user_id
 	)
-	ON CONFLICT (endpoint_id) DO UPDATE SET
-		org_id = EXCLUDED.org_id,
-		model_id = EXCLUDED.model_id,
-		dataset_id = EXCLUDED.dataset_id,
+	ON CONFLICT (org_id, model_id, dataset_id) DO UPDATE SET
 		status = EXCLUDED.status,
 		display_name = EXCLUDED.display_name,
 		created_by_user_id = EXCLUDED.created_by_user_id;`
@@ -52,7 +49,6 @@ func publishedEndpointArgs(endpoint *model.PublishedEndpoint) pgx.NamedArgs {
 	log.Trace("publishedEndpointArgs")
 
 	return pgx.NamedArgs{
-		"endpoint_id":        pgtype.UUID{Bytes: endpoint.EndpointID, Valid: true},
 		"org_id":             pgtype.UUID{Bytes: endpoint.OrgID, Valid: true},
 		"model_id":           pgtype.UUID{Bytes: endpoint.ModelID, Valid: true},
 		"dataset_id":         pgtype.UUID{Bytes: endpoint.DatasetID, Valid: true},

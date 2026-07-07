@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TYPE table_format_enum AS ENUM ('PARQUET', 'ICEBERG');
 CREATE TYPE catalog_provider_enum AS ENUM ('LOCAL', 'POLARIS');
@@ -86,9 +87,9 @@ CREATE INDEX IF NOT EXISTS index_outbox_messages_resource_key
 ON bighill_ingestion_db.outbox_messages(resource_key, created_at);
 
 CREATE TABLE IF NOT EXISTS bighill_ingestion_db.upload_sessions (
-    upload_id uuid PRIMARY KEY,
+    upload_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     resource_type upload_resource_type_enum NOT NULL DEFAULT 'DATA_FILE',
-    resource_id uuid NOT NULL,
+    resource_id uuid NOT NULL DEFAULT uuid_generate_v4(),
     dataset_id uuid REFERENCES bighill_ingestion_db.datasets(dataset_id),
     user_id uuid NOT NULL REFERENCES bighill_ingestion_db.tenants(id),
     org_id uuid NOT NULL,
@@ -137,7 +138,7 @@ CREATE INDEX IF NOT EXISTS index_upload_sessions_pending_expiry
 ON bighill_ingestion_db.upload_sessions(status, expires_at);
 
 CREATE UNIQUE INDEX IF NOT EXISTS index_upload_sessions_client_nonce
-ON bighill_ingestion_db.upload_sessions(resource_type, resource_id, user_id, client_nonce)
+ON bighill_ingestion_db.upload_sessions(resource_type, org_id, user_id, client_nonce)
 WHERE client_nonce <> '';
 
 ALTER TABLE bighill_ingestion_db.tenants ENABLE ROW LEVEL SECURITY;

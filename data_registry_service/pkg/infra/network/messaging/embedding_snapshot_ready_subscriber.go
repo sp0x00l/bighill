@@ -7,6 +7,7 @@ import (
 
 	"data_registry_service/pkg/domain/model"
 	featurepb "lib/data_contracts_lib/feature_materializer"
+	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -51,6 +52,7 @@ func (l *embeddingSnapshotReadyEventListener) Handle(ctx context.Context, resour
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
+	ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	_, err = l.listener.RecordDatasetMaterialization(ctx, dataset, model.DatasetProcessingEmbeddingsMaterialized)
 	return err
 }

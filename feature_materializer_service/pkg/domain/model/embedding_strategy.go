@@ -15,7 +15,7 @@ const (
 	DefaultChunkerVersion           = "v1"
 	DefaultChunkSize                = 384
 	DefaultChunkOverlap             = 64
-	DefaultEmbeddingProvider        = "deterministic"
+	DefaultEmbeddingProvider        = ""
 	DefaultEmbeddingModel           = "bge-small-en-v1.5"
 	DefaultEmbeddingDimensions      = 384
 )
@@ -45,6 +45,11 @@ func NormalizeEmbeddingStrategy(strategy EmbeddingStrategy) EmbeddingStrategy {
 	strategy.ChunkerVersion = strings.TrimSpace(strategy.ChunkerVersion)
 	strategy.EmbeddingProvider = strings.ToLower(strings.TrimSpace(strategy.EmbeddingProvider))
 	strategy.EmbeddingModel = strings.TrimSpace(strategy.EmbeddingModel)
+	return strategy
+}
+
+func ApplyEmbeddingStrategyDefaults(strategy EmbeddingStrategy) EmbeddingStrategy {
+	strategy = NormalizeEmbeddingStrategy(strategy)
 
 	if strategy.StrategyVersion == "" {
 		strategy.StrategyVersion = DefaultEmbeddingStrategyVersion
@@ -86,6 +91,55 @@ func NormalizeEmbeddingStrategy(strategy EmbeddingStrategy) EmbeddingStrategy {
 		strategy.EmbeddingDimensions = DefaultEmbeddingDimensions
 	}
 	return strategy
+}
+
+func DefaultEmbeddingStrategy() EmbeddingStrategy {
+	return ApplyEmbeddingStrategyDefaults(EmbeddingStrategy{})
+}
+
+func ValidateEmbeddingStrategy(strategy EmbeddingStrategy) error {
+	strategy = NormalizeEmbeddingStrategy(strategy)
+	required := map[string]string{
+		"strategy_version":   strategy.StrategyVersion,
+		"extractor_name":     strategy.ExtractorName,
+		"extractor_version":  strategy.ExtractorVersion,
+		"cleaner_name":       strategy.CleanerName,
+		"cleaner_version":    strategy.CleanerVersion,
+		"chunker_name":       strategy.ChunkerName,
+		"chunker_version":    strategy.ChunkerVersion,
+		"embedding_provider": strategy.EmbeddingProvider,
+		"embedding_model":    strategy.EmbeddingModel,
+	}
+	for field, value := range required {
+		if value == "" {
+			return fmt.Errorf("%s is required", field)
+		}
+	}
+	if strategy.ChunkSize <= 0 {
+		return fmt.Errorf("chunk_size must be greater than zero")
+	}
+	if strategy.ChunkOverlap < 0 {
+		return fmt.Errorf("chunk_overlap must be greater than or equal to zero")
+	}
+	if strategy.ChunkOverlap >= strategy.ChunkSize {
+		return fmt.Errorf("chunk_overlap must be less than chunk_size")
+	}
+	if strategy.EmbeddingDimensions <= 0 {
+		return fmt.Errorf("embedding_dimensions must be greater than zero")
+	}
+	if !IsSupportedEmbeddingProvider(strategy.EmbeddingProvider) {
+		return fmt.Errorf("embedding_provider %q is not supported", strategy.EmbeddingProvider)
+	}
+	return nil
+}
+
+func IsSupportedEmbeddingProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "ollama", "tei":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s EmbeddingStrategy) CanonicalKey() string {

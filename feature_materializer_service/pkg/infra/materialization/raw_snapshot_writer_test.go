@@ -34,6 +34,26 @@ type memoryArtifactStore struct {
 	writes  map[string][]byte
 }
 
+type testEmbeddingProvider struct {
+	dimensions int
+}
+
+func (p testEmbeddingProvider) Dimensions() int {
+	return p.dimensions
+}
+
+func (p testEmbeddingProvider) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	vectors := make([][]float32, len(texts))
+	for textIndex := range texts {
+		vector := make([]float32, p.dimensions)
+		for i := range vector {
+			vector[i] = float32((textIndex+i)%7+1) / 10
+		}
+		vectors[textIndex] = vector
+	}
+	return vectors, nil
+}
+
 func newMemoryArtifactStore() *memoryArtifactStore {
 	return &memoryArtifactStore{
 		objects: map[string][]byte{},
@@ -469,15 +489,15 @@ var _ = Describe("Materialization adapters", func() {
 	It("materializes embeddings into the pgvector repository boundary", func() {
 		ctx := context.Background()
 		store := newMemoryArtifactStore()
-		provider := materialization.NewDeterministicEmbeddingProvider(8)
-		strategy := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+		provider := testEmbeddingProvider{dimensions: 8}
+		strategy := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
 			StrategyVersion:     "rag-v1",
 			ChunkerName:         "go-token-window",
 			ChunkerVersion:      "v1",
 			ChunkSize:           512,
 			ChunkOverlap:        64,
-			EmbeddingProvider:   "deterministic",
-			EmbeddingModel:      "deterministic-test",
+			EmbeddingProvider:   "tei",
+			EmbeddingModel:      "test-model",
 			EmbeddingDimensions: 8,
 		})
 		writer := materialization.NewEmbeddingWriter(store, provider, nil, strategy, "pgvector", 10)
@@ -495,7 +515,7 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(result.EmbeddingDimensions).To(Equal(8))
 		Expect(result.EmbeddingCount).To(Equal(int64(2)))
 		Expect(result.StrategyVersion).To(Equal(strategy.StrategyVersion))
-		Expect(result.EmbeddingProvider).To(Equal("deterministic"))
+		Expect(result.EmbeddingProvider).To(Equal("tei"))
 		Expect(result.ChunkSize).To(Equal(512))
 		Expect(records).To(HaveLen(2))
 		Expect(records[0].Vector).To(HaveLen(8))
@@ -504,7 +524,7 @@ var _ = Describe("Materialization adapters", func() {
 	})
 
 	It("chunks feature rows with a Go token window", func() {
-		strategy := model.EmbeddingStrategy{ChunkSize: 3, ChunkOverlap: 1}
+		strategy := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", ChunkSize: 3, ChunkOverlap: 1})
 		chunker := materialization.NewTokenWindowChunker(strategy)
 
 		chunks, err := chunker.Chunk(context.Background(), []string{"one two three four five"})
@@ -517,7 +537,7 @@ var _ = Describe("Materialization adapters", func() {
 	})
 
 	It("chunks structured rows with heading context", func() {
-		strategy := model.EmbeddingStrategy{ChunkerName: "go-structure-aware-token-window", ChunkSize: 16, ChunkOverlap: 0}
+		strategy := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", ChunkerName: "go-structure-aware-token-window", ChunkSize: 16, ChunkOverlap: 0})
 		chunker := materialization.NewStructureAwareTokenWindowChunker(strategy)
 
 		chunks, err := chunker.Chunk(context.Background(), []string{"# Risks\nMarket risk increased"})

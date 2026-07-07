@@ -253,6 +253,8 @@ func main() {
 }
 
 func readRegistryConfig() registryConfig {
+	env.RequireServiceEnvironment()
+
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	dbName := env.WithDefaultString("DATA_REGISTRY_SERVICE_DB_NAME", "bighill_data_registry_db")
 	dbConnectionString := postgresConnectionString(

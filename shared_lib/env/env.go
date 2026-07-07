@@ -207,6 +207,31 @@ func IsProduction() bool {
 	return environment() == prodBuild
 }
 
+func RequireKnownEnvironment() {
+	log.Trace("Env RequireKnownEnvironment")
+
+	if !IsKnownEnvironment() {
+		log.Fatalf("environment variable %s must be one of %s, %s, %s, %s", env, devbuild, cicdBuild, stagingBuild, prodBuild)
+	}
+}
+
+func RequireServiceEnvironment() {
+	log.Trace("Env RequireServiceEnvironment")
+
+	RequireKnownEnvironment()
+}
+
+func IsKnownEnvironment() bool {
+	log.Trace("Env IsKnownEnvironment")
+
+	switch environment() {
+	case devbuild, cicdBuild, stagingBuild, prodBuild:
+		return true
+	default:
+		return false
+	}
+}
+
 // ResetEnvironmentCache clears the cached environment value (primarily for tests).
 func ResetEnvironmentCache() {
 	envValue.Store(nil)
@@ -217,7 +242,7 @@ func environment() string {
 		if value := envValue.Load(); value != nil {
 			return *value
 		}
-		next := strings.ToUpper(WithDefaultString(env, devbuild))
+		next := strings.ToUpper(strings.TrimSpace(WithDefaultString(env, "")))
 		stored := &next
 		if envValue.CompareAndSwap(nil, stored) {
 			return next

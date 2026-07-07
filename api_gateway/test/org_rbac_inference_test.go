@@ -27,7 +27,6 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 
 		modelID := uuid.New()
 		publishReadyModelForInference(modelID, admin.ID, admin.OrgID, uuid.MustParse(datasetID))
-		endpointID := publishedEndpointID(admin.OrgID, modelID, uuid.MustParse(datasetID))
 
 		addOrgMember(admin, admin.OrgID, consumer.ID, authz.RoleConsumer)
 		consumer = loginExistingProfile(consumer)
@@ -42,21 +41,7 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 
 		assertConsumerDeniedWriteRoutes(consumer)
 
-		Eventually(func(g Gomega) {
-			status, body := doJSON(http.MethodGet, "/v1/private/inference/endpoints", nil, consumer.Token, uuid.Nil)
-			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
-			var endpoints []map[string]any
-			g.Expect(json.Unmarshal(body, &endpoints)).To(Succeed())
-			g.Expect(endpoints).To(ContainElement(SatisfyAll(
-				HaveKeyWithValue("endpoint_id", endpointID.String()),
-				HaveKeyWithValue("display_name", "rag-e2e-generator"),
-				HaveKeyWithValue("status", "ready"),
-				Not(HaveKey("model_id")),
-				Not(HaveKey("dataset_id")),
-				Not(HaveKey("org_id")),
-				Not(HaveKey("user_id")),
-			)))
-		}, 45*time.Second, 1*time.Second).Should(Succeed())
+		endpointID := waitForPublishedEndpoint(consumer.Token, "rag-e2e-generator")
 
 		generationPayload := map[string]any{
 			"query_text":       "What phrase identifies the embedded knowledge base?",
@@ -86,14 +71,7 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 		otherDatasetID := uuid.New()
 		otherModelID := uuid.New()
 		publishReadyModelForInference(otherModelID, otherOrgOwner.ID, otherOrgOwner.OrgID, otherDatasetID)
-		otherEndpointID := publishedEndpointID(otherOrgOwner.OrgID, otherModelID, otherDatasetID)
-		Eventually(func(g Gomega) {
-			status, body := doJSON(http.MethodGet, "/v1/private/inference/endpoints", nil, otherOrgOwner.Token, uuid.Nil)
-			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
-			var endpoints []map[string]any
-			g.Expect(json.Unmarshal(body, &endpoints)).To(Succeed())
-			g.Expect(endpoints).To(ContainElement(HaveKeyWithValue("endpoint_id", otherEndpointID.String())))
-		}, 45*time.Second, 1*time.Second).Should(Succeed())
+		otherEndpointID := waitForPublishedEndpoint(otherOrgOwner.Token, "rag-e2e-generator")
 
 		status, body = doJSON(http.MethodPost, "/v1/private/inference/endpoints/"+otherEndpointID.String()+"/generations", map[string]any{
 			"query_text": "try another org",
@@ -110,6 +88,36 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 		Expect(status).To(Equal(http.StatusBadRequest), "body: %s", string(body))
 	})
 })
+
+func waitForPublishedEndpoint(token string, displayName string) uuid.UUID {
+	var endpointID uuid.UUID
+	Eventually(func(g Gomega) {
+		status, body := doJSON(http.MethodGet, "/v1/private/inference/endpoints", nil, token, uuid.Nil)
+		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		var endpoints []map[string]any
+		g.Expect(json.Unmarshal(body, &endpoints)).To(Succeed())
+		for _, endpoint := range endpoints {
+			if endpoint["display_name"] != displayName || endpoint["status"] != "ready" {
+				continue
+			}
+			g.Expect(endpoint).To(SatisfyAll(
+				HaveKey("endpoint_id"),
+				Not(HaveKey("model_id")),
+				Not(HaveKey("dataset_id")),
+				Not(HaveKey("org_id")),
+				Not(HaveKey("user_id")),
+			))
+			rawEndpointID, ok := endpoint["endpoint_id"].(string)
+			g.Expect(ok).To(BeTrue())
+			parsed, err := uuid.Parse(rawEndpointID)
+			g.Expect(err).NotTo(HaveOccurred())
+			endpointID = parsed
+			return
+		}
+		g.Expect(endpoints).To(ContainElement(HaveKeyWithValue("display_name", displayName)))
+	}, 45*time.Second, 1*time.Second).Should(Succeed())
+	return endpointID
+}
 
 func addOrgMember(admin profileTestUser, orgID uuid.UUID, memberID uuid.UUID, role string) {
 	status, body := doJSON(http.MethodPost, "/v1/private/orgs/"+orgID.String()+"/members", map[string]any{
@@ -154,10 +162,6 @@ func assertConsumerDeniedWriteRoutes(consumer profileTestUser) {
 		"source_model_id": uuid.NewString(),
 	}, consumer.Token, uuid.New())
 	Expect(status).To(Equal(http.StatusForbidden), "body: %s", string(body))
-}
-
-func publishedEndpointID(orgID uuid.UUID, modelID uuid.UUID, datasetID uuid.UUID) uuid.UUID {
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("published-inference-endpoint:"+orgID.String()+":"+modelID.String()+":"+datasetID.String()))
 }
 
 func decodeAccessTokenClaims(token string) map[string]any {

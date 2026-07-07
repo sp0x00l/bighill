@@ -35,6 +35,7 @@ type DatasetEventBuilderAdapter interface {
 
 type SourceRepositoryAdapter interface {
 	Close()
+	ReserveID(context.Context, pgx.Tx) (uuid.UUID, error)
 	Create(context.Context, pgx.Tx, *model.SourceConnector, uuid.UUID) error
 	ReadByUserID(context.Context, uuid.UUID) ([]model.SourceConnector, error)
 	ReadByID(context.Context, uuid.UUID, uuid.UUID) (*model.SourceConnector, error)

@@ -366,6 +366,10 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		err = domain.ErrDatasetNotReady.Extend("dataset embeddings are not materialized")
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
+	if !dataset.HasSupportedEmbeddingProvider() {
+		err = domain.ErrDatasetNotReady.Extend(fmt.Sprintf("dataset embedding provider %q is not supported", dataset.EmbeddingProvider))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProvider, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
 
 	retrievalQuery := request.QueryText
 	retrievalFilters := copyMetadataFilters(request.MetadataFilters)
@@ -529,14 +533,16 @@ func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferen
 		return nil
 	}
 	if inferenceModel.OrgID == uuid.Nil || inferenceModel.UserID == uuid.Nil || inferenceModel.DatasetID == uuid.Nil {
-		return nil
+		if inferenceModel.ModelKind == model.ModelKindBase && inferenceModel.OrgID == uuid.Nil && inferenceModel.UserID == uuid.Nil && inferenceModel.DatasetID == uuid.Nil {
+			return nil
+		}
+		return domain.ErrValidationFailed.Extend("published endpoint requires org_id, user_id, and dataset_id")
 	}
 	status := model.PublishedEndpointStatusDisabled
 	if inferenceModel.Status == model.ModelStatusReady && inferenceModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
 		status = model.PublishedEndpointStatusReady
 	}
 	_, err := u.endpointRepository.UpsertEndpoint(ctx, &model.PublishedEndpoint{
-		EndpointID:      publishedEndpointID(inferenceModel),
 		OrgID:           inferenceModel.OrgID,
 		ModelID:         inferenceModel.ModelID,
 		DatasetID:       inferenceModel.DatasetID,
@@ -545,17 +551,6 @@ func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferen
 		CreatedByUserID: inferenceModel.UserID,
 	})
 	return err
-}
-
-func publishedEndpointID(inferenceModel *model.InferenceModel) uuid.UUID {
-	log.Trace("publishedEndpointID")
-
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
-		"published-inference-endpoint",
-		inferenceModel.OrgID.String(),
-		inferenceModel.ModelID.String(),
-		inferenceModel.DatasetID.String(),
-	}, ":")))
 }
 
 func contextForActorOrg(ctx context.Context, userID uuid.UUID, orgID uuid.UUID) context.Context {

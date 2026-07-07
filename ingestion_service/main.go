@@ -328,6 +328,8 @@ func main() {
 }
 
 func readIngestionConfig() ingestionConfig {
+	env.RequireServiceEnvironment()
+
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	dbName := env.WithDefaultString("INGESTION_SERVICE_DB_NAME", "bighill_ingestion_db")
 	dbConnectionString := postgresConnectionString(
@@ -343,8 +345,12 @@ func readIngestionConfig() ingestionConfig {
 	directMaxFileSizeMB := env.WithDefaultInt64("INGESTION_SERVICE_DIRECT_UPLOAD_MAX_SIZE_MB", "5")
 	validationReadMaxMB := env.WithDefaultInt64("INGESTION_SERVICE_UPLOAD_VALIDATION_READ_MAX_SIZE_MB", "5")
 	uploadPartSizeMB := env.WithDefaultInt64("INGESTION_SERVICE_FILES_UPLOAD_PART_SIZE_MB", "10")
+	defaultBucketName := ""
+	defaultHuggingFaceOutputURI := ""
 	defaultBucketRegion := "eu-west-1"
 	if env.IsDevEnv() {
+		defaultBucketName = "local-dev-bucket"
+		defaultHuggingFaceOutputURI = "s3://local-dev-bucket/models/huggingface"
 		defaultBucketRegion = coreBucket.LocalDevS3Region
 	}
 	return ingestionConfig{
@@ -354,7 +360,7 @@ func readIngestionConfig() ingestionConfig {
 		UploadSessionMaxFileSizeBytes: maxFileSizeMB * 1000 * 1000,
 		UploadSessionTTL:              time.Duration(env.WithDefaultInt("INGESTION_SERVICE_UPLOAD_SESSION_TTL_SECONDS", "900")) * time.Second,
 		UploadValidationReadMaxBytes:  validationReadMaxMB * 1000 * 1000,
-		BucketName:                    env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_NAME", "local-dev-bucket"),
+		BucketName:                    env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_NAME", defaultBucketName),
 		BucketRegion:                  env.WithDefaultString("INGESTION_SERVICE_FILES_BUCKET_REGION", defaultBucketRegion),
 		BucketUploadPartSize:          uploadPartSizeMB * 1024 * 1024,
 		DBName:                        dbName,
@@ -389,7 +395,7 @@ func readIngestionConfig() ingestionConfig {
 			"python -m training_jobs.model_onboard",
 		),
 		HuggingFaceDownloadWorkingDir: env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_WORKING_DIRECTORY", ""),
-		HuggingFaceOutputURI:          env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI", "s3://local-dev-bucket/models/huggingface"),
+		HuggingFaceOutputURI:          env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI", defaultHuggingFaceOutputURI),
 		HuggingFaceDownloadTimeout:    time.Duration(env.WithDefaultInt("INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_TIMEOUT_SECONDS", "1800")) * time.Second,
 		HuggingFaceJobEnvKeys:         huggingFaceJobEnvKeysFromEnv(),
 		HuggingFaceJobNamespace:       env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_NAMESPACE", "default"),
@@ -437,6 +443,12 @@ func validateIngestionConfig(cfg ingestionConfig) error {
 	if cfg.BucketUploadPartSize <= 0 {
 		return fmt.Errorf("INGESTION_SERVICE_FILES_UPLOAD_PART_SIZE_MB must be greater than zero")
 	}
+	if strings.TrimSpace(cfg.BucketName) == "" {
+		return fmt.Errorf("INGESTION_SERVICE_FILES_BUCKET_NAME must be set")
+	}
+	if !env.IsDevEnv() && strings.TrimSpace(cfg.BucketName) == "local-dev-bucket" {
+		return fmt.Errorf("INGESTION_SERVICE_FILES_BUCKET_NAME must not be local-dev-bucket outside dev environments")
+	}
 	if cfg.UploadSessionTTL <= 0 {
 		return fmt.Errorf("INGESTION_SERVICE_UPLOAD_SESSION_TTL_SECONDS must be greater than zero")
 	}
@@ -448,6 +460,9 @@ func validateIngestionConfig(cfg ingestionConfig) error {
 	}
 	if strings.TrimSpace(cfg.HuggingFaceOutputURI) == "" {
 		return fmt.Errorf("INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI must be set")
+	}
+	if !env.IsDevEnv() && strings.Contains(cfg.HuggingFaceOutputURI, "local-dev-bucket") {
+		return fmt.Errorf("INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI must not use local-dev-bucket outside dev environments")
 	}
 	if cfg.HuggingFaceDownloadTimeout <= 0 {
 		return fmt.Errorf("INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_TIMEOUT_SECONDS must be greater than zero")

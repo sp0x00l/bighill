@@ -66,8 +66,8 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 
 		Expect(response.GetDatasetId()).To(Equal(datasetID))
 		Expect(response.GetModelId()).To(Equal(modelID.String()))
-		Expect(response.GetGenerationProvider()).To(Equal("deterministic"))
-		Expect(response.GetGenerationModel()).To(Equal("deterministic"))
+		Expect(response.GetGenerationProvider()).To(Equal("ollama"))
+		Expect(response.GetGenerationModel()).To(Equal("llama3.1:8b"))
 		Expect(response.GetPromptStrategyVersion()).To(Equal("rag-prompt-v1"))
 		Expect(response.GetContexts()[0].GetEmbeddingRecordId()).NotTo(BeEmpty())
 		Expect(response.GetContexts()[0].GetEmbeddingSnapshotId()).NotTo(BeEmpty())

@@ -317,6 +317,9 @@ func (r *SnapshotRepository) SavePendingEmbeddingSnapshot(ctx context.Context, t
 	log.Trace("SnapshotRepository SavePendingEmbeddingSnapshot")
 
 	strategy = model.NormalizeEmbeddingStrategy(strategy)
+	if err := model.ValidateEmbeddingStrategy(strategy); err != nil {
+		return nil, domain.ErrValidationFailed.Extend(err.Error())
+	}
 	featureSnapshot, err := r.readFeatureSnapshot(ctx, tx, featureSnapshotID)
 	if err != nil {
 		return nil, err

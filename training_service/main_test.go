@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	env "lib/shared_lib/env"
 	"training_service/pkg/infra/executor"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -48,6 +49,8 @@ func readTextFile(path string) string {
 
 var _ = Describe("readTrainingConfig", func() {
 	BeforeEach(func() {
+		Expect(os.Setenv("ENVIRONMENT", "LOCAL-DEV")).To(Succeed())
+		env.ResetEnvironmentCache()
 		Expect(os.Unsetenv("TRAINING_SERVICE_TEMPORAL_ADDRESS")).To(Succeed())
 		Expect(os.Unsetenv("TEMPORAL_ADDRESS")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_TEMPORAL_NAMESPACE")).To(Succeed())

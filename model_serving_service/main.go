@@ -113,6 +113,8 @@ func main() {
 }
 
 func readModelServingConfig() modelServingConfig {
+	env.RequireServiceEnvironment()
+
 	return modelServingConfig{
 		ServiceName: env.WithDefaultString("MODEL_SERVING_SERVICE_NAME", "model-serving-service"),
 		Namespace:   env.WithDefaultString("MODEL_SERVING_SERVICE_NAMESPACE", "default"),

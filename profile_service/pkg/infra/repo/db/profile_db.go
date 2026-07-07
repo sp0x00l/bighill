@@ -138,19 +138,23 @@ func (db *profileDB) Update(ctx context.Context, userID uuid.UUID, profile *doma
 func (db *profileDB) createDefaultOrganizationTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email string) (uuid.UUID, error) {
 	log.Trace("ProfileDB createDefaultOrganizationTx")
 
-	orgID := uuid.New()
 	displayName := defaultOrganizationName(email)
 	exec := db.executor(tx)
-	if _, err := exec.Exec(ctx, `
-		INSERT INTO `+db.Name+`.organizations (id, display_name, created_by_user_id)
-		VALUES (@org_id, @display_name, @created_by_user_id);`,
+	var orgIDText string
+	if err := exec.QueryRow(ctx, `
+		INSERT INTO `+db.Name+`.organizations (display_name, created_by_user_id)
+		VALUES (@display_name, @created_by_user_id)
+		RETURNING id::text;`,
 		pgx.NamedArgs{
-			"org_id":             pgtype.UUID{Bytes: orgID, Valid: true},
 			"display_name":       pgtype.Text{String: displayName, Valid: true},
 			"created_by_user_id": pgtype.UUID{Bytes: userID, Valid: true},
 		},
-	); err != nil {
+	).Scan(&orgIDText); err != nil {
 		return uuid.Nil, fmt.Errorf("database error. failed to create default organization: %w", err)
+	}
+	orgID, err := uuidutil.Parse("organization id", orgIDText)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("database error. create default organization returned invalid id: %w", err)
 	}
 	if _, err := exec.Exec(ctx, `
 		INSERT INTO `+db.Name+`.organization_memberships (org_id, user_id, role, status, created_by_user_id)

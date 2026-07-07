@@ -5,6 +5,7 @@ CREATE TYPE model_source_enum AS ENUM ('TRAINING', 'UPLOAD', 'HUGGING_FACE');
 CREATE TYPE promotion_decision_enum AS ENUM ('PROMOTION_ACCEPTED', 'PROMOTION_REJECTED');
 
 CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE OR REPLACE FUNCTION updated_at_column()
 RETURNS TRIGGER AS $$
@@ -91,7 +92,7 @@ FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();
 
 CREATE TABLE IF NOT EXISTS bighill_model_registry_db.published_inference_endpoints (
-    endpoint_id uuid PRIMARY KEY,
+    endpoint_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id uuid NOT NULL,
     model_id uuid NOT NULL REFERENCES bighill_model_registry_db.models(model_id),
     dataset_id uuid NOT NULL,
@@ -108,6 +109,9 @@ ON bighill_model_registry_db.published_inference_endpoints(org_id, status, creat
 
 CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_model_id
 ON bighill_model_registry_db.published_inference_endpoints(model_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS index_published_inference_endpoints_natural_key
+ON bighill_model_registry_db.published_inference_endpoints(org_id, model_id, dataset_id);
 
 CREATE TRIGGER published_inference_endpoints_updated_at
 BEFORE UPDATE ON bighill_model_registry_db.published_inference_endpoints

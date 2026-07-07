@@ -13,6 +13,7 @@ CREATE TYPE processing_profile_enum AS ENUM (
 );
 
 CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE OR REPLACE FUNCTION updated_at_column()
 RETURNS TRIGGER AS $$
@@ -178,7 +179,7 @@ CREATE INDEX IF NOT EXISTS index_inference_requests_created_at
 ON bighill_inference_db.inference_requests(created_at);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_feedback (
-    feedback_id uuid PRIMARY KEY,
+    feedback_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     idempotency_key uuid NOT NULL UNIQUE,
     request_id uuid NOT NULL REFERENCES bighill_inference_db.inference_requests(request_id),
     user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
@@ -200,7 +201,7 @@ CREATE INDEX IF NOT EXISTS index_inference_feedback_org_id
 ON bighill_inference_db.inference_feedback(org_id);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_examples (
-    preference_example_id uuid PRIMARY KEY,
+    preference_example_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     feedback_id uuid NOT NULL UNIQUE REFERENCES bighill_inference_db.inference_feedback(feedback_id),
     request_id uuid NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
@@ -228,7 +229,7 @@ CREATE INDEX IF NOT EXISTS index_preference_examples_model_id
 ON bighill_inference_db.preference_examples(model_id);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_dataset_snapshots (
-    preference_dataset_id uuid PRIMARY KEY,
+    preference_dataset_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
     org_id uuid NOT NULL,
     dataset_id uuid NOT NULL,
@@ -266,7 +267,7 @@ FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.published_inference_endpoints (
-    endpoint_id uuid PRIMARY KEY,
+    endpoint_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id uuid NOT NULL,
     model_id uuid NOT NULL,
     dataset_id uuid NOT NULL,
@@ -283,6 +284,9 @@ ON bighill_inference_db.published_inference_endpoints(org_id, status, created_at
 
 CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_model_id
 ON bighill_inference_db.published_inference_endpoints(model_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS index_published_inference_endpoints_natural_key
+ON bighill_inference_db.published_inference_endpoints(org_id, model_id, dataset_id);
 
 CREATE TRIGGER published_inference_endpoints_updated_at
 BEFORE UPDATE ON bighill_inference_db.published_inference_endpoints

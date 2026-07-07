@@ -42,6 +42,14 @@ func runFatalEnvHelper() bool {
 	case "empty_default_string_slice":
 		os.Unsetenv("ENV_VAT_STR_ARRAY")
 		config.WithDefaultStringSlice("ENV_VAT_STR_ARRAY", "")
+	case "unknown_environment":
+		os.Setenv("ENVIRONMENT", "DEV")
+		config.ResetEnvironmentCache()
+		config.RequireKnownEnvironment()
+	case "missing_environment":
+		os.Unsetenv("ENVIRONMENT")
+		config.ResetEnvironmentCache()
+		config.RequireKnownEnvironment()
 	default:
 		return false
 	}
@@ -241,6 +249,50 @@ var _ = Describe("environment variables", func() {
 				Expect(len(result)).Should(Equal(2))
 				Expect(result).Should(HaveKeyWithValue("defaultKey1", int64(10)))
 				Expect(result).Should(HaveKeyWithValue("defaultKey2", int64(20)))
+			})
+		})
+
+		Describe("runtime environment classification", func() {
+			BeforeEach(func() {
+				os.Unsetenv("ENVIRONMENT")
+				config.ResetEnvironmentCache()
+			})
+
+			It("does not treat an unset environment as dev", func() {
+				Expect(config.IsKnownEnvironment()).To(BeFalse())
+				Expect(config.IsDevEnv()).To(BeFalse())
+			})
+
+			It("recognizes local dev and cicd as dev environments", func() {
+				Expect(os.Setenv("ENVIRONMENT", "LOCAL-DEV")).To(Succeed())
+				config.ResetEnvironmentCache()
+				Expect(config.IsKnownEnvironment()).To(BeTrue())
+				Expect(config.IsDevEnv()).To(BeTrue())
+
+				Expect(os.Setenv("ENVIRONMENT", "CICD")).To(Succeed())
+				config.ResetEnvironmentCache()
+				Expect(config.IsKnownEnvironment()).To(BeTrue())
+				Expect(config.IsDevEnv()).To(BeTrue())
+			})
+
+			It("does not treat staging or production as dev environments", func() {
+				Expect(os.Setenv("ENVIRONMENT", "STAGING")).To(Succeed())
+				config.ResetEnvironmentCache()
+				Expect(config.IsKnownEnvironment()).To(BeTrue())
+				Expect(config.IsDevEnv()).To(BeFalse())
+
+				Expect(os.Setenv("ENVIRONMENT", "PRODUCTION")).To(Succeed())
+				config.ResetEnvironmentCache()
+				Expect(config.IsKnownEnvironment()).To(BeTrue())
+				Expect(config.IsDevEnv()).To(BeFalse())
+			})
+
+			It("fails loudly for unknown environments", func() {
+				expectFatalEnvCall("unknown_environment")
+			})
+
+			It("fails loudly for missing environments", func() {
+				expectFatalEnvCall("missing_environment")
 			})
 		})
 	})

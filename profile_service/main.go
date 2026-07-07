@@ -204,6 +204,8 @@ func main() {
 }
 
 func loadConfig() runtimeConfig {
+	env.RequireServiceEnvironment()
+
 	brokers := env.MustString("KAFKA_BROKER")
 	return runtimeConfig{
 		serviceName:             env.MustString("PROFILE_SERVICE_NAME"),

@@ -112,6 +112,26 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		Expect(result).To(BeNil())
 		Expect(errors.Is(err, domain.ErrEmbeddingSearch)).To(BeTrue())
 	})
+
+	It("rejects active snapshots with unsupported embedding providers", func() {
+		activeSnapshot := validSearchEmbeddingSnapshot(uuid.New())
+		activeSnapshot.EmbeddingProvider = "unknown"
+		repo := &embeddingSearchRepoStub{activeSnapshot: activeSnapshot}
+		factoryCalled := false
+		uc := usecase.NewEmbeddingSearchUsecase(repo, func(model.EmbeddingStrategy) (usecase.QueryEmbeddingProvider, error) {
+			factoryCalled = true
+			return queryEmbeddingProviderStub{}, nil
+		})
+
+		ctx := ctxutil.WithActorOrg(context.Background(), activeSnapshot.UserID, activeSnapshot.OrgID)
+		result, err := uc.SearchEmbeddings(ctx, activeSnapshot.UserID, activeSnapshot.DatasetID, "query", 5)
+
+		Expect(result).To(BeNil())
+		Expect(errors.Is(err, domain.ErrEmbeddingSearch)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("embedding_provider"))
+		Expect(factoryCalled).To(BeFalse())
+		Expect(repo.queryVector).To(BeNil())
+	})
 })
 
 func validSearchEmbeddingSnapshot(datasetID uuid.UUID) *model.EmbeddingSnapshot {

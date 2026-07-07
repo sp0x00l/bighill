@@ -34,6 +34,7 @@ func readTextFile(path string) string {
 
 var _ = Describe("readRegistryConfig", func() {
 	BeforeEach(func() {
+		Expect(os.Setenv("ENVIRONMENT", "LOCAL-DEV")).To(Succeed())
 		env.ResetEnvironmentCache()
 		Expect(os.Unsetenv("DATA_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC")).To(Succeed())
 	})

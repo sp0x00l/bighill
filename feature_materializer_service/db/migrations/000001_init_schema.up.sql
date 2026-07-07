@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE OR REPLACE FUNCTION updated_at_column()
 RETURNS TRIGGER AS $$
@@ -117,7 +118,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_snapshots (
     chunker_version text NOT NULL DEFAULT 'v1',
     chunk_size integer NOT NULL DEFAULT 384,
     chunk_overlap integer NOT NULL DEFAULT 64,
-    embedding_provider text NOT NULL DEFAULT 'deterministic',
+    embedding_provider text NOT NULL,
     embedding_model text NOT NULL DEFAULT 'bge-small-en-v1.5',
     active_for_retrieval boolean NOT NULL DEFAULT false,
     status snapshot_status_enum NOT NULL DEFAULT 'PENDING',

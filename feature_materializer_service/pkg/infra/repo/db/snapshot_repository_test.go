@@ -667,7 +667,7 @@ var _ = Describe("SnapshotRepository", func() {
 				readyRow,
 			}
 
-			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, tx, featureID, idempotencyKey, model.EmbeddingStrategy{})
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, tx, featureID, idempotencyKey, validEmbeddingStrategy())
 
 			Expect(embeddingSnapshot).To(BeNil())
 			existing, ok := domain.IsEmbeddingsAlreadyMaterialized(err)
@@ -691,7 +691,7 @@ var _ = Describe("SnapshotRepository", func() {
 				reopenedRow,
 			}
 
-			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, tx, featureID, idempotencyKey, model.EmbeddingStrategy{})
+			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, tx, featureID, idempotencyKey, validEmbeddingStrategy())
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
@@ -891,7 +891,7 @@ func selectedOrgID(orgIDs []uuid.UUID) uuid.UUID {
 }
 
 func validEmbeddingStrategy() model.EmbeddingStrategy {
-	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+	return model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
 		StrategyVersion:     "rag-v1",
 		ExtractorName:       model.DefaultExtractorName,
 		ExtractorVersion:    "v1",

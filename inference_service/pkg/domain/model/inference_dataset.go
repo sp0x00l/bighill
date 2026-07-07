@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -78,4 +79,16 @@ func (d *InferenceDataset) IsRAGReady() bool {
 		d.EmbeddingSnapshotID != uuid.Nil &&
 		d.EmbeddingDimensions > 0 &&
 		d.EmbeddingCount > 0
+}
+
+func (d *InferenceDataset) HasSupportedEmbeddingProvider() bool {
+	if d == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(d.EmbeddingProvider)) {
+	case "ollama", "tei":
+		return true
+	default:
+		return false
+	}
 }

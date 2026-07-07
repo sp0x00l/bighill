@@ -81,8 +81,6 @@ func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Datas
 		dataset.OrgID = orgID
 		ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	}
-	model.NormalizeDatasetMetadata(dataset)
-
 	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		if err := u.datasetsRepository.Create(ctx, tx, dataset, idempotencyKey); err != nil {
 			return err
@@ -211,8 +209,6 @@ func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Data
 		dataset.OrgID = orgID
 		ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	}
-	model.NormalizeDatasetMetadata(dataset)
-
 	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		var replaceErr error
 		updated, replaceErr = u.datasetsRepository.Replace(ctx, tx, dataset)

@@ -23,6 +23,7 @@ type BlobRepositoryAdapter interface {
 }
 
 type UploadSessionRepositoryAdapter interface {
+	ReserveID(context.Context, pgx.Tx) (uuid.UUID, error)
 	CreateUploadSession(context.Context, pgx.Tx, *model.UploadSession) (*model.UploadSession, error)
 	ReadUploadSessionForComplete(context.Context, uuid.UUID, uuid.UUID) (*model.UploadSession, error)
 	PromoteUploadSession(context.Context, pgx.Tx, *model.UploadSession) (*model.UploadSession, bool, error)

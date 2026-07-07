@@ -150,6 +150,8 @@ func main() {
 }
 
 func readStreamConfig() streamConfig {
+	env.RequireServiceEnvironment()
+
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	return streamConfig{
 		ServiceName:          env.WithDefaultString("DATA_STREAM_SERVICE_NAME", "data-stream-service"),
