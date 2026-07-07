@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"fmt"
+	"lib/shared_lib/authz"
+	"lib/shared_lib/ctxutil"
 	"net/http"
 	"strconv"
 	"time"
@@ -27,6 +29,7 @@ func Middleware(tracer trace.Tracer, spanName string, next handlerFunc) http.Han
 		metrics.DefaultActiveRequests().Inc()
 		defer metrics.DefaultActiveRequests().Dec()
 		ctx := r.Context()
+		ctx = trustedIdentityContext(ctx, r)
 		ctx, span := tracer.Start(ctx, spanName)
 		defer span.End()
 		statusCode, body, err := next(ctx, r)
@@ -62,6 +65,18 @@ func Middleware(tracer trace.Tracer, spanName string, next handlerFunc) http.Han
 			writeRespError(w, "Error: Failed to write response")
 		}
 	}
+}
+
+func trustedIdentityContext(ctx context.Context, r *http.Request) context.Context {
+	userID, userErr := authz.ReadUserIDHeader(ctx, r)
+	orgID, orgErr := authz.ReadOrgIDHeader(ctx, r)
+	if userErr == nil {
+		ctx = ctxutil.WithTenantID(ctx, userID)
+	}
+	if orgErr == nil {
+		ctx = ctxutil.WithOrgID(ctx, orgID)
+	}
+	return ctx
 }
 
 type ErrorMessage struct {

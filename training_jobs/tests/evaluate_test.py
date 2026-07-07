@@ -208,6 +208,7 @@ class EvaluationJobTests(unittest.TestCase):
             profile = json.dumps({"promotion": {"deepchecks_command": f"{sys.executable} {evidence} --output {{output}}"}})
             job_spec = {
                 "user_id": "user-1",
+                "org_id": "org-1",
                 "model_id": "model-1",
                 "training_run_id": "training-1",
                 "candidate_report_uri": "s3://evals/reports/candidate.json",

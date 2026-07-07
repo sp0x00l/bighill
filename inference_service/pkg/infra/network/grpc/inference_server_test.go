@@ -8,6 +8,7 @@ import (
 	"inference_service/pkg/domain/model"
 	featurepb "lib/data_contracts_lib/feature_materializer"
 	inferencepb "lib/data_contracts_lib/inference"
+	"lib/shared_lib/ctxutil"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -45,6 +46,15 @@ func (s *inferenceUsecaseStub) ReadModel(context.Context, uuid.UUID, uuid.UUID) 
 	return nil, nil
 }
 
+func (s *inferenceUsecaseStub) ListEndpoints(context.Context, uuid.UUID) ([]*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
+func (s *inferenceUsecaseStub) GenerateForEndpoint(_ context.Context, _ uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error) {
+	s.request = request
+	return s.result, s.err
+}
+
 func (s *inferenceUsecaseStub) Generate(_ context.Context, request model.GenerateRequest) (*model.GenerateResponse, error) {
 	s.request = request
 	return s.result, s.err
@@ -79,6 +89,7 @@ var _ = Describe("InferenceServer", func() {
 	It("maps generate requests and responses", func() {
 		requestID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		recordID := uuid.New()
@@ -86,6 +97,7 @@ var _ = Describe("InferenceServer", func() {
 		uc := &inferenceUsecaseStub{
 			result: &model.GenerateResponse{
 				RequestID:             requestID,
+				OrgID:                 orgID,
 				DatasetID:             datasetID,
 				ModelID:               modelID,
 				QueryText:             "what is relevant?",
@@ -108,6 +120,7 @@ var _ = Describe("InferenceServer", func() {
 		response, err := server.Generate(context.Background(), &inferencepb.GenerateRequest{
 			RequestId:       requestID.String(),
 			UserId:          userID.String(),
+			OrgId:           orgID.String(),
 			DatasetId:       datasetID.String(),
 			ModelId:         modelID.String(),
 			QueryText:       "what is relevant?",
@@ -118,7 +131,9 @@ var _ = Describe("InferenceServer", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.request.RequestID).To(Equal(requestID))
 		Expect(uc.request.UserID).To(Equal(userID))
+		Expect(uc.request.OrgID).To(Equal(orgID))
 		Expect(uc.request.DatasetID).To(Equal(datasetID))
+		Expect(response.GetOrgId()).To(Equal(orgID.String()))
 		Expect(uc.request.ModelID).To(Equal(modelID))
 		Expect(uc.request.TopK).To(Equal(4))
 		Expect(uc.request.MetadataFilters).To(Equal(map[string]string{"source": "manual"}))
@@ -146,6 +161,7 @@ var _ = Describe("InferenceServer", func() {
 		server := NewInferenceGrpcServer(&inferenceUsecaseStub{})
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 
 		_, err := server.Generate(context.Background(), &inferencepb.GenerateRequest{
@@ -160,6 +176,7 @@ var _ = Describe("InferenceServer", func() {
 		_, err = server.Generate(context.Background(), &inferencepb.GenerateRequest{
 			RequestId: uuid.NewString(),
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 			DatasetId: datasetID.String(),
 			ModelId:   modelID.String(),
 			QueryText: "query",
@@ -171,6 +188,7 @@ var _ = Describe("InferenceServer", func() {
 		feedbackID := uuid.New()
 		requestID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		uc := &inferenceUsecaseStub{}
 		server := NewInferenceGrpcServer(uc)
 
@@ -178,6 +196,7 @@ var _ = Describe("InferenceServer", func() {
 			FeedbackId:      feedbackID.String(),
 			RequestId:       requestID.String(),
 			UserId:          userID.String(),
+			OrgId:           orgID.String(),
 			Accepted:        false,
 			Rating:          -1,
 			Comment:         " not grounded ",
@@ -190,6 +209,7 @@ var _ = Describe("InferenceServer", func() {
 		Expect(uc.feedback.FeedbackID).To(Equal(feedbackID))
 		Expect(uc.feedback.RequestID).To(Equal(requestID))
 		Expect(uc.feedback.UserID).To(Equal(userID))
+		Expect(uc.feedback.OrgID).To(Equal(orgID))
 		Expect(uc.feedback.Accepted).To(BeFalse())
 		Expect(uc.feedback.Rating).To(Equal(-1))
 		Expect(uc.feedback.Comment).To(Equal("not grounded"))
@@ -200,11 +220,13 @@ var _ = Describe("InferenceServer", func() {
 	It("maps preference dataset export requests into the usecase", func() {
 		requestID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		uc := &inferenceUsecaseStub{exportResult: &model.PreferenceDataset{
 			RequestID: requestID,
 			UserID:    userID,
+			OrgID:     orgID,
 			DatasetID: datasetID,
 			ModelID:   modelID,
 			OutputURI: "s3://local-dev-bucket/preferences/dataset.jsonl",
@@ -218,6 +240,7 @@ var _ = Describe("InferenceServer", func() {
 		response, err := server.ExportPreferenceDataset(context.Background(), &inferencepb.ExportPreferenceDatasetRequest{
 			RequestId:   requestID.String(),
 			UserId:      userID.String(),
+			OrgId:       orgID.String(),
 			DatasetId:   datasetID.String(),
 			ModelId:     modelID.String(),
 			OutputUri:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
@@ -228,7 +251,9 @@ var _ = Describe("InferenceServer", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.exportRequest.RequestID).To(Equal(requestID))
 		Expect(uc.exportRequest.UserID).To(Equal(userID))
+		Expect(uc.exportRequest.OrgID).To(Equal(orgID))
 		Expect(uc.exportRequest.DatasetID).To(Equal(datasetID))
+		Expect(response.GetOrgId()).To(Equal(orgID.String()))
 		Expect(uc.exportRequest.ModelID).To(Equal(modelID))
 		Expect(uc.exportRequest.MinExamples).To(Equal(1))
 		Expect(uc.exportRequest.Limit).To(Equal(100))
@@ -255,6 +280,7 @@ var _ = Describe("InferenceServer", func() {
 			FeedbackId: uuid.NewString(),
 			RequestId:  uuid.NewString(),
 			UserId:     uuid.NewString(),
+			OrgId:      uuid.NewString(),
 			Rating:     2,
 		})
 
@@ -289,6 +315,7 @@ var _ = Describe("FeatureMaterializerClient", func() {
 	It("maps search responses into retrieved contexts", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		recordID := uuid.New()
 		snapshotID := uuid.New()
 		clientStub := &featureMaterializerServiceClientStub{
@@ -306,10 +333,11 @@ var _ = Describe("FeatureMaterializerClient", func() {
 		}
 		client := &featureMaterializerClient{client: clientStub}
 
-		contexts, err := client.SearchEmbeddings(context.Background(), userID, datasetID, "query", 6, map[string]string{"source": "manual"})
+		contexts, err := client.SearchEmbeddings(ctxutil.WithOrgID(context.Background(), orgID), userID, datasetID, "query", 6, map[string]string{"source": "manual"})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(clientStub.request.GetUserId()).To(Equal(userID.String()))
+		Expect(clientStub.request.GetOrgId()).To(Equal(orgID.String()))
 		Expect(clientStub.request.GetDatasetId()).To(Equal(datasetID.String()))
 		Expect(clientStub.request.GetQueryText()).To(Equal("query"))
 		Expect(clientStub.request.GetTopK()).To(Equal(int32(6)))
@@ -330,7 +358,7 @@ var _ = Describe("FeatureMaterializerClient", func() {
 			},
 		}}
 
-		_, err := client.SearchEmbeddings(context.Background(), uuid.New(), uuid.New(), "query", 5, nil)
+		_, err := client.SearchEmbeddings(ctxutil.WithOrgID(context.Background(), uuid.New()), uuid.New(), uuid.New(), "query", 5, nil)
 
 		Expect(err).To(HaveOccurred())
 	})

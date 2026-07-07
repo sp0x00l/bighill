@@ -136,6 +136,8 @@ func validFeatureSnapshot(rawSnapshotID uuid.UUID) *model.FeatureSnapshot {
 		FeatureSnapshotID: uuid.New(),
 		RawSnapshotID:     rawSnapshotID,
 		DatasetID:         uuid.New(),
+		UserID:            uuid.New(),
+		OrgID:             uuid.New(),
 		TableNamespace:    "default",
 		TableName:         "dataset_movies",
 		TableFormat:       "PARQUET",

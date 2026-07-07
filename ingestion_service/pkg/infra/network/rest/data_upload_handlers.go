@@ -187,7 +187,7 @@ func (h *DataUploadHandlers) InitiateUploadSession(ctx context.Context, r *http.
 	if err != nil {
 		return nil, err
 	}
-	ctx = ctxutil.WithTenantID(ctx, authResult.UserID)
+	ctx = ctxutil.WithActorOrg(ctx, authResult.UserID, authResult.OrgID)
 	body, err := transport.ReadReqBody(ctx, r)
 	if err != nil {
 		return nil, err
@@ -196,6 +196,7 @@ func (h *DataUploadHandlers) InitiateUploadSession(ctx context.Context, r *http.
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid upload session request")
 	}
+	command.OrgID = authResult.OrgID
 	result, err := h.uploadUseCase.InitiateUploadSession(ctx, *command)
 	if err != nil {
 		return nil, h.uploadError(ctx, err, "Failed to initiate upload session")
@@ -215,7 +216,7 @@ func (h *DataUploadHandlers) InitiateModelUploadSession(ctx context.Context, r *
 	if err != nil {
 		return nil, err
 	}
-	ctx = ctxutil.WithTenantID(ctx, authResult.UserID)
+	ctx = ctxutil.WithActorOrg(ctx, authResult.UserID, authResult.OrgID)
 	body, err := transport.ReadReqBody(ctx, r)
 	if err != nil {
 		return nil, err
@@ -224,6 +225,7 @@ func (h *DataUploadHandlers) InitiateModelUploadSession(ctx context.Context, r *
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid model upload session request")
 	}
+	command.OrgID = authResult.OrgID
 	result, err := h.uploadUseCase.InitiateModelUploadSession(ctx, *command)
 	if err != nil {
 		return nil, h.uploadError(ctx, err, "Failed to initiate model upload session")
@@ -254,10 +256,11 @@ func (h *DataUploadHandlers) CompleteUploadSession(ctx context.Context, r *http.
 	if err != nil {
 		return nil, err
 	}
-	ctx = ctxutil.WithTenantID(ctx, authResult.UserID)
+	ctx = ctxutil.WithActorOrg(ctx, authResult.UserID, authResult.OrgID)
 	session, err := h.uploadUseCase.CompleteUploadSession(ctx, model.CompleteUploadSessionRequest{
 		UploadID: uploadID,
 		UserID:   authResult.UserID,
+		OrgID:    authResult.OrgID,
 	})
 	if err != nil {
 		return nil, h.uploadError(ctx, err, "Failed to complete upload session")
@@ -279,10 +282,11 @@ func (h *DataUploadHandlers) CompleteModelUploadSession(ctx context.Context, r *
 	if err != nil {
 		return nil, err
 	}
-	ctx = ctxutil.WithTenantID(ctx, authResult.UserID)
+	ctx = ctxutil.WithActorOrg(ctx, authResult.UserID, authResult.OrgID)
 	session, err := h.uploadUseCase.CompleteModelUploadSession(ctx, model.CompleteUploadSessionRequest{
 		UploadID: uploadID,
 		UserID:   authResult.UserID,
+		OrgID:    authResult.OrgID,
 	})
 	if err != nil {
 		return nil, h.uploadError(ctx, err, "Failed to complete model upload session")
@@ -309,7 +313,7 @@ func (h *DataUploadHandlers) OnboardHuggingFaceModel(ctx context.Context, r *htt
 	if err != nil {
 		return nil, err
 	}
-	ctx = ctxutil.WithTenantID(ctx, authResult.UserID)
+	ctx = ctxutil.WithActorOrg(ctx, authResult.UserID, authResult.OrgID)
 	body, err := transport.ReadReqBody(ctx, r)
 	if err != nil {
 		return nil, err
@@ -318,6 +322,7 @@ func (h *DataUploadHandlers) OnboardHuggingFaceModel(ctx context.Context, r *htt
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid Hugging Face onboarding request")
 	}
+	command.OrgID = authResult.OrgID
 	session, err := h.uploadUseCase.OnboardHuggingFaceModel(ctx, *command)
 	if err != nil {
 		return nil, h.uploadError(ctx, err, "Failed to onboard Hugging Face model")
@@ -345,7 +350,7 @@ func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request
 	if err != nil {
 		return nil, err
 	}
-	ctx = ctxutil.WithTenantID(ctx, authResult.UserID)
+	ctx = ctxutil.WithActorOrg(ctx, authResult.UserID, authResult.OrgID)
 	userID := authResult.UserID
 
 	// Set the maximum file size for the request (this includes the entire request body) to prevent abuse.
@@ -389,6 +394,7 @@ func (h *DataUploadHandlers) UploadDataFile(ctx context.Context, r *http.Request
 	upload := &model.DataFile{
 		DatasetID:         datasetID,
 		UserID:            userID,
+		OrgID:             authResult.OrgID,
 		File:              file,
 		Extension:         fileFormat,
 		ContentType:       contentType,
@@ -422,7 +428,7 @@ func (h *DataUploadHandlers) authenticateDatasetForUpload(ctx context.Context, r
 		return uuid.Nil, AuthResult{}, nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), authResult.UserID.String())
-	ctx = ctxutil.WithTenantID(ctx, authResult.UserID)
+	ctx = ctxutil.WithActorOrg(ctx, authResult.UserID, authResult.OrgID)
 	dataset, err := h.datasetsUsecase.DatasetForUpload(ctx, datasetID, authResult.UserID)
 	if err != nil {
 		if errors.Is(err, domain.ErrResourceNotFound) {

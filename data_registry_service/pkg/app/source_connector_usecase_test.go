@@ -7,6 +7,7 @@ import (
 	usecase "data_registry_service/pkg/app"
 	domainErrors "data_registry_service/pkg/domain"
 	"data_registry_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 	shareduow "lib/shared_lib/uow"
 
 	"github.com/google/uuid"
@@ -149,12 +150,12 @@ var _ = Describe("SourceUsecase", func() {
 	)
 
 	BeforeEach(func() {
-		ctx = context.Background()
+		userID = uuid.New()
+		ctx = ctxutil.WithActorOrg(context.Background(), userID, uuid.New())
 		repo = &stubSourceRepository{}
 		uow = &stubSourceUnitOfWork{}
 		catalog = &stubCatalogClient{}
 		uc = usecase.NewSourceUsecase(repo, uow, catalog)
-		userID = uuid.New()
 		catalogID = uuid.New()
 		config = &mockSourceConfig{nextSourceType: model.S3}
 		connector = &model.SourceConnector{UserID: userID, Config: config}

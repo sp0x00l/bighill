@@ -28,6 +28,7 @@ func (b *DatasetEventBuilder) DatasetUpdatedMessage(dataset *model.Dataset) msgC
 	payload := mustMarshalDataset(&datasetpb.DatasetUpdatedEvent{
 		DatasetId:                dataset.ID.String(),
 		UserId:                   dataset.UserID.String(),
+		OrgId:                    dataset.OrgID.String(),
 		DatasetVersion:           int32(dataset.DatasetVersion),
 		ProcessingState:          dataset.ProcessingState.String(),
 		StorageLocation:          dataset.Location,
@@ -75,6 +76,7 @@ func (b *DatasetEventBuilder) DatasetCreatedMessage(dataset *model.Dataset) msgC
 	payload := mustMarshalDataset(&datasetpb.DatasetCreatedEvent{
 		DatasetId:         dataset.ID.String(),
 		UserId:            dataset.UserID.String(),
+		OrgId:             dataset.OrgID.String(),
 		DatasetVersion:    int32(dataset.DatasetVersion),
 		ProcessingState:   dataset.ProcessingState.String(),
 		StorageLocation:   dataset.Location,
@@ -102,12 +104,13 @@ func (b *DatasetEventBuilder) DatasetCreatedMessage(dataset *model.Dataset) msgC
 	}
 }
 
-func (b *DatasetEventBuilder) DatasetDeletedMessage(datasetID uuid.UUID, userID uuid.UUID) msgConn.OutboundMessage {
+func (b *DatasetEventBuilder) DatasetDeletedMessage(datasetID uuid.UUID, userID uuid.UUID, orgID uuid.UUID) msgConn.OutboundMessage {
 	log.Trace("DatasetEventBuilder DatasetDeletedMessage")
 
 	payload := mustMarshalDataset(&datasetpb.DatasetDeletedEvent{
 		DatasetId: datasetID.String(),
 		UserId:    userID.String(),
+		OrgId:     orgID.String(),
 	})
 	return msgConn.OutboundMessage{
 		Topic: b.topic,

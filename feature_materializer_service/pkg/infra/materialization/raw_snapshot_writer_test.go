@@ -300,6 +300,7 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(result.SchemaMetadata).To(ContainSubstring(`"source_query":"SELECT title FROM movies"`))
 		Expect(store.writes[result.StorageLocation]).To(Equal([]byte("PAR1fakePAR1")))
 		Expect(reader.request.UserID).To(Equal(datasetFile.UserID.String()))
+		Expect(reader.request.OrgID).To(Equal(datasetFile.OrgID.String()))
 		Expect(reader.request.SourceType).To(Equal("postgres"))
 		Expect(reader.request.SourceConnectorID).To(Equal(datasetFile.SourceConnectorID.String()))
 		Expect(reader.request.SQL).To(Equal("SELECT title FROM movies"))
@@ -619,6 +620,7 @@ func validDatasetFile() *model.DatasetFile {
 	return &model.DatasetFile{
 		DatasetID:         uuid.New(),
 		UserID:            uuid.New(),
+		OrgID:             uuid.New(),
 		StorageLocation:   "s3://local/raw/file.csv",
 		ContentType:       "text/csv",
 		FileExtension:     "csv",
@@ -635,6 +637,7 @@ func validRawSnapshot(datasetFile *model.DatasetFile) *model.RawSnapshot {
 		RawSnapshotID:     uuid.New(),
 		DatasetID:         datasetFile.DatasetID,
 		UserID:            datasetFile.UserID,
+		OrgID:             datasetFile.OrgID,
 		StorageLocation:   datasetFile.StorageLocation,
 		ContentType:       datasetFile.ContentType,
 		FileExtension:     datasetFile.FileExtension,
@@ -655,6 +658,7 @@ func validFeatureSnapshot(rawSnapshot *model.RawSnapshot) *model.FeatureSnapshot
 		RawSnapshotID:     rawSnapshot.RawSnapshotID,
 		DatasetID:         rawSnapshot.DatasetID,
 		UserID:            rawSnapshot.UserID,
+		OrgID:             rawSnapshot.OrgID,
 		TableNamespace:    rawSnapshot.TableNamespace,
 		TableName:         rawSnapshot.TableName,
 		TableFormat:       rawSnapshot.TableFormat,
@@ -672,6 +676,7 @@ func validEmbeddingSnapshot(featureSnapshot *model.FeatureSnapshot) *model.Embed
 		FeatureSnapshotID:   featureSnapshot.FeatureSnapshotID,
 		DatasetID:           featureSnapshot.DatasetID,
 		UserID:              featureSnapshot.UserID,
+		OrgID:               featureSnapshot.OrgID,
 		Status:              model.SnapshotStatusPending,
 	}
 }

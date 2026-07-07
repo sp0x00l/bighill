@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"lib/shared_lib/authz"
 	sharedclock "lib/shared_lib/clock"
 	msgConn "lib/shared_lib/messaging"
 	shareduow "lib/shared_lib/uow"
@@ -11,6 +12,7 @@ import (
 	usecase "profile_service/pkg/app"
 	"profile_service/pkg/domain"
 
+	"github.com/alexedwards/argon2id"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
@@ -31,6 +33,15 @@ type passwordProfileDBStub struct {
 	updatedPasswordHash     string
 	updatePasswordCalled    bool
 	order                   *[]string
+	defaultMembership       *domain.OrganizationMembership
+	defaultMembershipErr    error
+	readMembershipResult    *domain.OrganizationMembership
+	readMembershipErr       error
+	readOrganizationResult  *domain.Organization
+	readOrganizationErr     error
+	upsertedMembership      *domain.OrganizationMembership
+	deletedMembershipOrgID  uuid.UUID
+	deletedMembershipUserID uuid.UUID
 }
 
 func (s *passwordProfileDBStub) Save(_ context.Context, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
@@ -111,6 +122,59 @@ func (s *passwordProfileDBStub) DeleteTx(context.Context, pgx.Tx, uuid.UUID) err
 	s.deleteCalled = true
 	return nil
 }
+func (s *passwordProfileDBStub) ReadDefaultMembership(_ context.Context, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+	if s.defaultMembershipErr != nil {
+		return nil, s.defaultMembershipErr
+	}
+	if s.defaultMembership != nil {
+		return s.defaultMembership, nil
+	}
+	return &domain.OrganizationMembership{
+		OrgID:  uuid.New(),
+		UserID: userID,
+		Role:   domain.OrgMemberRoleOrgAdmin,
+		Status: domain.OrgMemberStatusActive,
+	}, nil
+}
+func (s *passwordProfileDBStub) ReadMembership(_ context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+	if s.readMembershipErr != nil {
+		return nil, s.readMembershipErr
+	}
+	if s.readMembershipResult != nil {
+		return s.readMembershipResult, nil
+	}
+	return &domain.OrganizationMembership{
+		OrgID:  orgID,
+		UserID: userID,
+		Role:   domain.OrgMemberRoleOrgAdmin,
+		Status: domain.OrgMemberStatusActive,
+	}, nil
+}
+func (s *passwordProfileDBStub) ReadOrganization(_ context.Context, orgID uuid.UUID) (*domain.Organization, error) {
+	if s.readOrganizationErr != nil {
+		return nil, s.readOrganizationErr
+	}
+	if s.readOrganizationResult != nil {
+		return s.readOrganizationResult, nil
+	}
+	return &domain.Organization{ID: orgID, DisplayName: "Test Org"}, nil
+}
+func (s *passwordProfileDBStub) ListMemberships(context.Context, uuid.UUID) ([]*domain.OrganizationMembership, error) {
+	if s.readMembershipResult != nil {
+		return []*domain.OrganizationMembership{s.readMembershipResult}, nil
+	}
+	return []*domain.OrganizationMembership{}, nil
+}
+func (s *passwordProfileDBStub) UpsertMembership(_ context.Context, _ pgx.Tx, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error) {
+	copy := *membership
+	s.upsertedMembership = &copy
+	return &copy, nil
+}
+func (s *passwordProfileDBStub) DeleteMembership(_ context.Context, _ pgx.Tx, orgID uuid.UUID, userID uuid.UUID) error {
+	s.deletedMembershipOrgID = orgID
+	s.deletedMembershipUserID = userID
+	return nil
+}
 
 type recordingProfileUnitOfWork struct {
 	messages []shareduow.OutboundMessage
@@ -179,11 +243,18 @@ func testOutboundMessage(msgType msgConn.MsgType, resourceKey uuid.UUID) sharedu
 }
 
 type passwordAuthProviderStub struct {
-	createTokenCalled bool
+	createTokenCalled       bool
+	createAccessTokenCalled bool
+	lastClaims              authz.TokenClaims
 }
 
 func (s *passwordAuthProviderStub) CreateToken(context.Context, uuid.UUID, int) (string, string, int64, error) {
 	s.createTokenCalled = true
+	return "token-1", "sid-1", time.Now().Add(time.Hour).Unix(), nil
+}
+func (s *passwordAuthProviderStub) CreateAccessToken(_ context.Context, claims authz.TokenClaims, _ int) (string, string, int64, error) {
+	s.createAccessTokenCalled = true
+	s.lastClaims = claims
 	return "token-1", "sid-1", time.Now().Add(time.Hour).Unix(), nil
 }
 func (s *passwordAuthProviderStub) Validate(context.Context, string) (map[string]any, error) {
@@ -257,8 +328,51 @@ var _ = Describe("profilesUseCase VerifyPassword", func() {
 		token, err := profiles.VerifyPassword(context.Background(), "user@example.com", "Password123!")
 		Expect(err).To(MatchError(domain.ErrEmailNotVerified))
 		Expect(token).To(BeEmpty())
-		Expect(authProvider.createTokenCalled).To(BeFalse())
+		Expect(authProvider.createAccessTokenCalled).To(BeFalse())
 		Expect(authStore.createSessionCalled).To(BeFalse())
+	})
+
+	It("issues an org-scoped token from the active default membership", func() {
+		userID := uuid.New()
+		orgID := uuid.New()
+		passwordHash, hashErr := argon2id.CreateHash("Password123!", &argon2id.Params{
+			Memory:      64 * 1024,
+			Iterations:  3,
+			Parallelism: 1,
+			SaltLength:  16,
+			KeyLength:   32,
+		})
+		Expect(hashErr).NotTo(HaveOccurred())
+		dbStub := &passwordProfileDBStub{
+			userID:       userID,
+			passwordHash: passwordHash,
+			defaultMembership: &domain.OrganizationMembership{
+				OrgID:  orgID,
+				UserID: userID,
+				Role:   domain.OrgMemberRoleMLResearcher,
+				Status: domain.OrgMemberStatusActive,
+			},
+		}
+		authProvider := &passwordAuthProviderStub{}
+		authStore := &passwordAuthStoreStub{}
+		profiles := newProfilesUseCaseForTest(
+			dbStub,
+			&noopUserEventBuilder{},
+			authStore,
+			authProvider,
+		)
+
+		token, err := profiles.VerifyPassword(context.Background(), "user@example.com", "Password123!")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(token).To(Equal("token-1"))
+		Expect(authProvider.createAccessTokenCalled).To(BeTrue())
+		Expect(authProvider.lastClaims.UserID).To(Equal(userID.String()))
+		Expect(authProvider.lastClaims.OrgID).To(Equal(orgID.String()))
+		Expect(authProvider.lastClaims.Roles).To(Equal([]string{domain.OrgMemberRoleMLResearcher}))
+		Expect(authProvider.lastClaims.Permissions).To(ContainElement(authz.PermissionTrainingStart))
+		Expect(authProvider.lastClaims.Permissions).NotTo(ContainElement(authz.PermissionOrgMembersWrite))
+		Expect(authStore.createSessionCalled).To(BeTrue())
 	})
 })
 

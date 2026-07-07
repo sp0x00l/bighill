@@ -9,6 +9,7 @@ import (
 	app "profile_service/pkg/app"
 	"profile_service/pkg/domain"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
 )
@@ -99,6 +100,36 @@ func (ph *HttpHandler) GetRoutes() []transport.Route {
 			Handler:  ph.Logout,
 			Method:   http.MethodPost,
 			SpanName: "logout",
+		},
+		{
+			Path:     "/private/v1/orgs/current",
+			Handler:  ph.ReadCurrentOrganization,
+			Method:   http.MethodGet,
+			SpanName: "read-current-org",
+		},
+		{
+			Path:     "/private/v1/orgs/{orgId}/members",
+			Handler:  ph.ListOrganizationMembers,
+			Method:   http.MethodGet,
+			SpanName: "list-org-members",
+		},
+		{
+			Path:     "/private/v1/orgs/{orgId}/members",
+			Handler:  ph.UpsertOrganizationMember,
+			Method:   http.MethodPost,
+			SpanName: "create-org-member",
+		},
+		{
+			Path:     "/private/v1/orgs/{orgId}/members/{userId}",
+			Handler:  ph.UpsertOrganizationMember,
+			Method:   http.MethodPut,
+			SpanName: "replace-org-member",
+		},
+		{
+			Path:     "/private/v1/orgs/{orgId}/members/{userId}",
+			Handler:  ph.DeleteOrganizationMember,
+			Method:   http.MethodDelete,
+			SpanName: "delete-org-member",
 		},
 	}
 	return routes
@@ -413,6 +444,131 @@ func (ph *HttpHandler) CreateOAuthSession(ctx context.Context, r *http.Request) 
 	return http.StatusOK, respBytes, nil
 }
 
+func (ph *HttpHandler) ReadCurrentOrganization(ctx context.Context, r *http.Request) (int, []byte, error) {
+	log.Trace("HttpHandler ReadCurrentOrganization")
+
+	userID, orgID, err := readActorOrgHeaders(ctx, r)
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	organization, membership, err := ph.profilesUseCase.ReadCurrentOrganization(ctx, userID, orgID)
+	if err != nil {
+		return httpStatusFor(err), nil, err
+	}
+	body, err := ph.profilesDTOAdapter.ToOrganizationDTO(ctx, organization, membership)
+	if err != nil {
+		return http.StatusInternalServerError, nil, err
+	}
+	return http.StatusOK, body, nil
+}
+
+func (ph *HttpHandler) ListOrganizationMembers(ctx context.Context, r *http.Request) (int, []byte, error) {
+	log.Trace("HttpHandler ListOrganizationMembers")
+
+	userID, _, err := readActorOrgHeaders(ctx, r)
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	orgID, err := readUUIDRouteParam(r, "orgId")
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	members, err := ph.profilesUseCase.ListOrganizationMembers(ctx, userID, orgID)
+	if err != nil {
+		return httpStatusFor(err), nil, err
+	}
+	body, err := ph.profilesDTOAdapter.ToOrganizationMembersDTO(ctx, members)
+	if err != nil {
+		return http.StatusInternalServerError, nil, err
+	}
+	return http.StatusOK, body, nil
+}
+
+func (ph *HttpHandler) UpsertOrganizationMember(ctx context.Context, r *http.Request) (int, []byte, error) {
+	log.Trace("HttpHandler UpsertOrganizationMember")
+
+	userID, _, err := readActorOrgHeaders(ctx, r)
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	orgID, err := readUUIDRouteParam(r, "orgId")
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	reqBody, err := transport.ReadReqBody(ctx, r)
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	membership, err := ph.profilesDTOAdapter.FromOrganizationMemberDTO(ctx, orgID, reqBody)
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	if routeUserIDRaw := mux.Vars(r)["userId"]; routeUserIDRaw != "" {
+		routeUserID, err := readUUIDRouteParam(r, "userId")
+		if err != nil {
+			return http.StatusBadRequest, nil, err
+		}
+		if membership.UserID != routeUserID {
+			return http.StatusBadRequest, nil, domain.ErrValidationFailed
+		}
+	}
+	updated, err := ph.profilesUseCase.UpsertOrganizationMember(ctx, userID, membership)
+	if err != nil {
+		return httpStatusFor(err), nil, err
+	}
+	body, err := ph.profilesDTOAdapter.ToOrganizationMembersDTO(ctx, []*domain.OrganizationMembership{updated})
+	if err != nil {
+		return http.StatusInternalServerError, nil, err
+	}
+	return http.StatusOK, body, nil
+}
+
+func (ph *HttpHandler) DeleteOrganizationMember(ctx context.Context, r *http.Request) (int, []byte, error) {
+	log.Trace("HttpHandler DeleteOrganizationMember")
+
+	userID, _, err := readActorOrgHeaders(ctx, r)
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	orgID, err := readUUIDRouteParam(r, "orgId")
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	memberUserID, err := readUUIDRouteParam(r, "userId")
+	if err != nil {
+		return http.StatusBadRequest, nil, err
+	}
+	if err := ph.profilesUseCase.DeleteOrganizationMember(ctx, userID, orgID, memberUserID); err != nil {
+		return httpStatusFor(err), nil, err
+	}
+	return http.StatusNoContent, nil, nil
+}
+
+func readActorOrgHeaders(ctx context.Context, r *http.Request) (uuid.UUID, uuid.UUID, error) {
+	log.Trace("readActorOrgHeaders")
+
+	userID, err := transport.ReadUserIDHeader(ctx, r)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	orgID, err := transport.ReadOrgIDHeader(ctx, r)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	return userID, orgID, nil
+}
+
+func readUUIDRouteParam(r *http.Request, name string) (uuid.UUID, error) {
+	log.Trace("readUUIDRouteParam")
+
+	value := mux.Vars(r)[name]
+	parsed, err := uuid.Parse(value)
+	if err != nil || parsed == uuid.Nil {
+		return uuid.Nil, domain.ErrValidationFailed
+	}
+	return parsed, nil
+}
+
 func (ph *HttpHandler) requestToProfile(ctx context.Context, r *http.Request) (*domain.Profile, error) {
 	log.Trace("HttpHandler requestToProfile")
 
@@ -453,6 +609,12 @@ func httpStatusFor(err error) int {
 		),
 		sharedrpc.HTTPStatus(http.StatusConflict,
 			domain.ErrProfileAlreadyExists,
+		),
+		sharedrpc.HTTPStatus(http.StatusBadRequest,
+			domain.ErrValidationFailed,
+		),
+		sharedrpc.HTTPStatus(http.StatusForbidden,
+			domain.ErrUnauthorized,
 		),
 	)
 }

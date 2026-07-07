@@ -133,7 +133,11 @@ func (s *FeatureMaterializerServer) SearchEmbeddings(ctx context.Context, req *f
 	if err != nil || userID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
 	}
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil || orgID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid org_id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	queryText := strings.TrimSpace(req.GetQueryText())
 	if queryText == "" {
 		return nil, status.Error(codes.InvalidArgument, "query_text is required")
@@ -163,6 +167,7 @@ func embeddingSearchResultToPB(result *model.EmbeddingSearchResult) *featurepb.S
 			EmbeddingRecordId:   match.EmbeddingRecordID.String(),
 			EmbeddingSnapshotId: match.EmbeddingSnapshotID.String(),
 			DatasetId:           match.DatasetID.String(),
+			OrgId:               match.OrgID.String(),
 			ChunkIndex:          int32(match.ChunkIndex),
 			SourceText:          match.SourceText,
 			Distance:            match.Distance,
@@ -172,6 +177,7 @@ func embeddingSearchResultToPB(result *model.EmbeddingSearchResult) *featurepb.S
 
 	return &featurepb.SearchEmbeddingsResponse{
 		DatasetId:           snapshot.DatasetID.String(),
+		OrgId:               snapshot.OrgID.String(),
 		EmbeddingSnapshotId: snapshot.EmbeddingSnapshotID.String(),
 		FeatureSnapshotId:   snapshot.FeatureSnapshotID.String(),
 		VectorStore:         snapshot.VectorStore,

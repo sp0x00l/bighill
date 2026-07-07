@@ -136,8 +136,12 @@ func (h *DataRegistryHandlers) CreateDataset(ctx context.Context, req *http.Requ
 	if err != nil {
 		return nil, err
 	}
+	orgID, err := core.ReadOrgIDHeader(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 
 	dataset, err := h.requestToDataset(ctx, req)
 	if err != nil {
@@ -164,12 +168,11 @@ func (h *DataRegistryHandlers) CreateDataset(ctx context.Context, req *http.Requ
 func (h *DataRegistryHandlers) ReadDatasets(ctx context.Context, req *http.Request) (APIResponse, error) {
 	log.Trace("DataRegistryHandlers ReadDatasets")
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	pagination, filters, err := h.requestToPaginationAndFilters(ctx, req)
 	if err != nil {
@@ -201,12 +204,11 @@ func (h *DataRegistryHandlers) ReadDatasets(ctx context.Context, req *http.Reque
 func (h *DataRegistryHandlers) ReadDatasetByID(ctx context.Context, req *http.Request) (APIResponse, error) {
 	log.Trace("DataRegistryHandlers ReadDatasetByID")
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, datasetID, err := h.readDatasetId(ctx, req)
 	if err != nil {
@@ -233,12 +235,11 @@ func (h *DataRegistryHandlers) ReadDatasetByID(ctx context.Context, req *http.Re
 func (h *DataRegistryHandlers) ReadDatasetMaterialization(ctx context.Context, req *http.Request) (APIResponse, error) {
 	log.Trace("DataRegistryHandlers ReadDatasetMaterialization")
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, datasetID, err := h.readDatasetId(ctx, req)
 	if err != nil {
@@ -273,12 +274,11 @@ func (h *DataRegistryHandlers) DeleteDataset(ctx context.Context, req *http.Requ
 		return nil, err
 	}
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	if err := h.datasetsUsecase.DeleteDataset(ctx, datasetID, userID); err != nil {
 		if domainErrors.IsServiceError(err, domainErrors.ErrResourceNotFound) {
@@ -292,12 +292,11 @@ func (h *DataRegistryHandlers) DeleteDataset(ctx context.Context, req *http.Requ
 func (h *DataRegistryHandlers) PublishDataset(ctx context.Context, req *http.Request) (APIResponse, error) {
 	log.Trace("DataRegistryHandlers PublishDataset")
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, datasetID, err := h.readDatasetId(ctx, req)
 	if err != nil {
@@ -317,12 +316,11 @@ func (h *DataRegistryHandlers) PublishDataset(ctx context.Context, req *http.Req
 func (h *DataRegistryHandlers) ReplaceDataset(ctx context.Context, req *http.Request) (APIResponse, error) {
 	log.Trace("DataRegistryHandlers ReplaceDataset")
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, datasetID, err := h.readDatasetId(ctx, req)
 	if err != nil {
@@ -362,12 +360,11 @@ func (h *DataRegistryHandlers) CreateSourceConnector(ctx context.Context, req *h
 	}
 	ctx = context.WithValue(ctx, contextKey("Source-connector idempotency key"), idempotencyKey.String())
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	ctx, storageType, err := h.readStorageType(ctx, req)
 	if err != nil {
@@ -404,12 +401,11 @@ func (h *DataRegistryHandlers) ReadSourceConnector(ctx context.Context, req *htt
 		return nil, err
 	}
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	connector, err := h.sourceUsecase.ReadSourceConnector(ctx, connectorID, userID)
 	if err != nil {
@@ -441,12 +437,11 @@ func (h *DataRegistryHandlers) ReplaceSourceConnector(ctx context.Context, req *
 		return nil, err
 	}
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	sourceConnector, err := h.fromSourceConnectorDTO(ctx, *storageType, req)
 	if err != nil {
@@ -479,12 +474,11 @@ func (h *DataRegistryHandlers) DeleteSourceConnector(ctx context.Context, req *h
 		return nil, err
 	}
 
-	userID, err := ReadUserIDHeader(ctx, req)
+	ctx, userID, err := h.readActorOrg(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = context.WithValue(ctx, contextKey("UserID"), userID.String())
-	ctx = ctxutil.WithTenantID(ctx, userID)
 
 	if err := h.sourceUsecase.DeleteSourceConnector(ctx, connectorID, userID); err != nil {
 		if domainErrors.IsServiceError(err, domainErrors.ErrResourceNotFound) {
@@ -494,6 +488,20 @@ func (h *DataRegistryHandlers) DeleteSourceConnector(ctx context.Context, req *h
 	}
 
 	return NewReponse(http.StatusOK), nil
+}
+
+func (h *DataRegistryHandlers) readActorOrg(ctx context.Context, req *http.Request) (context.Context, uuid.UUID, error) {
+	log.Trace("DataRegistryHandlers readActorOrg")
+
+	userID, err := ReadUserIDHeader(ctx, req)
+	if err != nil {
+		return ctx, uuid.Nil, err
+	}
+	orgID, err := core.ReadOrgIDHeader(ctx, req)
+	if err != nil {
+		return ctx, uuid.Nil, err
+	}
+	return ctxutil.WithActorOrg(ctx, userID, orgID), userID, nil
 }
 
 func (h *DataRegistryHandlers) fromSourceConnectorDTO(ctx context.Context, storageType model.StorageType, r *http.Request) (*model.SourceConnector, error) {

@@ -34,6 +34,7 @@ EXECUTE FUNCTION updated_at_column();
 CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     model_id uuid PRIMARY KEY,
     user_id uuid REFERENCES bighill_model_registry_db.tenants(id),
+    org_id uuid,
     idempotency_key uuid UNIQUE NOT NULL,
     training_run_id uuid,
     dataset_id uuid,
@@ -63,8 +64,8 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT models_tenant_ownership_ck CHECK (
-        (model_kind = 'BASE' AND user_id IS NULL)
-        OR (model_kind <> 'BASE' AND user_id IS NOT NULL)
+        (model_kind = 'BASE' AND user_id IS NULL AND org_id IS NULL)
+        OR (model_kind <> 'BASE' AND user_id IS NOT NULL AND org_id IS NOT NULL)
     )
 );
 
@@ -74,15 +75,42 @@ ON bighill_model_registry_db.models(training_run_id);
 CREATE INDEX IF NOT EXISTS index_models_user_id
 ON bighill_model_registry_db.models(user_id);
 
+CREATE INDEX IF NOT EXISTS index_models_org_id
+ON bighill_model_registry_db.models(org_id);
+
 CREATE INDEX IF NOT EXISTS index_models_dataset_id
 ON bighill_model_registry_db.models(dataset_id);
 
 CREATE INDEX IF NOT EXISTS index_models_champion_lookup
-ON bighill_model_registry_db.models(user_id, name, model_version DESC)
+ON bighill_model_registry_db.models(org_id, name, model_version DESC)
 WHERE status = 'READY' AND serving_load_status = 'LOADED';
 
 CREATE TRIGGER models_updated_at
 BEFORE UPDATE ON bighill_model_registry_db.models
+FOR EACH ROW
+EXECUTE FUNCTION updated_at_column();
+
+CREATE TABLE IF NOT EXISTS bighill_model_registry_db.published_inference_endpoints (
+    endpoint_id uuid PRIMARY KEY,
+    org_id uuid NOT NULL,
+    model_id uuid NOT NULL REFERENCES bighill_model_registry_db.models(model_id),
+    dataset_id uuid NOT NULL,
+    status text NOT NULL DEFAULT 'ready',
+    display_name text NOT NULL,
+    created_by_user_id uuid NOT NULL REFERENCES bighill_model_registry_db.tenants(id),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT published_inference_endpoint_status_ck CHECK (status IN ('ready', 'disabled'))
+);
+
+CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_org_id
+ON bighill_model_registry_db.published_inference_endpoints(org_id, status, created_at);
+
+CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_model_id
+ON bighill_model_registry_db.published_inference_endpoints(model_id);
+
+CREATE TRIGGER published_inference_endpoints_updated_at
+BEFORE UPDATE ON bighill_model_registry_db.published_inference_endpoints
 FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();
 
@@ -103,11 +131,23 @@ ALTER TABLE bighill_model_registry_db.models FORCE ROW LEVEL SECURITY;
 CREATE POLICY models_tenant_isolation ON bighill_model_registry_db.models
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR user_id IS NULL
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR org_id IS NULL
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR (model_kind = 'BASE' AND user_id IS NULL)
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR (model_kind = 'BASE' AND user_id IS NULL AND org_id IS NULL)
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_model_registry_db.published_inference_endpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_model_registry_db.published_inference_endpoints FORCE ROW LEVEL SECURITY;
+CREATE POLICY published_inference_endpoints_tenant_isolation ON bighill_model_registry_db.published_inference_endpoints
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );

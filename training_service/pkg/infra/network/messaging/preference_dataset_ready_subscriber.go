@@ -129,6 +129,10 @@ func buildDPOTrainingRunRequest(resourceKey uuid.UUID, payload *inferencepb.Pref
 	if err != nil {
 		return model.TrainingRunRequest{}, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return model.TrainingRunRequest{}, err
+	}
 	sourceRequestID, err := msgConn.ParseUUID("source_request_id", payload.GetSourceRequestId())
 	if err != nil {
 		return model.TrainingRunRequest{}, err
@@ -163,6 +167,7 @@ func buildDPOTrainingRunRequest(resourceKey uuid.UUID, payload *inferencepb.Pref
 	}
 	trainingRunID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
 		"dpo",
+		orgID.String(),
 		datasetID.String(),
 		modelID.String(),
 		fmt.Sprintf("%d", parentModelVersion),
@@ -178,6 +183,7 @@ func buildDPOTrainingRunRequest(resourceKey uuid.UUID, payload *inferencepb.Pref
 	return model.TrainingRunRequest{
 		TrainingRunID:        trainingRunID.String(),
 		UserID:               userID.String(),
+		OrgID:                orgID.String(),
 		DatasetID:            datasetID.String(),
 		DatasetVersion:       "",
 		PreferenceDatasetID:  preferenceDatasetID.String(),

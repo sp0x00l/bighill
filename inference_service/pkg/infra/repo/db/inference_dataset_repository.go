@@ -31,15 +31,22 @@ func NewInferenceDatasetRepository(db *coreDB.Database) *InferenceDatasetReposit
 func (r *InferenceDatasetRepository) UpsertDataset(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error) {
 	log.Trace("InferenceDatasetRepository UpsertDataset")
 
+	if dataset == nil {
+		return nil, domain.ErrValidationFailed.Extend("dataset is required")
+	}
+	if strings.TrimSpace(dataset.SchemaMetadata) == "" {
+		return nil, domain.ErrValidationFailed.Extend("schema metadata is required")
+	}
+
 	query := `INSERT INTO ` + r.Name + `.inference_datasets (
-		dataset_id, user_id, idempotency_key, dataset_version, processing_state, storage_location,
+		dataset_id, user_id, org_id, idempotency_key, dataset_version, processing_state, storage_location,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version,
 		schema_metadata, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store,
 		collection_name, embedding_dimensions, embedding_count, embedding_strategy_version,
 		embedding_chunker_name, embedding_chunker_version, embedding_chunk_size, embedding_chunk_overlap,
 		embedding_provider, embedding_model
 	) VALUES (
-		@dataset_id, @user_id, @idempotency_key, @dataset_version, @processing_state::inference_dataset_processing_state_enum, @storage_location,
+		@dataset_id, @user_id, @org_id, @idempotency_key, @dataset_version, @processing_state::inference_dataset_processing_state_enum, @storage_location,
 		@table_namespace, @table_name, @table_format::table_format_enum, @catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @schema_version,
 		@schema_metadata::jsonb, @raw_snapshot_id, @feature_snapshot_id, @embedding_snapshot_id, @vector_store,
 		@collection_name, @embedding_dimensions, @embedding_count, @embedding_strategy_version,
@@ -48,6 +55,7 @@ func (r *InferenceDatasetRepository) UpsertDataset(ctx context.Context, dataset 
 	)
 	ON CONFLICT (dataset_id) DO UPDATE SET
 		user_id = EXCLUDED.user_id,
+		org_id = EXCLUDED.org_id,
 		idempotency_key = EXCLUDED.idempotency_key,
 		dataset_version = EXCLUDED.dataset_version,
 		processing_state = EXCLUDED.processing_state,
@@ -79,7 +87,7 @@ func (r *InferenceDatasetRepository) UpsertDataset(ctx context.Context, dataset 
 	record, err := scanInferenceDataset(r.Pool.QueryRow(ctx, query, datasetArgs(dataset, idempotencyKey)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return r.ReadDataset(ctx, dataset.UserID, dataset.DatasetID)
+			return r.ReadDataset(ctx, dataset.OrgID, dataset.DatasetID)
 		}
 		r.LogPoolStatsOnError(ctx, "upsert inference dataset failed", err)
 		if coreDB.IsForeignKeyViolation(err) {
@@ -90,13 +98,13 @@ func (r *InferenceDatasetRepository) UpsertDataset(ctx context.Context, dataset 
 	return record, nil
 }
 
-func (r *InferenceDatasetRepository) ReadDataset(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.InferenceDataset, error) {
+func (r *InferenceDatasetRepository) ReadDataset(ctx context.Context, orgID uuid.UUID, datasetID uuid.UUID) (*model.InferenceDataset, error) {
 	log.Trace("InferenceDatasetRepository ReadDataset")
 
-	query := `SELECT ` + datasetColumns() + ` FROM ` + r.Name + `.inference_datasets WHERE dataset_id = @dataset_id AND user_id = @user_id`
+	query := `SELECT ` + datasetColumns() + ` FROM ` + r.Name + `.inference_datasets WHERE dataset_id = @dataset_id AND org_id = @org_id`
 	record, err := scanInferenceDataset(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"dataset_id": pgtype.UUID{Bytes: datasetID, Valid: true},
-		"user_id":    pgtype.UUID{Bytes: userID, Valid: true},
+		"org_id":     pgtype.UUID{Bytes: orgID, Valid: true},
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -111,7 +119,7 @@ func (r *InferenceDatasetRepository) ReadDataset(ctx context.Context, userID uui
 func datasetColumns() string {
 	log.Trace("datasetColumns")
 
-	return `dataset_id::text, user_id::text, dataset_version, processing_state::text, storage_location,
+	return `dataset_id::text, user_id::text, org_id::text, dataset_version, processing_state::text, storage_location,
 		table_namespace, table_name, table_format::text, catalog_provider::text, processing_profile::text, schema_version,
 		schema_metadata::text, COALESCE(raw_snapshot_id::text, ''), COALESCE(feature_snapshot_id::text, ''),
 		COALESCE(embedding_snapshot_id::text, ''), vector_store, collection_name, embedding_dimensions,
@@ -125,6 +133,7 @@ func datasetArgs(dataset *model.InferenceDataset, idempotencyKey uuid.UUID) pgx.
 	return pgx.NamedArgs{
 		"dataset_id":                 pgtype.UUID{Bytes: dataset.DatasetID, Valid: true},
 		"user_id":                    pgtype.UUID{Bytes: dataset.UserID, Valid: true},
+		"org_id":                     pgtype.UUID{Bytes: dataset.OrgID, Valid: true},
 		"idempotency_key":            pgtype.UUID{Bytes: idempotencyKey, Valid: true},
 		"dataset_version":            dataset.DatasetVersion,
 		"processing_state":           dataset.ProcessingState.String(),
@@ -135,7 +144,7 @@ func datasetArgs(dataset *model.InferenceDataset, idempotencyKey uuid.UUID) pgx.
 		"catalog_provider":           dataset.CatalogProvider,
 		"processing_profile":         dataset.ProcessingProfile,
 		"schema_version":             dataset.SchemaVersion,
-		"schema_metadata":            jsonObjectOrDefault(dataset.SchemaMetadata),
+		"schema_metadata":            dataset.SchemaMetadata,
 		"raw_snapshot_id":            nullableUUID(dataset.RawSnapshotID),
 		"feature_snapshot_id":        nullableUUID(dataset.FeatureSnapshotID),
 		"embedding_snapshot_id":      nullableUUID(dataset.EmbeddingSnapshotID),
@@ -158,6 +167,7 @@ func scanInferenceDataset(row pgx.Row) (*model.InferenceDataset, error) {
 
 	var datasetID string
 	var userID string
+	var orgID string
 	var processingStateRaw string
 	var rawSnapshotID string
 	var featureSnapshotID string
@@ -166,6 +176,7 @@ func scanInferenceDataset(row pgx.Row) (*model.InferenceDataset, error) {
 	if err := row.Scan(
 		&datasetID,
 		&userID,
+		&orgID,
 		&record.DatasetVersion,
 		&processingStateRaw,
 		&record.StorageLocation,
@@ -199,6 +210,7 @@ func scanInferenceDataset(row pgx.Row) (*model.InferenceDataset, error) {
 	}
 	record.DatasetID = uuid.MustParse(datasetID)
 	record.UserID = uuid.MustParse(userID)
+	record.OrgID = uuid.MustParse(orgID)
 	record.ProcessingState = processingState
 	record.RawSnapshotID = parseOptionalUUID(rawSnapshotID)
 	record.FeatureSnapshotID = parseOptionalUUID(featureSnapshotID)

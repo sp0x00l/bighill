@@ -48,6 +48,7 @@ var _ = Describe("InferenceDatasetRepository", func() {
 			Expect(args).To(SatisfyAll(
 				HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: dataset.DatasetID, Valid: true}),
 				HaveKeyWithValue("user_id", pgtype.UUID{Bytes: dataset.UserID, Valid: true}),
+				HaveKeyWithValue("org_id", pgtype.UUID{Bytes: dataset.OrgID, Valid: true}),
 				HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}),
 				HaveKeyWithValue("dataset_version", dataset.DatasetVersion),
 				HaveKeyWithValue("processing_state", model.DatasetProcessingEmbeddingsMaterialized.String()),
@@ -76,19 +77,18 @@ var _ = Describe("InferenceDatasetRepository", func() {
 			Expect(pool.queries[0]).To(ContainSubstring("INSERT INTO test_db.inference_datasets"))
 			Expect(pool.queries[1]).To(ContainSubstring("FROM test_db.inference_datasets WHERE dataset_id = @dataset_id"))
 			Expect(namedArgs(pool.args[1])).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: staleDataset.DatasetID, Valid: true}))
-			Expect(namedArgs(pool.args[1])).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: staleDataset.UserID, Valid: true}))
+			Expect(namedArgs(pool.args[1])).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: staleDataset.OrgID, Valid: true}))
 		})
 
-		It("defaults empty schema metadata to an empty JSON object", func() {
+		It("rejects empty schema metadata", func() {
 			dataset := validInferenceDataset()
 			dataset.SchemaMetadata = ""
-			idempotencyKey := uuid.New()
-			pool.nextRows = []pgx.Row{inferenceDatasetRow(dataset)}
 
-			_, err := repository.UpsertDataset(ctx, dataset, idempotencyKey)
+			record, err := repository.UpsertDataset(ctx, dataset, uuid.New())
 
-			Expect(err).NotTo(HaveOccurred())
-			Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("schema_metadata", "{}"))
+			Expect(record).To(BeNil())
+			Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+			Expect(pool.queries).To(BeEmpty())
 		})
 
 		It("wraps database failures from the upsert", func() {
@@ -118,13 +118,13 @@ var _ = Describe("InferenceDatasetRepository", func() {
 			dataset := validInferenceDataset()
 			pool.nextRows = []pgx.Row{inferenceDatasetRow(dataset)}
 
-			record, err := repository.ReadDataset(ctx, dataset.UserID, dataset.DatasetID)
+			record, err := repository.ReadDataset(ctx, dataset.OrgID, dataset.DatasetID)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(record).To(Equal(dataset))
 			Expect(pool.lastQuery).To(ContainSubstring("SELECT dataset_id::text"))
-			Expect(pool.lastQuery).To(ContainSubstring("FROM test_db.inference_datasets WHERE dataset_id = @dataset_id AND user_id = @user_id"))
-			Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: dataset.UserID, Valid: true}))
+			Expect(pool.lastQuery).To(ContainSubstring("FROM test_db.inference_datasets WHERE dataset_id = @dataset_id AND org_id = @org_id"))
+			Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: dataset.OrgID, Valid: true}))
 		})
 
 		It("maps empty optional snapshot ids to uuid.Nil", func() {
@@ -134,7 +134,7 @@ var _ = Describe("InferenceDatasetRepository", func() {
 			dataset.EmbeddingSnapshotID = uuid.Nil
 			pool.nextRows = []pgx.Row{inferenceDatasetRow(dataset)}
 
-			record, err := repository.ReadDataset(ctx, dataset.UserID, dataset.DatasetID)
+			record, err := repository.ReadDataset(ctx, dataset.OrgID, dataset.DatasetID)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(record.RawSnapshotID).To(Equal(uuid.Nil))
@@ -155,6 +155,7 @@ func validInferenceDataset() *model.InferenceDataset {
 	return &model.InferenceDataset{
 		DatasetID:                uuid.New(),
 		UserID:                   uuid.New(),
+		OrgID:                    uuid.New(),
 		DatasetVersion:           3,
 		ProcessingState:          model.DatasetProcessingEmbeddingsMaterialized,
 		StorageLocation:          "s3://datasets/user/dataset/features.parquet",
@@ -186,6 +187,7 @@ func inferenceDatasetRow(dataset *model.InferenceDataset) pgx.Row {
 	return &repositoryRow{values: []any{
 		dataset.DatasetID.String(),
 		dataset.UserID.String(),
+		dataset.OrgID.String(),
 		dataset.DatasetVersion,
 		dataset.ProcessingState.String(),
 		dataset.StorageLocation,

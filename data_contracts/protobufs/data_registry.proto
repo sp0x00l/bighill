@@ -12,6 +12,7 @@ service DataRegistryService {
 message Dataset {
   string dataset_id = 1;
   string user_id = 2;
+  string org_id = 3;
 }
 
 message DatasetCreatedEvent {
@@ -32,11 +33,13 @@ message DatasetCreatedEvent {
   string source_query = 15;
   string source_database = 16;
   string source_collection = 17;
+  string org_id = 18;
 }
 
 message DatasetDeletedEvent {
   string dataset_id = 1;
   string user_id = 2;
+  string org_id = 3;
 }
 
 message DatasetUpdatedEvent {
@@ -71,12 +74,14 @@ message DatasetUpdatedEvent {
   string source_query = 29;
   string source_database = 30;
   string source_collection = 31;
+  string org_id = 32;
 }
 
 message ReadSourceConnectorRequest {
   string connector_id = 1;
   string user_id = 2;
   string source_type = 3;
+  string org_id = 4;
 }
 
 message ReadSourceConnectorResponse {
@@ -87,6 +92,7 @@ message ReadDatasetTableRequest {
   string dataset_id = 1;
   string user_id = 2;
   string snapshot_id = 3;
+  string org_id = 4;
 }
 
 message ReadDatasetTableResponse {
@@ -102,6 +108,7 @@ message ReadDatasetTableResponse {
   int32 schema_version = 10;
   string schema_metadata = 11;
   string snapshot_id = 12;
+  string org_id = 13;
 }
 
 message SourceConnector {
@@ -115,6 +122,7 @@ message SourceConnector {
   MongoSourceConfig mongo_config = 8;
   OracleSourceConfig oracle_config = 9;
   ClickHouseSourceConfig clickhouse_config = 10;
+  string org_id = 11;
 }
 
 message PostgresSourceConfig {

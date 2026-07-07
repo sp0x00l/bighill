@@ -148,6 +148,7 @@ func (w *EmbeddingWriter) MaterializeEmbeddings(ctx context.Context, featureSnap
 			EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
 			DatasetID:           featureSnapshot.DatasetID,
 			UserID:              featureSnapshot.UserID,
+			OrgID:               featureSnapshot.OrgID,
 			ChunkIndex:          chunk.ChunkIndex,
 			SourceText:          chunk.Text,
 			Vector:              normalizeVector(vectors[i]),
@@ -156,6 +157,7 @@ func (w *EmbeddingWriter) MaterializeEmbeddings(ctx context.Context, featureSnap
 	out := *embeddingSnapshot
 	out.DatasetID = featureSnapshot.DatasetID
 	out.UserID = featureSnapshot.UserID
+	out.OrgID = featureSnapshot.OrgID
 	out.VectorStore = w.vectorStore
 	out.CollectionName = featureSnapshot.TableName
 	out.EmbeddingDimensions = w.provider.Dimensions()

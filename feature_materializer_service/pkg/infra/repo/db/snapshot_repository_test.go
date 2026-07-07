@@ -9,6 +9,7 @@ import (
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
 	featuredb "feature_materializer_service/pkg/infra/repo/db"
+	"lib/shared_lib/ctxutil"
 	coreDB "lib/shared_lib/db"
 
 	"github.com/google/uuid"
@@ -204,6 +205,7 @@ type rawSnapshotRow struct {
 	RawSnapshotID     uuid.UUID
 	DatasetID         uuid.UUID
 	UserID            uuid.UUID
+	OrgID             uuid.UUID
 	StorageLocation   string
 	ContentType       string
 	FileExtension     string
@@ -222,18 +224,19 @@ func (r rawSnapshotRow) Scan(dest ...any) error {
 	*(dest[0].(*string)) = r.RawSnapshotID.String()
 	*(dest[1].(*string)) = r.DatasetID.String()
 	*(dest[2].(*string)) = r.UserID.String()
-	*(dest[3].(*string)) = r.StorageLocation
-	*(dest[4].(*string)) = r.ContentType
-	*(dest[5].(*string)) = r.FileExtension
-	*(dest[6].(*string)) = r.TableNamespace
-	*(dest[7].(*string)) = r.TableName
-	*(dest[8].(*string)) = r.TableFormat
-	*(dest[9].(*string)) = r.CatalogProvider
-	*(dest[10].(*string)) = r.ProcessingProfile
-	*(dest[11].(*int)) = r.SchemaVersion
-	*(dest[12].(*string)) = r.SchemaMetadata
-	*(dest[13].(*string)) = r.Status
-	*(dest[14].(*string)) = r.FailureReason
+	*(dest[3].(*string)) = r.OrgID.String()
+	*(dest[4].(*string)) = r.StorageLocation
+	*(dest[5].(*string)) = r.ContentType
+	*(dest[6].(*string)) = r.FileExtension
+	*(dest[7].(*string)) = r.TableNamespace
+	*(dest[8].(*string)) = r.TableName
+	*(dest[9].(*string)) = r.TableFormat
+	*(dest[10].(*string)) = r.CatalogProvider
+	*(dest[11].(*string)) = r.ProcessingProfile
+	*(dest[12].(*int)) = r.SchemaVersion
+	*(dest[13].(*string)) = r.SchemaMetadata
+	*(dest[14].(*string)) = r.Status
+	*(dest[15].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -242,6 +245,7 @@ type featureSnapshotRow struct {
 	RawSnapshotID     uuid.UUID
 	DatasetID         uuid.UUID
 	UserID            uuid.UUID
+	OrgID             uuid.UUID
 	StorageLocation   string
 	TableNamespace    string
 	TableName         string
@@ -259,16 +263,17 @@ func (r featureSnapshotRow) Scan(dest ...any) error {
 	*(dest[1].(*string)) = r.RawSnapshotID.String()
 	*(dest[2].(*string)) = r.DatasetID.String()
 	*(dest[3].(*string)) = r.UserID.String()
-	*(dest[4].(*string)) = r.StorageLocation
-	*(dest[5].(*string)) = r.TableNamespace
-	*(dest[6].(*string)) = r.TableName
-	*(dest[7].(*string)) = r.TableFormat
-	*(dest[8].(*string)) = r.CatalogProvider
-	*(dest[9].(*string)) = r.ProcessingProfile
-	*(dest[10].(*int)) = r.SchemaVersion
-	*(dest[11].(*string)) = r.SchemaMetadata
-	*(dest[12].(*string)) = r.Status
-	*(dest[13].(*string)) = r.FailureReason
+	*(dest[4].(*string)) = r.OrgID.String()
+	*(dest[5].(*string)) = r.StorageLocation
+	*(dest[6].(*string)) = r.TableNamespace
+	*(dest[7].(*string)) = r.TableName
+	*(dest[8].(*string)) = r.TableFormat
+	*(dest[9].(*string)) = r.CatalogProvider
+	*(dest[10].(*string)) = r.ProcessingProfile
+	*(dest[11].(*int)) = r.SchemaVersion
+	*(dest[12].(*string)) = r.SchemaMetadata
+	*(dest[13].(*string)) = r.Status
+	*(dest[14].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -277,6 +282,7 @@ type embeddingSnapshotRow struct {
 	FeatureSnapshotID   uuid.UUID
 	DatasetID           uuid.UUID
 	UserID              uuid.UUID
+	OrgID               uuid.UUID
 	VectorStore         string
 	CollectionName      string
 	EmbeddingDimensions int
@@ -302,24 +308,25 @@ func (r embeddingSnapshotRow) Scan(dest ...any) error {
 	*(dest[1].(*string)) = r.FeatureSnapshotID.String()
 	*(dest[2].(*string)) = r.DatasetID.String()
 	*(dest[3].(*string)) = r.UserID.String()
-	*(dest[4].(*string)) = r.VectorStore
-	*(dest[5].(*string)) = r.CollectionName
-	*(dest[6].(*int)) = r.EmbeddingDimensions
-	*(dest[7].(*int64)) = r.EmbeddingCount
-	*(dest[8].(*string)) = r.StrategyVersion
-	*(dest[9].(*string)) = r.ExtractorName
-	*(dest[10].(*string)) = r.ExtractorVersion
-	*(dest[11].(*string)) = r.CleanerName
-	*(dest[12].(*string)) = r.CleanerVersion
-	*(dest[13].(*string)) = r.ChunkerName
-	*(dest[14].(*string)) = r.ChunkerVersion
-	*(dest[15].(*int)) = r.ChunkSize
-	*(dest[16].(*int)) = r.ChunkOverlap
-	*(dest[17].(*string)) = r.EmbeddingProvider
-	*(dest[18].(*string)) = r.EmbeddingModel
-	*(dest[19].(*bool)) = r.ActiveForRetrieval
-	*(dest[20].(*string)) = r.Status
-	*(dest[21].(*string)) = r.FailureReason
+	*(dest[4].(*string)) = r.OrgID.String()
+	*(dest[5].(*string)) = r.VectorStore
+	*(dest[6].(*string)) = r.CollectionName
+	*(dest[7].(*int)) = r.EmbeddingDimensions
+	*(dest[8].(*int64)) = r.EmbeddingCount
+	*(dest[9].(*string)) = r.StrategyVersion
+	*(dest[10].(*string)) = r.ExtractorName
+	*(dest[11].(*string)) = r.ExtractorVersion
+	*(dest[12].(*string)) = r.CleanerName
+	*(dest[13].(*string)) = r.CleanerVersion
+	*(dest[14].(*string)) = r.ChunkerName
+	*(dest[15].(*string)) = r.ChunkerVersion
+	*(dest[16].(*int)) = r.ChunkSize
+	*(dest[17].(*int)) = r.ChunkOverlap
+	*(dest[18].(*string)) = r.EmbeddingProvider
+	*(dest[19].(*string)) = r.EmbeddingModel
+	*(dest[20].(*bool)) = r.ActiveForRetrieval
+	*(dest[21].(*string)) = r.Status
+	*(dest[22].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -350,6 +357,7 @@ var _ = Describe("SnapshotRepository", func() {
 		repository     *featuredb.SnapshotRepository
 		datasetID      uuid.UUID
 		userID         uuid.UUID
+		orgID          uuid.UUID
 		rawSnapshotID  uuid.UUID
 		featureID      uuid.UUID
 		embeddingID    uuid.UUID
@@ -358,7 +366,6 @@ var _ = Describe("SnapshotRepository", func() {
 	)
 
 	BeforeEach(func() {
-		ctx = context.Background()
 		poolMock = &testConnectionPool{NextRowsAffected: 1}
 		tx = &testTx{pool: poolMock}
 		dbCore := coreDB.NewDatabase(poolMock, "test_db")
@@ -366,6 +373,8 @@ var _ = Describe("SnapshotRepository", func() {
 
 		datasetID = uuid.New()
 		userID = uuid.New()
+		orgID = uuid.New()
+		ctx = ctxutil.WithActorOrg(context.Background(), userID, orgID)
 		rawSnapshotID = uuid.New()
 		featureID = uuid.New()
 		embeddingID = uuid.New()
@@ -373,6 +382,7 @@ var _ = Describe("SnapshotRepository", func() {
 		datasetFile = &model.DatasetFile{
 			DatasetID:         datasetID,
 			UserID:            userID,
+			OrgID:             orgID,
 			StorageLocation:   "s3://local/raw/file.csv",
 			ContentType:       "text/csv",
 			FileExtension:     "csv",
@@ -386,7 +396,7 @@ var _ = Describe("SnapshotRepository", func() {
 
 	Describe("SavePendingRawSnapshot", func() {
 		It("inserts a pending raw snapshot with named args", func() {
-			poolMock.NextRows = []pgx.Row{newRawSnapshotRow(rawSnapshotID, datasetID, userID)}
+			poolMock.NextRows = []pgx.Row{newRawSnapshotRow(rawSnapshotID, datasetID, userID, orgID)}
 
 			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, tx, datasetFile, idempotencyKey)
 
@@ -400,6 +410,7 @@ var _ = Describe("SnapshotRepository", func() {
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("storage_location", datasetFile.StorageLocation))
 			Expect(args).To(HaveKeyWithValue("table_name", datasetFile.TableName))
@@ -408,7 +419,7 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("returns a domain idempotency error when the insert is replayed", func() {
-			readyRow := newRawSnapshotRow(rawSnapshotID, datasetID, userID)
+			readyRow := newRawSnapshotRow(rawSnapshotID, datasetID, userID, orgID)
 			readyRow.Status = model.SnapshotStatusReady.String()
 			poolMock.NextRows = []pgx.Row{
 				errorRow{err: pgx.ErrNoRows},
@@ -426,7 +437,7 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("reopens failed raw snapshots so Temporal can retry the activity body", func() {
-			failedRow := newRawSnapshotRow(rawSnapshotID, datasetID, userID)
+			failedRow := newRawSnapshotRow(rawSnapshotID, datasetID, userID, orgID)
 			failedRow.Status = model.SnapshotStatusFailed.String()
 			failedRow.FailureReason = "object store timeout"
 			reopenedRow := failedRow
@@ -452,7 +463,7 @@ var _ = Describe("SnapshotRepository", func() {
 		It("returns retryable in-progress errors for pending raw snapshot replays", func() {
 			poolMock.NextRows = []pgx.Row{
 				errorRow{err: pgx.ErrNoRows},
-				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
+				newRawSnapshotRow(rawSnapshotID, datasetID, userID, orgID),
 			}
 
 			rawSnapshot, err := repository.SavePendingRawSnapshot(ctx, tx, datasetFile, idempotencyKey)
@@ -517,8 +528,8 @@ var _ = Describe("SnapshotRepository", func() {
 	Describe("SavePendingFeatureSnapshot", func() {
 		It("reads the raw snapshot and inserts a pending feature snapshot", func() {
 			poolMock.NextRows = []pgx.Row{
-				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
-				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
+				newRawSnapshotRow(rawSnapshotID, datasetID, userID, orgID),
+				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID, orgID),
 			}
 
 			featureSnapshot, err := repository.SavePendingFeatureSnapshot(ctx, tx, rawSnapshotID, idempotencyKey)
@@ -533,16 +544,17 @@ var _ = Describe("SnapshotRepository", func() {
 			args := namedArgs(poolMock.QueryArgs[1])
 			Expect(args).To(HaveKeyWithValue("raw_snapshot_id", pgtype.UUID{Bytes: rawSnapshotID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("table_name", "movies"))
 			Expect(args).To(HaveKeyWithValue("processing_profile", model.ProcessingProfileTextRAG.String()))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusPending.String()))
 		})
 
 		It("returns a domain idempotency error when feature snapshot insert is replayed", func() {
-			readyRow := newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID)
+			readyRow := newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID, orgID)
 			readyRow.Status = model.SnapshotStatusReady.String()
 			poolMock.NextRows = []pgx.Row{
-				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
+				newRawSnapshotRow(rawSnapshotID, datasetID, userID, orgID),
 				errorRow{err: pgx.ErrNoRows},
 				readyRow,
 			}
@@ -558,14 +570,14 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("reopens failed feature snapshots for retry", func() {
-			failedRow := newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID)
+			failedRow := newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID, orgID)
 			failedRow.Status = model.SnapshotStatusFailed.String()
 			failedRow.FailureReason = "builder failed"
 			reopenedRow := failedRow
 			reopenedRow.Status = model.SnapshotStatusPending.String()
 			reopenedRow.FailureReason = ""
 			poolMock.NextRows = []pgx.Row{
-				newRawSnapshotRow(rawSnapshotID, datasetID, userID),
+				newRawSnapshotRow(rawSnapshotID, datasetID, userID, orgID),
 				errorRow{err: pgx.ErrNoRows},
 				failedRow,
 				reopenedRow,
@@ -609,8 +621,8 @@ var _ = Describe("SnapshotRepository", func() {
 		It("reads the feature snapshot and inserts a pending embedding snapshot", func() {
 			strategy := validEmbeddingStrategy()
 			poolMock.NextRows = []pgx.Row{
-				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
-				newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID),
+				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID, orgID),
+				newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID),
 			}
 
 			embeddingSnapshot, err := repository.SavePendingEmbeddingSnapshot(ctx, tx, featureID, idempotencyKey, strategy)
@@ -630,6 +642,7 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("feature_snapshot_id", pgtype.UUID{Bytes: featureID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("strategy_version", strategy.StrategyVersion))
 			Expect(args).To(HaveKeyWithValue("extractor_name", strategy.ExtractorName))
 			Expect(args).To(HaveKeyWithValue("extractor_version", strategy.ExtractorVersion))
@@ -646,10 +659,10 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("returns a domain idempotency error when embedding insert is replayed", func() {
-			readyRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID)
+			readyRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID)
 			readyRow.Status = model.SnapshotStatusReady.String()
 			poolMock.NextRows = []pgx.Row{
-				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
+				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID, orgID),
 				errorRow{err: pgx.ErrNoRows},
 				readyRow,
 			}
@@ -665,14 +678,14 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("reopens failed embedding snapshots for retry", func() {
-			failedRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID)
+			failedRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID)
 			failedRow.Status = model.SnapshotStatusFailed.String()
 			failedRow.FailureReason = "embedding writer failed"
 			reopenedRow := failedRow
 			reopenedRow.Status = model.SnapshotStatusPending.String()
 			reopenedRow.FailureReason = ""
 			poolMock.NextRows = []pgx.Row{
-				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID),
+				newFeatureSnapshotRow(featureID, rawSnapshotID, datasetID, userID, orgID),
 				errorRow{err: pgx.ErrNoRows},
 				failedRow,
 				reopenedRow,
@@ -694,6 +707,7 @@ var _ = Describe("SnapshotRepository", func() {
 			err := repository.MarkEmbeddingReady(ctx, tx, &model.EmbeddingSnapshot{
 				EmbeddingSnapshotID: embeddingID,
 				DatasetID:           datasetID,
+				OrgID:               orgID,
 				VectorStore:         "pgvector",
 				CollectionName:      "movies",
 				EmbeddingDimensions: 384,
@@ -737,7 +751,7 @@ var _ = Describe("SnapshotRepository", func() {
 
 	Describe("ReadActiveEmbeddingSnapshot", func() {
 		It("reads the ready active snapshot for a dataset", func() {
-			activeRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID)
+			activeRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID)
 			activeRow.Status = model.SnapshotStatusReady.String()
 			activeRow.ActiveForRetrieval = true
 			poolMock.NextRows = []pgx.Row{activeRow}
@@ -751,6 +765,7 @@ var _ = Describe("SnapshotRepository", func() {
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
 		})
 	})
@@ -767,11 +782,12 @@ var _ = Describe("SnapshotRepository", func() {
 					Distance:            0.25,
 				},
 			}}
-			activeSnapshot := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID)
+			activeSnapshot := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID)
 
 			records, err := repository.SearchEmbeddingRecords(ctx, &model.EmbeddingSnapshot{
 				EmbeddingSnapshotID: activeSnapshot.EmbeddingSnapshotID,
 				UserID:              activeSnapshot.UserID,
+				OrgID:               activeSnapshot.OrgID,
 				DatasetID:           activeSnapshot.DatasetID,
 				EmbeddingDimensions: activeSnapshot.EmbeddingDimensions,
 			}, make([]float32, activeSnapshot.EmbeddingDimensions), 3)
@@ -787,6 +803,7 @@ var _ = Describe("SnapshotRepository", func() {
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: activeSnapshot.OrgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("limit", 3))
 		})
@@ -800,11 +817,12 @@ func namedArgs(args []any) pgx.NamedArgs {
 	return named
 }
 
-func newRawSnapshotRow(rawSnapshotID, datasetID, userID uuid.UUID) rawSnapshotRow {
+func newRawSnapshotRow(rawSnapshotID, datasetID, userID uuid.UUID, orgIDs ...uuid.UUID) rawSnapshotRow {
 	return rawSnapshotRow{
 		RawSnapshotID:     rawSnapshotID,
 		DatasetID:         datasetID,
 		UserID:            userID,
+		OrgID:             selectedOrgID(orgIDs),
 		StorageLocation:   "s3://local/raw/file.csv",
 		ContentType:       "text/csv",
 		FileExtension:     "csv",
@@ -819,12 +837,13 @@ func newRawSnapshotRow(rawSnapshotID, datasetID, userID uuid.UUID) rawSnapshotRo
 	}
 }
 
-func newFeatureSnapshotRow(featureSnapshotID, rawSnapshotID, datasetID, userID uuid.UUID) featureSnapshotRow {
+func newFeatureSnapshotRow(featureSnapshotID, rawSnapshotID, datasetID, userID uuid.UUID, orgIDs ...uuid.UUID) featureSnapshotRow {
 	return featureSnapshotRow{
 		FeatureSnapshotID: featureSnapshotID,
 		RawSnapshotID:     rawSnapshotID,
 		DatasetID:         datasetID,
 		UserID:            userID,
+		OrgID:             selectedOrgID(orgIDs),
 		StorageLocation:   "s3://lakehouse/features/snapshot.parquet",
 		TableNamespace:    "features",
 		TableName:         "movies",
@@ -837,13 +856,14 @@ func newFeatureSnapshotRow(featureSnapshotID, rawSnapshotID, datasetID, userID u
 	}
 }
 
-func newEmbeddingSnapshotRow(embeddingSnapshotID, featureSnapshotID, datasetID, userID uuid.UUID) embeddingSnapshotRow {
+func newEmbeddingSnapshotRow(embeddingSnapshotID, featureSnapshotID, datasetID, userID uuid.UUID, orgIDs ...uuid.UUID) embeddingSnapshotRow {
 	strategy := validEmbeddingStrategy()
 	return embeddingSnapshotRow{
 		EmbeddingSnapshotID: embeddingSnapshotID,
 		FeatureSnapshotID:   featureSnapshotID,
 		DatasetID:           datasetID,
 		UserID:              userID,
+		OrgID:               selectedOrgID(orgIDs),
 		VectorStore:         "pgvector",
 		CollectionName:      "movies",
 		EmbeddingDimensions: strategy.EmbeddingDimensions,
@@ -861,6 +881,13 @@ func newEmbeddingSnapshotRow(embeddingSnapshotID, featureSnapshotID, datasetID, 
 		EmbeddingModel:      strategy.EmbeddingModel,
 		Status:              model.SnapshotStatusPending.String(),
 	}
+}
+
+func selectedOrgID(orgIDs []uuid.UUID) uuid.UUID {
+	if len(orgIDs) > 0 && orgIDs[0] != uuid.Nil {
+		return orgIDs[0]
+	}
+	return uuid.New()
 }
 
 func validEmbeddingStrategy() model.EmbeddingStrategy {

@@ -106,7 +106,7 @@ func (e *lakehouseQueryEngine) executeCommand(ctx context.Context, command strin
 	}
 	defer cancel()
 
-	table, err := e.registryClient.ReadDatasetTable(runCtx, query.datasetID, query.userID, query.command.SnapshotID)
+	table, err := e.registryClient.ReadDatasetTable(runCtx, query.datasetID, query.userID, query.orgID, query.command.SnapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func (e *lakehouseQueryEngine) streamCommand(ctx context.Context, command string
 	}
 	defer cancel()
 
-	table, err := e.registryClient.ReadDatasetTable(runCtx, query.datasetID, query.userID, query.command.SnapshotID)
+	table, err := e.registryClient.ReadDatasetTable(runCtx, query.datasetID, query.userID, query.orgID, query.command.SnapshotID)
 	if err != nil {
 		return err
 	}
@@ -133,6 +133,7 @@ type resolvedLakehouseQuery struct {
 	command   *lakehouseQueryCommand
 	datasetID uuid.UUID
 	userID    uuid.UUID
+	orgID     uuid.UUID
 }
 
 func (e *lakehouseQueryEngine) resolveLakehouseQuery(ctx context.Context, command string) (resolvedLakehouseQuery, context.Context, context.CancelFunc, error) {
@@ -151,6 +152,10 @@ func (e *lakehouseQueryEngine) resolveLakehouseQuery(ctx context.Context, comman
 	if err != nil || userID == uuid.Nil {
 		return resolvedLakehouseQuery{}, nil, nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command has invalid userId")
 	}
+	orgID, err := uuid.Parse(query.OrgID)
+	if err != nil || orgID == uuid.Nil {
+		return resolvedLakehouseQuery{}, nil, nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command has invalid orgId")
+	}
 
 	runCtx := ctx
 	cancel := func() {}
@@ -161,6 +166,7 @@ func (e *lakehouseQueryEngine) resolveLakehouseQuery(ctx context.Context, comman
 		command:   query,
 		datasetID: datasetID,
 		userID:    userID,
+		orgID:     orgID,
 	}, runCtx, cancel, nil
 }
 

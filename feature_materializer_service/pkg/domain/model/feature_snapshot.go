@@ -7,6 +7,7 @@ type FeatureSnapshot struct {
 	RawSnapshotID     uuid.UUID
 	DatasetID         uuid.UUID
 	UserID            uuid.UUID
+	OrgID             uuid.UUID
 	StorageLocation   string
 	TableNamespace    string
 	TableName         string

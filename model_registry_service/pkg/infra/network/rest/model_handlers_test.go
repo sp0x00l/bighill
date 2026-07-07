@@ -42,7 +42,7 @@ func (s *modelUsecaseStub) RegisterModel(context.Context, *model.Model, uuid.UUI
 	return nil, nil
 }
 
-func (s *modelUsecaseStub) ReadModel(context.Context, uuid.UUID) (*model.Model, error) {
+func (s *modelUsecaseStub) ReadModelSystem(context.Context, uuid.UUID) (*model.Model, error) {
 	return nil, nil
 }
 
@@ -94,6 +94,7 @@ var _ = Describe("ModelHandlers", func() {
 	var (
 		ctx      context.Context
 		userID   uuid.UUID
+		orgID    uuid.UUID
 		modelID  uuid.UUID
 		usecase  *modelUsecaseStub
 		handlers *rest.ModelHandlers
@@ -102,6 +103,7 @@ var _ = Describe("ModelHandlers", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		userID = uuid.New()
+		orgID = uuid.New()
 		modelID = uuid.New()
 		usecase = &modelUsecaseStub{}
 		handlers = rest.NewModelHandlers(usecase, adapter.NewModelDTOAdapter(serializers.NewJSONSerializer()))
@@ -112,6 +114,7 @@ var _ = Describe("ModelHandlers", func() {
 		usecase.total = 1
 		req := httptest.NewRequest(http.MethodGet, "/v1/models?source=HUGGING_FACE&kind=BASE&status=READY&limit=10&page=1", nil)
 		req.Header.Set("X-User-ID", userID.String())
+		req.Header.Set("X-Org-ID", orgID.String())
 
 		resp, err := handlers.ListModels(ctx, req)
 
@@ -147,6 +150,7 @@ var _ = Describe("ModelHandlers", func() {
 	It("rejects invalid model list filters", func() {
 		req := httptest.NewRequest(http.MethodGet, "/v1/models?source=unknown", nil)
 		req.Header.Set("X-User-ID", userID.String())
+		req.Header.Set("X-Org-ID", orgID.String())
 
 		resp, err := handlers.ListModels(ctx, req)
 
@@ -157,6 +161,7 @@ var _ = Describe("ModelHandlers", func() {
 	It("rejects invalid pagination", func() {
 		req := httptest.NewRequest(http.MethodGet, "/v1/models?limit=0", nil)
 		req.Header.Set("X-User-ID", userID.String())
+		req.Header.Set("X-Org-ID", orgID.String())
 
 		resp, err := handlers.ListModels(ctx, req)
 
@@ -168,6 +173,7 @@ var _ = Describe("ModelHandlers", func() {
 		usecase.model = readyHFModel(modelID)
 		req := httptest.NewRequest(http.MethodGet, "/v1/models/"+modelID.String(), nil)
 		req.Header.Set("X-User-ID", userID.String())
+		req.Header.Set("X-Org-ID", orgID.String())
 		req = mux.SetURLVars(req, map[string]string{"modelId": modelID.String()})
 
 		resp, err := handlers.ReadModel(ctx, req)
@@ -184,6 +190,7 @@ var _ = Describe("ModelHandlers", func() {
 		usecase.readErr = domain.ErrModelNotFound
 		req := httptest.NewRequest(http.MethodGet, "/v1/models/"+modelID.String(), nil)
 		req.Header.Set("X-User-ID", userID.String())
+		req.Header.Set("X-Org-ID", orgID.String())
 		req = mux.SetURLVars(req, map[string]string{"modelId": modelID.String()})
 
 		resp, err := handlers.ReadModel(ctx, req)
@@ -196,6 +203,7 @@ var _ = Describe("ModelHandlers", func() {
 		usecase.listErr = errors.New("db unavailable")
 		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 		req.Header.Set("X-User-ID", userID.String())
+		req.Header.Set("X-Org-ID", orgID.String())
 
 		resp, err := handlers.ListModels(ctx, req)
 

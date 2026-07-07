@@ -9,6 +9,7 @@ import (
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
+	"lib/shared_lib/ctxutil"
 	coreDB "lib/shared_lib/db"
 	transport "lib/shared_lib/transport"
 
@@ -36,13 +37,13 @@ func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel
 	log.Trace("ModelRepository Create")
 
 	query := `INSERT INTO ` + r.Name + `.models (
-		model_id, user_id, idempotency_key, training_run_id, dataset_id, model_kind, source, source_uri, source_metadata,
+		model_id, user_id, org_id, idempotency_key, training_run_id, dataset_id, model_kind, source, source_uri, source_metadata,
 		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status,
 		metrics_metadata, promotion_report_uri, promotion_deltas, promotion_decision, promotion_reason, status, failure_reason
 	) VALUES (
-		@model_id, @user_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind::model_kind_enum, @source::model_source_enum, @source_uri, @source_metadata::jsonb,
+		@model_id, @user_id, @org_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind::model_kind_enum, @source::model_source_enum, @source_uri, @source_metadata::jsonb,
 		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @serving_target, @serving_model, @serving_load_status::model_load_status_enum,
@@ -102,14 +103,14 @@ func (r *ModelRepository) ReadChampion(ctx context.Context, lineage model.Lineag
 	log.Trace("ModelRepository ReadChampion")
 
 	query := `SELECT ` + modelColumns() + ` FROM ` + r.Name + `.models
-		WHERE user_id = @user_id
+		WHERE org_id = @org_id
 			AND name = @name
 			AND status = @status::model_status_enum
 			AND serving_load_status = @serving_load_status::model_load_status_enum
 		ORDER BY model_version DESC, created_at DESC, model_id DESC
 		LIMIT 1`
 	modelRecord, err := scanModel(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
-		"user_id":             pgtype.UUID{Bytes: lineage.UserID, Valid: lineage.UserID != uuid.Nil},
+		"org_id":              pgtype.UUID{Bytes: lineage.OrgID, Valid: lineage.OrgID != uuid.Nil},
 		"name":                lineage.Name,
 		"status":              model.ModelStatusReady.String(),
 		"serving_load_status": model.ModelLoadStatusLoaded.String(),
@@ -127,10 +128,20 @@ func (r *ModelRepository) ReadChampion(ctx context.Context, lineage model.Lineag
 func (r *ModelRepository) List(ctx context.Context, pagination transport.Pagination, filter model.ListFilter) ([]*model.Model, int, error) {
 	log.Trace("ModelRepository List")
 
-	args := modelListArgs(pagination, filter)
+	args := modelListArgs(ctx, pagination, filter)
 	where := ` WHERE (@model_kind = '' OR model_kind::text = @model_kind)
 		AND (@source = '' OR source::text = @source)
-		AND (@status = '' OR status::text = @status)`
+		AND (@status = '' OR status::text = @status)
+		AND (
+			@trainable = false
+			OR (
+				status = 'READY'::model_status_enum
+				AND (
+					model_kind = 'BASE'::model_kind_enum
+					OR org_id = @org_id
+				)
+			)
+		)`
 	countQuery := `SELECT count(*) FROM ` + r.Name + `.models` + where
 	var total int
 	if err := r.Pool.QueryRow(ctx, countQuery, args).Scan(&total); err != nil {
@@ -254,6 +265,7 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 	return pgx.NamedArgs{
 		"model_id":             pgtype.UUID{Bytes: registeredModel.ModelID, Valid: true},
 		"user_id":              pgtype.UUID{Bytes: registeredModel.UserID, Valid: registeredModel.UserID != uuid.Nil},
+		"org_id":               pgtype.UUID{Bytes: registeredModel.OrgID, Valid: registeredModel.OrgID != uuid.Nil},
 		"idempotency_key":      pgtype.UUID{Bytes: idempotencyKey, Valid: true},
 		"training_run_id":      pgtype.UUID{Bytes: registeredModel.TrainingRunID, Valid: registeredModel.TrainingRunID != uuid.Nil},
 		"dataset_id":           pgtype.UUID{Bytes: registeredModel.DatasetID, Valid: registeredModel.DatasetID != uuid.Nil},
@@ -296,7 +308,7 @@ func servingStatusArgs(modelID uuid.UUID, status model.ModelStatus, servingLoadS
 	}
 }
 
-func modelListArgs(pagination transport.Pagination, filter model.ListFilter) pgx.NamedArgs {
+func modelListArgs(ctx context.Context, pagination transport.Pagination, filter model.ListFilter) pgx.NamedArgs {
 	log.Trace("modelListArgs")
 
 	modelKind := ""
@@ -315,6 +327,8 @@ func modelListArgs(pagination transport.Pagination, filter model.ListFilter) pgx
 		"model_kind": modelKind,
 		"source":     source,
 		"status":     status,
+		"org_id":     pgtype.UUID{Bytes: orgIDFromContext(ctx), Valid: orgIDFromContext(ctx) != uuid.Nil},
+		"trainable":  filter.Trainable,
 		"limit":      pagination.Limit,
 		"offset":     pagination.GetOffset(),
 	}
@@ -323,7 +337,7 @@ func modelListArgs(pagination transport.Pagination, filter model.ListFilter) pgx
 func modelColumns() string {
 	log.Trace("modelColumns")
 
-	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
+	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(org_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
 		model_kind::text, source::text, source_uri, source_metadata::text, name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status::text,
@@ -351,11 +365,12 @@ func scanModels(rows pgx.Rows) ([]*model.Model, error) {
 func scanModel(row pgx.Row) (*model.Model, error) {
 	log.Trace("scanModel")
 
-	var modelID, userID, trainingRunID, datasetID, modelKindRaw, modelSourceRaw, statusRaw, servingLoadStatusRaw string
+	var modelID, userID, orgID, trainingRunID, datasetID, modelKindRaw, modelSourceRaw, statusRaw, servingLoadStatusRaw string
 	modelRecord := &model.Model{}
 	if err := row.Scan(
 		&modelID,
 		&userID,
+		&orgID,
 		&trainingRunID,
 		&datasetID,
 		&modelKindRaw,
@@ -395,6 +410,9 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 	if userID != "" {
 		modelRecord.UserID = uuid.MustParse(userID)
 	}
+	if orgID != "" {
+		modelRecord.OrgID = uuid.MustParse(orgID)
+	}
 	if trainingRunID != "" {
 		modelRecord.TrainingRunID = uuid.MustParse(trainingRunID)
 	}
@@ -406,6 +424,14 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 	modelRecord.Status = status
 	modelRecord.ServingLoadStatus = servingLoadStatus
 	return modelRecord, nil
+}
+
+func orgIDFromContext(ctx context.Context) uuid.UUID {
+	orgID, ok := ctxutil.OrgID(ctx)
+	if !ok {
+		return uuid.Nil
+	}
+	return orgID
 }
 
 func readModelByIDTx(ctx context.Context, tx pgx.Tx, schemaName string, modelID uuid.UUID) (*model.Model, error) {

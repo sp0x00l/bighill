@@ -20,6 +20,7 @@ message RawSnapshotReadyEvent {
   int32 schema_version = 9;
   string schema_metadata = 10;
   string processing_profile = 11;
+  string org_id = 12;
 }
 
 message FeatureSnapshotReadyEvent {
@@ -35,6 +36,7 @@ message FeatureSnapshotReadyEvent {
   int32 schema_version = 10;
   string schema_metadata = 11;
   string processing_profile = 12;
+  string org_id = 13;
 }
 
 message EmbeddingSnapshotReadyEvent {
@@ -53,6 +55,7 @@ message EmbeddingSnapshotReadyEvent {
   int32 chunk_overlap = 13;
   string embedding_provider = 14;
   string embedding_model = 15;
+  string org_id = 16;
 }
 
 message SearchEmbeddingsRequest {
@@ -61,6 +64,7 @@ message SearchEmbeddingsRequest {
   string query_text = 3;
   int32 top_k = 4;
   map<string, string> metadata_filters = 5;
+  string org_id = 6;
 }
 
 message SearchEmbeddingsResponse {
@@ -78,6 +82,7 @@ message SearchEmbeddingsResponse {
   string embedding_provider = 12;
   string embedding_model = 13;
   repeated EmbeddingSearchMatch matches = 14;
+  string org_id = 15;
 }
 
 message EmbeddingSearchMatch {
@@ -88,4 +93,5 @@ message EmbeddingSearchMatch {
   string source_text = 5;
   double distance = 6;
   double similarity = 7;
+  string org_id = 8;
 }

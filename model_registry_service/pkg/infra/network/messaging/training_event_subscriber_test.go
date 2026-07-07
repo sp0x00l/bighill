@@ -38,7 +38,7 @@ func (r *recordingModelRegistryUsecase) RegisterModel(context.Context, *model.Mo
 	return nil, nil
 }
 
-func (r *recordingModelRegistryUsecase) ReadModel(context.Context, uuid.UUID) (*model.Model, error) {
+func (r *recordingModelRegistryUsecase) ReadModelSystem(context.Context, uuid.UUID) (*model.Model, error) {
 	return nil, nil
 }
 
@@ -103,6 +103,7 @@ var _ = Describe("Training event listeners", func() {
 	It("maps completed training events into candidates and requests promotion", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		trainingRunID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
 		listener := registrymessaging.NewModelTrainingCompletedEventListener(uc)
@@ -110,6 +111,7 @@ var _ = Describe("Training event listeners", func() {
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId:     trainingRunID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			DatasetId:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotId: uuid.NewString(),
@@ -132,6 +134,7 @@ var _ = Describe("Training event listeners", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.idempotencyKey).To(Equal(trainingRunID))
 		Expect(uc.completedModel.UserID).To(Equal(userID))
+		Expect(uc.completedModel.OrgID).To(Equal(orgID))
 		Expect(uc.completedModel.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.completedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.completedModel.ModelVersion).To(Equal(4))
@@ -143,12 +146,14 @@ var _ = Describe("Training event listeners", func() {
 	It("maps promotion report ready events into promotion decisions", func() {
 		modelID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		trainingRunID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
 		listener := registrymessaging.NewPromotionReportReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), modelID, &trainingpb.PromotionReportReadyEvent{
 			UserId:             userID.String(),
+			OrgId:              orgID.String(),
 			ModelId:            modelID.String(),
 			TrainingRunId:      trainingRunID.String(),
 			PromotionReportUri: "s3://local-dev-bucket/promotion/model.json",
@@ -160,6 +165,7 @@ var _ = Describe("Training event listeners", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.idempotencyKey).To(Equal(modelID))
 		Expect(uc.promotionReport.UserID).To(Equal(userID))
+		Expect(uc.promotionReport.OrgID).To(Equal(orgID))
 		Expect(uc.promotionReport.ModelID).To(Equal(modelID))
 		Expect(uc.promotionReport.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.promotionReport.PromotionReportURI).To(Equal("s3://local-dev-bucket/promotion/model.json"))
@@ -169,6 +175,7 @@ var _ = Describe("Training event listeners", func() {
 	It("maps failed training events into failed model registrations", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		trainingRunID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
 		listener := registrymessaging.NewModelTrainingFailedEventListener(uc)
@@ -176,6 +183,7 @@ var _ = Describe("Training event listeners", func() {
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingFailedEvent{
 			TrainingRunId:  trainingRunID.String(),
 			UserId:         userID.String(),
+			OrgId:          orgID.String(),
 			DatasetId:      datasetID.String(),
 			DatasetVersion: "5",
 			ModelId:        uuid.NewString(),
@@ -188,6 +196,7 @@ var _ = Describe("Training event listeners", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.idempotencyKey).To(Equal(trainingRunID))
 		Expect(uc.failedModel.UserID).To(Equal(userID))
+		Expect(uc.failedModel.OrgID).To(Equal(orgID))
 		Expect(uc.failedModel.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.failedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.failedModel.ModelVersion).To(Equal(5))
@@ -202,6 +211,7 @@ var _ = Describe("Training event listeners", func() {
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId: uuid.NewString(),
 			UserId:        uuid.NewString(),
+			OrgId:         uuid.NewString(),
 			DatasetId:     uuid.NewString(),
 			ModelId:       uuid.NewString(),
 			BaseModel:     "mistral-7b",
@@ -219,6 +229,7 @@ var _ = Describe("Training event listeners", func() {
 		err := listener.Handle(context.Background(), datasetID, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId:     uuid.NewString(),
 			UserId:            uuid.NewString(),
+			OrgId:             uuid.NewString(),
 			DatasetId:         datasetID.String(),
 			DatasetVersion:    "1",
 			ModelId:           uuid.NewString(),
@@ -277,6 +288,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 		uploadID := uuid.New()
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
 		listener := registrymessaging.NewModelArtifactIngestedEventListener(uc)
 
@@ -284,6 +296,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 			ArtifactId:        artifactID.String(),
 			UploadId:          uploadID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			DatasetId:         datasetID.String(),
 			Source:            "upload",
 			StorageLocation:   "s3://local-dev-bucket/models/artifacts/adapter",
@@ -298,6 +311,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.ingestedModel.UserID).To(Equal(userID))
+		Expect(uc.ingestedModel.OrgID).To(Equal(orgID))
 		Expect(uc.ingestedModel.ModelKind).To(Equal(model.ModelKindFineTuned))
 		Expect(uc.ingestedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.ingestedModel.AdapterURI).To(Equal("s3://local-dev-bucket/models/artifacts/adapter"))
@@ -325,5 +339,29 @@ var _ = Describe("Model artifact ingested listener", func() {
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("user_id required")))
+	})
+
+	It("rejects adapter artifacts without an owning org", func() {
+		artifactID := uuid.New()
+		uploadID := uuid.New()
+		uc := &recordingModelRegistryUsecase{}
+		listener := registrymessaging.NewModelArtifactIngestedEventListener(uc)
+
+		err := listener.Handle(context.Background(), artifactID, &ingestionpb.ModelArtifactIngestedEvent{
+			ArtifactId:        artifactID.String(),
+			UploadId:          uploadID.String(),
+			UserId:            uuid.NewString(),
+			Source:            "upload",
+			StorageLocation:   "s3://local-dev-bucket/models/artifacts/adapter",
+			ArtifactType:      "LORA_ADAPTER",
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactSizeBytes: 1024,
+			ArtifactChecksum:  "sha256:adapter",
+			ModelName:         "movie-adapter",
+			ModelVersion:      "2",
+			BaseModel:         "mistral-7b",
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("org_id required")))
 	})
 })

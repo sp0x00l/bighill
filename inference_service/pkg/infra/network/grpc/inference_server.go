@@ -133,7 +133,11 @@ func (s *InferenceServer) Generate(ctx context.Context, req *inferencepb.Generat
 	if err != nil || userID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
 	}
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil || orgID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid org_id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	modelID, err := uuid.Parse(req.GetModelId())
 	if err != nil || modelID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid model_id")
@@ -154,6 +158,7 @@ func (s *InferenceServer) Generate(ctx context.Context, req *inferencepb.Generat
 	response, err := s.usecase.Generate(ctx, model.GenerateRequest{
 		RequestID:       requestID,
 		UserID:          userID,
+		OrgID:           orgID,
 		DatasetID:       datasetID,
 		ModelID:         modelID,
 		QueryText:       queryText,
@@ -184,7 +189,11 @@ func (s *InferenceServer) RecordFeedback(ctx context.Context, req *inferencepb.R
 	if err != nil || userID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
 	}
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil || orgID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid org_id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	rating := int(req.GetRating())
 	if rating < -1 || rating > 1 {
 		return nil, status.Error(codes.InvalidArgument, "rating must be between -1 and 1")
@@ -193,6 +202,7 @@ func (s *InferenceServer) RecordFeedback(ctx context.Context, req *inferencepb.R
 		FeedbackID:      feedbackID,
 		RequestID:       requestID,
 		UserID:          userID,
+		OrgID:           orgID,
 		Accepted:        req.GetAccepted(),
 		Rating:          rating,
 		Comment:         strings.TrimSpace(req.GetComment()),
@@ -221,7 +231,11 @@ func (s *InferenceServer) ExportPreferenceDataset(ctx context.Context, req *infe
 	if err != nil || userID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
 	}
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil || orgID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid org_id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	var datasetID uuid.UUID
 	if strings.TrimSpace(req.GetDatasetId()) != "" {
 		datasetID, err = uuid.Parse(req.GetDatasetId())
@@ -251,6 +265,7 @@ func (s *InferenceServer) ExportPreferenceDataset(ctx context.Context, req *infe
 	dataset, err := s.usecase.ExportPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
 		RequestID:   requestID,
 		UserID:      userID,
+		OrgID:       orgID,
 		DatasetID:   datasetID,
 		ModelID:     modelID,
 		OutputURI:   outputURI,
@@ -262,6 +277,7 @@ func (s *InferenceServer) ExportPreferenceDataset(ctx context.Context, req *infe
 	}
 	return &inferencepb.ExportPreferenceDatasetResponse{
 		RequestId:    dataset.RequestID.String(),
+		OrgId:        dataset.OrgID.String(),
 		DatasetId:    dataset.DatasetID.String(),
 		ModelId:      dataset.ModelID.String(),
 		OutputUri:    dataset.OutputURI,
@@ -285,6 +301,7 @@ func generateResponseToPB(response *model.GenerateResponse) *inferencepb.Generat
 		}
 	}
 	return &inferencepb.GenerateResponse{
+		OrgId:                 response.OrgID.String(),
 		DatasetId:             response.DatasetID.String(),
 		ModelId:               response.ModelID.String(),
 		QueryText:             response.QueryText,

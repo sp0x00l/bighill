@@ -97,7 +97,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		Expect(readyModel.Status).To(Equal(model.ModelStatusReady))
 		Expect(readyModel.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/run/model"))
 
-		readModel, err := modelsUse.ReadModel(ctx, registeredModel.ModelID)
+		readModel, err := modelsUse.ReadModelSystem(ctx, registeredModel.ModelID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readModel.ModelID).To(Equal(registeredModel.ModelID))
 
@@ -119,31 +119,35 @@ var _ = Describe("Model registry integration", Ordered, func() {
 
 		duplicate := validIntegrationModel()
 		duplicate.UserID = modelRecord.UserID
+		duplicate.OrgID = modelRecord.OrgID
 		_, err = modelsUse.RegisterModel(ctx, duplicate, idempotencyKey)
 		Expect(errors.Is(err, domain.ErrModelExists)).To(BeTrue())
 
-		_, err = modelsUse.ReadModel(ctx, uuid.New())
+		_, err = modelsUse.ReadModelSystem(ctx, uuid.New())
 		Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
 	})
 
 	It("enforces tenant projections and RLS on repository reads", func() {
 		tenantA := uuid.New()
 		tenantB := uuid.New()
+		orgA := uuid.New()
+		orgB := uuid.New()
 		modelRecord := validIntegrationModel()
 		modelRecord.UserID = tenantA
+		modelRecord.OrgID = orgA
 		Expect(upsertModelRegistryTenant(ctx, database, tenantA)).To(Succeed())
 		Expect(upsertModelRegistryTenant(ctx, database, tenantB)).To(Succeed())
 
 		registeredModel, err := modelsUse.RegisterModel(ctx, modelRecord, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = models.ReadByID(ctxutil.WithTenantID(ctx, tenantB), registeredModel.ModelID)
+		_, err = models.ReadByID(ctxutil.WithActorOrg(ctx, tenantB, orgB), registeredModel.ModelID)
 		Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
 
 		_, err = models.ReadByID(ctx, registeredModel.ModelID)
 		Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
 
-		readModel, err := models.ReadByID(ctxutil.WithTenantID(ctx, tenantA), registeredModel.ModelID)
+		readModel, err := models.ReadByID(ctxutil.WithActorOrg(ctx, tenantA, orgA), registeredModel.ModelID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readModel.ModelID).To(Equal(registeredModel.ModelID))
 	})
@@ -157,6 +161,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 	It("records completed training through the listener, lands a candidate, and requests promotion", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		trainingRunID := uuid.New()
 		modelID := uuid.New()
 		Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
@@ -165,6 +170,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		Expect(listener.Handle(ctx, datasetID, &trainingpb.ModelTrainingCompletedEvent{
 			TrainingRunId:     trainingRunID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			DatasetId:         datasetID.String(),
 			DatasetVersion:    "7",
 			FeatureSnapshotId: uuid.NewString(),
@@ -184,7 +190,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			ReportLocation:    "s3://local-dev-bucket/evals/" + trainingRunID.String() + ".json",
 		})).To(Succeed())
 
-		modelRecord, err := models.ReadByTrainingRunID(ctxutil.WithTenantID(ctx, userID), trainingRunID)
+		modelRecord, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, userID, orgID), trainingRunID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(modelRecord.UserID).To(Equal(userID))
 		Expect(modelRecord.DatasetID).To(Equal(datasetID))
@@ -197,6 +203,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		promotionRequests := promotionRequestedOutboxEvents(ctx, database, modelRecord.ModelID)
 		Expect(promotionRequests).To(HaveLen(1))
 		Expect(promotionRequests[0].UserId).To(Equal(userID.String()))
+		Expect(promotionRequests[0].OrgId).To(Equal(orgID.String()))
 		Expect(promotionRequests[0].ModelId).To(Equal(modelRecord.ModelID.String()))
 		Expect(promotionRequests[0].TrainingRunId).To(Equal(trainingRunID.String()))
 		Expect(promotionRequests[0].CandidateMetricsMetadata).To(ContainSubstring("faithfulness"))
@@ -208,13 +215,14 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		promotionListener := registrymessaging.NewPromotionReportReadyEventListener(modelsUse)
 		Expect(promotionListener.Handle(ctx, candidate.ModelID, &trainingpb.PromotionReportReadyEvent{
 			UserId:             candidate.UserID.String(),
+			OrgId:              candidate.OrgID.String(),
 			ModelId:            candidate.ModelID.String(),
 			TrainingRunId:      candidate.TrainingRunID.String(),
 			PromotionReportUri: "s3://local-dev-bucket/promotion/" + candidate.ModelID.String() + ".json",
 			PromotionDeltas:    "{}",
 		})).To(Succeed())
 
-		promotedModel, err := models.ReadByTrainingRunID(ctxutil.WithTenantID(ctx, candidate.UserID), candidate.TrainingRunID)
+		promotedModel, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, candidate.UserID, candidate.OrgID), candidate.TrainingRunID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(promotedModel.Status).To(Equal(model.ModelStatusEvaluated))
 		Expect(promotedModel.PromotionReportURI).To(Equal("s3://local-dev-bucket/promotion/" + candidate.ModelID.String() + ".json"))
@@ -227,9 +235,11 @@ var _ = Describe("Model registry integration", Ordered, func() {
 
 	It("rejects a promotion report when candidate metrics regress against the champion", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
 		Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
 		champion := validIntegrationModel()
 		champion.UserID = userID
+		champion.OrgID = orgID
 		champion.ModelVersion = 1
 		champion.Status = model.ModelStatusReady
 		champion.ServingLoadStatus = model.ModelLoadStatusLoaded
@@ -237,22 +247,23 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		_, err := modelsUse.RegisterModel(ctx, champion, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
 
-		candidate := trainingCompletedEvent(userID, uuid.New(), uuid.New(), uuid.New(), 2, 0.70, 0.70, 0.70)
+		candidate := trainingCompletedEvent(userID, orgID, uuid.New(), uuid.New(), uuid.New(), 2, 0.70, 0.70, 0.70)
 		listener := registrymessaging.NewModelTrainingCompletedEventListener(modelsUse)
 		Expect(listener.Handle(ctx, uuid.MustParse(candidate.DatasetId), candidate)).To(Succeed())
-		candidateRecord, err := models.ReadByTrainingRunID(ctxutil.WithTenantID(ctx, uuid.MustParse(candidate.UserId)), uuid.MustParse(candidate.TrainingRunId))
+		candidateRecord, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, uuid.MustParse(candidate.UserId), uuid.MustParse(candidate.OrgId)), uuid.MustParse(candidate.TrainingRunId))
 		Expect(err).NotTo(HaveOccurred())
 
 		promotionListener := registrymessaging.NewPromotionReportReadyEventListener(modelsUse)
 		Expect(promotionListener.Handle(ctx, candidateRecord.ModelID, &trainingpb.PromotionReportReadyEvent{
 			UserId:             candidateRecord.UserID.String(),
+			OrgId:              candidateRecord.OrgID.String(),
 			ModelId:            candidateRecord.ModelID.String(),
 			TrainingRunId:      candidateRecord.TrainingRunID.String(),
 			PromotionReportUri: "s3://local-dev-bucket/promotion/rejected.json",
 			PromotionDeltas:    "{}",
 		})).To(Succeed())
 
-		rejectedModel, err := models.ReadByTrainingRunID(ctxutil.WithTenantID(ctx, candidateRecord.UserID), candidateRecord.TrainingRunID)
+		rejectedModel, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, candidateRecord.UserID, candidateRecord.OrgID), candidateRecord.TrainingRunID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rejectedModel.Status).To(Equal(model.ModelStatusFailed))
 		Expect(rejectedModel.PromotionDecision).To(ContainSubstring(model.PromotionDecisionOutcomeRejected.String()))
@@ -280,6 +291,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 	It("records failed training events and rejects invalid failed-training payloads", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		trainingRunID := uuid.New()
 		Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
 		listener := registrymessaging.NewModelTrainingFailedEventListener(modelsUse)
@@ -287,6 +299,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		Expect(listener.Handle(ctx, datasetID, &trainingpb.ModelTrainingFailedEvent{
 			TrainingRunId:  trainingRunID.String(),
 			UserId:         userID.String(),
+			OrgId:          orgID.String(),
 			DatasetId:      datasetID.String(),
 			DatasetVersion: "3",
 			ModelId:        uuid.NewString(),
@@ -296,7 +309,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			FailureReason:  "training failed",
 		})).To(Succeed())
 
-		failedModel, err := models.ReadByTrainingRunID(ctxutil.WithTenantID(ctx, userID), trainingRunID)
+		failedModel, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, userID, orgID), trainingRunID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(failedModel.Status).To(Equal(model.ModelStatusFailed))
 		Expect(failedModel.FailureReason).To(Equal("training failed"))
@@ -305,6 +318,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		err = listener.Handle(ctx, datasetID, &trainingpb.ModelTrainingFailedEvent{
 			TrainingRunId: trainingRunID.String(),
 			UserId:        userID.String(),
+			OrgId:         orgID.String(),
 			DatasetId:     datasetID.String(),
 			ModelId:       uuid.NewString(),
 			ModelName:     "movie-ranker",
@@ -349,6 +363,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		artifactID := uuid.New()
 		uploadID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		datasetID := uuid.New()
 		Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
 		listener := registrymessaging.NewModelArtifactIngestedEventListener(modelsUse)
@@ -357,6 +372,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			ArtifactId:        artifactID.String(),
 			UploadId:          uploadID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			DatasetId:         datasetID.String(),
 			Source:            "upload",
 			StorageLocation:   "s3://local-dev-bucket/models/adapter",
@@ -369,7 +385,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			BaseModel:         "mistral-7b",
 		})).To(Succeed())
 
-		adapterModel, err := models.ReadByID(ctxutil.WithTenantID(ctx, userID), artifactID)
+		adapterModel, err := models.ReadByID(ctxutil.WithActorOrg(ctx, userID, orgID), artifactID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(adapterModel.ModelKind).To(Equal(model.ModelKindFineTuned))
 		Expect(adapterModel.DatasetID).To(Equal(datasetID))
@@ -446,6 +462,7 @@ func validIntegrationModel() *model.Model {
 	return &model.Model{
 		ModelID:           uuid.New(),
 		UserID:            uuid.New(),
+		OrgID:             uuid.New(),
 		TrainingRunID:     uuid.New(),
 		DatasetID:         uuid.New(),
 		ModelKind:         model.ModelKindFineTuned,
@@ -464,10 +481,11 @@ func validIntegrationModel() *model.Model {
 	}
 }
 
-func trainingCompletedEvent(userID, datasetID, trainingRunID, modelID uuid.UUID, version int, faithfulness, answerRelevancy, contextPrecision float64) *trainingpb.ModelTrainingCompletedEvent {
+func trainingCompletedEvent(userID, orgID, datasetID, trainingRunID, modelID uuid.UUID, version int, faithfulness, answerRelevancy, contextPrecision float64) *trainingpb.ModelTrainingCompletedEvent {
 	return &trainingpb.ModelTrainingCompletedEvent{
 		TrainingRunId:     trainingRunID.String(),
 		UserId:            userID.String(),
+		OrgId:             orgID.String(),
 		DatasetId:         datasetID.String(),
 		DatasetVersion:    fmt.Sprintf("%d", version),
 		FeatureSnapshotId: uuid.NewString(),
@@ -491,14 +509,15 @@ func trainingCompletedEvent(userID, datasetID, trainingRunID, modelID uuid.UUID,
 func createCandidateFromTraining(ctx context.Context, database *dbconn.Database, modelRepository app.ModelRepository, usecase app.ModelRegistryUsecase, faithfulness, answerRelevancy, contextPrecision float64) *model.Model {
 	datasetID := uuid.New()
 	userID := uuid.New()
+	orgID := uuid.New()
 	trainingRunID := uuid.New()
 	modelID := uuid.New()
 	Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
 
 	listener := registrymessaging.NewModelTrainingCompletedEventListener(usecase)
-	Expect(listener.Handle(ctx, datasetID, trainingCompletedEvent(userID, datasetID, trainingRunID, modelID, 1, faithfulness, answerRelevancy, contextPrecision))).To(Succeed())
+	Expect(listener.Handle(ctx, datasetID, trainingCompletedEvent(userID, orgID, datasetID, trainingRunID, modelID, 1, faithfulness, answerRelevancy, contextPrecision))).To(Succeed())
 
-	candidate, err := modelRepository.ReadByTrainingRunID(ctxutil.WithTenantID(ctx, userID), trainingRunID)
+	candidate, err := modelRepository.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, userID, orgID), trainingRunID)
 	Expect(err).NotTo(HaveOccurred())
 	return candidate
 }

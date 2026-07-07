@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
 	usecasetrace "lib/shared_lib/usecasetrace"
@@ -37,7 +38,10 @@ func (u *DatasetUsecase) AddDataset(ctx context.Context, dataset *model.Dataset)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if dataset != nil {
-		ctx = ctxutil.WithTenantID(ctx, dataset.UserID)
+		if dataset.OrgID == uuid.Nil {
+			return domain.ErrValidationFailed.Extend("org id is required")
+		}
+		ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	}
 	return u.datasetsRepository.Upsert(ctx, dataset)
 }
@@ -56,7 +60,10 @@ func (u *DatasetUsecase) UpdateDataset(ctx context.Context, dataset *model.Datas
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if dataset != nil {
-		ctx = ctxutil.WithTenantID(ctx, dataset.UserID)
+		if dataset.OrgID == uuid.Nil {
+			return domain.ErrValidationFailed.Extend("org id is required")
+		}
+		ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	}
 	return u.datasetsRepository.Upsert(ctx, dataset)
 }

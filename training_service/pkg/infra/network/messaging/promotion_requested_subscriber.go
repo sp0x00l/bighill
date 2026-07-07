@@ -69,6 +69,10 @@ func (r *PromotionReportRunner) SpecFromEvent(resourceKey uuid.UUID, payload *mo
 	if err != nil {
 		return model.PromotionReportJobSpec{}, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return model.PromotionReportJobSpec{}, err
+	}
 	trainingRunID, err := msgConn.ParseUUID("training_run_id", payload.GetTrainingRunId())
 	if err != nil {
 		return model.PromotionReportJobSpec{}, err
@@ -81,9 +85,13 @@ func (r *PromotionReportRunner) SpecFromEvent(resourceKey uuid.UUID, payload *mo
 	if candidateMetrics == "" {
 		return model.PromotionReportJobSpec{}, fmt.Errorf("candidate metrics metadata is required")
 	}
+	if r.reportURIPrefix == "" {
+		return model.PromotionReportJobSpec{}, fmt.Errorf("promotion report uri prefix is required")
+	}
 	reportURI := fmt.Sprintf("%s/%s/promotion_report.json", r.reportURIPrefix, modelID)
 	return model.PromotionReportJobSpec{
 		UserID:                   userID.String(),
+		OrgID:                    orgID.String(),
 		ModelID:                  modelID.String(),
 		TrainingRunID:            trainingRunID.String(),
 		CandidateReportURI:       candidateReportURI,

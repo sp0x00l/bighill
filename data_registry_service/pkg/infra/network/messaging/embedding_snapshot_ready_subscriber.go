@@ -75,6 +75,10 @@ func embeddingSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.E
 	if err != nil {
 		return nil, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return nil, err
+	}
 	embeddingSnapshotID, err := msgConn.ParseUUID("embedding_snapshot_id", payload.GetEmbeddingSnapshotId())
 	if err != nil {
 		return nil, err
@@ -94,6 +98,7 @@ func embeddingSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.E
 	return &model.Dataset{
 		ID:                       datasetID,
 		UserID:                   userID,
+		OrgID:                    orgID,
 		FeatureSnapshotID:        featureSnapshotID,
 		EmbeddingSnapshotID:      embeddingSnapshotID,
 		VectorStore:              vectorStore,

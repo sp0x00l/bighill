@@ -18,6 +18,7 @@ import (
 
 const (
 	userIDHeader = "X-User-ID"
+	orgIDHeader  = "X-Org-ID"
 )
 
 type DatasetResolver struct {
@@ -34,7 +35,7 @@ func NewDatasetResolver(baseURL string, client *http.Client) *DatasetResolver {
 	}
 }
 
-func (r *DatasetResolver) ResolveMaterializedDataset(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (model.MaterializedDatasetRef, error) {
+func (r *DatasetResolver) ResolveMaterializedDataset(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID) (model.MaterializedDatasetRef, error) {
 	log.Trace("DatasetResolver ResolveMaterializedDataset")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/v1/data/registry/"+url.PathEscape(datasetID.String())+"/materialization", nil)
@@ -42,6 +43,7 @@ func (r *DatasetResolver) ResolveMaterializedDataset(ctx context.Context, userID
 		return model.MaterializedDatasetRef{}, fmt.Errorf("%w: build dataset resolver request: %w", domain.ErrDependencyFailed, err)
 	}
 	req.Header.Set(userIDHeader, userID.String())
+	req.Header.Set(orgIDHeader, orgID.String())
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return model.MaterializedDatasetRef{}, fmt.Errorf("%w: resolve dataset materialization: %w", domain.ErrDependencyFailed, err)
@@ -64,6 +66,7 @@ func (r *DatasetResolver) ResolveMaterializedDataset(ctx context.Context, userID
 	return model.MaterializedDatasetRef{
 		DatasetID:         dto.ID,
 		UserID:            dto.UserID,
+		OrgID:             dto.OrgID,
 		DatasetVersion:    fmt.Sprintf("%d", dto.DatasetVersion),
 		FeatureSnapshotID: dto.FeatureSnapshotID,
 		DatasetURI:        firstNonEmpty(dto.StorageLocation, dto.Location),
@@ -76,6 +79,7 @@ func (r *DatasetResolver) ResolveMaterializedDataset(ctx context.Context, userID
 type datasetDTO struct {
 	ID                string `json:"id"`
 	UserID            string `json:"userId"`
+	OrgID             string `json:"orgId"`
 	Location          string `json:"location"`
 	StorageLocation   string `json:"storageLocation"`
 	TableName         string `json:"tableName"`

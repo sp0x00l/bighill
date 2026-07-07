@@ -30,7 +30,7 @@ type DatasetUnitOfWorkAdapter interface {
 type DatasetEventBuilderAdapter interface {
 	DatasetCreatedMessage(*model.Dataset) shareduow.OutboundMessage
 	DatasetUpdatedMessage(*model.Dataset) shareduow.OutboundMessage
-	DatasetDeletedMessage(uuid.UUID, uuid.UUID) shareduow.OutboundMessage
+	DatasetDeletedMessage(uuid.UUID, uuid.UUID, uuid.UUID) shareduow.OutboundMessage
 }
 
 type SourceRepositoryAdapter interface {

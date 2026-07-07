@@ -42,6 +42,7 @@ func (s *embeddingSearchUsecaseStub) SearchEmbeddings(_ context.Context, userID 
 var _ = Describe("FeatureMaterializerServer", func() {
 	It("maps search requests and responses", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
 		datasetID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		featureSnapshotID := uuid.New()
@@ -52,6 +53,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 					EmbeddingSnapshotID: embeddingSnapshotID,
 					FeatureSnapshotID:   featureSnapshotID,
 					UserID:              userID,
+					OrgID:               orgID,
 					DatasetID:           datasetID,
 					VectorStore:         "pgvector",
 					CollectionName:      "movies",
@@ -68,6 +70,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 					EmbeddingRecordID:   recordID,
 					EmbeddingSnapshotID: embeddingSnapshotID,
 					DatasetID:           datasetID,
+					OrgID:               orgID,
 					ChunkIndex:          3,
 					SourceText:          "result chunk",
 					Distance:            0.2,
@@ -80,6 +83,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		response, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
 			DatasetId: datasetID.String(),
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 			QueryText: " query ",
 			TopK:      9,
 		})
@@ -90,10 +94,12 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		Expect(uc.queryText).To(Equal("query"))
 		Expect(uc.topK).To(Equal(9))
 		Expect(response.GetEmbeddingSnapshotId()).To(Equal(embeddingSnapshotID.String()))
+		Expect(response.GetOrgId()).To(Equal(orgID.String()))
 		Expect(response.GetFeatureSnapshotId()).To(Equal(featureSnapshotID.String()))
 		Expect(response.GetEmbeddingDimensions()).To(Equal(int32(384)))
 		Expect(response.GetMatches()).To(HaveLen(1))
 		Expect(response.GetMatches()[0].GetEmbeddingRecordId()).To(Equal(recordID.String()))
+		Expect(response.GetMatches()[0].GetOrgId()).To(Equal(orgID.String()))
 		Expect(response.GetMatches()[0].GetDistance()).To(Equal(0.2))
 		Expect(response.GetMatches()[0].GetSimilarity()).To(Equal(0.8))
 	})
@@ -103,6 +109,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 
 		_, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
 			UserId:    uuid.NewString(),
+			OrgId:     uuid.NewString(),
 			DatasetId: "not-a-uuid",
 			QueryText: "query",
 		})
@@ -115,6 +122,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 
 		_, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
 			UserId:    uuid.NewString(),
+			OrgId:     uuid.NewString(),
 			DatasetId: uuid.NewString(),
 			QueryText: "query",
 		})

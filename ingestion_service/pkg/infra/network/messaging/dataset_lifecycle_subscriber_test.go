@@ -47,12 +47,14 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 	It("adds datasets from dataset-created events", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		uc := &datasetLifecycleUsecaseStub{}
 		listener := ingestionmessaging.NewDatasetCreatedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetCreatedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			TableNamespace:    "features",
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
@@ -65,6 +67,7 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.addDataset.DatasetID).To(Equal(datasetID))
 		Expect(uc.addDataset.UserID).To(Equal(userID))
+		Expect(uc.addDataset.OrgID).To(Equal(orgID))
 		Expect(uc.addDataset.TableNamespace).To(Equal("features"))
 		Expect(uc.addDataset.ProcessingProfile).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
 		Expect(listener.MsgType()).To(Equal(shared.MsgTypeDatasetCreated))
@@ -73,12 +76,14 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 	It("updates datasets from dataset-updated events", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		uc := &datasetLifecycleUsecaseStub{}
 		listener := ingestionmessaging.NewDatasetUpdatedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			TableNamespace:    "features",
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
@@ -91,6 +96,7 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.updateDataset.DatasetID).To(Equal(datasetID))
 		Expect(uc.updateDataset.UserID).To(Equal(userID))
+		Expect(uc.updateDataset.OrgID).To(Equal(orgID))
 		Expect(uc.updateDataset.SchemaVersion).To(Equal(2))
 		Expect(uc.updateDataset.SchemaMetadata).To(Equal(`{"columns":["title"]}`))
 		Expect(listener.MsgType()).To(Equal(shared.MsgTypeDatasetUpdated))
@@ -99,12 +105,14 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 	It("deletes datasets from dataset-deleted events", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		uc := &datasetLifecycleUsecaseStub{}
 		listener := ingestionmessaging.NewDatasetDeletedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetDeletedEvent{
 			DatasetId: datasetID.String(),
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -119,6 +127,7 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 		err := listener.Handle(context.Background(), uuid.New(), &datasetpb.DatasetCreatedEvent{
 			DatasetId:         uuid.NewString(),
 			UserId:            uuid.NewString(),
+			OrgId:             uuid.NewString(),
 			TableNamespace:    "features",
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
@@ -139,6 +148,7 @@ var _ = Describe("Dataset lifecycle event listeners", func() {
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetCreatedEvent{
 			DatasetId: datasetID.String(),
 			UserId:    uuid.NewString(),
+			OrgId:     uuid.NewString(),
 		})
 
 		Expect(err).To(HaveOccurred())

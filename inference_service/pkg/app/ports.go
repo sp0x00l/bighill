@@ -12,12 +12,18 @@ import (
 
 type InferenceModelRepository interface {
 	UpsertModel(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error)
-	ReadByID(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
+	ReadByID(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
 }
 
 type InferenceDatasetRepository interface {
 	UpsertDataset(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error)
-	ReadDataset(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.InferenceDataset, error)
+	ReadDataset(ctx context.Context, orgID uuid.UUID, datasetID uuid.UUID) (*model.InferenceDataset, error)
+}
+
+type PublishedEndpointRepository interface {
+	UpsertEndpoint(ctx context.Context, endpoint *model.PublishedEndpoint) (*model.PublishedEndpoint, error)
+	ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error)
+	ReadEndpoint(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID) (*model.PublishedEndpoint, error)
 }
 
 type InferenceRequestRepository interface {

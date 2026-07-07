@@ -49,6 +49,12 @@ type ProfileDB interface {
 	SaveOAuthIdentityTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, identity domain.OAuthIdentity) error
 	Delete(ctx context.Context, userID uuid.UUID) error
 	DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error
+	ReadDefaultMembership(ctx context.Context, userID uuid.UUID) (*domain.OrganizationMembership, error)
+	ReadMembership(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error)
+	ReadOrganization(ctx context.Context, orgID uuid.UUID) (*domain.Organization, error)
+	ListMemberships(ctx context.Context, orgID uuid.UUID) ([]*domain.OrganizationMembership, error)
+	UpsertMembership(ctx context.Context, tx pgx.Tx, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error)
+	DeleteMembership(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, userID uuid.UUID) error
 }
 
 type profileDB struct {
@@ -114,6 +120,12 @@ func (db *profileDB) SaveTx(ctx context.Context, tx pgx.Tx, profileAccount *doma
 		return fmt.Errorf("database error. insert profile returned invalid id: %w", err)
 	}
 	profileAccount.ID = parsedProfileID
+	orgID, err := db.createDefaultOrganizationTx(ctx, tx, parsedProfileID, profileAccount.Email)
+	if err != nil {
+		profileAccount.ID = uuid.Nil
+		return err
+	}
+	profileAccount.DefaultOrgID = orgID
 	return nil
 }
 
@@ -121,6 +133,56 @@ func (db *profileDB) Update(ctx context.Context, userID uuid.UUID, profile *doma
 	log.Trace("ProfileDB Update")
 
 	return db.UpdateTx(ctx, nil, userID, profile)
+}
+
+func (db *profileDB) createDefaultOrganizationTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email string) (uuid.UUID, error) {
+	log.Trace("ProfileDB createDefaultOrganizationTx")
+
+	orgID := uuid.New()
+	displayName := defaultOrganizationName(email)
+	exec := db.executor(tx)
+	if _, err := exec.Exec(ctx, `
+		INSERT INTO `+db.Name+`.organizations (id, display_name, created_by_user_id)
+		VALUES (@org_id, @display_name, @created_by_user_id);`,
+		pgx.NamedArgs{
+			"org_id":             pgtype.UUID{Bytes: orgID, Valid: true},
+			"display_name":       pgtype.Text{String: displayName, Valid: true},
+			"created_by_user_id": pgtype.UUID{Bytes: userID, Valid: true},
+		},
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("database error. failed to create default organization: %w", err)
+	}
+	if _, err := exec.Exec(ctx, `
+		INSERT INTO `+db.Name+`.organization_memberships (org_id, user_id, role, status, created_by_user_id)
+		VALUES (@org_id, @user_id, 'org_admin', 'active', @created_by_user_id);`,
+		pgx.NamedArgs{
+			"org_id":             pgtype.UUID{Bytes: orgID, Valid: true},
+			"user_id":            pgtype.UUID{Bytes: userID, Valid: true},
+			"created_by_user_id": pgtype.UUID{Bytes: userID, Valid: true},
+		},
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("database error. failed to create default organization membership: %w", err)
+	}
+	if _, err := exec.Exec(ctx, `
+		UPDATE `+db.Name+`.profiles SET default_org_id = @org_id WHERE id = @user_id;`,
+		pgx.NamedArgs{
+			"org_id":  pgtype.UUID{Bytes: orgID, Valid: true},
+			"user_id": pgtype.UUID{Bytes: userID, Valid: true},
+		},
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("database error. failed to set default organization: %w", err)
+	}
+	return orgID, nil
+}
+
+func defaultOrganizationName(email string) string {
+	log.Trace("defaultOrganizationName")
+
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return "Default Organization"
+	}
+	return email + " Organization"
 }
 
 func (db *profileDB) UpdateTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error) {
@@ -135,12 +197,12 @@ func (db *profileDB) UpdateTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, 
 	SET email = @email, first_name = @first_name, last_name = @last_name, phone_number = @phone_number,
 	date_of_birth = @date_of_birth, country_code = @country_code, address_line_1 = @address_line_1,
 	address_line_2 = @address_line_2, city = @city, state = @state, postal_code = @postal_code, country = @country
-	WHERE id = @id AND deleted = false RETURNING id, email, first_name, last_name, phone_number, date_of_birth, country_code,
+	WHERE id = @id AND deleted = false RETURNING id, default_org_id, email, first_name, last_name, phone_number, date_of_birth, country_code,
 	address_line_1, address_line_2, city, state, postal_code, country, huggingface_token_ciphertext, email_verified;`
 
 	var updatedProfile ProfileDAO = ProfileDAO{}
 	row := db.executor(tx).QueryRow(ctx, sqlStatementProfile, dao)
-	switch err := row.Scan(&updatedProfile.ID, &updatedProfile.Email, &updatedProfile.FirstName, &updatedProfile.LastName,
+	switch err := row.Scan(&updatedProfile.ID, &updatedProfile.DefaultOrgID, &updatedProfile.Email, &updatedProfile.FirstName, &updatedProfile.LastName,
 		&updatedProfile.PhoneNumber, &updatedProfile.DateOfBirth, &updatedProfile.CountryCode,
 		&updatedProfile.AddressLine1, &updatedProfile.AddressLine2, &updatedProfile.City, &updatedProfile.State,
 		&updatedProfile.PostalCode, &updatedProfile.Country, &updatedProfile.HuggingFaceTokenCiphertext, &updatedProfile.EmailVerified); err {
@@ -179,7 +241,7 @@ func (db *profileDB) UpdateHuggingFaceTokenTx(ctx context.Context, tx pgx.Tx, us
 		UPDATE `+db.Name+`.profiles
 		SET huggingface_token_ciphertext = @huggingface_token_ciphertext
 		WHERE id = @id AND deleted = false
-		RETURNING id, email, first_name, last_name, phone_number, date_of_birth, country_code,
+		RETURNING id, default_org_id, email, first_name, last_name, phone_number, date_of_birth, country_code,
 			address_line_1, address_line_2, city, state, postal_code, country, huggingface_token_ciphertext, email_verified;`,
 		pgx.NamedArgs{
 			"id":                           pgtype.UUID{Bytes: userID, Valid: true},
@@ -187,6 +249,7 @@ func (db *profileDB) UpdateHuggingFaceTokenTx(ctx context.Context, tx pgx.Tx, us
 		},
 	).Scan(
 		&profileDAO.ID,
+		&profileDAO.DefaultOrgID,
 		&profileDAO.Email,
 		&profileDAO.FirstName,
 		&profileDAO.LastName,
@@ -258,7 +321,7 @@ func (db *profileDB) VerifyEmailTx(ctx context.Context, tx pgx.Tx, token string)
 			ORDER BY email_verify_expires_at DESC, id DESC
 			LIMIT 1
 		)
-		RETURNING id, email, first_name, last_name, phone_number,
+		RETURNING id, default_org_id, email, first_name, last_name, phone_number,
 			date_of_birth, country_code, address_line_1, address_line_2, city, state,
 			postal_code, country, huggingface_token_ciphertext, email_verified;`,
 		pgx.NamedArgs{
@@ -266,6 +329,7 @@ func (db *profileDB) VerifyEmailTx(ctx context.Context, tx pgx.Tx, token string)
 		},
 	).Scan(
 		&profileDAO.ID,
+		&profileDAO.DefaultOrgID,
 		&profileDAO.Email,
 		&profileDAO.FirstName,
 		&profileDAO.LastName,
@@ -296,7 +360,7 @@ func (db *profileDB) ReadByVerifyToken(ctx context.Context, token string) (*doma
 
 	var profileDAO ProfileDAO
 	err := db.Pool.QueryRow(ctx, `
-	SELECT id, email, first_name, last_name, phone_number,
+	SELECT id, default_org_id, email, first_name, last_name, phone_number,
 	date_of_birth, country_code, address_line_1, address_line_2, city, state,
 	postal_code, country, huggingface_token_ciphertext, email_verified
 	FROM `+db.Name+`.profiles
@@ -306,6 +370,7 @@ func (db *profileDB) ReadByVerifyToken(ctx context.Context, token string) (*doma
 		},
 	).Scan(
 		&profileDAO.ID,
+		&profileDAO.DefaultOrgID,
 		&profileDAO.Email,
 		&profileDAO.FirstName,
 		&profileDAO.LastName,
@@ -343,7 +408,7 @@ func (db *profileDB) ReadTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (*
 
 	var profileDao ProfileDAO
 	var sqlStatementProfile = `
-	SELECT id, email, first_name, last_name, phone_number,
+	SELECT id, default_org_id, email, first_name, last_name, phone_number,
 	date_of_birth, country_code, address_line_1, address_line_2, city, state,
 	postal_code, country, huggingface_token_ciphertext, email_verified
 	FROM ` + db.Name + `.profiles WHERE id = @id AND deleted = false;`
@@ -354,6 +419,7 @@ func (db *profileDB) ReadTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (*
 			"id": pgtype.UUID{Bytes: userID, Valid: true},
 		}).Scan(
 		&profileDao.ID,
+		&profileDao.DefaultOrgID,
 		&profileDao.Email,
 		&profileDao.FirstName,
 		&profileDao.LastName,
@@ -487,6 +553,9 @@ func (db *profileDB) CreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identi
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("database error. create oauth profile returned invalid id: %w", err)
 	}
+	if _, err := db.createDefaultOrganizationTx(ctx, tx, parsedProfileID, identity.Email); err != nil {
+		return uuid.Nil, err
+	}
 	return parsedProfileID, nil
 }
 
@@ -545,6 +614,208 @@ func (db *profileDB) DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) 
 		return fmt.Errorf("database error. Failed to delete profile: %w", err)
 	}
 	if cmdTag.RowsAffected() == 0 {
+		return ErrProfileNotFound
+	}
+	return nil
+}
+
+func (db *profileDB) ReadDefaultMembership(ctx context.Context, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+	log.Trace("ProfileDB ReadDefaultMembership")
+
+	var membership OrganizationMembershipDAO
+	err := db.Pool.QueryRow(ctx, `
+		SELECT m.org_id, m.user_id, p.email, m.role::text, m.status::text, m.created_by_user_id, m.created_at, m.updated_at
+		FROM `+db.Name+`.profiles p
+		INNER JOIN `+db.Name+`.organization_memberships m
+			ON m.org_id = p.default_org_id AND m.user_id = p.id
+		WHERE p.id = @user_id AND p.deleted = false AND m.status = 'active';`,
+		pgx.NamedArgs{"user_id": pgtype.UUID{Bytes: userID, Valid: true}},
+	).Scan(
+		&membership.OrgID,
+		&membership.UserID,
+		&membership.Email,
+		&membership.Role,
+		&membership.Status,
+		&membership.CreatedByUserID,
+		&membership.CreatedAt,
+		&membership.UpdatedAt,
+	)
+	switch err {
+	case nil:
+		return FromDAOOrganizationMembership(&membership), nil
+	case pgx.ErrNoRows:
+		return nil, ErrProfileNotFound
+	default:
+		return nil, fmt.Errorf("database error. failed to read default membership: %w", err)
+	}
+}
+
+func (db *profileDB) ReadMembership(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+	log.Trace("ProfileDB ReadMembership")
+
+	var membership OrganizationMembershipDAO
+	err := db.Pool.QueryRow(ctx, `
+		SELECT m.org_id, m.user_id, p.email, m.role::text, m.status::text, m.created_by_user_id, m.created_at, m.updated_at
+		FROM `+db.Name+`.organization_memberships m
+		INNER JOIN `+db.Name+`.profiles p ON p.id = m.user_id AND p.deleted = false
+		WHERE m.org_id = @org_id AND m.user_id = @user_id;`,
+		pgx.NamedArgs{
+			"org_id":  pgtype.UUID{Bytes: orgID, Valid: true},
+			"user_id": pgtype.UUID{Bytes: userID, Valid: true},
+		},
+	).Scan(
+		&membership.OrgID,
+		&membership.UserID,
+		&membership.Email,
+		&membership.Role,
+		&membership.Status,
+		&membership.CreatedByUserID,
+		&membership.CreatedAt,
+		&membership.UpdatedAt,
+	)
+	switch err {
+	case nil:
+		return FromDAOOrganizationMembership(&membership), nil
+	case pgx.ErrNoRows:
+		return nil, ErrProfileNotFound
+	default:
+		return nil, fmt.Errorf("database error. failed to read membership: %w", err)
+	}
+}
+
+func (db *profileDB) ReadOrganization(ctx context.Context, orgID uuid.UUID) (*domain.Organization, error) {
+	log.Trace("ProfileDB ReadOrganization")
+
+	var organization OrganizationDAO
+	err := db.Pool.QueryRow(ctx, `
+		SELECT id, display_name, created_by_user_id, created_at, updated_at
+		FROM `+db.Name+`.organizations
+		WHERE id = @org_id AND deleted = false;`,
+		pgx.NamedArgs{"org_id": pgtype.UUID{Bytes: orgID, Valid: true}},
+	).Scan(
+		&organization.ID,
+		&organization.DisplayName,
+		&organization.CreatedByUserID,
+		&organization.CreatedAt,
+		&organization.UpdatedAt,
+	)
+	switch err {
+	case nil:
+		return FromDAOOrganization(&organization), nil
+	case pgx.ErrNoRows:
+		return nil, ErrProfileNotFound
+	default:
+		return nil, fmt.Errorf("database error. failed to read organization: %w", err)
+	}
+}
+
+func (db *profileDB) ListMemberships(ctx context.Context, orgID uuid.UUID) ([]*domain.OrganizationMembership, error) {
+	log.Trace("ProfileDB ListMemberships")
+
+	rows, err := db.Pool.Query(ctx, `
+		SELECT m.org_id, m.user_id, p.email, m.role::text, m.status::text, m.created_by_user_id, m.created_at, m.updated_at
+		FROM `+db.Name+`.organization_memberships m
+		INNER JOIN `+db.Name+`.profiles p ON p.id = m.user_id AND p.deleted = false
+		WHERE m.org_id = @org_id
+		ORDER BY p.email ASC;`,
+		pgx.NamedArgs{"org_id": pgtype.UUID{Bytes: orgID, Valid: true}},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("database error. failed to list memberships: %w", err)
+	}
+	defer rows.Close()
+
+	memberships := []*domain.OrganizationMembership{}
+	for rows.Next() {
+		var membership OrganizationMembershipDAO
+		if err := rows.Scan(
+			&membership.OrgID,
+			&membership.UserID,
+			&membership.Email,
+			&membership.Role,
+			&membership.Status,
+			&membership.CreatedByUserID,
+			&membership.CreatedAt,
+			&membership.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("database error. failed to scan membership: %w", err)
+		}
+		memberships = append(memberships, FromDAOOrganizationMembership(&membership))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("database error. failed to read memberships: %w", err)
+	}
+	return memberships, nil
+}
+
+func (db *profileDB) UpsertMembership(ctx context.Context, tx pgx.Tx, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error) {
+	log.Trace("ProfileDB UpsertMembership")
+
+	if membership == nil {
+		return nil, fmt.Errorf("membership is required")
+	}
+	var dao OrganizationMembershipDAO
+	err := db.executor(tx).QueryRow(ctx, `
+		WITH upserted AS (
+			INSERT INTO `+db.Name+`.organization_memberships (org_id, user_id, role, status, created_by_user_id)
+			VALUES (@org_id, @user_id, @role::org_member_role_enum, @status::org_member_status_enum, @created_by_user_id)
+			ON CONFLICT (org_id, user_id)
+			DO UPDATE SET
+				role = EXCLUDED.role,
+				status = EXCLUDED.status,
+				updated_at = CURRENT_TIMESTAMP
+			RETURNING org_id, user_id, role, status, created_by_user_id, created_at, updated_at
+		),
+		defaulted AS (
+			UPDATE `+db.Name+`.profiles p
+			SET default_org_id = u.org_id
+			FROM upserted u
+			WHERE p.id = u.user_id
+			  AND p.deleted = false
+			  AND u.status = 'active'
+			RETURNING p.id
+		)
+		SELECT org_id, user_id, ''::text AS email, role::text, status::text, created_by_user_id, created_at, updated_at
+		FROM upserted;`,
+		pgx.NamedArgs{
+			"org_id":             pgtype.UUID{Bytes: membership.OrgID, Valid: true},
+			"user_id":            pgtype.UUID{Bytes: membership.UserID, Valid: true},
+			"role":               pgtype.Text{String: membership.Role, Valid: true},
+			"status":             pgtype.Text{String: membership.Status, Valid: true},
+			"created_by_user_id": pgtype.UUID{Bytes: membership.CreatedByUserID, Valid: membership.CreatedByUserID != uuid.Nil},
+		},
+	).Scan(
+		&dao.OrgID,
+		&dao.UserID,
+		&dao.Email,
+		&dao.Role,
+		&dao.Status,
+		&dao.CreatedByUserID,
+		&dao.CreatedAt,
+		&dao.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("database error. failed to upsert membership: %w", err)
+	}
+	return FromDAOOrganizationMembership(&dao), nil
+}
+
+func (db *profileDB) DeleteMembership(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, userID uuid.UUID) error {
+	log.Trace("ProfileDB DeleteMembership")
+
+	tag, err := db.executor(tx).Exec(ctx, `
+		UPDATE `+db.Name+`.organization_memberships
+		SET status = 'disabled', updated_at = CURRENT_TIMESTAMP
+		WHERE org_id = @org_id AND user_id = @user_id;`,
+		pgx.NamedArgs{
+			"org_id":  pgtype.UUID{Bytes: orgID, Valid: true},
+			"user_id": pgtype.UUID{Bytes: userID, Valid: true},
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("database error. failed to disable membership: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
 		return ErrProfileNotFound
 	}
 	return nil

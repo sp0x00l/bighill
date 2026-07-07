@@ -82,7 +82,12 @@ func (s embeddingWriterStub) MaterializeEmbeddings(_ context.Context, _ *model.F
 	if s.records != nil {
 		return embeddingSnapshot, s.records, nil
 	}
-	return embeddingSnapshot, []model.EmbeddingRecord{{EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID}}, nil
+	return embeddingSnapshot, []model.EmbeddingRecord{{
+		EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+		DatasetID:           embeddingSnapshot.DatasetID,
+		UserID:              embeddingSnapshot.UserID,
+		OrgID:               embeddingSnapshot.OrgID,
+	}}, nil
 }
 
 var _ = Describe("EmbeddingMaterializationUsecase", func() {
@@ -147,6 +152,7 @@ func validEmbeddingSnapshot(featureSnapshotID uuid.UUID) *model.EmbeddingSnapsho
 		FeatureSnapshotID:   featureSnapshotID,
 		DatasetID:           uuid.New(),
 		UserID:              uuid.New(),
+		OrgID:               uuid.New(),
 		Status:              model.SnapshotStatusPending,
 	}
 }

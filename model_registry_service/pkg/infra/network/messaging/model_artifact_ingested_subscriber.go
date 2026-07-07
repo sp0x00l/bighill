@@ -116,10 +116,17 @@ func artifactIngestedEventToModel(resourceKey uuid.UUID, payload *ingestionpb.Mo
 		return nil, uuid.Nil, fmt.Errorf("artifact type is invalid")
 	}
 	userID := uuid.Nil
+	orgID := uuid.Nil
 	if modelKind == model.ModelKindBase {
 		userID, err = msgConn.ParseOptionalUUID("user_id", payload.GetUserId())
+		if err == nil {
+			orgID, err = msgConn.ParseOptionalUUID("org_id", payload.GetOrgId())
+		}
 	} else {
 		userID, err = msgConn.ParseUUID("user_id", payload.GetUserId())
+		if err == nil {
+			orgID, err = msgConn.ParseUUID("org_id", payload.GetOrgId())
+		}
 	}
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -131,6 +138,7 @@ func artifactIngestedEventToModel(resourceKey uuid.UUID, payload *ingestionpb.Mo
 	ingestedModel := &model.Model{
 		ModelID:           modelID,
 		UserID:            userID,
+		OrgID:             orgID,
 		DatasetID:         datasetID,
 		ModelKind:         modelKind,
 		Source:            source,

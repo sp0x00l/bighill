@@ -36,8 +36,9 @@ var _ = Describe("MaterializationEventPublisher", func() {
 		publisher := featuremessaging.NewMaterializationEventPublisher(sharedPublisher, featuremessaging.MaterializationTopics{
 			FeatureMaterializer: "feature_materializer",
 		})
+		rawSnapshot := validMessagingRawSnapshot(datasetID)
 
-		err := publisher.PublishRawSnapshotReady(context.Background(), validMessagingRawSnapshot(datasetID))
+		err := publisher.PublishRawSnapshotReady(context.Background(), rawSnapshot)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sharedPublisher.topic).To(Equal("feature_materializer"))
@@ -45,6 +46,7 @@ var _ = Describe("MaterializationEventPublisher", func() {
 		Expect(sharedPublisher.message.MsgType).To(Equal(sharedMessaging.MsgTypeRawSnapshotReady))
 		event, ok := sharedPublisher.payload.(*featurepb.RawSnapshotReadyEvent)
 		Expect(ok).To(BeTrue())
+		Expect(event.OrgId).To(Equal(rawSnapshot.OrgID.String()))
 		Expect(event.ProcessingProfile).To(Equal(model.ProcessingProfileTextRAG.String()))
 	})
 
@@ -64,6 +66,7 @@ var _ = Describe("MaterializationEventPublisher", func() {
 		Expect(sharedPublisher.message.MsgType).To(Equal(sharedMessaging.MsgTypeFeatureSnapshotReady))
 		event, ok := sharedPublisher.payload.(*featurepb.FeatureSnapshotReadyEvent)
 		Expect(ok).To(BeTrue())
+		Expect(event.OrgId).To(Equal(featureSnapshot.OrgID.String()))
 		Expect(event.ProcessingProfile).To(Equal(model.ProcessingProfileTextRAG.String()))
 	})
 
@@ -81,7 +84,9 @@ var _ = Describe("MaterializationEventPublisher", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sharedPublisher.message.ResourceKey).To(Equal(datasetID))
 		Expect(sharedPublisher.message.MsgType).To(Equal(sharedMessaging.MsgTypeEmbeddingSnapshotReady))
-		Expect(sharedPublisher.payload).To(BeAssignableToTypeOf(&featurepb.EmbeddingSnapshotReadyEvent{}))
+		event, ok := sharedPublisher.payload.(*featurepb.EmbeddingSnapshotReadyEvent)
+		Expect(ok).To(BeTrue())
+		Expect(event.OrgId).To(Equal(embeddingSnapshot.OrgID.String()))
 	})
 })
 
@@ -90,6 +95,7 @@ func validMessagingRawSnapshot(datasetID uuid.UUID) *model.RawSnapshot {
 		RawSnapshotID:     uuid.New(),
 		DatasetID:         datasetID,
 		UserID:            uuid.New(),
+		OrgID:             uuid.New(),
 		StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
 		ContentType:       "text/csv",
 		FileExtension:     "csv",
@@ -110,6 +116,7 @@ func validMessagingFeatureSnapshot(rawSnapshotID uuid.UUID) *model.FeatureSnapsh
 		RawSnapshotID:     rawSnapshotID,
 		DatasetID:         uuid.New(),
 		UserID:            uuid.New(),
+		OrgID:             uuid.New(),
 		StorageLocation:   "s3://local-dev-bucket/lakehouse/features/data.parquet",
 		TableNamespace:    "features",
 		TableName:         "movies",
@@ -128,6 +135,7 @@ func validMessagingEmbeddingSnapshot(featureSnapshotID uuid.UUID) *model.Embeddi
 		FeatureSnapshotID:   featureSnapshotID,
 		DatasetID:           uuid.New(),
 		UserID:              uuid.New(),
+		OrgID:               uuid.New(),
 		VectorStore:         "pgvector",
 		CollectionName:      "movies",
 		EmbeddingDimensions: 384,

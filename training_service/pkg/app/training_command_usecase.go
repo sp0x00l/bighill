@@ -61,6 +61,10 @@ func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command m
 	if !ok {
 		return nil, domain.ErrValidationFailed.Extend("user id is required")
 	}
+	orgID, ok := ctxutil.OrgID(ctx)
+	if !ok {
+		return nil, domain.ErrValidationFailed.Extend("org id is required")
+	}
 	datasetID, err := uuid.Parse(strings.TrimSpace(command.DatasetID))
 	if err != nil || datasetID == uuid.Nil {
 		return nil, domain.ErrValidationFailed.Extend("dataset id is required")
@@ -75,19 +79,20 @@ func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command m
 	}
 	span.SetAttributes(
 		attribute.String("user_id", userID.String()),
+		attribute.String("org_id", orgID.String()),
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("source_model_id", sourceModelID.String()),
 	)
 
-	datasetRef, err := u.datasetResolver.ResolveMaterializedDataset(ctx, userID, datasetID)
+	datasetRef, err := u.datasetResolver.ResolveMaterializedDataset(ctx, userID, orgID, datasetID)
 	if err != nil {
 		return nil, err
 	}
-	sourceModel, err := u.modelResolver.ResolveTrainableModel(ctx, userID, sourceModelID)
+	sourceModel, err := u.modelResolver.ResolveTrainableModel(ctx, userID, orgID, sourceModelID)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateResolvedTrainingInputs(datasetRef, sourceModel); err != nil {
+	if err := validateResolvedTrainingInputs(datasetRef, sourceModel, orgID); err != nil {
 		return nil, err
 	}
 	trainingProfile, evaluationProfile, err := u.resolveProfiles(ctx, command)
@@ -95,7 +100,7 @@ func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command m
 		return nil, err
 	}
 
-	request := u.trainingRunRequest(idempotencyKey, userID, datasetRef, sourceModel, trainingProfile, evaluationProfile)
+	request := u.trainingRunRequest(idempotencyKey, userID, orgID, datasetRef, sourceModel, trainingProfile, evaluationProfile)
 	if err := u.starter.StartTrainingWorkflow(ctx, request); err != nil {
 		return nil, fmt.Errorf("%w: start training workflow: %w", domain.ErrTrainModel, err)
 	}
@@ -133,11 +138,12 @@ func (u *trainingCommandUsecase) resolveProfiles(ctx context.Context, command mo
 	return trainingProfile, evaluationProfile, nil
 }
 
-func (u *trainingCommandUsecase) trainingRunRequest(idempotencyKey string, userID uuid.UUID, datasetRef model.MaterializedDatasetRef, sourceModel model.SourceModelRef, trainingProfile model.TrainingProfile, evaluationProfile string) model.TrainingRunRequest {
+func (u *trainingCommandUsecase) trainingRunRequest(idempotencyKey string, userID uuid.UUID, orgID uuid.UUID, datasetRef model.MaterializedDatasetRef, sourceModel model.SourceModelRef, trainingProfile model.TrainingProfile, evaluationProfile string) model.TrainingRunRequest {
 	log.Trace("trainingCommandUsecase trainingRunRequest")
 
 	trainingRunID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
 		"training",
+		orgID.String(),
 		userID.String(),
 		strings.TrimSpace(datasetRef.DatasetID),
 		strings.TrimSpace(sourceModel.ModelID),
@@ -150,6 +156,7 @@ func (u *trainingCommandUsecase) trainingRunRequest(idempotencyKey string, userI
 	request := model.TrainingRunRequest{
 		TrainingRunID:          trainingRunID.String(),
 		UserID:                 userID.String(),
+		OrgID:                  orgID.String(),
 		DatasetID:              strings.TrimSpace(datasetRef.DatasetID),
 		DatasetVersion:         strings.TrimSpace(datasetRef.DatasetVersion),
 		FeatureSnapshotID:      strings.TrimSpace(datasetRef.FeatureSnapshotID),
@@ -172,9 +179,15 @@ func (u *trainingCommandUsecase) trainingRunRequest(idempotencyKey string, userI
 	return request
 }
 
-func validateResolvedTrainingInputs(datasetRef model.MaterializedDatasetRef, sourceModel model.SourceModelRef) error {
+func validateResolvedTrainingInputs(datasetRef model.MaterializedDatasetRef, sourceModel model.SourceModelRef, orgID uuid.UUID) error {
 	log.Trace("validateResolvedTrainingInputs")
 
+	if strings.TrimSpace(datasetRef.OrgID) != orgID.String() {
+		return domain.ErrValidationFailed.Extend("dataset does not belong to active org")
+	}
+	if strings.TrimSpace(sourceModel.OrgID) != "" && strings.TrimSpace(sourceModel.OrgID) != orgID.String() {
+		return domain.ErrValidationFailed.Extend("source model does not belong to active org")
+	}
 	state := strings.TrimSpace(datasetRef.ProcessingState)
 	if state != stateFeatureMaterialized && state != stateEmbeddingsMaterialized {
 		return domain.ErrValidationFailed.Extend("dataset is not materialized")

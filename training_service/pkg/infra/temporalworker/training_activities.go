@@ -88,8 +88,6 @@ func NewTrainingActivities(publisher TrainingEventPublisher, opts ...TrainingAct
 
 	activities := &TrainingActivities{
 		eventPublisher:       publisher,
-		modelURIPrefix:       "s3://local-dev-bucket/models",
-		evaluationURIPrefix:  "s3://local-dev-bucket/evaluations",
 		servingLoadStatus:    "NOT_LOADED",
 		artifactBucketRegion: "eu-west-1",
 		axolotlCommand:       "axolotl train",
@@ -118,6 +116,7 @@ func (a *TrainingActivities) PrepareTrainingDataset(_ context.Context, request m
 		}
 		return &model.PreparedTrainingDataset{
 			TrainingRunID:     request.TrainingRunID,
+			OrgID:             strings.TrimSpace(request.OrgID),
 			FeatureSnapshotID: strings.TrimSpace(request.FeatureSnapshotID),
 			DatasetURI:        preferenceDatasetURI,
 		}, nil
@@ -127,10 +126,11 @@ func (a *TrainingActivities) PrepareTrainingDataset(_ context.Context, request m
 	}
 	datasetURI := strings.TrimSpace(request.DatasetURI)
 	if datasetURI == "" {
-		datasetURI = "s3://local-dev-bucket/features/" + request.FeatureSnapshotID + ".parquet"
+		return nil, domain.ErrValidationFailed.Extend("dataset uri is required")
 	}
 	return &model.PreparedTrainingDataset{
 		TrainingRunID:     request.TrainingRunID,
+		OrgID:             strings.TrimSpace(request.OrgID),
 		FeatureSnapshotID: request.FeatureSnapshotID,
 		DatasetURI:        datasetURI,
 	}, nil
@@ -180,6 +180,9 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 	if baseModel == "" {
 		return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("base model is required")
 	}
+	if strings.TrimSpace(a.modelURIPrefix) == "" {
+		return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("model uri prefix is required")
+	}
 	trainingProfile := request.TrainingProfile
 	if strings.EqualFold(strings.TrimSpace(trainingProfile.Trainer), "dpo") && strings.TrimSpace(trainingProfile.PreferenceDatasetURI) == "" {
 		trainingProfile.PreferenceDatasetURI = strings.TrimSpace(request.PreferenceDatasetURI)
@@ -208,6 +211,7 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 	}
 	recipe := axolotlRecipeYAML(model.TrainingJobSpec{
 		TrainingRunID:          trainingRunID,
+		OrgID:                  strings.TrimSpace(request.OrgID),
 		DatasetURI:             datasetURI,
 		PreferenceDatasetID:    strings.TrimSpace(request.PreferenceDatasetID),
 		ModelName:              modelName,
@@ -230,6 +234,7 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 	recipeHash := hex.EncodeToString(hash[:])
 	return model.TrainingJobSpec{
 		TrainingRunID:          trainingRunID,
+		OrgID:                  strings.TrimSpace(request.OrgID),
 		DatasetURI:             datasetURI,
 		PreferenceDatasetID:    strings.TrimSpace(request.PreferenceDatasetID),
 		ModelName:              modelName,
@@ -286,10 +291,14 @@ func (a *TrainingActivities) evaluationJobSpec(artifact model.TrainedModelArtifa
 		return model.EvaluationJobSpec{}, domain.ErrTrainModel.Extend("trained model uri is required")
 	}
 	trainingRunID := strings.TrimSpace(request.TrainingRunID)
+	if strings.TrimSpace(a.evaluationURIPrefix) == "" {
+		return model.EvaluationJobSpec{}, domain.ErrTrainModel.Extend("evaluation uri prefix is required")
+	}
 	reportURI := a.evaluationURIPrefix + "/" + trainingRunID + ".json"
 	hash := sha256.Sum256([]byte(artifact.ModelURI + "|" + strings.TrimSpace(request.EvaluationProfile)))
 	return model.EvaluationJobSpec{
 		TrainingRunID:        trainingRunID,
+		OrgID:                strings.TrimSpace(request.OrgID),
 		ModelURI:             artifact.ModelURI,
 		EvaluationProfile:    strings.TrimSpace(request.EvaluationProfile),
 		ReportURI:            reportURI,

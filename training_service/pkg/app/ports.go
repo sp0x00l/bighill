@@ -23,9 +23,9 @@ type TrainingWorkflowStatusReader interface {
 }
 
 type DatasetResolver interface {
-	ResolveMaterializedDataset(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (model.MaterializedDatasetRef, error)
+	ResolveMaterializedDataset(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID) (model.MaterializedDatasetRef, error)
 }
 
 type ModelResolver interface {
-	ResolveTrainableModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (model.SourceModelRef, error)
+	ResolveTrainableModel(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, modelID uuid.UUID) (model.SourceModelRef, error)
 }

@@ -94,7 +94,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		idempotencyKey := uuid.New()
 		datasetFile := validIntegrationDatasetFile()
 		Expect(upsertFeatureMaterializerTenant(ctx, database, datasetFile.UserID)).To(Succeed())
-		tenantCtx := ctxutil.WithTenantID(ctx, datasetFile.UserID)
+		tenantCtx := ctxutil.WithActorOrg(ctx, datasetFile.UserID, datasetFile.OrgID)
 
 		rawSnapshot, err := rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, idempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
@@ -266,6 +266,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		Expect(upsertFeatureMaterializerTenant(ctx, database, userID)).To(Succeed())
 		storageKey := fmt.Sprintf("raw/%s/upload.csv", datasetID)
 		bucket := corebucket.NewBucket(runCtx, "local-dev", 10*1024*1024)
@@ -278,6 +279,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		}, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			StorageLocation:   storageLocation,
 			ContentType:       "text/csv",
 			FileExtension:     "csv",
@@ -290,7 +292,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(func(g Gomega) {
-			rawStatus, featureStatus, embeddingStatus, embeddingCount := materializationState(ctxutil.WithTenantID(ctx, userID), database, datasetID)
+			rawStatus, featureStatus, embeddingStatus, embeddingCount := materializationState(ctxutil.WithActorOrg(ctx, userID, orgID), database, datasetID)
 			g.Expect(rawStatus).To(Equal(model.SnapshotStatusReady.String()))
 			g.Expect(featureStatus).To(Equal(model.SnapshotStatusReady.String()))
 			g.Expect(embeddingStatus).To(Equal(model.SnapshotStatusReady.String()))
@@ -304,6 +306,7 @@ func validIntegrationDatasetFile() *model.DatasetFile {
 	return &model.DatasetFile{
 		DatasetID:       uuid.New(),
 		UserID:          uuid.New(),
+		OrgID:           uuid.New(),
 		StorageLocation: "s3://local-dev-bucket/raw/user/dataset/file.csv",
 		ContentType:     "text/csv",
 		FileExtension:   "csv",

@@ -158,7 +158,7 @@ func (e *KubeRayExecutor) RunPromotionReport(ctx context.Context, spec model.Pro
 		return nil, err
 	}
 	return waitForKubeRayJob(ctx, e, domain.ErrEvaluateModel, spec.SubmissionID, entrypoint, promotionReportEnv(spec), func(ctx context.Context) (*model.PromotionReport, error) {
-		return readPromotionReport(ctx, e.manifestReader, spec.ReportManifestURI, spec.ModelID)
+		return readPromotionReport(ctx, e.manifestReader, spec.ReportManifestURI, spec.ModelID, spec.OrgID)
 	})
 }
 

@@ -33,6 +33,7 @@ var (
 
 type profileTestUser struct {
 	ID       uuid.UUID
+	OrgID    uuid.UUID
 	Email    string
 	Password string
 	Phone    string
@@ -161,8 +162,15 @@ func createVerifiedProfileAndLogin() profileTestUser {
 	token := stringField(login, "token")
 	Expect(token).NotTo(BeEmpty())
 
+	status, body = doJSON(http.MethodGet, "/v1/private/orgs/current", nil, token, uuid.Nil)
+	Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+	currentOrg := decodeObject(body)
+	orgID, err := uuid.Parse(stringField(currentOrg, "orgId"))
+	Expect(err).NotTo(HaveOccurred())
+
 	return profileTestUser{
 		ID:       userID,
+		OrgID:    orgID,
 		Email:    email,
 		Password: password,
 		Phone:    phone,

@@ -11,6 +11,7 @@ import (
 
 type sourceQueryCommand struct {
 	UserID            string                  `json:"userId"`
+	OrgID             string                  `json:"orgId"`
 	SourceType        streamdomain.SourceType `json:"sourceType"`
 	SourceConnectorID string                  `json:"sourceConnectorId"`
 	SQL               string                  `json:"sql"`
@@ -34,12 +35,16 @@ func parseSourceQueryCommand(command string) (*sourceQueryCommand, error) {
 
 	query.SourceConnectorID = strings.TrimSpace(query.SourceConnectorID)
 	query.UserID = strings.TrimSpace(query.UserID)
+	query.OrgID = strings.TrimSpace(query.OrgID)
 	query.SQL = strings.TrimSpace(query.SQL)
 	query.Database = strings.TrimSpace(query.Database)
 	query.Collection = strings.TrimSpace(query.Collection)
 
 	if query.UserID == "" {
 		return nil, streamdomain.ErrValidationFailed.Extend("registry query command requires userId")
+	}
+	if query.OrgID == "" {
+		return nil, streamdomain.ErrValidationFailed.Extend("registry query command requires orgId")
 	}
 	if query.SourceConnectorID == "" {
 		return nil, streamdomain.ErrValidationFailed.Extend("registry query command requires sourceConnectorId")

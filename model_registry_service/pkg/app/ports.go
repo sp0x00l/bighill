@@ -24,6 +24,10 @@ type ModelRepository interface {
 	UpdatePromotionDecision(ctx context.Context, tx pgx.Tx, modelID uuid.UUID, status model.ModelStatus, promotionReportURI string, promotionDeltas string, promotionDecision string, failureReason string) (*model.Model, error)
 }
 
+type PublishedEndpointRepository interface {
+	UpsertEndpoint(ctx context.Context, tx pgx.Tx, endpoint *model.PublishedEndpoint) error
+}
+
 type ModelUnitOfWorkAdapter interface {
 	Do(ctx context.Context, fn shareduow.TxFunc) error
 }

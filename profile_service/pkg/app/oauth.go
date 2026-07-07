@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"lib/shared_lib/authz"
 	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
 	"profile_service/pkg/domain"
@@ -194,7 +195,17 @@ func (u *profilesUseCase) findOrCreateOAuthProfileTx(ctx context.Context, tx pgx
 }
 
 func (u *profilesUseCase) createOAuthSession(ctx context.Context, provider string, userID uuid.UUID, isNewUser bool) (*OAuthSessionResult, error) {
-	authToken, sid, expiresAt, err := u.authProvider.CreateToken(ctx, userID, u.authExpirationInMinutes)
+	membership, err := u.profilesRepository.ReadDefaultMembership(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	authToken, sid, expiresAt, err := u.authProvider.CreateAccessToken(ctx, authz.TokenClaims{
+		UserID:      userID.String(),
+		OrgID:       membership.OrgID.String(),
+		Roles:       []string{membership.Role},
+		Permissions: authz.PermissionsForRole(membership.Role),
+		TokenType:   "access",
+	}, u.authExpirationInMinutes)
 	if err != nil {
 		return nil, err
 	}

@@ -7,4 +7,5 @@ type ListFilter struct {
 	SourceSet bool
 	Status    ModelStatus
 	StatusSet bool
+	Trainable bool
 }

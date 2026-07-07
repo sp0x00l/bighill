@@ -169,6 +169,10 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	modelVersion, err := modelVersionFromEvent(payload.GetModelVersion())
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -184,6 +188,7 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 	trainedModel := &model.Model{
 		ModelID:           modelID,
 		UserID:            userID,
+		OrgID:             orgID,
 		TrainingRunID:     trainingRunID,
 		DatasetID:         datasetID,
 		Name:              modelName,
@@ -226,6 +231,10 @@ func failedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTraining
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	modelVersion, err := modelVersionFromEvent(payload.GetModelVersion())
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -237,6 +246,7 @@ func failedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTraining
 	failedModel := &model.Model{
 		ModelID:         modelID,
 		UserID:          userID,
+		OrgID:           orgID,
 		TrainingRunID:   trainingRunID,
 		DatasetID:       datasetID,
 		Name:            modelName,
@@ -268,6 +278,10 @@ func promotionReportReadyToModel(resourceKey uuid.UUID, payload *trainingpb.Prom
 	if err != nil {
 		return model.PromotionReportResult{}, uuid.Nil, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return model.PromotionReportResult{}, uuid.Nil, err
+	}
 	trainingRunID, err := msgConn.ParseUUID("training_run_id", payload.GetTrainingRunId())
 	if err != nil {
 		return model.PromotionReportResult{}, uuid.Nil, err
@@ -282,6 +296,7 @@ func promotionReportReadyToModel(resourceKey uuid.UUID, payload *trainingpb.Prom
 	}
 	return model.PromotionReportResult{
 		UserID:              userID,
+		OrgID:               orgID,
 		ModelID:             modelID,
 		TrainingRunID:       trainingRunID,
 		PromotionReportURI:  reportURI,

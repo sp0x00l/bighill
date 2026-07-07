@@ -38,7 +38,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 		waitForRAGDatasetMaterialized(user, datasetID)
 
 		modelID := uuid.New()
-		publishReadyModelForInference(modelID, user.ID, uuid.MustParse(datasetID))
+		publishReadyModelForInference(modelID, user.ID, user.OrgID, uuid.MustParse(datasetID))
 
 		client, closeClient := newInferenceClient()
 		defer closeClient()
@@ -53,6 +53,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 			response, err = client.Generate(ctx, &inferencepb.GenerateRequest{
 				RequestId: requestID,
 				UserId:    user.ID.String(),
+				OrgId:     user.OrgID.String(),
 				DatasetId: datasetID,
 				ModelId:   modelID.String(),
 				QueryText: "What phrase identifies the embedded knowledge base?",
@@ -79,6 +80,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 			FeedbackId:      feedbackID,
 			RequestId:       response.GetRequestId(),
 			UserId:          user.ID.String(),
+			OrgId:           user.OrgID.String(),
 			Accepted:        false,
 			Rating:          -1,
 			Comment:         "Prefer the explicit verification phrase.",
@@ -91,6 +93,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 		export, err := client.ExportPreferenceDataset(ctx, &inferencepb.ExportPreferenceDatasetRequest{
 			RequestId:   response.GetRequestId(),
 			UserId:      user.ID.String(),
+			OrgId:       user.OrgID.String(),
 			DatasetId:   datasetID,
 			ModelId:     modelID.String(),
 			OutputUri:   "s3://local-dev-bucket/preference-datasets/rag-e2e/{preference_dataset_id}.jsonl",
@@ -125,6 +128,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 			response, err = client.Generate(ctx, &inferencepb.GenerateRequest{
 				RequestId: uuid.NewString(),
 				UserId:    user.ID.String(),
+				OrgId:     user.OrgID.String(),
 				DatasetId: datasetID,
 				ModelId:   modelID.String(),
 				QueryText: "Which phrase proves the uploaded base model can serve RAG?",
@@ -187,6 +191,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 			response, err = client.Generate(ctx, &inferencepb.GenerateRequest{
 				RequestId: uuid.NewString(),
 				UserId:    user.ID.String(),
+				OrgId:     user.OrgID.String(),
 				DatasetId: datasetID,
 				ModelId:   modelID.String(),
 				QueryText: "Which phrase proves the Hugging Face base model can serve RAG?",
@@ -281,7 +286,7 @@ func ragResponseContextText(response *inferencepb.GenerateResponse) string {
 	return strings.Join(contexts, "\n")
 }
 
-func publishReadyModelForInference(modelID uuid.UUID, userID uuid.UUID, datasetID uuid.UUID) {
+func publishReadyModelForInference(modelID uuid.UUID, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -295,6 +300,7 @@ func publishReadyModelForInference(modelID uuid.UUID, userID uuid.UUID, datasetI
 	}, &modelregistrypb.ModelUpdatedEvent{
 		ModelId:           modelID.String(),
 		UserId:            userID.String(),
+		OrgId:             orgID.String(),
 		TrainingRunId:     uuid.NewString(),
 		DatasetId:         datasetID.String(),
 		ModelKind:         "FINE_TUNED",

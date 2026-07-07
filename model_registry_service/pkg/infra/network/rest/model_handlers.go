@@ -63,7 +63,11 @@ func (h *ModelHandlers) ListModels(ctx context.Context, req *http.Request) (APIR
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("User ID is required")
 	}
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	orgID, err := transport.ReadOrgIDHeader(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Org ID is required")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	pagination, err := transport.ReadPagination(ctx, req)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid pagination")
@@ -92,11 +96,15 @@ func (h *ModelHandlers) ReadModel(ctx context.Context, req *http.Request) (APIRe
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("User ID is required")
 	}
+	orgID, err := transport.ReadOrgIDHeader(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Org ID is required")
+	}
 	modelID, err := uuid.Parse(mux.Vars(req)["modelId"])
 	if err != nil || modelID == uuid.Nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid model ID")
 	}
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	modelRecord, err := h.usecase.ReadModelForUser(ctx, userID, modelID)
 	if err != nil {
 		if errors.Is(err, modeldomain.ErrModelNotFound) {
@@ -139,6 +147,9 @@ func modelListFilterFromRequest(req *http.Request) (model.ListFilter, error) {
 		}
 		filter.Status = status
 		filter.StatusSet = true
+	}
+	if raw := query.Get("trainable"); raw == "true" || raw == "1" {
+		filter.Trainable = true
 	}
 	return filter, nil
 }

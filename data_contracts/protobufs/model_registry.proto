@@ -27,6 +27,7 @@ message ModelUpdatedEvent {
   string source_metadata = 22;
   string promotion_report_uri = 23;
   string promotion_deltas = 24;
+  string org_id = 25;
 }
 
 message PromotionRequestedEvent {
@@ -41,4 +42,5 @@ message PromotionRequestedEvent {
   string champion_model_id = 9;
   string champion_report_uri = 10;
   string champion_metrics_metadata = 11;
+  string org_id = 12;
 }

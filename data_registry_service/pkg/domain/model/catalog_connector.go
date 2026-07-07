@@ -9,6 +9,7 @@ type ConnectorConfig interface {
 type SourceConnector struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID
+	OrgID     uuid.UUID
 	CatalogID uuid.UUID
 	Config    ConnectorConfig
 }

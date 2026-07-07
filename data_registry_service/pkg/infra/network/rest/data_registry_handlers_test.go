@@ -473,6 +473,7 @@ func newJSONRequest(method, path, body string, userID, requestID uuid.UUID) *htt
 	req.Header.Set("Content-Type", "application/json")
 	if userID != uuid.Nil {
 		req.Header.Set("X-User-ID", userID.String())
+		req.Header.Set("X-Org-ID", uuid.NewString())
 	}
 	if requestID != uuid.Nil {
 		req.Header.Set("X-Request-ID", requestID.String())

@@ -31,6 +31,7 @@ func (b *ModelEventBuilder) ModelUpdatedMessage(modelRecord *model.Model) msgCon
 
 	payload := mustMarshal(&modelregistrypb.ModelUpdatedEvent{
 		ModelId:            modelRecord.ModelID.String(),
+		OrgId:              uuidutil.StringOrEmpty(modelRecord.OrgID),
 		TrainingRunId:      uuidutil.StringOrEmpty(modelRecord.TrainingRunID),
 		DatasetId:          uuidutil.StringOrEmpty(modelRecord.DatasetID),
 		ModelKind:          modelRecord.ModelKind.String(),
@@ -71,6 +72,7 @@ func (b *ModelEventBuilder) PromotionRequestedMessage(candidate *model.Model, ch
 
 	event := &modelregistrypb.PromotionRequestedEvent{
 		UserId:                   uuidutil.StringOrEmpty(candidate.UserID),
+		OrgId:                    uuidutil.StringOrEmpty(candidate.OrgID),
 		ModelId:                  candidate.ModelID.String(),
 		TrainingRunId:            uuidutil.StringOrEmpty(candidate.TrainingRunID),
 		DatasetId:                uuidutil.StringOrEmpty(candidate.DatasetID),

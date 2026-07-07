@@ -78,10 +78,11 @@ var _ = Describe("TrainingActivities", func() {
 		prepared, err := activities.PrepareTrainingDataset(context.Background(), model.TrainingRunRequest{
 			TrainingRunID:     "training-run-1",
 			FeatureSnapshotID: "feature-snapshot-1",
+			DatasetURI:        "s3://lakehouse/features/feature-snapshot-1.parquet",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(prepared.DatasetURI).To(Equal("s3://local-dev-bucket/features/feature-snapshot-1.parquet"))
+		Expect(prepared.DatasetURI).To(Equal("s3://lakehouse/features/feature-snapshot-1.parquet"))
 	})
 
 	It("prepares DPO dataset metadata from a preference dataset artifact", func() {
@@ -107,6 +108,19 @@ var _ = Describe("TrainingActivities", func() {
 
 		Expect(prepared).To(BeNil())
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+	})
+
+	It("rejects feature snapshot preparation without a resolved dataset uri", func() {
+		activities := temporalworker.NewTrainingActivities(nil)
+
+		prepared, err := activities.PrepareTrainingDataset(context.Background(), model.TrainingRunRequest{
+			TrainingRunID:     "training-run-1",
+			FeatureSnapshotID: "feature-snapshot-1",
+		})
+
+		Expect(prepared).To(BeNil())
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("dataset uri is required")))
 	})
 
 	It("builds a training job spec and delegates execution", func() {
@@ -174,6 +188,27 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(artifact.ServingTarget).To(Equal("vllm-local"))
 		Expect(artifact.ServingModel).To(Equal("movie-ranker-v1"))
 		Expect(artifact.ServingLoadStatus).To(Equal("LOADED"))
+	})
+
+	It("rejects training jobs without a configured model uri prefix", func() {
+		executor := &recordingTrainingExecutor{}
+		activities := temporalworker.NewTrainingActivities(nil, temporalworker.WithExecutor(executor))
+
+		artifact, err := activities.RunTrainingJob(context.Background(), model.PreparedTrainingDataset{
+			TrainingRunID: "training-run-1",
+			DatasetURI:    "s3://lakehouse/features/feature-snapshot-1.parquet",
+		}, model.TrainingRunRequest{
+			TrainingRunID:   "training-run-1",
+			ModelName:       "model",
+			ModelVersion:    "v1",
+			BaseModel:       "mistral-7b",
+			TrainingProfile: trainingProfile(),
+		})
+
+		Expect(artifact).To(BeNil())
+		Expect(errors.Is(err, domain.ErrTrainModel)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("model uri prefix is required")))
+		Expect(executor.trainingSpec.TrainingRunID).To(BeEmpty())
 	})
 
 	It("builds a real DPO recipe from the parent adapter and preference dataset", func() {

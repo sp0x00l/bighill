@@ -33,6 +33,12 @@ type ProfileDB interface {
 	SaveOAuthIdentityTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, identity domain.OAuthIdentity) error
 	Delete(ctx context.Context, userID uuid.UUID) error
 	DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error
+	ReadDefaultMembership(ctx context.Context, userID uuid.UUID) (*domain.OrganizationMembership, error)
+	ReadMembership(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error)
+	ReadOrganization(ctx context.Context, orgID uuid.UUID) (*domain.Organization, error)
+	ListMemberships(ctx context.Context, orgID uuid.UUID) ([]*domain.OrganizationMembership, error)
+	UpsertMembership(ctx context.Context, tx pgx.Tx, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error)
+	DeleteMembership(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, userID uuid.UUID) error
 }
 
 type SecretEncryptor interface {

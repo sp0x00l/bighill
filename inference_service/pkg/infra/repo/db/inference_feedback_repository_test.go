@@ -24,6 +24,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		feedbackID     uuid.UUID
 		requestID      uuid.UUID
 		userID         uuid.UUID
+		orgID          uuid.UUID
 		idempotencyKey uuid.UUID
 		feedback       *model.InferenceFeedback
 		tx             pgx.Tx
@@ -37,11 +38,13 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		feedbackID = uuid.New()
 		requestID = uuid.New()
 		userID = uuid.New()
+		orgID = uuid.New()
 		idempotencyKey = uuid.New()
 		feedback = &model.InferenceFeedback{
 			FeedbackID:      feedbackID,
 			RequestID:       requestID,
 			UserID:          userID,
+			OrgID:           orgID,
 			Accepted:        false,
 			Rating:          -1,
 			Comment:         "wrong answer",
@@ -68,6 +71,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}),
 			HaveKeyWithValue("request_id", pgtype.UUID{Bytes: requestID, Valid: true}),
 			HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}),
+			HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}),
 			HaveKeyWithValue("accepted", false),
 			HaveKeyWithValue("rating", -1),
 			HaveKeyWithValue("comment", "wrong answer"),
@@ -98,6 +102,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			"feedback_id": %q,
 			"request_id": %q,
 			"user_id": %q,
+			"org_id": %q,
 			"dataset_id": %q,
 			"model_id": %q,
 			"split": "EVAL",
@@ -106,12 +111,13 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			"rejected_answer": "Wrong answer",
 			"rating": -1,
 			"feedback_label": "REJECTED"
-		}]`, exampleID.String(), feedbackID.String(), requestID.String(), userID.String(), datasetID.String(), modelID.String())
-		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), modelID.String(), "s3://models/parent", "mistral-7b", 7, rawExamples}}}
+		}]`, exampleID.String(), feedbackID.String(), requestID.String(), userID.String(), orgID.String(), datasetID.String(), modelID.String())
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), orgID.String(), modelID.String(), "s3://models/parent", "mistral-7b", 7, rawExamples}}}
 
 		dataset, err := repository.ReadPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
 			RequestID: requestID,
 			UserID:    userID,
+			OrgID:     orgID,
 			OutputURI: "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
 			Limit:     100,
 		})
@@ -119,6 +125,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dataset.RequestID).To(Equal(requestID))
 		Expect(dataset.UserID).To(Equal(userID))
+		Expect(dataset.OrgID).To(Equal(orgID))
 		Expect(dataset.DatasetID).To(Equal(datasetID))
 		Expect(dataset.ModelID).To(Equal(modelID))
 		Expect(dataset.ParentAdapterURI).To(Equal("s3://models/parent"))
@@ -134,11 +141,13 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		Expect(pool.lastQuery).To(ContainSubstring("p.rating < 0"))
 		Expect(pool.lastQuery).To(ContainSubstring("CASE WHEN substr(md5(p.preference_example_id::text), 1, 1)"))
 		Expect(pool.lastQuery).To(ContainSubstring("DISTINCT ON"))
+		Expect(pool.lastQuery).To(ContainSubstring("preference_example_id, feedback_id, request_id, user_id, org_id, dataset_id, model_id"))
 		Expect(pool.lastQuery).To(ContainSubstring("p.preference_example_id DESC"))
 		args := namedArgs(pool.lastArgs)
 		Expect(args).To(SatisfyAll(
 			HaveKeyWithValue("request_id", pgtype.UUID{Bytes: requestID, Valid: true}),
 			HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}),
+			HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}),
 			HaveKeyWithValue("limit", 100),
 		))
 	})
@@ -151,6 +160,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			PreferenceDatasetID: preferenceDatasetID,
 			RequestID:           requestID,
 			UserID:              userID,
+			OrgID:               orgID,
 			DatasetID:           datasetID,
 			ModelID:             modelID,
 			ParentAdapterURI:    "s3://models/parent",
@@ -162,6 +172,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			EligibilityPolicy:   "complete_rejected_pairs_train_eval_split_v1",
 			Examples: []model.PreferenceExample{{
 				PreferenceExampleID: uuid.New(),
+				OrgID:               orgID,
 				DatasetID:           datasetID,
 				ModelID:             modelID,
 				Split:               "TRAIN",
@@ -171,6 +182,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		record, err := repository.RecordPreferenceDatasetSnapshot(ctx, tx, dataset, model.PreferenceDatasetExportRequest{
 			RequestID:   requestID,
 			UserID:      userID,
+			OrgID:       orgID,
 			MinExamples: 10,
 			Limit:       100,
 		})
@@ -186,6 +198,7 @@ func feedbackRow(feedback *model.InferenceFeedback) pgx.Row {
 		feedback.FeedbackID.String(),
 		feedback.RequestID.String(),
 		feedback.UserID.String(),
+		feedback.OrgID.String(),
 		feedback.Accepted,
 		feedback.Rating,
 		feedback.Comment,

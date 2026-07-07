@@ -30,7 +30,7 @@ func NewModelResolver(baseURL string, client *http.Client) *ModelResolver {
 	}
 }
 
-func (r *ModelResolver) ResolveTrainableModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (model.SourceModelRef, error) {
+func (r *ModelResolver) ResolveTrainableModel(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, modelID uuid.UUID) (model.SourceModelRef, error) {
 	log.Trace("ModelResolver ResolveTrainableModel")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/v1/models/"+url.PathEscape(modelID.String()), nil)
@@ -38,6 +38,7 @@ func (r *ModelResolver) ResolveTrainableModel(ctx context.Context, userID uuid.U
 		return model.SourceModelRef{}, fmt.Errorf("%w: build model resolver request: %w", domain.ErrDependencyFailed, err)
 	}
 	req.Header.Set(userIDHeader, userID.String())
+	req.Header.Set(orgIDHeader, orgID.String())
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return model.SourceModelRef{}, fmt.Errorf("%w: resolve source model: %w", domain.ErrDependencyFailed, err)
@@ -57,6 +58,7 @@ func (r *ModelResolver) ResolveTrainableModel(ctx context.Context, userID uuid.U
 	return model.SourceModelRef{
 		ModelID:           dto.ID,
 		UserID:            dto.UserID,
+		OrgID:             dto.OrgID,
 		ModelKind:         dto.ModelKind,
 		Name:              dto.Name,
 		ModelVersion:      dto.ModelVersion,
@@ -72,6 +74,7 @@ func (r *ModelResolver) ResolveTrainableModel(ctx context.Context, userID uuid.U
 type modelDTO struct {
 	ID                string `json:"id"`
 	UserID            string `json:"user_id"`
+	OrgID             string `json:"org_id"`
 	ModelKind         string `json:"model_kind"`
 	Name              string `json:"name"`
 	ModelVersion      int    `json:"model_version"`

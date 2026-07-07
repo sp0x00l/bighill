@@ -262,6 +262,7 @@ func validDatasetDAO(datasetID, userID uuid.UUID) *DatasetDAO {
 	return &DatasetDAO{
 		ID:                  pgtype.UUID{Bytes: datasetID, Valid: true},
 		UserID:              pgtype.UUID{Bytes: userID, Valid: true},
+		OrgID:               pgtype.UUID{Bytes: userID, Valid: true},
 		Title:               pgtype.Text{String: "Movies", Valid: true},
 		Description:         pgtype.Text{String: "Movie rows", Valid: true},
 		Origin:              pgtype.Text{String: model.Standard.String(), Valid: true},
@@ -294,6 +295,7 @@ func (r *datasetRowStub) Scan(dest ...any) error {
 	values := []any{
 		r.dao.ID,
 		r.dao.UserID,
+		r.dao.OrgID,
 		r.dao.Title,
 		r.dao.Description,
 		r.dao.Origin,

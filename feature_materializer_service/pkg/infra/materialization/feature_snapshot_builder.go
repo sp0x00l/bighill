@@ -85,6 +85,7 @@ func (b *FeatureSnapshotBuilder) BuildFeatureSnapshot(ctx context.Context, rawSn
 
 	out := *featureSnapshot
 	out.UserID = rawSnapshot.UserID
+	out.OrgID = rawSnapshot.OrgID
 	out.StorageLocation = location
 	out.TableFormat = rawSnapshot.TableFormat
 	out.CatalogProvider = rawSnapshot.CatalogProvider

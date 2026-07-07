@@ -5,6 +5,7 @@ import "github.com/google/uuid"
 type DatasetFile struct {
 	DatasetID         uuid.UUID
 	UserID            uuid.UUID
+	OrgID             uuid.UUID
 	StorageLocation   string
 	ContentType       string
 	FileExtension     string

@@ -30,6 +30,7 @@ func (b *UploadEventBuilder) DatasetFileUploadedMessage(session *model.UploadSes
 	payload := mustMarshalUpload(&ingestionpb.DatasetFileUploadedEvent{
 		DatasetId:         session.DatasetID.String(),
 		UserId:            session.UserID.String(),
+		OrgId:             session.OrgID.String(),
 		StorageLocation:   session.StorageLocation,
 		ContentType:       session.DeclaredContentType,
 		FileExtension:     session.DeclaredFormat,
@@ -68,6 +69,7 @@ func (b *UploadEventBuilder) ModelArtifactIngestedMessage(session *model.UploadS
 		ArtifactId:        session.ResourceID.String(),
 		UploadId:          session.UploadID.String(),
 		UserId:            session.UserID.String(),
+		OrgId:             session.OrgID.String(),
 		DatasetId:         uuidutil.StringOrEmpty(session.DatasetID),
 		Source:            sourceOrDefault(session.Source),
 		StorageLocation:   session.StorageLocation,

@@ -31,14 +31,14 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 	log.Trace("InferenceModelRepository UpsertModel")
 
 	query := `INSERT INTO ` + r.Name + `.inference_models (
-		model_id, user_id, training_run_id, dataset_id, idempotency_key,
+		model_id, user_id, org_id, training_run_id, dataset_id, idempotency_key,
 		model_kind, source, source_uri, source_metadata,
 		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_load_status,
 		metrics_metadata, status, failure_reason
 	) VALUES (
-		@model_id, @user_id, @training_run_id, @dataset_id, @idempotency_key,
+		@model_id, @user_id, @org_id, @training_run_id, @dataset_id, @idempotency_key,
 		@model_kind::inference_model_kind_enum, @source::inference_model_source_enum, @source_uri, @source_metadata::jsonb,
 		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
@@ -48,6 +48,7 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 	ON CONFLICT (model_id) DO UPDATE SET
 		training_run_id = EXCLUDED.training_run_id,
 		user_id = EXCLUDED.user_id,
+		org_id = EXCLUDED.org_id,
 		dataset_id = EXCLUDED.dataset_id,
 		idempotency_key = EXCLUDED.idempotency_key,
 		model_kind = EXCLUDED.model_kind,
@@ -81,13 +82,13 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 	return record, nil
 }
 
-func (r *InferenceModelRepository) ReadByID(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error) {
+func (r *InferenceModelRepository) ReadByID(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error) {
 	log.Trace("InferenceModelRepository ReadByID")
 
-	query := `SELECT ` + modelColumns() + ` FROM ` + r.Name + `.inference_models WHERE model_id = @model_id AND (user_id = @user_id OR user_id IS NULL)`
+	query := `SELECT ` + modelColumns() + ` FROM ` + r.Name + `.inference_models WHERE model_id = @model_id AND (org_id = @org_id OR org_id IS NULL)`
 	record, err := scanInferenceModel(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
 		"model_id": pgtype.UUID{Bytes: modelID, Valid: true},
-		"user_id":  pgtype.UUID{Bytes: userID, Valid: true},
+		"org_id":   pgtype.UUID{Bytes: orgID, Valid: true},
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -102,7 +103,7 @@ func (r *InferenceModelRepository) ReadByID(ctx context.Context, userID uuid.UUI
 func modelColumns() string {
 	log.Trace("modelColumns")
 
-	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
+	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(org_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
 		model_kind::text, source::text, source_uri, source_metadata::text,
 		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
@@ -116,6 +117,7 @@ func modelArgs(inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) p
 	return pgx.NamedArgs{
 		"model_id":            pgtype.UUID{Bytes: inferenceModel.ModelID, Valid: true},
 		"user_id":             nullableUUID(inferenceModel.UserID),
+		"org_id":              nullableUUID(inferenceModel.OrgID),
 		"training_run_id":     nullableUUID(inferenceModel.TrainingRunID),
 		"dataset_id":          nullableUUID(inferenceModel.DatasetID),
 		"idempotency_key":     pgtype.UUID{Bytes: idempotencyKey, Valid: true},
@@ -145,6 +147,7 @@ func scanInferenceModel(row pgx.Row) (*model.InferenceModel, error) {
 
 	var modelID string
 	var userID string
+	var orgID string
 	var trainingRunID string
 	var datasetID string
 	var modelKindRaw string
@@ -155,6 +158,7 @@ func scanInferenceModel(row pgx.Row) (*model.InferenceModel, error) {
 	if err := row.Scan(
 		&modelID,
 		&userID,
+		&orgID,
 		&trainingRunID,
 		&datasetID,
 		&modelKindRaw,
@@ -188,6 +192,7 @@ func scanInferenceModel(row pgx.Row) (*model.InferenceModel, error) {
 	}
 	record.ModelID = uuid.MustParse(modelID)
 	record.UserID = parseOptionalUUID(userID)
+	record.OrgID = parseOptionalUUID(orgID)
 	record.TrainingRunID = parseOptionalUUID(trainingRunID)
 	record.DatasetID = parseOptionalUUID(datasetID)
 	record.ModelKind = model.ToModelKind(modelKindRaw)

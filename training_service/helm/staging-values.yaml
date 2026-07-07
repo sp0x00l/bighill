@@ -23,3 +23,7 @@ env:
   dataRegistryHttpPort: "8081"
   modelRegistryHttpHost: "model-registry-service"
   modelRegistryHttpPort: "8084"
+  artifactBucketRegion: "eu-west-1"
+  modelUriPrefix: "s3://bighill-mlops-lakehouse/models"
+  evaluationUriPrefix: "s3://bighill-mlops-lakehouse/evaluations"
+  promotionReportUriPrefix: "s3://bighill-mlops-lakehouse/promotion-reports"

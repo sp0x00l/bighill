@@ -9,6 +9,7 @@ import (
 	"data_registry_service/pkg/domain/model"
 	registrymessaging "data_registry_service/pkg/infra/network/messaging"
 	datasetpb "lib/data_contracts_lib/data_registry"
+	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 	core "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
@@ -151,15 +152,17 @@ var _ = Describe("DatasetUsecase", func() {
 		uc        usecase.DatasetUsecase
 		datasetID uuid.UUID
 		userID    uuid.UUID
+		orgID     uuid.UUID
 	)
 
 	BeforeEach(func() {
-		ctx = context.Background()
+		userID = uuid.New()
+		orgID = uuid.New()
+		ctx = ctxutil.WithActorOrg(context.Background(), userID, orgID)
 		repo = &stubDatasetRepository{}
 		work = &stubDatasetUnitOfWork{}
 		uc = usecase.NewDatasetUseCase(repo, work, registrymessaging.NewDatasetEventBuilder("data_registry"))
 		datasetID = uuid.New()
-		userID = uuid.New()
 	})
 
 	It("creates a dataset through the repository", func() {
@@ -178,6 +181,7 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(proto.Unmarshal(work.messages[0].Message.Payload, &event)).To(Succeed())
 		Expect(event.DatasetId).To(Equal(dataset.ID.String()))
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 	})
 
 	It("returns repository create errors", func() {
@@ -322,6 +326,7 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(proto.Unmarshal(work.messages[0].Message.Payload, &event)).To(Succeed())
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 	})
 
 	It("publishes a dataset through the repository", func() {
@@ -345,6 +350,7 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(proto.Unmarshal(work.messages[0].Message.Payload, &event)).To(Succeed())
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 	})
 
 	It("advances dataset processing state through the repository", func() {
@@ -378,7 +384,7 @@ var _ = Describe("DatasetUsecase", func() {
 	})
 
 	It("records feature materialization metadata and advances processing state", func() {
-		updated := &model.Dataset{ID: datasetID, UserID: userID, Title: "movies", ProcessingState: model.DatasetProcessingFeatureMaterialized}
+		updated := &model.Dataset{ID: datasetID, UserID: userID, OrgID: orgID, Title: "movies", ProcessingState: model.DatasetProcessingFeatureMaterialized}
 		repo.updateMaterializationResult = updated
 		materialized := &model.Dataset{
 			ID:                datasetID,
@@ -414,6 +420,7 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(proto.Unmarshal(work.messages[0].Message.Payload, &event)).To(Succeed())
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 		Expect(event.RawSnapshotId).To(Equal(materialized.RawSnapshotID.String()))
 		Expect(event.FeatureSnapshotId).To(Equal(materialized.FeatureSnapshotID.String()))
 		Expect(event.TableNamespace).To(Equal("features"))

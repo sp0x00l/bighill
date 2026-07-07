@@ -10,6 +10,7 @@ import (
 	"time"
 
 	auth "lib/shared_lib/auth"
+	"lib/shared_lib/authz"
 	sharedclock "lib/shared_lib/clock"
 	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
@@ -54,6 +55,10 @@ type ProfilesUseCase interface {
 	CreateOAuthAuthorization(ctx context.Context, provider string, req OAuthAuthorizeRequest) (*OAuthAuthorizeResult, error)
 	CreateOAuthSession(ctx context.Context, provider string, req OAuthSessionRequest) (*OAuthSessionResult, error)
 	Logout(ctx context.Context, sessionID string) error
+	ReadCurrentOrganization(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID) (*domain.Organization, *domain.OrganizationMembership, error)
+	ListOrganizationMembers(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID) ([]*domain.OrganizationMembership, error)
+	UpsertOrganizationMember(ctx context.Context, actorUserID uuid.UUID, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error)
+	DeleteOrganizationMember(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID, memberUserID uuid.UUID) error
 }
 
 type profilesUseCase struct {
@@ -272,7 +277,17 @@ func (u *profilesUseCase) VerifyPassword(ctx context.Context, email, password st
 		return "", fmt.Errorf("invalid password")
 	}
 
-	authToken, sid, expiresAt, err := u.authProvider.CreateToken(ctx, userID, u.authExpirationInMinutes)
+	membership, err := u.profilesRepository.ReadDefaultMembership(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	authToken, sid, expiresAt, err := u.authProvider.CreateAccessToken(ctx, authz.TokenClaims{
+		UserID:      userID.String(),
+		OrgID:       membership.OrgID.String(),
+		Roles:       []string{membership.Role},
+		Permissions: authz.PermissionsForRole(membership.Role),
+		TokenType:   "access",
+	}, u.authExpirationInMinutes)
 	if err != nil {
 		return "", err
 	}
@@ -309,6 +324,144 @@ func (u *profilesUseCase) Logout(ctx context.Context, sessionID string) (err err
 	}
 
 	return nil
+}
+
+func (u *profilesUseCase) ReadCurrentOrganization(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID) (organization *domain.Organization, membership *domain.OrganizationMembership, err error) {
+	log.Trace("profilesUseCase ReadCurrentOrganization")
+	ctx, span := usecasetrace.StartSpan(ctx, "profile_service/app", "org.read_current",
+		attribute.String("user_id", actorUserID.String()),
+		attribute.String("org_id", orgID.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	membership, err = u.requireActiveMembership(ctx, orgID, actorUserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	organization, err = u.profilesRepository.ReadOrganization(ctx, orgID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return organization, membership, nil
+}
+
+func (u *profilesUseCase) ListOrganizationMembers(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID) (memberships []*domain.OrganizationMembership, err error) {
+	log.Trace("profilesUseCase ListOrganizationMembers")
+	ctx, span := usecasetrace.StartSpan(ctx, "profile_service/app", "org.list_members",
+		attribute.String("user_id", actorUserID.String()),
+		attribute.String("org_id", orgID.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	if _, err := u.requireOrgAdmin(ctx, orgID, actorUserID); err != nil {
+		return nil, err
+	}
+	return u.profilesRepository.ListMemberships(ctx, orgID)
+}
+
+func (u *profilesUseCase) UpsertOrganizationMember(ctx context.Context, actorUserID uuid.UUID, membership *domain.OrganizationMembership) (updated *domain.OrganizationMembership, err error) {
+	log.Trace("profilesUseCase UpsertOrganizationMember")
+	var attrs []attribute.KeyValue
+	if membership != nil {
+		attrs = append(attrs,
+			attribute.String("org_id", membership.OrgID.String()),
+			attribute.String("member_user_id", membership.UserID.String()),
+			attribute.String("role", membership.Role),
+		)
+	}
+	attrs = append(attrs, attribute.String("actor_user_id", actorUserID.String()))
+	ctx, span := usecasetrace.StartSpan(ctx, "profile_service/app", "org.upsert_member", attrs...)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	if err := validateMembershipWrite(membership); err != nil {
+		return nil, err
+	}
+	if _, err := u.requireOrgAdmin(ctx, membership.OrgID, actorUserID); err != nil {
+		return nil, err
+	}
+	membership.CreatedByUserID = actorUserID
+	if membership.Status == "" {
+		membership.Status = domain.OrgMemberStatusActive
+	}
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		var writeErr error
+		updated, writeErr = u.profilesRepository.UpsertMembership(ctx, tx, membership)
+		return writeErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := u.authStore.SetUserRevokedAfter(ctx, membership.UserID.String(), u.clock.Now().Unix()); err != nil {
+		return nil, fmt.Errorf("failed to revoke changed member sessions: %w", err)
+	}
+	return updated, nil
+}
+
+func (u *profilesUseCase) DeleteOrganizationMember(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID, memberUserID uuid.UUID) (err error) {
+	log.Trace("profilesUseCase DeleteOrganizationMember")
+	ctx, span := usecasetrace.StartSpan(ctx, "profile_service/app", "org.delete_member",
+		attribute.String("actor_user_id", actorUserID.String()),
+		attribute.String("org_id", orgID.String()),
+		attribute.String("member_user_id", memberUserID.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	if _, err := u.requireOrgAdmin(ctx, orgID, actorUserID); err != nil {
+		return err
+	}
+	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.profilesRepository.DeleteMembership(ctx, tx, orgID, memberUserID)
+	})
+	if err != nil {
+		return err
+	}
+	if err := u.authStore.SetUserRevokedAfter(ctx, memberUserID.String(), u.clock.Now().Unix()); err != nil {
+		return fmt.Errorf("failed to revoke removed member sessions: %w", err)
+	}
+	return nil
+}
+
+func (u *profilesUseCase) requireOrgAdmin(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+	log.Trace("profilesUseCase requireOrgAdmin")
+
+	membership, err := u.requireActiveMembership(ctx, orgID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if membership.Role != authz.RoleOrgAdmin {
+		return nil, fmt.Errorf("%w: org_admin role is required", domain.ErrUnauthorized)
+	}
+	return membership, nil
+}
+
+func (u *profilesUseCase) requireActiveMembership(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+	log.Trace("profilesUseCase requireActiveMembership")
+
+	membership, err := u.profilesRepository.ReadMembership(ctx, orgID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if membership.Status != domain.OrgMemberStatusActive {
+		return nil, fmt.Errorf("%w: active organization membership is required", domain.ErrUnauthorized)
+	}
+	return membership, nil
+}
+
+func validateMembershipWrite(membership *domain.OrganizationMembership) error {
+	log.Trace("validateMembershipWrite")
+
+	if membership == nil || membership.OrgID == uuid.Nil || membership.UserID == uuid.Nil {
+		return fmt.Errorf("%w: organization membership is required", domain.ErrValidationFailed)
+	}
+	if !authz.ValidRole(membership.Role) {
+		return fmt.Errorf("%w: organization member role is invalid", domain.ErrValidationFailed)
+	}
+	switch membership.Status {
+	case "", domain.OrgMemberStatusActive, domain.OrgMemberStatusInvited, domain.OrgMemberStatusDisabled:
+		return nil
+	default:
+		return fmt.Errorf("%w: organization member status is invalid", domain.ErrValidationFailed)
+	}
 }
 
 func generateEmailVerifyToken(email string, useStagingTestToken bool) (string, error) {

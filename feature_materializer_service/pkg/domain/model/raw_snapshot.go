@@ -6,6 +6,7 @@ type RawSnapshot struct {
 	RawSnapshotID     uuid.UUID
 	DatasetID         uuid.UUID
 	UserID            uuid.UUID
+	OrgID             uuid.UUID
 	StorageLocation   string
 	ContentType       string
 	FileExtension     string

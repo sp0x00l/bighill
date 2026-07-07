@@ -32,6 +32,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 	It("publishes completed model training facts to the training topic", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 		client := &trainingPublishClientStub{}
 		publisher := trainingmessaging.NewTrainingEventPublisher(client, trainingmessaging.TrainingTopics{
@@ -41,6 +42,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		err := publisher.PublishModelTrainingCompleted(context.Background(), &model.TrainingRunResult{
 			TrainingRunID:     uuid.NewString(),
 			UserID:            userID.String(),
+			OrgID:             orgID.String(),
 			DatasetID:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotID: uuid.NewString(),
@@ -68,6 +70,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		event := &trainingpb.ModelTrainingCompletedEvent{}
 		Expect(proto.Unmarshal(client.message.Payload, event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.ModelName).To(Equal("movie-ranker"))
@@ -81,6 +84,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 	It("publishes failed model training facts to the training topic", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 		client := &trainingPublishClientStub{}
 		publisher := trainingmessaging.NewTrainingEventPublisher(client, trainingmessaging.TrainingTopics{
@@ -90,6 +94,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		err := publisher.PublishModelTrainingFailed(context.Background(), &model.TrainingRunResult{
 			TrainingRunID:     uuid.NewString(),
 			UserID:            userID.String(),
+			OrgID:             orgID.String(),
 			DatasetID:         datasetID.String(),
 			DatasetVersion:    "4",
 			FeatureSnapshotID: uuid.NewString(),
@@ -108,6 +113,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		event := &trainingpb.ModelTrainingFailedEvent{}
 		Expect(proto.Unmarshal(client.message.Payload, event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.ModelName).To(Equal("movie-ranker"))
@@ -116,6 +122,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 
 	It("publishes promotion report facts to the training topic", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 		trainingRunID := uuid.New()
 		client := &trainingPublishClientStub{}
@@ -125,6 +132,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 
 		err := publisher.PublishPromotionReportReady(context.Background(), &model.PromotionReport{
 			UserID:             userID.String(),
+			OrgID:              orgID.String(),
 			ModelID:            modelID.String(),
 			TrainingRunID:      trainingRunID.String(),
 			PromotionReportURI: "s3://local-dev-bucket/promotion/model.json",
@@ -140,6 +148,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		event := &trainingpb.PromotionReportReadyEvent{}
 		Expect(proto.Unmarshal(client.message.Payload, event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 		Expect(event.ModelId).To(Equal(modelID.String()))
 		Expect(event.TrainingRunId).To(Equal(trainingRunID.String()))
 		Expect(event.PromotionReportUri).To(Equal("s3://local-dev-bucket/promotion/model.json"))

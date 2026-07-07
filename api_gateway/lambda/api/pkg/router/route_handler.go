@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"lib/shared_lib/authz"
 	"net"
 	"net/http"
 	"strings"
@@ -19,10 +20,14 @@ import (
 )
 
 const (
-	publicEndpoint  = "public"
-	privateEndpoint = "private"
-	userHeader      = "X-User-ID"
-	sessionHeader   = "X-Session-ID"
+	publicEndpoint    = "public"
+	privateEndpoint   = "private"
+	userHeader        = "X-User-ID"
+	sessionHeader     = "X-Session-ID"
+	orgHeader         = "X-Org-ID"
+	rolesHeader       = "X-Roles"
+	permissionsHeader = "X-Permissions"
+	denyRoutePolicy   = "__deny_private_route__"
 
 	corsAllowOrigin  = "*"
 	corsAllowMethods = "GET,POST,PUT,DELETE,PATCH,OPTIONS"
@@ -30,7 +35,11 @@ const (
 )
 
 type AuthorizerContext struct {
-	UserID string `json:"userId"`
+	UserID      string   `json:"userId"`
+	SessionID   string   `json:"sid"`
+	OrgID       string   `json:"orgId"`
+	Roles       []string `json:"roles"`
+	Permissions []string `json:"permissions"`
 }
 
 type HttpClient interface {
@@ -45,6 +54,7 @@ type Config struct {
 	ModelRegistryServiceRoute string
 	ProfileServiceRoute       string
 	TrainingServiceRoute      string
+	InferenceServiceRoute     string
 }
 
 type routeResolver struct {
@@ -53,6 +63,7 @@ type routeResolver struct {
 	modelRegistryServiceRoute string
 	profileServiceRoute       string
 	trainingServiceRoute      string
+	inferenceServiceRoute     string
 }
 
 type routeContext struct {
@@ -81,6 +92,7 @@ func DefaultConfig() Config {
 		ModelRegistryServiceRoute: serviceBaseRoute("127.0.0.1", "8084"),
 		ProfileServiceRoute:       serviceBaseRoute("127.0.0.1", "8082"),
 		TrainingServiceRoute:      serviceBaseRoute("127.0.0.1", "8085"),
+		InferenceServiceRoute:     serviceBaseRoute("127.0.0.1", "8087"),
 	}
 }
 
@@ -104,12 +116,16 @@ func (cfg Config) resolver() (routeResolver, error) {
 	if cfg.TrainingServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing training service route")
 	}
+	if cfg.InferenceServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing inference service route")
+	}
 	return routeResolver{
 		dataRegistryServiceRoute:  cfg.DataRegistryServiceRoute,
 		ingestionServiceRoute:     cfg.IngestionServiceRoute,
 		modelRegistryServiceRoute: cfg.ModelRegistryServiceRoute,
 		profileServiceRoute:       cfg.ProfileServiceRoute,
 		trainingServiceRoute:      cfg.TrainingServiceRoute,
+		inferenceServiceRoute:     cfg.InferenceServiceRoute,
 	}, nil
 }
 
@@ -120,6 +136,67 @@ func getHeaderValue(headers map[string]string, key string) string {
 		}
 	}
 	return ""
+}
+
+func spoofedTrustedHeader(headers map[string]string) string {
+	log.Trace("spoofedTrustedHeader")
+
+	for _, trusted := range []string{userHeader, sessionHeader, orgHeader, rolesHeader, permissionsHeader} {
+		if value := getHeaderValue(headers, trusted); value != "" {
+			return trusted
+		}
+	}
+	return ""
+}
+
+func requiredRoutePermission(request events.APIGatewayProxyRequest) string {
+	log.Trace("requiredRoutePermission")
+
+	routeCtx, err := parseRouteContext(request)
+	if err != nil || routeCtx.scope != privateEndpoint {
+		return ""
+	}
+	afterResource := routeCtx.segments[routeCtx.resourceIndex+1:]
+	switch routeCtx.resource {
+	case "data":
+		if routeCtx.method == http.MethodPost || routeCtx.method == http.MethodPut || routeCtx.method == http.MethodDelete {
+			return authz.PermissionDataWrite
+		}
+		return authz.PermissionDataRead
+	case "models":
+		if routeCtx.method == http.MethodPost || routeCtx.method == http.MethodPut || routeCtx.method == http.MethodDelete {
+			return authz.PermissionModelWrite
+		}
+		return authz.PermissionModelRead
+	case "training-runs":
+		if routeCtx.method == http.MethodPost {
+			return authz.PermissionTrainingStart
+		}
+		return authz.PermissionTrainingRead
+	case "inference":
+		if len(afterResource) == 1 && afterResource[0] == "endpoints" && routeCtx.method == http.MethodGet {
+			return authz.PermissionInferenceEndpointsRead
+		}
+		if len(afterResource) >= 3 && afterResource[0] == "endpoints" && afterResource[2] == "generations" && routeCtx.method == http.MethodPost {
+			return authz.PermissionInferenceInvoke
+		}
+		if len(afterResource) == 1 && afterResource[0] == "feedback" && routeCtx.method == http.MethodPost {
+			return authz.PermissionInferenceFeedback
+		}
+	case "orgs":
+		if len(afterResource) == 1 && afterResource[0] == "current" && routeCtx.method == http.MethodGet {
+			return ""
+		}
+		if routeCtx.method == http.MethodGet {
+			return authz.PermissionOrgMembersRead
+		}
+		if routeCtx.method == http.MethodPost || routeCtx.method == http.MethodPut || routeCtx.method == http.MethodDelete {
+			return authz.PermissionOrgMembersWrite
+		}
+	case "profiles":
+		return ""
+	}
+	return denyRoutePolicy
 }
 
 func withCORSHeaders(resp events.APIGatewayProxyResponse, origin string) events.APIGatewayProxyResponse {
@@ -159,17 +236,9 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 			return withCORSHeaders(gatewayResponse(http.StatusNoContent, ""), origin), nil
 		}
 
-		if userIDHeader := getHeaderValue(request.Headers, userHeader); len(userIDHeader) > 0 {
-			err := fmt.Errorf("X-User-ID header found on request")
-			log.WithContext(ctx).WithError(err).Errorf("API Gateway request with X-User-ID: `%s` and IP: `%s`", userIDHeader, request.RequestContext.Identity.SourceIP)
-			return withCORSHeaders(events.APIGatewayProxyResponse{
-				StatusCode: http.StatusBadRequest,
-				Body:       "Invalid request. Please check your headers",
-			}, origin), nil
-		}
-		if sessionIDHeader := getHeaderValue(request.Headers, sessionHeader); len(sessionIDHeader) > 0 {
-			err := fmt.Errorf("X-Session-ID header found on request")
-			log.WithContext(ctx).WithError(err).Errorf("API Gateway request with X-Session-ID and IP: `%s`", request.RequestContext.Identity.SourceIP)
+		if spoofedHeader := spoofedTrustedHeader(request.Headers); spoofedHeader != "" {
+			err := fmt.Errorf("%s header found on request", spoofedHeader)
+			log.WithContext(ctx).WithError(err).Errorf("API Gateway request with spoofed auth header and IP: `%s`", request.RequestContext.Identity.SourceIP)
 			return withCORSHeaders(events.APIGatewayProxyResponse{
 				StatusCode: http.StatusBadRequest,
 				Body:       "Invalid request. Please check your headers",
@@ -178,6 +247,8 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 
 		var userID string
 		var sessionID string
+		var orgID string
+		var permissions []string
 		authorizerContext := request.RequestContext.Authorizer
 		if authorizerContext != nil {
 			if v, ok := authorizerContext["userId"]; ok {
@@ -190,6 +261,16 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 					if s, ok := v.(string); ok {
 						sessionID = s
 					}
+				}
+			}
+			if v, ok := authorizerContext["orgId"]; ok {
+				if s, ok := v.(string); ok {
+					orgID = s
+				}
+			}
+			if v, ok := authorizerContext["permissions"]; ok {
+				if s, ok := v.(string); ok {
+					permissions, _ = authz.DecodeStringSlice(s)
 				}
 			}
 		}
@@ -208,6 +289,9 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 			}
 			return withCORSHeaders(gatewayResponse(http.StatusInternalServerError, "bighill gateway route error"), origin), nil
 		}
+		if requiredPermission := requiredRoutePermission(request); requiredPermission == denyRoutePolicy || (requiredPermission != "" && !authz.HasPermission(permissions, requiredPermission)) {
+			return withCORSHeaders(gatewayResponse(http.StatusForbidden, "forbidden"), origin), nil
+		}
 
 		req, errorResponse := newProxyRequest(ctx, request, serviceRoute, newReqFunc)
 		if errorResponse != nil {
@@ -216,6 +300,12 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 
 		if userID != "" {
 			req.Header.Set(userHeader, userID)
+		}
+		if orgID != "" {
+			req.Header.Set(orgHeader, orgID)
+		}
+		if len(permissions) > 0 {
+			req.Header.Set(permissionsHeader, authz.EncodeStringSlice(permissions))
 		}
 		if sessionID != "" {
 			req.Header.Set(sessionHeader, sessionID)
@@ -260,6 +350,8 @@ func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver)
 	switch routeCtx.resource {
 	case "profiles":
 		return fmt.Sprintf("%s%s", resolver.profileServiceRoute, profileBackendPath(routeCtx)), nil
+	case "orgs":
+		return fmt.Sprintf("%s%s", resolver.profileServiceRoute, profileBackendPath(routeCtx)), nil
 	case "data":
 		if len(routeCtx.segments) > routeCtx.resourceIndex+1 &&
 			(routeCtx.segments[routeCtx.resourceIndex+1] == "store" || routeCtx.segments[routeCtx.resourceIndex+1] == "uploads") {
@@ -276,6 +368,8 @@ func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver)
 		return fmt.Sprintf("%s%s", resolver.modelRegistryServiceRoute, path), nil
 	case "training-runs":
 		return fmt.Sprintf("%s%s", resolver.trainingServiceRoute, path), nil
+	case "inference":
+		return fmt.Sprintf("%s%s", resolver.inferenceServiceRoute, path), nil
 	default:
 		return "", fmt.Errorf("invalid resource: %s", routeCtx.resource)
 	}

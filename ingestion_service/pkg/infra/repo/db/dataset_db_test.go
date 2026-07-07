@@ -29,7 +29,7 @@ var _ = Describe("DatasetDB", func() {
 
 	BeforeEach(func() {
 		dataset = validDatasetProjection()
-		ctx = ctxutil.WithTenantID(context.Background(), dataset.UserID)
+		ctx = ctxutil.WithActorOrg(context.Background(), dataset.UserID, dataset.OrgID)
 		pool = &datasetPoolStub{rowsAffected: 1}
 		repo = NewDatasetDB(coreDb.NewDatabase(pool, "test_db"))
 	})
@@ -45,6 +45,7 @@ var _ = Describe("DatasetDB", func() {
 			args := namedDatasetArgs(pool.lastArgs)
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: dataset.DatasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: dataset.UserID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: dataset.OrgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("table_name", dataset.TableName))
 		})
 
@@ -76,6 +77,7 @@ var _ = Describe("DatasetDB", func() {
 			args := namedDatasetArgs(pool.lastArgs)
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: dataset.DatasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: dataset.UserID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: dataset.OrgID, Valid: true}))
 		})
 
 		It("returns not found when no row is updated", func() {
@@ -106,6 +108,7 @@ var _ = Describe("DatasetDB", func() {
 			args := namedDatasetArgs(pool.lastArgs)
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: dataset.DatasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: dataset.UserID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: dataset.OrgID, Valid: true}))
 		})
 
 		It("returns not found when no row is deleted", func() {
@@ -131,6 +134,7 @@ var _ = Describe("DatasetDB", func() {
 			pool.row = datasetRowStub{values: []any{
 				dataset.DatasetID.String(),
 				dataset.UserID.String(),
+				dataset.OrgID.String(),
 				dataset.StorageLocation,
 				dataset.TableNamespace,
 				dataset.TableName,
@@ -146,10 +150,11 @@ var _ = Describe("DatasetDB", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(record).To(Equal(dataset))
 			Expect(pool.queryRowCalled).To(BeTrue())
-			Expect(pool.lastSQL).To(ContainSubstring("WHERE dataset_id = @dataset_id AND user_id = @user_id AND blacklisted = false"))
+			Expect(pool.lastSQL).To(ContainSubstring("WHERE dataset_id = @dataset_id AND org_id = @org_id AND blacklisted = false"))
 			args := namedDatasetArgs(pool.lastArgs)
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: dataset.DatasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: dataset.UserID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: dataset.OrgID, Valid: true}))
 		})
 
 		It("returns not found when the dataset is missing", func() {
@@ -214,6 +219,7 @@ func validDatasetProjection() *model.Dataset {
 	return &model.Dataset{
 		DatasetID:         uuid.New(),
 		UserID:            uuid.New(),
+		OrgID:             uuid.New(),
 		StorageLocation:   "s3://local-dev-bucket/raw/movies.parquet",
 		TableNamespace:    "raw",
 		TableName:         "movies",

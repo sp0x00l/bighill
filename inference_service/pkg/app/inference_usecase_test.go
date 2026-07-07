@@ -11,6 +11,7 @@ import (
 	"inference_service/pkg/domain/model"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
 	inferencepb "lib/data_contracts_lib/inference"
+	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 	shareduow "lib/shared_lib/uow"
 
@@ -29,13 +30,15 @@ func TestApp(t *testing.T) {
 type inferenceModelRepositoryStub struct {
 	model          *model.InferenceModel
 	upsertedModel  *model.InferenceModel
+	upsertCtx      context.Context
 	idempotencyKey uuid.UUID
 	readUserID     uuid.UUID
 	readID         uuid.UUID
 	err            error
 }
 
-func (s *inferenceModelRepositoryStub) UpsertModel(_ context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error) {
+func (s *inferenceModelRepositoryStub) UpsertModel(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error) {
+	s.upsertCtx = ctx
 	s.upsertedModel = inferenceModel
 	s.idempotencyKey = idempotencyKey
 	if s.err != nil {
@@ -249,16 +252,32 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(repository.idempotencyKey).To(Equal(idempotencyKey))
 	})
 
+	It("does not grant system context when a model update is missing actor and org", func() {
+		repository := &inferenceModelRepositoryStub{}
+		uc := app.NewInferenceUsecase(repository)
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = uuid.Nil
+		inferenceModel.OrgID = uuid.Nil
+
+		recorded, err := uc.RecordModelUpdated(context.Background(), inferenceModel, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recorded).To(Equal(inferenceModel))
+		Expect(ctxutil.IsSystemContext(repository.upsertCtx)).To(BeFalse())
+		_, hasOrg := ctxutil.OrgID(repository.upsertCtx)
+		Expect(hasOrg).To(BeFalse())
+	})
+
 	It("reads a model by id", func() {
 		expected := validInferenceModel()
 		repository := &inferenceModelRepositoryStub{model: expected}
 		uc := app.NewInferenceUsecase(repository)
 
-		readModel, err := uc.ReadModel(context.Background(), expected.UserID, expected.ModelID)
+		readModel, err := uc.ReadModel(context.Background(), expected.OrgID, expected.ModelID)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readModel).To(Equal(expected))
-		Expect(repository.readUserID).To(Equal(expected.UserID))
+		Expect(repository.readUserID).To(Equal(expected.OrgID))
 		Expect(repository.readID).To(Equal(expected.ModelID))
 	})
 
@@ -528,6 +547,7 @@ var _ = Describe("InferenceUsecase", func() {
 		dataset := validInferenceDataset()
 		inferenceModel := validInferenceModel()
 		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
 		inferenceModel.DatasetID = dataset.DatasetID
 		modelRepository := &inferenceModelRepositoryStub{model: inferenceModel}
 		datasetRepository := &inferenceDatasetRepositoryStub{dataset: dataset}
@@ -556,6 +576,7 @@ var _ = Describe("InferenceUsecase", func() {
 		response, err := uc.Generate(context.Background(), model.GenerateRequest{
 			RequestID:       requestID,
 			UserID:          dataset.UserID,
+			OrgID:           dataset.OrgID,
 			DatasetID:       dataset.DatasetID,
 			ModelID:         inferenceModel.ModelID,
 			QueryText:       "what happened?",
@@ -564,9 +585,9 @@ var _ = Describe("InferenceUsecase", func() {
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(datasetRepository.readUserID).To(Equal(dataset.UserID))
+		Expect(datasetRepository.readUserID).To(Equal(dataset.OrgID))
 		Expect(datasetRepository.readID).To(Equal(dataset.DatasetID))
-		Expect(modelRepository.readUserID).To(Equal(dataset.UserID))
+		Expect(modelRepository.readUserID).To(Equal(dataset.OrgID))
 		Expect(modelRepository.readID).To(Equal(inferenceModel.ModelID))
 		Expect(retrieval.userID).To(Equal(dataset.UserID))
 		Expect(retrieval.datasetID).To(Equal(dataset.DatasetID))
@@ -586,6 +607,7 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(response.Contexts).To(HaveLen(1))
 		Expect(requestRepository.request).NotTo(BeNil())
 		Expect(requestRepository.request.UserID).To(Equal(dataset.UserID))
+		Expect(requestRepository.request.OrgID).To(Equal(dataset.OrgID))
 		Expect(requestRepository.request.RequestID).To(Equal(requestID))
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
 		Expect(requestRepository.request.GenerationProvider).To(Equal("stub"))
@@ -990,6 +1012,7 @@ func validInferenceModel() *model.InferenceModel {
 	return &model.InferenceModel{
 		ModelID:           uuid.New(),
 		UserID:            uuid.New(),
+		OrgID:             uuid.New(),
 		TrainingRunID:     uuid.New(),
 		DatasetID:         uuid.New(),
 		ModelKind:         model.ModelKindFineTuned,
@@ -1015,6 +1038,7 @@ func validInferenceDataset() *model.InferenceDataset {
 	return &model.InferenceDataset{
 		DatasetID:                uuid.New(),
 		UserID:                   uuid.New(),
+		OrgID:                    uuid.New(),
 		DatasetVersion:           4,
 		ProcessingState:          model.DatasetProcessingEmbeddingsMaterialized,
 		StorageLocation:          "s3://local-dev-bucket/features/dataset.parquet",

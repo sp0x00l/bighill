@@ -60,6 +60,7 @@ var _ = Describe("DatasetUsecase", func() {
 		uc        *usecase.DatasetUsecase
 		datasetID uuid.UUID
 		userID    uuid.UUID
+		orgID     uuid.UUID
 	)
 
 	BeforeEach(func() {
@@ -68,10 +69,11 @@ var _ = Describe("DatasetUsecase", func() {
 		uc = usecase.NewDatasetUseCase(repo)
 		datasetID = uuid.New()
 		userID = uuid.New()
+		orgID = uuid.New()
 	})
 
 	It("adds a dataset by upserting the local projection", func() {
-		dataset := &model.Dataset{DatasetID: datasetID, UserID: userID}
+		dataset := &model.Dataset{DatasetID: datasetID, UserID: userID, OrgID: orgID}
 
 		Expect(uc.AddDataset(ctx, dataset)).To(Succeed())
 		Expect(repo.upsertDataset).To(Equal(dataset))
@@ -81,11 +83,11 @@ var _ = Describe("DatasetUsecase", func() {
 		expectedErr := errors.New("upsert failed")
 		repo.upsertErr = expectedErr
 
-		Expect(uc.AddDataset(ctx, &model.Dataset{DatasetID: datasetID, UserID: userID})).To(MatchError(expectedErr))
+		Expect(uc.AddDataset(ctx, &model.Dataset{DatasetID: datasetID, UserID: userID, OrgID: orgID})).To(MatchError(expectedErr))
 	})
 
 	It("updates a dataset through the repository", func() {
-		dataset := &model.Dataset{DatasetID: datasetID, UserID: userID}
+		dataset := &model.Dataset{DatasetID: datasetID, UserID: userID, OrgID: orgID}
 
 		Expect(uc.UpdateDataset(ctx, dataset)).To(Succeed())
 		Expect(repo.upsertDataset).To(Equal(dataset))

@@ -43,6 +43,7 @@ func ToModelStatus(value string) (ModelStatus, error) {
 type InferenceModel struct {
 	ModelID           uuid.UUID
 	UserID            uuid.UUID
+	OrgID             uuid.UUID
 	TrainingRunID     uuid.UUID
 	DatasetID         uuid.UUID
 	ModelKind         ModelKind

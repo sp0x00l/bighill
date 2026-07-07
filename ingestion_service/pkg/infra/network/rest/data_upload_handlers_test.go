@@ -150,6 +150,7 @@ var _ = Describe("DataUploadHandlers", func() {
 	var (
 		datasetID      uuid.UUID
 		userID         uuid.UUID
+		orgID          uuid.UUID
 		uploadUseCase  *stubUploadUseCase
 		datasetUseCase *stubDatasetUsecase
 		detector       *stubFileDetector
@@ -160,10 +161,12 @@ var _ = Describe("DataUploadHandlers", func() {
 	BeforeEach(func() {
 		datasetID = uuid.New()
 		userID = uuid.New()
+		orgID = uuid.New()
 		uploadUseCase = &stubUploadUseCase{}
 		datasetUseCase = &stubDatasetUsecase{dataset: &model.Dataset{
 			DatasetID:         datasetID,
 			UserID:            userID,
+			OrgID:             orgID,
 			TableNamespace:    "features",
 			TableName:         "movies",
 			TableFormat:       "PARQUET",
@@ -177,7 +180,7 @@ var _ = Describe("DataUploadHandlers", func() {
 			contentType: "text/csv",
 		}
 		authenticator = &stubAuthenticator{
-			result: serviceRest.AuthResult{UserID: userID, ExpUnix: 200},
+			result: serviceRest.AuthResult{UserID: userID, OrgID: orgID, ExpUnix: 200},
 		}
 		handler = serviceRest.NewDataUploadHandlers(uploadUseCase, datasetUseCase, adapter.NewUploadDTOAdapter(serializers.NewJSONSerializer()), detector, authenticator, 1024*1024)
 	})
@@ -195,6 +198,7 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(uploadUseCase.receivedUpload).NotTo(BeNil())
 		Expect(uploadUseCase.receivedUpload.DatasetID).To(Equal(datasetID))
 		Expect(uploadUseCase.receivedUpload.UserID).To(Equal(userID))
+		Expect(uploadUseCase.receivedUpload.OrgID).To(Equal(orgID))
 		Expect(uploadUseCase.receivedUpload.Extension).To(Equal(serviceRest.FileTypeCSV))
 		Expect(uploadUseCase.receivedUpload.ContentType).To(Equal("text/csv"))
 		Expect(uploadUseCase.receivedUpload.TableNamespace).To(Equal("features"))
@@ -215,6 +219,7 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(datasetUseCase.receivedDatasetID).To(Equal(datasetID))
 		Expect(uploadUseCase.receivedInitiateRequest.DatasetID).To(Equal(datasetID))
 		Expect(uploadUseCase.receivedInitiateRequest.UserID).To(Equal(userID))
+		Expect(uploadUseCase.receivedInitiateRequest.OrgID).To(Equal(orgID))
 		Expect(uploadUseCase.receivedInitiateRequest.DeclaredFormat).To(Equal("csv"))
 		Expect(uploadUseCase.receivedInitiateRequest.DeclaredContentType).To(Equal("text/csv"))
 		Expect(uploadUseCase.receivedInitiateRequest.ClientNonce).To(Equal("retry-1"))
@@ -234,6 +239,7 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(response.StatusCode()).To(Equal(http.StatusCreated))
 		Expect(uploadUseCase.receivedCompleteRequest.UploadID).To(Equal(uploadID))
 		Expect(uploadUseCase.receivedCompleteRequest.UserID).To(Equal(userID))
+		Expect(uploadUseCase.receivedCompleteRequest.OrgID).To(Equal(orgID))
 		var body map[string]any
 		Expect(json.Unmarshal(response.Payload(), &body)).To(Succeed())
 		Expect(body).To(HaveKeyWithValue("storage_location", "s3://local-dev-bucket/raw/file.csv"))
@@ -261,6 +267,7 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(uploadUseCase.receivedModelRequest.ResourceID).To(Equal(resourceID))
 		Expect(uploadUseCase.receivedModelRequest.DatasetID).To(Equal(datasetID))
 		Expect(uploadUseCase.receivedModelRequest.UserID).To(Equal(userID))
+		Expect(uploadUseCase.receivedModelRequest.OrgID).To(Equal(orgID))
 		Expect(uploadUseCase.receivedModelRequest.ArtifactType).To(Equal("LORA_ADAPTER"))
 		Expect(uploadUseCase.receivedModelRequest.ArtifactFormat).To(Equal("SAFETENSORS"))
 		Expect(uploadUseCase.receivedModelRequest.ClientNonce).To(Equal("model-retry-1"))
@@ -298,6 +305,7 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(response.StatusCode()).To(Equal(http.StatusCreated))
 		Expect(uploadUseCase.receivedCompleteRequest.UploadID).To(Equal(uploadID))
 		Expect(uploadUseCase.receivedCompleteRequest.UserID).To(Equal(userID))
+		Expect(uploadUseCase.receivedCompleteRequest.OrgID).To(Equal(orgID))
 		var body map[string]any
 		Expect(json.Unmarshal(response.Payload(), &body)).To(Succeed())
 		Expect(body).To(HaveKeyWithValue("resource_id", resourceID.String()))
@@ -336,6 +344,7 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(response.StatusCode()).To(Equal(http.StatusCreated))
 		Expect(uploadUseCase.receivedOnboardRequest.ResourceID).To(Equal(resourceID))
 		Expect(uploadUseCase.receivedOnboardRequest.UserID).To(Equal(userID))
+		Expect(uploadUseCase.receivedOnboardRequest.OrgID).To(Equal(orgID))
 		Expect(uploadUseCase.receivedOnboardRequest.RepoID).To(Equal("meta-llama/Llama-3.1-8B"))
 		var body map[string]any
 		Expect(json.Unmarshal(response.Payload(), &body)).To(Succeed())

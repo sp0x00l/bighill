@@ -27,16 +27,19 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 var _ = Describe("DatasetResolver", func() {
-	It("resolves materialized datasets and forwards the user id", func() {
+	It("resolves materialized datasets and forwards the user and org ids", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
 		datasetID := uuid.New()
 		httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			Expect(req.Method).To(Equal(http.MethodGet))
 			Expect(req.URL.Path).To(Equal("/v1/data/registry/" + datasetID.String() + "/materialization"))
 			Expect(req.Header.Get(userIDHeader)).To(Equal(userID.String()))
+			Expect(req.Header.Get(orgIDHeader)).To(Equal(orgID.String()))
 			return jsonResponse(http.StatusOK, `{
 				"id":"`+datasetID.String()+`",
 				"userId":"`+userID.String()+`",
+				"orgId":"`+orgID.String()+`",
 				"storageLocation":"s3://lakehouse/features/movies.parquet",
 				"tableName":"movies",
 				"tableFormat":"PARQUET",
@@ -46,11 +49,12 @@ var _ = Describe("DatasetResolver", func() {
 			}`), nil
 		})}
 
-		ref, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), userID, datasetID)
+		ref, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), userID, orgID, datasetID)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ref.DatasetID).To(Equal(datasetID.String()))
 		Expect(ref.UserID).To(Equal(userID.String()))
+		Expect(ref.OrgID).To(Equal(orgID.String()))
 		Expect(ref.DatasetVersion).To(Equal("4"))
 		Expect(ref.DatasetURI).To(Equal("s3://lakehouse/features/movies.parquet"))
 	})
@@ -60,7 +64,7 @@ var _ = Describe("DatasetResolver", func() {
 			return jsonResponse(http.StatusNotFound, `{"message":"missing"}`), nil
 		})}
 
-		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), uuid.New())
+		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), uuid.New(), uuid.New())
 
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
@@ -70,7 +74,7 @@ var _ = Describe("DatasetResolver", func() {
 			return jsonResponse(http.StatusBadRequest, `{"message":"not materialized"}`), nil
 		})}
 
-		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), uuid.New())
+		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), uuid.New(), uuid.New())
 
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
@@ -80,7 +84,7 @@ var _ = Describe("DatasetResolver", func() {
 			return jsonResponse(http.StatusInternalServerError, `{"message":"downstream failed"}`), nil
 		})}
 
-		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), uuid.New())
+		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), uuid.New(), uuid.New())
 
 		Expect(errors.Is(err, domain.ErrDependencyFailed)).To(BeTrue())
 	})
@@ -90,23 +94,26 @@ var _ = Describe("DatasetResolver", func() {
 			return nil, errors.New("connection refused")
 		})}
 
-		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), uuid.New())
+		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), uuid.New(), uuid.New())
 
 		Expect(errors.Is(err, domain.ErrDependencyFailed)).To(BeTrue())
 	})
 })
 
 var _ = Describe("ModelResolver", func() {
-	It("resolves trainable models and forwards the user id", func() {
+	It("resolves trainable models and forwards the user and org ids", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 		httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			Expect(req.Method).To(Equal(http.MethodGet))
 			Expect(req.URL.Path).To(Equal("/v1/models/" + modelID.String()))
 			Expect(req.Header.Get(userIDHeader)).To(Equal(userID.String()))
+			Expect(req.Header.Get(orgIDHeader)).To(Equal(orgID.String()))
 			return jsonResponse(http.StatusOK, `{
 				"id":"`+modelID.String()+`",
 				"user_id":"`+userID.String()+`",
+				"org_id":"`+orgID.String()+`",
 				"model_kind":"BASE",
 				"name":"llama-3",
 				"model_version":1,
@@ -118,11 +125,12 @@ var _ = Describe("ModelResolver", func() {
 			}`), nil
 		})}
 
-		ref, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), userID, modelID)
+		ref, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), userID, orgID, modelID)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ref.ModelID).To(Equal(modelID.String()))
 		Expect(ref.UserID).To(Equal(userID.String()))
+		Expect(ref.OrgID).To(Equal(orgID.String()))
 		Expect(ref.ModelKind).To(Equal("BASE"))
 		Expect(ref.ArtifactLocation).To(Equal("s3://models/base"))
 	})
@@ -132,7 +140,7 @@ var _ = Describe("ModelResolver", func() {
 			return jsonResponse(http.StatusNotFound, `not found`), nil
 		})}
 
-		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), uuid.New())
+		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), uuid.New(), uuid.New())
 
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
@@ -142,7 +150,7 @@ var _ = Describe("ModelResolver", func() {
 			return jsonResponse(http.StatusInternalServerError, `registry failed`), nil
 		})}
 
-		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), uuid.New())
+		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), uuid.New(), uuid.New())
 
 		Expect(errors.Is(err, domain.ErrDependencyFailed)).To(BeTrue())
 	})
@@ -152,7 +160,7 @@ var _ = Describe("ModelResolver", func() {
 			return jsonResponse(http.StatusOK, `{`), nil
 		})}
 
-		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), uuid.New())
+		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), uuid.New(), uuid.New())
 
 		Expect(errors.Is(err, domain.ErrDependencyFailed)).To(BeTrue())
 	})

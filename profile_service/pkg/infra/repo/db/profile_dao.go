@@ -14,6 +14,7 @@ import (
 
 type ProfileDAO struct {
 	ID                         pgtype.UUID
+	DefaultOrgID               pgtype.UUID
 	Email                      pgtype.Text
 	EmailVerified              pgtype.Bool
 	FirstName                  pgtype.Text
@@ -32,6 +33,7 @@ type ProfileDAO struct {
 
 type ProfileAccountDAO struct {
 	ID                   pgtype.UUID
+	DefaultOrgID         pgtype.UUID
 	Email                pgtype.Text
 	PhoneNumber          pgtype.Text
 	CountryCode          pgtype.Text
@@ -60,6 +62,25 @@ type OAuthProfileDAO struct {
 
 type ProfileIDDAO struct {
 	ID pgtype.UUID
+}
+
+type OrganizationDAO struct {
+	ID              pgtype.UUID
+	DisplayName     pgtype.Text
+	CreatedByUserID pgtype.UUID
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+type OrganizationMembershipDAO struct {
+	OrgID           pgtype.UUID
+	UserID          pgtype.UUID
+	Email           pgtype.Text
+	Role            pgtype.Text
+	Status          pgtype.Text
+	CreatedByUserID pgtype.UUID
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }
 
 type OAuthProfileIDDAO struct {
@@ -151,6 +172,7 @@ func FromDAO(dao *ProfileDAO) (*domain.Profile, error) {
 	return &domain.Profile{
 		ProfileAccount: domain.ProfileAccount{
 			ID:                         dao.ID.Bytes,
+			DefaultOrgID:               dao.DefaultOrgID.Bytes,
 			Email:                      dao.Email.String,
 			PhoneNumber:                dao.PhoneNumber.String,
 			CountryCode:                dao.CountryCode.String,
@@ -172,10 +194,34 @@ func FromDAO(dao *ProfileDAO) (*domain.Profile, error) {
 func FromDAOProfileAccount(dao *ProfileAccountDAO) *domain.ProfileAccount {
 	return &domain.ProfileAccount{
 		ID:                   dao.ID.Bytes,
+		DefaultOrgID:         dao.DefaultOrgID.Bytes,
 		Email:                dao.Email.String,
 		PhoneNumber:          dao.PhoneNumber.String,
 		CountryCode:          dao.CountryCode.String,
 		EmailVerified:        dao.EmailVerified.Bool,
 		EmailVerifyExpiresAt: dao.EmailVerifyExpiresAt.Time,
+	}
+}
+
+func FromDAOOrganization(dao *OrganizationDAO) *domain.Organization {
+	return &domain.Organization{
+		ID:              dao.ID.Bytes,
+		DisplayName:     dao.DisplayName.String,
+		CreatedByUserID: dao.CreatedByUserID.Bytes,
+		CreatedAt:       dao.CreatedAt.Time,
+		UpdatedAt:       dao.UpdatedAt.Time,
+	}
+}
+
+func FromDAOOrganizationMembership(dao *OrganizationMembershipDAO) *domain.OrganizationMembership {
+	return &domain.OrganizationMembership{
+		OrgID:           dao.OrgID.Bytes,
+		UserID:          dao.UserID.Bytes,
+		Email:           dao.Email.String,
+		Role:            dao.Role.String,
+		Status:          dao.Status.String,
+		CreatedByUserID: dao.CreatedByUserID.Bytes,
+		CreatedAt:       dao.CreatedAt.Time,
+		UpdatedAt:       dao.UpdatedAt.Time,
 	}
 }

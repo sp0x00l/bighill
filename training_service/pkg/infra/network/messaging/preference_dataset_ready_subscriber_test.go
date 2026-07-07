@@ -62,6 +62,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 	It("starts DPO training from a preference dataset artifact", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 		preferenceDatasetID := uuid.New()
 		sourceRequestID := uuid.New()
@@ -72,6 +73,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
 			PreferenceDatasetId: preferenceDatasetID.String(),
 			UserId:              userID.String(),
+			OrgId:               orgID.String(),
 			DatasetId:           datasetID.String(),
 			ModelId:             modelID.String(),
 			SourceRequestId:     sourceRequestID.String(),
@@ -91,6 +93,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 		Expect(profileCatalog.evaluationProfileName).To(Equal("dpo-eval@v1"))
 		Expect(starter.calls).To(Equal(1))
 		Expect(starter.request.UserID).To(Equal(userID.String()))
+		Expect(starter.request.OrgID).To(Equal(orgID.String()))
 		Expect(starter.request.DatasetID).To(Equal(datasetID.String()))
 		Expect(starter.request.DatasetVersion).To(Equal(""))
 		Expect(starter.request.FeatureSnapshotID).To(Equal(""))
@@ -117,6 +120,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
 			PreferenceDatasetId: uuid.NewString(),
 			UserId:              uuid.NewString(),
+			OrgId:               uuid.NewString(),
 			DatasetId:           datasetID.String(),
 			ModelId:             uuid.NewString(),
 			SourceRequestId:     uuid.NewString(),
@@ -143,6 +147,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
 			PreferenceDatasetId: uuid.NewString(),
 			UserId:              uuid.NewString(),
+			OrgId:               uuid.NewString(),
 			DatasetId:           datasetID.String(),
 			ModelId:             uuid.NewString(),
 			SourceRequestId:     uuid.NewString(),
@@ -170,6 +175,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
 			PreferenceDatasetId: uuid.NewString(),
 			UserId:              uuid.NewString(),
+			OrgId:               uuid.NewString(),
 			DatasetId:           datasetID.String(),
 			ModelId:             uuid.NewString(),
 			SourceRequestId:     uuid.NewString(),

@@ -163,8 +163,15 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	orgID, err := msgConn.ParseOptionalUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	if modelKind.String() != model.ModelKindBase.String() && userID == uuid.Nil {
 		return nil, uuid.Nil, fmt.Errorf("user id is required for non-base models")
+	}
+	if modelKind.String() != model.ModelKindBase.String() && orgID == uuid.Nil {
+		return nil, uuid.Nil, fmt.Errorf("org id is required for non-base models")
 	}
 	status, err := model.ToModelStatus(strings.TrimSpace(payload.GetStatus()))
 	if err != nil {
@@ -177,6 +184,7 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 	inferenceModel := &model.InferenceModel{
 		ModelID:           modelID,
 		UserID:            userID,
+		OrgID:             orgID,
 		TrainingRunID:     trainingRunID,
 		DatasetID:         datasetID,
 		ModelKind:         modelKind,
@@ -293,6 +301,10 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	processingState, err := model.ToDatasetProcessingState(strings.TrimSpace(payload.GetProcessingState()))
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -313,6 +325,7 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 	dataset := &model.InferenceDataset{
 		DatasetID:                datasetID,
 		UserID:                   userID,
+		OrgID:                    orgID,
 		DatasetVersion:           int(payload.GetDatasetVersion()),
 		ProcessingState:          processingState,
 		StorageLocation:          strings.TrimSpace(payload.GetStorageLocation()),

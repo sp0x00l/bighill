@@ -39,11 +39,19 @@ type profilesDTOAdapterMock struct {
 	ToOAuthAuthorizeCalled          bool
 	FromOAuthSessionCalled          bool
 	ToOAuthSessionCalled            bool
+	FromOrganizationMemberCalled    bool
+	ToOrganizationCalled            bool
+	ToOrganizationMembersCalled     bool
 
 	NextProfile             *domain.Profile
 	NextProfileAccount      *domain.ProfileAccount
+	NextOrganization        *domain.Organization
+	NextMembership          *domain.OrganizationMembership
+	NextMemberships         []*domain.OrganizationMembership
 	NextProfileBytes        []byte
 	NextProfileAccountBytes []byte
+	NextOrganizationBytes   []byte
+	NextMembershipsBytes    []byte
 	NextEmail               string
 	NextPassword            string
 	NextHuggingFaceToken    string
@@ -58,6 +66,9 @@ type profilesDTOAdapterMock struct {
 
 	LastProfileModel        *domain.Profile
 	LastProfileAccountModel *domain.ProfileAccount
+	LastOrganizationModel   *domain.Organization
+	LastMembershipModel     *domain.OrganizationMembership
+	LastMembershipsModel    []*domain.OrganizationMembership
 	LastProfileBytes        []byte
 	LastProfileAccountBytes []byte
 	LastPasswordBytes       []byte
@@ -138,6 +149,25 @@ func (m *profilesDTOAdapterMock) ToOAuthSessionResultDTO(_ context.Context, _ *u
 	return m.NextOAuthSessionRes, m.NextSerialisationError
 }
 
+func (m *profilesDTOAdapterMock) FromOrganizationMemberDTO(_ context.Context, _ uuid.UUID, requestBytes []byte) (*domain.OrganizationMembership, error) {
+	m.FromOrganizationMemberCalled = true
+	m.LastProfileBytes = requestBytes
+	return m.NextMembership, m.NextError
+}
+
+func (m *profilesDTOAdapterMock) ToOrganizationDTO(_ context.Context, organization *domain.Organization, membership *domain.OrganizationMembership) ([]byte, error) {
+	m.ToOrganizationCalled = true
+	m.LastOrganizationModel = organization
+	m.LastMembershipModel = membership
+	return m.NextOrganizationBytes, m.NextSerialisationError
+}
+
+func (m *profilesDTOAdapterMock) ToOrganizationMembersDTO(_ context.Context, memberships []*domain.OrganizationMembership) ([]byte, error) {
+	m.ToOrganizationMembersCalled = true
+	m.LastMembershipsModel = memberships
+	return m.NextMembershipsBytes, m.NextSerialisationError
+}
+
 type profileUseCaseMock struct {
 	CreateProfileCalled            bool
 	UpdateProfileCalled            bool
@@ -150,8 +180,15 @@ type profileUseCaseMock struct {
 	CreateOAuthAuthorizationCalled bool
 	CreateOAuthSessionCalled       bool
 	LogoutCalled                   bool
+	ReadCurrentOrganizationCalled  bool
+	ListOrganizationMembersCalled  bool
+	UpsertOrganizationMemberCalled bool
+	DeleteOrganizationMemberCalled bool
 
 	NextProfile      *domain.Profile
+	NextOrganization *domain.Organization
+	NextMembership   *domain.OrganizationMembership
+	NextMemberships  []*domain.OrganizationMembership
 	NextToken        string
 	NextOAuthAuth    *usecase.OAuthAuthorizeResult
 	NextOAuthSession *usecase.OAuthSessionResult
@@ -161,6 +198,9 @@ type profileUseCaseMock struct {
 	LastProfileAccount   *domain.ProfileAccount
 	LastIdempotencyKey   uuid.UUID
 	LastUserID           uuid.UUID
+	LastOrgID            uuid.UUID
+	LastMemberUserID     uuid.UUID
+	LastMembership       *domain.OrganizationMembership
 	LastEmail            string
 	LastToken            string
 	LastPassword         string
@@ -234,6 +274,35 @@ func (m *profileUseCaseMock) CreateOAuthSession(_ context.Context, _ string, _ u
 func (m *profileUseCaseMock) Logout(_ context.Context, sessionID string) error {
 	m.LogoutCalled = true
 	m.LastSessionID = sessionID
+	return m.NextError
+}
+
+func (m *profileUseCaseMock) ReadCurrentOrganization(_ context.Context, actorUserID uuid.UUID, orgID uuid.UUID) (*domain.Organization, *domain.OrganizationMembership, error) {
+	m.ReadCurrentOrganizationCalled = true
+	m.LastUserID = actorUserID
+	m.LastOrgID = orgID
+	return m.NextOrganization, m.NextMembership, m.NextError
+}
+
+func (m *profileUseCaseMock) ListOrganizationMembers(_ context.Context, actorUserID uuid.UUID, orgID uuid.UUID) ([]*domain.OrganizationMembership, error) {
+	m.ListOrganizationMembersCalled = true
+	m.LastUserID = actorUserID
+	m.LastOrgID = orgID
+	return m.NextMemberships, m.NextError
+}
+
+func (m *profileUseCaseMock) UpsertOrganizationMember(_ context.Context, actorUserID uuid.UUID, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error) {
+	m.UpsertOrganizationMemberCalled = true
+	m.LastUserID = actorUserID
+	m.LastMembership = membership
+	return m.NextMembership, m.NextError
+}
+
+func (m *profileUseCaseMock) DeleteOrganizationMember(_ context.Context, actorUserID uuid.UUID, orgID uuid.UUID, memberUserID uuid.UUID) error {
+	m.DeleteOrganizationMemberCalled = true
+	m.LastUserID = actorUserID
+	m.LastOrgID = orgID
+	m.LastMemberUserID = memberUserID
 	return m.NextError
 }
 

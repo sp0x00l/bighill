@@ -27,6 +27,7 @@ type UploadSession struct {
 	ResourceID          uuid.UUID
 	DatasetID           uuid.UUID
 	UserID              uuid.UUID
+	OrgID               uuid.UUID
 	ClientNonce         string
 	FileName            string
 	StagingKey          string
@@ -72,6 +73,7 @@ type ObjectInfo struct {
 type InitiateUploadSessionRequest struct {
 	DatasetID           uuid.UUID
 	UserID              uuid.UUID
+	OrgID               uuid.UUID
 	ClientNonce         string
 	FileName            string
 	DeclaredFormat      string
@@ -88,6 +90,7 @@ type InitiateModelUploadSessionRequest struct {
 	ResourceID          uuid.UUID
 	DatasetID           uuid.UUID
 	UserID              uuid.UUID
+	OrgID               uuid.UUID
 	ClientNonce         string
 	FileName            string
 	ArtifactType        string
@@ -103,6 +106,7 @@ type OnboardHuggingFaceModelRequest struct {
 	ResourceID       uuid.UUID
 	DatasetID        uuid.UUID
 	UserID           uuid.UUID
+	OrgID            uuid.UUID
 	ClientNonce      string
 	RepoID           string
 	Revision         string
@@ -142,4 +146,5 @@ type InitiatedUploadSession struct {
 type CompleteUploadSessionRequest struct {
 	UploadID uuid.UUID
 	UserID   uuid.UUID
+	OrgID    uuid.UUID
 }

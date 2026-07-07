@@ -31,7 +31,7 @@ var _ = Describe("DatasetDB", func() {
 
 	BeforeEach(func() {
 		userID = uuid.New()
-		ctx = ctxutil.WithTenantID(context.Background(), userID)
+		ctx = ctxutil.WithActorOrg(context.Background(), userID, userID)
 		pool = &repositoryPoolStub{}
 		repo = NewDatasetDB(coreDB.NewDatabase(pool, "test_schema"))
 		dataset = validDatasetDomain(uuid.New(), userID)
@@ -41,6 +41,7 @@ var _ = Describe("DatasetDB", func() {
 		pool.txRows = []pgx.Row{stringScanRow(nil,
 			dataset.ID.String(),
 			userID.String(),
+			dataset.OrgID.String(),
 			model.Standard.String(),
 			model.Draft.String(),
 			model.DatasetProcessingPending.String(),
@@ -90,10 +91,10 @@ var _ = Describe("DatasetDB", func() {
 		Expect(got).To(HaveLen(1))
 		Expect(got[0].ID).To(Equal(dataset.ID))
 		Expect(pool.queryCalled).To(BeTrue())
-		Expect(pool.lastQuery).To(ContainSubstring("user_id = @user_id"))
+		Expect(pool.lastQuery).To(ContainSubstring("org_id = @org_id"))
 		Expect(pool.lastQuery).To(ContainSubstring("category IN (@value_0)"))
 		args := pool.lastArgs[0].(pgx.NamedArgs)
-		Expect(args["user_id"]).To(Equal(userID))
+		Expect(args["org_id"]).To(Equal(userID))
 		Expect(args["value_0"]).To(Equal("rag"))
 	})
 
@@ -125,10 +126,10 @@ var _ = Describe("DatasetDB", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.ID).To(Equal(dataset.ID))
-		Expect(pool.lastQuery).To(ContainSubstring("id = @id AND user_id = @user_id"))
+		Expect(pool.lastQuery).To(ContainSubstring("id = @id AND org_id = @org_id"))
 		args := pool.lastArgs[0].(pgx.NamedArgs)
 		Expect(args["id"]).To(Equal(dataset.ID))
-		Expect(args["user_id"]).To(Equal(userID))
+		Expect(args["org_id"]).To(Equal(userID))
 	})
 
 	It("returns resource-not-found when reading a missing dataset by id", func() {
@@ -169,7 +170,7 @@ var _ = Describe("DatasetDB", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pool.commitCalled).To(BeFalse())
-		Expect(pool.lastQuery).To(ContainSubstring("user_id = @user_id"))
+		Expect(pool.lastQuery).To(ContainSubstring("org_id = @org_id"))
 	})
 
 	It("returns resource-not-found when deleting a missing dataset", func() {
@@ -285,7 +286,7 @@ var _ = Describe("SourceConnectorDB", func() {
 
 	BeforeEach(func() {
 		userID = uuid.New()
-		ctx = ctxutil.WithTenantID(context.Background(), userID)
+		ctx = ctxutil.WithActorOrg(context.Background(), userID, userID)
 		pool = &repositoryPoolStub{}
 		repo = NewSourceConnectorDB(coreDB.NewDatabase(pool, "test_schema"))
 		connector = validSourceConnectorDomain(uuid.New(), userID)
@@ -332,9 +333,9 @@ var _ = Describe("SourceConnectorDB", func() {
 		Expect(got).To(HaveLen(1))
 		Expect(got[0].ID).To(Equal(connector.ID))
 		Expect(got[0].UserID).To(Equal(userID))
-		Expect(pool.lastQuery).To(ContainSubstring("WHERE user_id = @user_id"))
+		Expect(pool.lastQuery).To(ContainSubstring("WHERE org_id = @org_id"))
 		args := pool.lastArgs[0].(pgx.NamedArgs)
-		Expect(args["user_id"]).To(Equal(userID))
+		Expect(args["org_id"]).To(Equal(userID))
 	})
 
 	It("returns resource-not-found when a user has no source connectors", func() {
@@ -365,7 +366,7 @@ var _ = Describe("SourceConnectorDB", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.ID).To(Equal(connector.ID))
 		Expect(got.CatalogID).To(Equal(connector.CatalogID))
-		Expect(pool.lastQuery).To(ContainSubstring("id = @id AND user_id = @user_id"))
+		Expect(pool.lastQuery).To(ContainSubstring("id = @id AND org_id = @org_id"))
 	})
 
 	It("returns resource-not-found when reading a missing connector by id", func() {
@@ -706,13 +707,15 @@ func (r *sourceConnectorRowStub) Scan(dest ...any) error {
 	*(dest[0].(*pgtype.UUID)) = r.dao.ID
 	*(dest[1].(*pgtype.UUID)) = r.dao.UserID
 	if len(dest) == 5 {
-		*(dest[2].(*pgtype.UUID)) = r.dao.CatalogID
+		*(dest[2].(*pgtype.UUID)) = r.dao.OrgID
 		*(dest[3].(*pgtype.Text)) = r.dao.StorageType
 		*(dest[4].(*[]byte)) = r.dao.Config
 		return nil
 	}
-	*(dest[2].(*pgtype.Text)) = r.dao.StorageType
-	*(dest[3].(*[]byte)) = r.dao.Config
+	*(dest[2].(*pgtype.UUID)) = r.dao.OrgID
+	*(dest[3].(*pgtype.UUID)) = r.dao.CatalogID
+	*(dest[4].(*pgtype.Text)) = r.dao.StorageType
+	*(dest[5].(*[]byte)) = r.dao.Config
 	return nil
 }
 
@@ -730,6 +733,7 @@ func validDatasetDomain(datasetID, userID uuid.UUID) *model.Dataset {
 	return &model.Dataset{
 		ID:                datasetID,
 		UserID:            userID,
+		OrgID:             userID,
 		Title:             "Movies",
 		Description:       "Movie rows",
 		Origin:            model.Standard,
@@ -752,6 +756,7 @@ func validSourceConnectorDomain(connectorID, userID uuid.UUID) *model.SourceConn
 	return &model.SourceConnector{
 		ID:        connectorID,
 		UserID:    userID,
+		OrgID:     userID,
 		CatalogID: uuid.New(),
 		Config: &model.PostgresDBConnCfg{
 			Hostname:           "localhost",
@@ -768,6 +773,7 @@ func validSourceConnectorDAO(connectorID, userID, catalogID uuid.UUID) SourceCon
 	return SourceConnectorDAO{
 		ID:          pgtype.UUID{Bytes: connectorID, Valid: true},
 		UserID:      pgtype.UUID{Bytes: userID, Valid: true},
+		OrgID:       pgtype.UUID{Bytes: userID, Valid: true},
 		CatalogID:   pgtype.UUID{Bytes: catalogID, Valid: true},
 		StorageType: pgtype.Text{String: model.Postgres.String(), Valid: true},
 		Config:      []byte(`{"Hostname":"localhost","Port":5432,"DatabaseName":"mlops","Username":"postgres","Password":"password","AuthenticationType":1}`),

@@ -179,6 +179,7 @@ func validDatasetFile() *model.DatasetFile {
 	return &model.DatasetFile{
 		DatasetID:       uuid.New(),
 		UserID:          uuid.New(),
+		OrgID:           uuid.New(),
 		StorageLocation: "s3://local-dev-bucket/raw/file.csv",
 		ContentType:     "text/csv",
 		FileExtension:   "csv",
@@ -195,6 +196,7 @@ func validRawSnapshot() *model.RawSnapshot {
 		RawSnapshotID:   uuid.New(),
 		DatasetID:       datasetID,
 		UserID:          uuid.New(),
+		OrgID:           uuid.New(),
 		StorageLocation: "s3://local-dev-bucket/raw/file.csv",
 		ContentType:     "text/csv",
 		FileExtension:   "csv",

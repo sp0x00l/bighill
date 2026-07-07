@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"lib/shared_lib/authz"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -16,6 +17,10 @@ type authProviderMock struct {
 }
 
 func (m *authProviderMock) CreateToken(_ context.Context, _ uuid.UUID, _ int) (string, string, int64, error) {
+	return "", "", 0, nil
+}
+
+func (m *authProviderMock) CreateAccessToken(_ context.Context, _ authz.TokenClaims, _ int) (string, string, int64, error) {
 	return "", "", 0, nil
 }
 

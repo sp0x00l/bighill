@@ -17,6 +17,7 @@ import (
 type DatasetDTO struct {
 	ID                  string          `json:"id,omitempty"`
 	UserID              string          `json:"userId,omitempty"`
+	OrgID               string          `json:"orgId,omitempty"`
 	Title               string          `json:"title"                       validate:"required,max=250"`
 	Description         string          `json:"description,omitempty"`
 	Origin              string          `json:"origin,omitempty"`
@@ -138,6 +139,15 @@ func (a *dtoAdapter) fromDTO(ctx context.Context, datasetDTO *DatasetDTO) (*mode
 		}
 	}
 
+	var orgID uuid.UUID
+	if datasetDTO.OrgID != "" {
+		orgID, err = uuid.Parse(datasetDTO.OrgID)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("org ID is invalid")
+			return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
+		}
+	}
+
 	var origin model.OriginType
 	if datasetDTO.Origin != "" {
 		origin, err = model.ToOriginType(datasetDTO.Origin)
@@ -209,6 +219,7 @@ func (a *dtoAdapter) fromDTO(ctx context.Context, datasetDTO *DatasetDTO) (*mode
 	modelDataset := &model.Dataset{
 		ID:                datasetID,
 		UserID:            userID,
+		OrgID:             orgID,
 		Title:             datasetDTO.Title,
 		Description:       datasetDTO.Description,
 		Origin:            origin,
@@ -237,12 +248,10 @@ func (a *dtoAdapter) toDTO(datasetModel *model.Dataset, baseURL string) *Dataset
 	log.Trace("dtoAdapter toDTO")
 
 	schemaMetadata := datasetModel.SchemaMetadata
-	if schemaMetadata == "" {
-		schemaMetadata = "{}"
-	}
 	dtoDataset := DatasetDTO{
 		ID:                  datasetModel.ID.String(),
 		UserID:              datasetModel.UserID.String(),
+		OrgID:               datasetModel.OrgID.String(),
 		Title:               datasetModel.Title,
 		Description:         datasetModel.Description,
 		Origin:              datasetModel.Origin.String(),

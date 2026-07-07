@@ -3,9 +3,12 @@ package messaging
 import (
 	"model_registry_service/pkg/domain/model"
 
+	modelregistrypb "lib/data_contracts_lib/model_registry"
+
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("ModelEventBuilder", func() {
@@ -29,6 +32,21 @@ var _ = Describe("ModelEventBuilder", func() {
 
 		Expect(first.DispatchKey).To(Equal(second.DispatchKey))
 	})
+
+	It("includes org id in model updated and promotion requested payloads", func() {
+		builder := NewModelEventBuilder("model_registry")
+		modelRecord := validEventBuilderModel()
+
+		modelUpdated := builder.ModelUpdatedMessage(modelRecord)
+		var updatedEvent modelregistrypb.ModelUpdatedEvent
+		Expect(proto.Unmarshal(modelUpdated.Message.Payload, &updatedEvent)).To(Succeed())
+		Expect(updatedEvent.GetOrgId()).To(Equal(modelRecord.OrgID.String()))
+
+		promotionRequested := builder.PromotionRequestedMessage(modelRecord, nil)
+		var promotionEvent modelregistrypb.PromotionRequestedEvent
+		Expect(proto.Unmarshal(promotionRequested.Message.Payload, &promotionEvent)).To(Succeed())
+		Expect(promotionEvent.GetOrgId()).To(Equal(modelRecord.OrgID.String()))
+	})
 })
 
 func validEventBuilderModel() *model.Model {
@@ -38,6 +56,7 @@ func validEventBuilderModel() *model.Model {
 	return &model.Model{
 		ModelID:            uuid.New(),
 		UserID:             userID,
+		OrgID:              uuid.New(),
 		DatasetID:          datasetID,
 		TrainingRunID:      trainingRunID,
 		ModelKind:          model.ModelKindFineTuned,

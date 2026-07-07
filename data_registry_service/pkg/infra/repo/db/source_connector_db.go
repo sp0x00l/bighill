@@ -6,6 +6,7 @@ import (
 	"data_registry_service/pkg/domain/model"
 	"errors"
 	"fmt"
+	"lib/shared_lib/ctxutil"
 	coreDB "lib/shared_lib/db"
 
 	"github.com/google/uuid"
@@ -36,8 +37,8 @@ func (db *sourceConnectorDB) Create(ctx context.Context, tx pgx.Tx, sourceConnec
 		return err
 	}
 
-	var sqlStatement = `INSERT INTO ` + db.Name + `.connectors (id, user_id, catalog_id, storage_type, config, idempotency_key)
-	VALUES (@id,  @user_id, @catalog_id, @storage_type, @config, @idempotency_key);`
+	var sqlStatement = `INSERT INTO ` + db.Name + `.connectors (id, user_id, org_id, catalog_id, storage_type, config, idempotency_key)
+	VALUES (@id, @user_id, @org_id, @catalog_id, @storage_type, @config, @idempotency_key);`
 
 	_, err = tx.Exec(ctx, sqlStatement, sourceConnDAO)
 	if err != nil {
@@ -60,10 +61,10 @@ func (db *sourceConnectorDB) Create(ctx context.Context, tx pgx.Tx, sourceConnec
 func (db *sourceConnectorDB) ReadByUserID(ctx context.Context, userID uuid.UUID) ([]model.SourceConnector, error) {
 	log.Trace("SourceConnectorDB ReadByUserID")
 
-	sqlStatement := `SELECT id, user_id, storage_type, config FROM ` + db.Name + `.connectors 
-	WHERE user_id = @user_id AND deleted = false;`
+	sqlStatement := `SELECT id, user_id, org_id, storage_type, config FROM ` + db.Name + `.connectors 
+	WHERE org_id = @org_id AND deleted = false;`
 
-	rows, err := db.Pool.Query(ctx, sqlStatement, pgx.NamedArgs{"user_id": userID})
+	rows, err := db.Pool.Query(ctx, sqlStatement, db.scopedArgs(ctx, userID, nil))
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("database error. Failed to query connector")
 		return nil, fmt.Errorf("database error. Failed to query connector: %w", err)
@@ -85,12 +86,12 @@ func (db *sourceConnectorDB) ReadByUserID(ctx context.Context, userID uuid.UUID)
 func (db *sourceConnectorDB) ReadByID(ctx context.Context, connectorID, userID uuid.UUID) (*model.SourceConnector, error) {
 	log.Trace("SourceConnectorDB ReadByID")
 
-	sqlStatement := `SELECT id, user_id, catalog_id, storage_type, config FROM ` + db.Name + `.connectors 
-	WHERE id = @id AND user_id = @user_id AND deleted = false;`
+	sqlStatement := `SELECT id, user_id, org_id, catalog_id, storage_type, config FROM ` + db.Name + `.connectors 
+	WHERE id = @id AND org_id = @org_id AND deleted = false;`
 
-	row := db.Pool.QueryRow(ctx, sqlStatement, pgx.NamedArgs{"id": connectorID, "user_id": userID})
+	row := db.Pool.QueryRow(ctx, sqlStatement, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": connectorID}))
 	var sourceConnDAO SourceConnectorDAO
-	err := row.Scan(&sourceConnDAO.ID, &sourceConnDAO.UserID, &sourceConnDAO.CatalogID, &sourceConnDAO.StorageType, &sourceConnDAO.Config)
+	err := row.Scan(&sourceConnDAO.ID, &sourceConnDAO.UserID, &sourceConnDAO.OrgID, &sourceConnDAO.CatalogID, &sourceConnDAO.StorageType, &sourceConnDAO.Config)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domainErrors.ErrResourceNotFound
@@ -108,11 +109,11 @@ func (db *sourceConnectorDB) ReadCatalogID(ctx context.Context, connectorID, use
 	log.Trace("SourceConnectorDB ReadCatalogID")
 
 	sqlStatement := `SELECT catalog_id FROM ` + db.Name + `.connectors 
-	WHERE id = @id AND user_id = @user_id AND deleted = false;`
+	WHERE id = @id AND org_id = @org_id AND deleted = false;`
 
 	var daoID pgtype.UUID
 
-	row := db.Pool.QueryRow(ctx, sqlStatement, pgx.NamedArgs{"id": connectorID, "user_id": userID})
+	row := db.Pool.QueryRow(ctx, sqlStatement, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": connectorID}))
 	err := row.Scan(&daoID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -131,9 +132,9 @@ func (db *sourceConnectorDB) Delete(ctx context.Context, tx pgx.Tx, connectorID,
 	log.Trace("SourceConnectorDB Delete")
 
 	sqlStatement := `UPDATE ` + db.Name + `.connectors SET deleted = true 
-	WHERE id = @id AND user_id = @user_id AND deleted = false;`
+	WHERE id = @id AND org_id = @org_id AND deleted = false;`
 
-	commandTag, err := tx.Exec(ctx, sqlStatement, pgx.NamedArgs{"id": connectorID, "user_id": userID})
+	commandTag, err := tx.Exec(ctx, sqlStatement, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": connectorID}))
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("database error. Failed to delete connector")
 		return fmt.Errorf("database error. Failed to delete connector: %w", err)
@@ -155,8 +156,8 @@ func (db *sourceConnectorDB) Replace(ctx context.Context, tx pgx.Tx, sourceConne
 		return err
 	}
 
-	sqlStatement := `UPDATE ` + db.Name + `.connectors SET user_id = @user_id, catalog_id = @catalog_id, storage_type = @storage_type, config = @config
-	WHERE id = @id AND user_id = @user_id AND deleted = false;`
+	sqlStatement := `UPDATE ` + db.Name + `.connectors SET user_id = @user_id, org_id = @org_id, catalog_id = @catalog_id, storage_type = @storage_type, config = @config
+	WHERE id = @id AND org_id = @org_id AND deleted = false;`
 
 	commandTag, err := tx.Exec(ctx, sqlStatement, sourceConnDAO)
 	if err != nil {
@@ -172,13 +173,31 @@ func (db *sourceConnectorDB) Replace(ctx context.Context, tx pgx.Tx, sourceConne
 	return nil
 }
 
+func (db *sourceConnectorDB) scopedArgs(ctx context.Context, userID uuid.UUID, args pgx.NamedArgs) pgx.NamedArgs {
+	log.Trace("SourceConnectorDB scopedArgs")
+
+	if args == nil {
+		args = pgx.NamedArgs{}
+	}
+	if userID != uuid.Nil {
+		args["user_id"] = userID
+	}
+	orgID, ok := ctxutil.OrgID(ctx)
+	if ok {
+		args["org_id"] = orgID
+	} else {
+		args["org_id"] = uuid.Nil
+	}
+	return args
+}
+
 func (db *sourceConnectorDB) scanRows(ctx context.Context, rows pgx.Rows) ([]model.SourceConnector, error) {
 	log.Trace("sourceConnectorDB scanRows")
 
 	sourceConnectors := make([]model.SourceConnector, 0)
 	for rows.Next() {
 		var sourceConnDAO SourceConnectorDAO
-		err := rows.Scan(&sourceConnDAO.ID, &sourceConnDAO.UserID, &sourceConnDAO.StorageType, &sourceConnDAO.Config)
+		err := rows.Scan(&sourceConnDAO.ID, &sourceConnDAO.UserID, &sourceConnDAO.OrgID, &sourceConnDAO.StorageType, &sourceConnDAO.Config)
 		if err != nil {
 			log.WithContext(ctx).WithError(err).Error("database error. Failed to scan connector")
 			return []model.SourceConnector{}, fmt.Errorf("database error. Failed to scan connector: %w", err)

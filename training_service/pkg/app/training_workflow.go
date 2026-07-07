@@ -82,6 +82,7 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 	result := &model.TrainingRunResult{
 		TrainingRunID:     request.TrainingRunID,
 		UserID:            request.UserID,
+		OrgID:             request.OrgID,
 		DatasetID:         request.DatasetID,
 		DatasetVersion:    request.DatasetVersion,
 		FeatureSnapshotID: request.FeatureSnapshotID,
@@ -132,6 +133,7 @@ func failedTrainingRunResult(request model.TrainingRunRequest, reason string) *m
 	return &model.TrainingRunResult{
 		TrainingRunID:     request.TrainingRunID,
 		UserID:            request.UserID,
+		OrgID:             request.OrgID,
 		DatasetID:         request.DatasetID,
 		DatasetVersion:    request.DatasetVersion,
 		FeatureSnapshotID: request.FeatureSnapshotID,

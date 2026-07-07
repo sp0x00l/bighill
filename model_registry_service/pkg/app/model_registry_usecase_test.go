@@ -11,6 +11,7 @@ import (
 	"model_registry_service/pkg/domain/model"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 
+	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 	transport "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
@@ -28,6 +29,7 @@ func TestApp(t *testing.T) {
 
 type modelRepositoryStub struct {
 	createdModel       *model.Model
+	createCtx          context.Context
 	readModel          *model.Model
 	champion           *model.Model
 	status             model.ModelStatus
@@ -45,7 +47,8 @@ type modelRepositoryStub struct {
 
 func (s *modelRepositoryStub) Close() {}
 
-func (s *modelRepositoryStub) Create(_ context.Context, _ pgx.Tx, registeredModel *model.Model, _ uuid.UUID) (*model.Model, error) {
+func (s *modelRepositoryStub) Create(ctx context.Context, _ pgx.Tx, registeredModel *model.Model, _ uuid.UUID) (*model.Model, error) {
+	s.createCtx = ctx
 	s.createdModel = registeredModel
 	return registeredModel, s.createErr
 }
@@ -126,6 +129,16 @@ type modelServingDeployerStub struct {
 	err         error
 }
 
+type publishedEndpointRepositoryStub struct {
+	endpoint *model.PublishedEndpoint
+	err      error
+}
+
+func (s *publishedEndpointRepositoryStub) UpsertEndpoint(_ context.Context, _ pgx.Tx, endpoint *model.PublishedEndpoint) error {
+	s.endpoint = endpoint
+	return s.err
+}
+
 func modelEventBuilder() app.ModelEventBuilder {
 	return registrymessaging.NewModelEventBuilder("model_registry")
 }
@@ -148,6 +161,23 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(result.ModelID).NotTo(Equal(uuid.Nil))
 		Expect(repo.createdModel).To(Equal(registeredModel))
 		Expect(uow.messages).To(HaveLen(1))
+	})
+
+	It("does not grant system context when a model record is missing actor and org", func() {
+		repo := &modelRepositoryStub{}
+		uow := &modelUnitOfWorkStub{}
+		uc := app.NewModelRegistryUsecase(repo, uow, modelEventBuilder())
+		registeredModel := validModel()
+		registeredModel.UserID = uuid.Nil
+		registeredModel.OrgID = uuid.Nil
+
+		result, err := uc.RegisterModel(context.Background(), registeredModel, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(registeredModel))
+		Expect(ctxutil.IsSystemContext(repo.createCtx)).To(BeFalse())
+		_, hasOrg := ctxutil.OrgID(repo.createCtx)
+		Expect(hasOrg).To(BeFalse())
 	})
 
 	It("marks a model ready", func() {
@@ -377,6 +407,58 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(result.Status).To(Equal(model.ModelStatusReady))
 	})
 
+	It("publishes a ready inference endpoint when a tenant model is loaded", func() {
+		modelRecord := validModel()
+		endpoints := &publishedEndpointRepositoryStub{}
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithPublishedEndpointRepository(endpoints))
+
+		_, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingTarget:     "vllm-local",
+			ServingModel:      "movie-ranker-v1",
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(endpoints.endpoint).NotTo(BeNil())
+		Expect(endpoints.endpoint.OrgID).To(Equal(modelRecord.OrgID))
+		Expect(endpoints.endpoint.ModelID).To(Equal(modelRecord.ModelID))
+		Expect(endpoints.endpoint.DatasetID).To(Equal(modelRecord.DatasetID))
+		Expect(endpoints.endpoint.Status).To(Equal(model.PublishedEndpointStatusReady))
+		Expect(endpoints.endpoint.DisplayName).To(Equal(modelRecord.Name))
+	})
+
+	It("publishes a disabled inference endpoint for an unloaded tenant model", func() {
+		modelRecord := validModel()
+		endpoints := &publishedEndpointRepositoryStub{}
+		repo := &modelRepositoryStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithPublishedEndpointRepository(endpoints))
+
+		result, err := uc.RecordModelTrainingCompleted(context.Background(), modelRecord, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusCandidate))
+		Expect(endpoints.endpoint).NotTo(BeNil())
+		Expect(endpoints.endpoint.Status).To(Equal(model.PublishedEndpointStatusDisabled))
+	})
+
+	It("does not publish an inference endpoint for shared base models", func() {
+		modelRecord := validModel()
+		modelRecord.ModelKind = model.ModelKindBase
+		modelRecord.UserID = uuid.Nil
+		modelRecord.OrgID = uuid.Nil
+		modelRecord.DatasetID = uuid.Nil
+		endpoints := &publishedEndpointRepositoryStub{}
+		repo := &modelRepositoryStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithPublishedEndpointRepository(endpoints))
+
+		_, err := uc.RecordModelArtifactIngested(context.Background(), modelRecord, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(endpoints.endpoint).To(BeNil())
+	})
+
 	It("does not let serving status make a candidate ready", func() {
 		modelRecord := validModel()
 		modelRecord.Status = model.ModelStatusCandidate
@@ -432,6 +514,8 @@ var _ = Describe("ModelRegistryUsecase", func() {
 func validModel() *model.Model {
 	return &model.Model{
 		ModelID:           uuid.New(),
+		UserID:            uuid.New(),
+		OrgID:             uuid.New(),
 		TrainingRunID:     uuid.New(),
 		DatasetID:         uuid.New(),
 		Name:              "movie-ranker",

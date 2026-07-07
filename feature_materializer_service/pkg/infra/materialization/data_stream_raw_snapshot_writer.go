@@ -69,6 +69,7 @@ func (w *DataStreamRawSnapshotWriter) WriteRawSnapshot(ctx context.Context, data
 
 	artifact, err := w.reader.ReadParquet(ctx, DataStreamReadRequest{
 		UserID:            datasetFile.UserID.String(),
+		OrgID:             datasetFile.OrgID.String(),
 		SourceType:        datasetFile.SourceType,
 		SourceConnectorID: datasetFile.SourceConnectorID.String(),
 		SQL:               datasetFile.SourceQuery,

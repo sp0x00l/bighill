@@ -39,11 +39,15 @@ type MaterializeRawSnapshotActivityInput struct {
 
 type BuildFeatureSnapshotActivityInput struct {
 	RawSnapshotID  uuid.UUID
+	UserID         uuid.UUID
+	OrgID          uuid.UUID
 	IdempotencyKey uuid.UUID
 }
 
 type MaterializeEmbeddingsActivityInput struct {
 	FeatureSnapshotID uuid.UUID
+	UserID            uuid.UUID
+	OrgID             uuid.UUID
 	IdempotencyKey    uuid.UUID
 	Strategy          model.EmbeddingStrategy
 }
@@ -87,6 +91,8 @@ func MaterializeWorkflow(ctx workflow.Context, input MaterializeWorkflowInput) (
 	var featureSnapshot model.FeatureSnapshot
 	if err := workflow.ExecuteActivity(ctx, BuildFeatureSnapshotActivityName, BuildFeatureSnapshotActivityInput{
 		RawSnapshotID:  rawSnapshot.RawSnapshotID,
+		UserID:         rawSnapshot.UserID,
+		OrgID:          rawSnapshot.OrgID,
 		IdempotencyKey: FeatureSnapshotIdempotencyKey(rawSnapshot.RawSnapshotID),
 	}).Get(ctx, &featureSnapshot); err != nil {
 		return nil, err
@@ -97,6 +103,8 @@ func MaterializeWorkflow(ctx workflow.Context, input MaterializeWorkflowInput) (
 		var embeddingSnapshot model.EmbeddingSnapshot
 		if err := workflow.ExecuteActivity(ctx, MaterializeEmbeddingsActivityName, MaterializeEmbeddingsActivityInput{
 			FeatureSnapshotID: featureSnapshot.FeatureSnapshotID,
+			UserID:            featureSnapshot.UserID,
+			OrgID:             featureSnapshot.OrgID,
 			IdempotencyKey:    EmbeddingSnapshotIdempotencyKey(featureSnapshot.FeatureSnapshotID, embeddingStrategy),
 			Strategy:          embeddingStrategy,
 		}).Get(ctx, &embeddingSnapshot); err != nil {

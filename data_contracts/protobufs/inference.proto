@@ -18,6 +18,7 @@ message GenerateRequest {
   string model_id = 5;
   string request_id = 6;
   map<string, string> metadata_filters = 7;
+  string org_id = 8;
 }
 
 message GenerateResponse {
@@ -30,6 +31,7 @@ message GenerateResponse {
   string prompt_strategy_version = 7;
   string generation_provider = 8;
   string generation_model = 9;
+  string org_id = 10;
 }
 
 message RetrievedContext {
@@ -49,6 +51,7 @@ message RecordFeedbackRequest {
   int32 rating = 5;
   string comment = 6;
   string preferred_answer = 7;
+  string org_id = 8;
 }
 
 message RecordFeedbackResponse {
@@ -64,6 +67,7 @@ message ExportPreferenceDatasetRequest {
   string output_uri = 5;
   int32 min_examples = 6;
   int32 limit = 7;
+  string org_id = 8;
 }
 
 message ExportPreferenceDatasetResponse {
@@ -73,6 +77,7 @@ message ExportPreferenceDatasetResponse {
   string output_uri = 4;
   int32 example_count = 5;
   bool exported = 6;
+  string org_id = 7;
 }
 
 message PreferenceDatasetReadyEvent {
@@ -90,4 +95,5 @@ message PreferenceDatasetReadyEvent {
   string parent_base_model = 12;
   int32 parent_model_version = 13;
   string evaluation_output_uri = 14;
+  string org_id = 15;
 }

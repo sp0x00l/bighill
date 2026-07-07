@@ -16,8 +16,8 @@ import (
 )
 
 type DataRegistryClient interface {
-	ReadSourceConnector(ctx context.Context, connectorID, userID uuid.UUID, sourceType string) (*dataregistrypb.SourceConnector, error)
-	ReadDatasetTable(ctx context.Context, datasetID, userID uuid.UUID, snapshotID string) (*dataregistrypb.ReadDatasetTableResponse, error)
+	ReadSourceConnector(ctx context.Context, connectorID, userID, orgID uuid.UUID, sourceType string) (*dataregistrypb.SourceConnector, error)
+	ReadDatasetTable(ctx context.Context, datasetID, userID, orgID uuid.UUID, snapshotID string) (*dataregistrypb.ReadDatasetTableResponse, error)
 	Close() error
 }
 
@@ -70,12 +70,13 @@ func (c *dataRegistryClient) Close() error {
 	return c.conn.Close()
 }
 
-func (c *dataRegistryClient) ReadSourceConnector(ctx context.Context, connectorID, userID uuid.UUID, sourceType string) (*dataregistrypb.SourceConnector, error) {
+func (c *dataRegistryClient) ReadSourceConnector(ctx context.Context, connectorID, userID, orgID uuid.UUID, sourceType string) (*dataregistrypb.SourceConnector, error) {
 	log.Trace("dataRegistryClient ReadSourceConnector")
 
 	resp, err := c.client.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 		ConnectorId: connectorID.String(),
 		UserId:      userID.String(),
+		OrgId:       orgID.String(),
 		SourceType:  sourceType,
 	})
 	if err != nil {
@@ -88,12 +89,13 @@ func (c *dataRegistryClient) ReadSourceConnector(ctx context.Context, connectorI
 	return resp.GetConnector(), nil
 }
 
-func (c *dataRegistryClient) ReadDatasetTable(ctx context.Context, datasetID, userID uuid.UUID, snapshotID string) (*dataregistrypb.ReadDatasetTableResponse, error) {
+func (c *dataRegistryClient) ReadDatasetTable(ctx context.Context, datasetID, userID, orgID uuid.UUID, snapshotID string) (*dataregistrypb.ReadDatasetTableResponse, error) {
 	log.Trace("dataRegistryClient ReadDatasetTable")
 
 	resp, err := c.client.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 		DatasetId:  datasetID.String(),
 		UserId:     userID.String(),
+		OrgId:      orgID.String(),
 		SnapshotId: snapshotID,
 	})
 	if err != nil {

@@ -268,7 +268,7 @@ var _ = Describe("RayExecutor", func() {
 		var postBody []byte
 		statusCalls := 0
 		reader := &manifestReaderStub{payloads: map[string]string{
-			"s3://promotion/model-1.json": `{"user_id":"user-1","model_id":"model-1","training_run_id":"run-1","promotion_report_uri":"s3://promotion/model-1.json","deltas":{"faithfulness":0.1}}`,
+			"s3://promotion/model-1.json": `{"user_id":"user-1","org_id":"org-1","model_id":"model-1","training_run_id":"run-1","promotion_report_uri":"s3://promotion/model-1.json","deltas":{"faithfulness":0.1}}`,
 		}, stats: map[string]executor.ObjectInfo{
 			"s3://promotion/model-1.json": {Location: "s3://promotion/model-1.json", SizeBytes: 128},
 		}}
@@ -296,6 +296,7 @@ var _ = Describe("RayExecutor", func() {
 
 		report, err := ray.RunPromotionReport(context.Background(), model.PromotionReportJobSpec{
 			UserID:                   "user-1",
+			OrgID:                    "org-1",
 			ModelID:                  "model-1",
 			TrainingRunID:            "run-1",
 			CandidateReportURI:       "s3://evals/candidate.json",
@@ -332,6 +333,7 @@ var _ = Describe("RayExecutor", func() {
 		Expect(json.Unmarshal(raw, &spec)).To(Succeed())
 		Expect(spec).To(Equal(map[string]string{
 			"user_id":                    "user-1",
+			"org_id":                     "org-1",
 			"model_id":                   "model-1",
 			"training_run_id":            "run-1",
 			"candidate_report_uri":       "s3://evals/candidate.json",

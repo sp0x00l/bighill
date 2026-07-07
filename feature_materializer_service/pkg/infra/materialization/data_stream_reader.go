@@ -29,6 +29,7 @@ import (
 
 const (
 	flightCommandUserID            = "userId"
+	flightCommandOrgID             = "orgId"
 	flightCommandSourceType        = "sourceType"
 	flightCommandSourceConnectorID = "sourceConnectorId"
 	flightCommandSQL               = "sql"
@@ -50,6 +51,7 @@ const (
 
 type DataStreamReadRequest struct {
 	UserID            string
+	OrgID             string
 	SourceType        string
 	SourceConnectorID string
 	SQL               string
@@ -118,6 +120,7 @@ func (r *FlightDataStreamReader) ReadParquet(ctx context.Context, request DataSt
 
 	command, err := json.Marshal(map[string]any{
 		flightCommandUserID:            strings.TrimSpace(request.UserID),
+		flightCommandOrgID:             strings.TrimSpace(request.OrgID),
 		flightCommandSourceType:        strings.ToLower(strings.TrimSpace(request.SourceType)),
 		flightCommandSourceConnectorID: strings.TrimSpace(request.SourceConnectorID),
 		flightCommandSQL:               strings.TrimSpace(request.SQL),

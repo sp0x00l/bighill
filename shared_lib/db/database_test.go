@@ -473,9 +473,11 @@ var _ = Describe("tenant RLS migration policies", func() {
 
 			Expect(content).To(ContainSubstring("FORCE ROW LEVEL SECURITY"), path)
 			Expect(content).To(ContainSubstring("current_setting('app.system_context', true) = 'true'"), path)
-			Expect(content).To(ContainSubstring("NULLIF(current_setting('app.current_user_id', true), '')::uuid"), path)
+			Expect(content).To(ContainSubstring("NULLIF(current_setting('app.current_org_id', true), '')::uuid"), path)
 			Expect(strings.Contains(content, "COALESCE(NULLIF(current_setting('app.current_user_id'")).To(BeFalse(), path)
+			Expect(strings.Contains(content, "COALESCE(NULLIF(current_setting('app.current_org_id'")).To(BeFalse(), path)
 			Expect(strings.Contains(content, "user_id = user_id")).To(BeFalse(), path)
+			Expect(strings.Contains(content, "org_id = org_id")).To(BeFalse(), path)
 			Expect(strings.Contains(content, "status = 'published'")).To(BeFalse(), path)
 		}
 	})

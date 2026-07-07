@@ -10,6 +10,7 @@ import (
 	"model_registry_service/pkg/domain/model"
 	modeldb "model_registry_service/pkg/infra/repo/db"
 
+	"lib/shared_lib/ctxutil"
 	coreDB "lib/shared_lib/db"
 	transport "lib/shared_lib/transport"
 
@@ -208,6 +209,7 @@ func (r *testRows) Conn() *pgx.Conn {
 type modelRow struct {
 	ModelID            uuid.UUID
 	UserID             uuid.UUID
+	OrgID              uuid.UUID
 	TrainingRunID      uuid.UUID
 	DatasetID          uuid.UUID
 	ModelKind          string
@@ -237,30 +239,31 @@ type modelRow struct {
 func (r modelRow) Scan(dest ...any) error {
 	*(dest[0].(*string)) = r.ModelID.String()
 	*(dest[1].(*string)) = r.UserID.String()
-	*(dest[2].(*string)) = r.TrainingRunID.String()
-	*(dest[3].(*string)) = r.DatasetID.String()
-	*(dest[4].(*string)) = r.ModelKind
-	*(dest[5].(*string)) = r.Source
-	*(dest[6].(*string)) = r.SourceURI
-	*(dest[7].(*string)) = r.SourceMetadata
-	*(dest[8].(*string)) = r.Name
-	*(dest[9].(*int)) = r.ModelVersion
-	*(dest[10].(*string)) = r.BaseModel
-	*(dest[11].(*string)) = r.ArtifactLocation
-	*(dest[12].(*string)) = r.ArtifactFormat
-	*(dest[13].(*string)) = r.ArtifactChecksum
-	*(dest[14].(*int64)) = r.ArtifactSizeBytes
-	*(dest[15].(*string)) = r.AdapterURI
-	*(dest[16].(*string)) = r.ServingTarget
-	*(dest[17].(*string)) = r.ServingModel
-	*(dest[18].(*string)) = r.ServingLoadStatus
-	*(dest[19].(*string)) = r.MetricsMetadata
-	*(dest[20].(*string)) = r.PromotionReportURI
-	*(dest[21].(*string)) = r.PromotionDeltas
-	*(dest[22].(*string)) = r.PromotionDecision
-	*(dest[23].(*string)) = r.PromotionReason
-	*(dest[24].(*string)) = r.Status
-	*(dest[25].(*string)) = r.FailureReason
+	*(dest[2].(*string)) = r.OrgID.String()
+	*(dest[3].(*string)) = r.TrainingRunID.String()
+	*(dest[4].(*string)) = r.DatasetID.String()
+	*(dest[5].(*string)) = r.ModelKind
+	*(dest[6].(*string)) = r.Source
+	*(dest[7].(*string)) = r.SourceURI
+	*(dest[8].(*string)) = r.SourceMetadata
+	*(dest[9].(*string)) = r.Name
+	*(dest[10].(*int)) = r.ModelVersion
+	*(dest[11].(*string)) = r.BaseModel
+	*(dest[12].(*string)) = r.ArtifactLocation
+	*(dest[13].(*string)) = r.ArtifactFormat
+	*(dest[14].(*string)) = r.ArtifactChecksum
+	*(dest[15].(*int64)) = r.ArtifactSizeBytes
+	*(dest[16].(*string)) = r.AdapterURI
+	*(dest[17].(*string)) = r.ServingTarget
+	*(dest[18].(*string)) = r.ServingModel
+	*(dest[19].(*string)) = r.ServingLoadStatus
+	*(dest[20].(*string)) = r.MetricsMetadata
+	*(dest[21].(*string)) = r.PromotionReportURI
+	*(dest[22].(*string)) = r.PromotionDeltas
+	*(dest[23].(*string)) = r.PromotionDecision
+	*(dest[24].(*string)) = r.PromotionReason
+	*(dest[25].(*string)) = r.Status
+	*(dest[26].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -286,12 +289,15 @@ var _ = Describe("ModelRepository", func() {
 
 		modelID = uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
+		ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 		trainingRunID = uuid.New()
 		datasetID = uuid.New()
 		idempotencyKey = uuid.New()
 		registered = &model.Model{
 			ModelID:           modelID,
 			UserID:            userID,
+			OrgID:             orgID,
 			TrainingRunID:     trainingRunID,
 			DatasetID:         datasetID,
 			ModelKind:         model.ModelKindFineTuned,
@@ -332,6 +338,7 @@ var _ = Describe("ModelRepository", func() {
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: registered.UserID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: registered.OrgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("training_run_id", pgtype.UUID{Bytes: trainingRunID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("model_kind", model.ModelKindFineTuned.String()))
@@ -388,14 +395,14 @@ var _ = Describe("ModelRepository", func() {
 		It("reads the newest loaded ready model with the highest version for a lineage", func() {
 			poolMock.NextRows = []pgx.Row{newModelRow(registered)}
 
-			modelRecord, err := repository.ReadChampion(ctx, model.Lineage{UserID: registered.UserID, Name: registered.Name})
+			modelRecord, err := repository.ReadChampion(ctx, model.Lineage{OrgID: registered.OrgID, Name: registered.Name})
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.ModelID).To(Equal(modelID))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY model_version DESC, created_at DESC, model_id DESC"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("LIMIT 1"))
 			args := namedArgs(poolMock.QueryArgs[0])
-			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: registered.UserID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: registered.OrgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("name", registered.Name))
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
 			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
@@ -404,7 +411,7 @@ var _ = Describe("ModelRepository", func() {
 		It("returns a domain not-found error when no champion exists", func() {
 			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
 
-			modelRecord, err := repository.ReadChampion(ctx, model.Lineage{UserID: registered.UserID, Name: registered.Name})
+			modelRecord, err := repository.ReadChampion(ctx, model.Lineage{OrgID: registered.OrgID, Name: registered.Name})
 
 			Expect(modelRecord).To(BeNil())
 			Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
@@ -439,6 +446,7 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("model_kind", model.ModelKindFineTuned.String()))
 			Expect(args).To(HaveKeyWithValue("source", model.ModelSourceTraining.String()))
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: registered.OrgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("limit", 10))
 			Expect(args).To(HaveKeyWithValue("offset", 10))
 		})
@@ -555,6 +563,7 @@ func newModelRow(modelRecord *model.Model) modelRow {
 	return modelRow{
 		ModelID:            modelRecord.ModelID,
 		UserID:             modelRecord.UserID,
+		OrgID:              modelRecord.OrgID,
 		TrainingRunID:      modelRecord.TrainingRunID,
 		DatasetID:          modelRecord.DatasetID,
 		ModelKind:          modelRecord.ModelKind.String(),

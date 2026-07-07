@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
     id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
     idempotency_key uuid UNIQUE NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_data_registry_db.tenants(id),
+    org_id uuid NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT,
     origin origin_enum NOT NULL DEFAULT 'standard',
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.connectors(
     id uuid UNIQUE NOT NULL PRIMARY KEY,
     idempotency_key uuid UNIQUE NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_data_registry_db.tenants(id),
+    org_id uuid NOT NULL,
     catalog_id uuid UNIQUE NOT NULL,
     storage_type storage_type_enum NOT NULL,
     config BYTEA NOT NULL,
@@ -94,6 +96,7 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.metadata(
     id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
     dataset_id uuid NOT NULL REFERENCES bighill_data_registry_db.datasets(id) ON DELETE CASCADE ON UPDATE CASCADE,
     user_id uuid NOT NULL REFERENCES bighill_data_registry_db.tenants(id),
+    org_id uuid NOT NULL,
     schema_name VARCHAR(255) NOT NULL,
     schema_version INTEGER DEFAULT 1,
     metadata TEXT NOT NULL,
@@ -124,6 +127,7 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.outbox_messages (
 );
 
 CREATE INDEX index_user_id ON bighill_data_registry_db.datasets(user_id);
+CREATE INDEX index_datasets_org_id ON bighill_data_registry_db.datasets(org_id);
 CREATE INDEX index_tenants_deleted ON bighill_data_registry_db.tenants(deleted, updated_at);
 CREATE INDEX index_dataset_processing_state ON bighill_data_registry_db.datasets(processing_state);
 CREATE INDEX index_dataset_table_ref ON bighill_data_registry_db.datasets(catalog_provider, table_namespace, table_name);
@@ -132,8 +136,10 @@ CREATE INDEX index_dataset_feature_snapshot_id ON bighill_data_registry_db.datas
 CREATE INDEX index_dataset_embedding_snapshot_id ON bighill_data_registry_db.datasets(embedding_snapshot_id);
 CREATE INDEX index_dataset_source_connector_id ON bighill_data_registry_db.datasets(source_connector_id);
 CREATE INDEX index_dataset_id_connectors ON bighill_data_registry_db.connectors(user_id);
+CREATE INDEX index_connectors_org_id ON bighill_data_registry_db.connectors(org_id);
 CREATE INDEX index_dataset_id_metadata ON bighill_data_registry_db.metadata(dataset_id);
 CREATE INDEX index_metadata_user_id ON bighill_data_registry_db.metadata(user_id);
+CREATE INDEX index_metadata_org_id ON bighill_data_registry_db.metadata(org_id);
 CREATE INDEX index_outbox_messages_pending
 ON bighill_data_registry_db.outbox_messages(status, next_attempt_at, created_at);
 CREATE INDEX index_outbox_messages_processing
@@ -163,11 +169,11 @@ ALTER TABLE bighill_data_registry_db.datasets FORCE ROW LEVEL SECURITY;
 CREATE POLICY datasets_tenant_isolation ON bighill_data_registry_db.datasets
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
 ALTER TABLE bighill_data_registry_db.connectors ENABLE ROW LEVEL SECURITY;
@@ -175,11 +181,11 @@ ALTER TABLE bighill_data_registry_db.connectors FORCE ROW LEVEL SECURITY;
 CREATE POLICY connectors_tenant_isolation ON bighill_data_registry_db.connectors
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
 ALTER TABLE bighill_data_registry_db.metadata ENABLE ROW LEVEL SECURITY;
@@ -187,9 +193,9 @@ ALTER TABLE bighill_data_registry_db.metadata FORCE ROW LEVEL SECURITY;
 CREATE POLICY metadata_tenant_isolation ON bighill_data_registry_db.metadata
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );

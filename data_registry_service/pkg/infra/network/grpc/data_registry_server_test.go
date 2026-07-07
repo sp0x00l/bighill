@@ -32,6 +32,7 @@ type datasetUsecaseStub struct {
 	tableDatasetID uuid.UUID
 	tableUserID    uuid.UUID
 	tableTenantID  uuid.UUID
+	tableOrgID     uuid.UUID
 	tableSnapshot  string
 }
 
@@ -76,6 +77,9 @@ func (s *datasetUsecaseStub) ReadDatasetTable(ctx context.Context, datasetID uui
 	if tenantID, ok := ctxutil.TenantID(ctx); ok {
 		s.tableTenantID = tenantID
 	}
+	if orgID, ok := ctxutil.OrgID(ctx); ok {
+		s.tableOrgID = orgID
+	}
 	return s.tableDataset, s.tableErr
 }
 
@@ -85,6 +89,7 @@ type sourceUsecaseStub struct {
 	readConnectorID uuid.UUID
 	readUserID      uuid.UUID
 	readTenantID    uuid.UUID
+	readOrgID       uuid.UUID
 }
 
 var _ usecase.SourceUsecase = (*sourceUsecaseStub)(nil)
@@ -98,6 +103,9 @@ func (s *sourceUsecaseStub) ReadSourceConnector(ctx context.Context, connectorID
 	s.readUserID = userID
 	if tenantID, ok := ctxutil.TenantID(ctx); ok {
 		s.readTenantID = tenantID
+	}
+	if orgID, ok := ctxutil.OrgID(ctx); ok {
+		s.readOrgID = orgID
 	}
 	return s.connector, s.err
 }
@@ -117,6 +125,7 @@ var _ = Describe("DataRegistryServer", func() {
 		sources     *sourceUsecaseStub
 		server      *DataRegistryServer
 		userID      uuid.UUID
+		orgID       uuid.UUID
 		datasetID   uuid.UUID
 		connectorID uuid.UUID
 	)
@@ -124,6 +133,7 @@ var _ = Describe("DataRegistryServer", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		userID = uuid.New()
+		orgID = uuid.New()
 		datasetID = uuid.New()
 		connectorID = uuid.New()
 		datasets = &datasetUsecaseStub{}
@@ -135,6 +145,7 @@ var _ = Describe("DataRegistryServer", func() {
 		sources.connector = &model.SourceConnector{
 			ID:        connectorID,
 			UserID:    userID,
+			OrgID:     orgID,
 			CatalogID: uuid.New(),
 			Config: &model.PostgresDBConnCfg{
 				Hostname:           "localhost",
@@ -149,6 +160,7 @@ var _ = Describe("DataRegistryServer", func() {
 		res, err := server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 			ConnectorId: connectorID.String(),
 			UserId:      userID.String(),
+			OrgId:       orgID.String(),
 			SourceType:  "POSTGRES",
 		})
 
@@ -156,7 +168,9 @@ var _ = Describe("DataRegistryServer", func() {
 		Expect(sources.readConnectorID).To(Equal(connectorID))
 		Expect(sources.readUserID).To(Equal(userID))
 		Expect(sources.readTenantID).To(Equal(userID))
+		Expect(sources.readOrgID).To(Equal(orgID))
 		Expect(res.GetConnector().GetId()).To(Equal(connectorID.String()))
+		Expect(res.GetConnector().GetOrgId()).To(Equal(orgID.String()))
 		Expect(res.GetConnector().GetSourceType()).To(Equal("POSTGRES"))
 		Expect(res.GetConnector().GetPostgresConfig().GetDatabaseName()).To(Equal("mlops"))
 		Expect(res.GetConnector().GetConfigJson()).NotTo(BeEmpty())
@@ -166,12 +180,21 @@ var _ = Describe("DataRegistryServer", func() {
 		_, err := server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 			ConnectorId: "not-a-uuid",
 			UserId:      userID.String(),
+			OrgId:       orgID.String(),
 		})
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 
 		_, err = server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 			ConnectorId: connectorID.String(),
 			UserId:      "",
+			OrgId:       orgID.String(),
+		})
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+		_, err = server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
+			ConnectorId: connectorID.String(),
+			UserId:      userID.String(),
+			OrgId:       "",
 		})
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
@@ -182,6 +205,7 @@ var _ = Describe("DataRegistryServer", func() {
 		_, err := server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 			ConnectorId: connectorID.String(),
 			UserId:      userID.String(),
+			OrgId:       orgID.String(),
 		})
 
 		Expect(status.Code(err)).To(Equal(codes.NotFound))
@@ -191,6 +215,7 @@ var _ = Describe("DataRegistryServer", func() {
 		sources.connector = &model.SourceConnector{
 			ID:     connectorID,
 			UserID: userID,
+			OrgID:  orgID,
 			Config: &model.PostgresDBConnCfg{
 				Hostname: "localhost",
 			},
@@ -199,6 +224,7 @@ var _ = Describe("DataRegistryServer", func() {
 		_, err := server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 			ConnectorId: connectorID.String(),
 			UserId:      userID.String(),
+			OrgId:       orgID.String(),
 			SourceType:  "MYSQL",
 		})
 
@@ -211,6 +237,7 @@ var _ = Describe("DataRegistryServer", func() {
 		_, err := server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 			ConnectorId: connectorID.String(),
 			UserId:      userID.String(),
+			OrgId:       orgID.String(),
 		})
 
 		Expect(status.Code(err)).To(Equal(codes.Internal))
@@ -220,6 +247,7 @@ var _ = Describe("DataRegistryServer", func() {
 		datasets.tableDataset = &model.Dataset{
 			ID:              datasetID,
 			UserID:          userID,
+			OrgID:           orgID,
 			DatasetVersion:  3,
 			ProcessingState: model.DatasetProcessingFeatureMaterialized,
 			Location:        "s3://bucket/features/data.parquet",
@@ -234,6 +262,7 @@ var _ = Describe("DataRegistryServer", func() {
 		res, err := server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 			DatasetId:  datasetID.String(),
 			UserId:     userID.String(),
+			OrgId:      orgID.String(),
 			SnapshotId: "snapshot-1",
 		})
 
@@ -241,8 +270,10 @@ var _ = Describe("DataRegistryServer", func() {
 		Expect(datasets.tableDatasetID).To(Equal(datasetID))
 		Expect(datasets.tableUserID).To(Equal(userID))
 		Expect(datasets.tableTenantID).To(Equal(userID))
+		Expect(datasets.tableOrgID).To(Equal(orgID))
 		Expect(datasets.tableSnapshot).To(Equal("snapshot-1"))
 		Expect(res.GetDatasetId()).To(Equal(datasetID.String()))
+		Expect(res.GetOrgId()).To(Equal(orgID.String()))
 		Expect(res.GetStorageLocation()).To(Equal("s3://bucket/features/data.parquet"))
 		Expect(res.GetTableFormat()).To(Equal("PARQUET"))
 		Expect(res.GetSnapshotId()).To(Equal("snapshot-1"))
@@ -252,12 +283,21 @@ var _ = Describe("DataRegistryServer", func() {
 		_, err := server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 			DatasetId: "not-a-uuid",
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 		})
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 
 		_, err = server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 			DatasetId: datasetID.String(),
 			UserId:    "",
+			OrgId:     orgID.String(),
+		})
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+		_, err = server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
+			DatasetId: datasetID.String(),
+			UserId:    userID.String(),
+			OrgId:     "",
 		})
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
@@ -268,6 +308,7 @@ var _ = Describe("DataRegistryServer", func() {
 		_, err := server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 			DatasetId: datasetID.String(),
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 		})
 		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 
@@ -275,6 +316,7 @@ var _ = Describe("DataRegistryServer", func() {
 		_, err = server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 			DatasetId: datasetID.String(),
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 		})
 		Expect(status.Code(err)).To(Equal(codes.NotFound))
 	})
@@ -285,6 +327,7 @@ var _ = Describe("DataRegistryServer", func() {
 		_, err := server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 			ConnectorId: connectorID.String(),
 			UserId:      userID.String(),
+			OrgId:       orgID.String(),
 		})
 
 		Expect(status.Code(err)).To(Equal(codes.Internal))

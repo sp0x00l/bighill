@@ -79,6 +79,7 @@ env:
   artifactBucketRegion: "eu-west-1"
   modelUriPrefix: "s3://local-dev-bucket/models"
   evaluationUriPrefix: "s3://local-dev-bucket/evaluations"
+  promotionReportUriPrefix: "s3://local-dev-bucket/promotion-reports"
   servingTarget: ""
   servingModel: ""
   servingLoadStatus: "NOT_LOADED"

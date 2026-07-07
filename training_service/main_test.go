@@ -33,6 +33,10 @@ var _ = Describe("staging Helm values", func() {
 		values := readTextFile("helm/staging-values.yaml")
 
 		Expect(values).NotTo(ContainSubstring("localhost:4566"))
+		Expect(values).To(ContainSubstring(`modelUriPrefix: "s3://bighill-mlops-lakehouse/models"`))
+		Expect(values).To(ContainSubstring(`evaluationUriPrefix: "s3://bighill-mlops-lakehouse/evaluations"`))
+		Expect(values).To(ContainSubstring(`promotionReportUriPrefix: "s3://bighill-mlops-lakehouse/promotion-reports"`))
+		Expect(values).NotTo(ContainSubstring("local-dev-bucket"))
 	})
 })
 
@@ -92,9 +96,13 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(os.Unsetenv("TRAINING_SERVICE_ARTIFACT_BUCKET_REGION")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_MODEL_URI_PREFIX")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_EVALUATION_URI_PREFIX")).To(Succeed())
+		Expect(os.Unsetenv("TRAINING_SERVICE_PROMOTION_REPORT_URI_PREFIX")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_SERVING_TARGET")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_SERVING_MODEL")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_SERVING_LOAD_STATUS")).To(Succeed())
+		Expect(os.Setenv("TRAINING_SERVICE_MODEL_URI_PREFIX", "s3://local-dev-bucket/models")).To(Succeed())
+		Expect(os.Setenv("TRAINING_SERVICE_EVALUATION_URI_PREFIX", "s3://local-dev-bucket/evaluations")).To(Succeed())
+		Expect(os.Setenv("TRAINING_SERVICE_PROMOTION_REPORT_URI_PREFIX", "s3://local-dev-bucket/promotion-reports")).To(Succeed())
 	})
 
 	It("uses local Temporal defaults", func() {
@@ -128,6 +136,7 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(cfg.Executor.ArtifactBucketRegion).To(Equal("eu-west-1"))
 		Expect(cfg.Executor.ModelURIPrefix).To(Equal("s3://local-dev-bucket/models"))
 		Expect(cfg.Executor.EvaluationURIPrefix).To(Equal("s3://local-dev-bucket/evaluations"))
+		Expect(cfg.Executor.PromotionReportURIPrefix).To(Equal("s3://local-dev-bucket/promotion-reports"))
 		Expect(cfg.Executor.ServingTarget).To(Equal(""))
 		Expect(cfg.Executor.ServingModel).To(Equal(""))
 		Expect(cfg.Executor.ServingLoadStatus).To(Equal("NOT_LOADED"))

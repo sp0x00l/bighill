@@ -15,13 +15,17 @@ import (
 
 type dataRegistryClientStub struct {
 	calls      int
+	userID     uuid.UUID
+	orgID      uuid.UUID
 	sourceType string
 	connector  *dataregistrypb.SourceConnector
 	err        error
 }
 
-func (s *dataRegistryClientStub) ReadSourceConnector(_ context.Context, _ uuid.UUID, _ uuid.UUID, sourceType string) (*dataregistrypb.SourceConnector, error) {
+func (s *dataRegistryClientStub) ReadSourceConnector(_ context.Context, _ uuid.UUID, userID, orgID uuid.UUID, sourceType string) (*dataregistrypb.SourceConnector, error) {
 	s.calls++
+	s.userID = userID
+	s.orgID = orgID
 	s.sourceType = sourceType
 	if s.err != nil {
 		return nil, s.err
@@ -29,7 +33,7 @@ func (s *dataRegistryClientStub) ReadSourceConnector(_ context.Context, _ uuid.U
 	return s.connector, nil
 }
 
-func (s *dataRegistryClientStub) ReadDatasetTable(context.Context, uuid.UUID, uuid.UUID, string) (*dataregistrypb.ReadDatasetTableResponse, error) {
+func (s *dataRegistryClientStub) ReadDatasetTable(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) (*dataregistrypb.ReadDatasetTableResponse, error) {
 	return nil, fmt.Errorf("should not be called")
 }
 
@@ -40,11 +44,13 @@ func (s *dataRegistryClientStub) Close() error {
 var _ = Describe("registry query engine", func() {
 	var (
 		userID      uuid.UUID
+		orgID       uuid.UUID
 		connectorID uuid.UUID
 	)
 
 	BeforeEach(func() {
 		userID = uuid.New()
+		orgID = uuid.New()
 		connectorID = uuid.New()
 	})
 
@@ -52,10 +58,12 @@ var _ = Describe("registry query engine", func() {
 		client := &dataRegistryClientStub{connector: &dataregistrypb.SourceConnector{}}
 		engine := NewRegistryQueryEngineWithClient(client, time.Second)
 
-		_, err := engine.Execute(context.Background(), &flight.Ticket{Ticket: registryCommand(userID, connectorID, "postgres", "select 1")})
+		_, err := engine.Execute(context.Background(), &flight.Ticket{Ticket: registryCommand(userID, orgID, connectorID, "postgres", "select 1")})
 
 		Expect(err).To(MatchError(ContainSubstring("source connector does not include postgres config")))
 		Expect(client.calls).To(Equal(1))
+		Expect(client.userID).To(Equal(userID))
+		Expect(client.orgID).To(Equal(orgID))
 		Expect(client.sourceType).To(Equal("POSTGRES"))
 	})
 
@@ -64,7 +72,7 @@ var _ = Describe("registry query engine", func() {
 			client := &dataRegistryClientStub{err: fmt.Errorf("should not be called")}
 			engine := NewRegistryQueryEngineWithClient(client, time.Second)
 
-			_, err := engine.Execute(context.Background(), &flight.Ticket{Ticket: registryCommand(userID, connectorID, sourceType, "")})
+			_, err := engine.Execute(context.Background(), &flight.Ticket{Ticket: registryCommand(userID, orgID, connectorID, sourceType, "")})
 
 			Expect(err).To(MatchError(ContainSubstring("unsupported source type")))
 			Expect(client.calls).To(Equal(0))
@@ -75,7 +83,7 @@ var _ = Describe("registry query engine", func() {
 		client := &dataRegistryClientStub{connector: &dataregistrypb.SourceConnector{}}
 		engine := NewRegistryQueryEngineWithClient(client, time.Second)
 
-		_, err := engine.Execute(context.Background(), &flight.Ticket{Ticket: registryCommand(userID, connectorID, "oracle", "select 1 from dual")})
+		_, err := engine.Execute(context.Background(), &flight.Ticket{Ticket: registryCommand(userID, orgID, connectorID, "oracle", "select 1 from dual")})
 
 		Expect(err).To(MatchError(ContainSubstring("source connector does not include oracle config")))
 		Expect(client.calls).To(Equal(1))
@@ -83,9 +91,10 @@ var _ = Describe("registry query engine", func() {
 	})
 })
 
-func registryCommand(userID, connectorID uuid.UUID, sourceType, sql string) []byte {
+func registryCommand(userID, orgID, connectorID uuid.UUID, sourceType, sql string) []byte {
 	payload := map[string]any{
 		"userId":            userID.String(),
+		"orgId":             orgID.String(),
 		"sourceType":        sourceType,
 		"sourceConnectorId": connectorID.String(),
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"lib/shared_lib/authz"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ var (
 
 type AuthProvider interface {
 	CreateToken(ctx context.Context, userID uuid.UUID, authExpirationInMinutes int) (string, string, int64, error)
+	CreateAccessToken(ctx context.Context, claims authz.TokenClaims, authExpirationInMinutes int) (string, string, int64, error)
 	Validate(ctx context.Context, authorizationToken string) (map[string]any, error)
 }
 
@@ -58,6 +60,15 @@ func NewAuthProvider(ctx context.Context, kmsClient kms.KMSClient) (AuthProvider
 func (a *authProvider) CreateToken(ctx context.Context, userID uuid.UUID, authExpirationInMinutes int) (string, string, int64, error) {
 	log.Trace("authProvider CreateToken")
 
+	return a.CreateAccessToken(ctx, authz.TokenClaims{
+		UserID:    userID.String(),
+		TokenType: "access",
+	}, authExpirationInMinutes)
+}
+
+func (a *authProvider) CreateAccessToken(ctx context.Context, tokenClaims authz.TokenClaims, authExpirationInMinutes int) (string, string, int64, error) {
+	log.Trace("authProvider CreateAccessToken")
+
 	now := time.Now()
 	expiresAt := now.Add(time.Duration(authExpirationInMinutes) * time.Minute).Unix()
 
@@ -65,15 +76,31 @@ func (a *authProvider) CreateToken(ctx context.Context, userID uuid.UUID, authEx
 	// unique at issuance so revocation/audit logic can distinguish tokens.
 	jti := uuid.NewString()
 	sid := uuid.NewString()
+	if strings.TrimSpace(tokenClaims.SessionID) != "" {
+		sid = strings.TrimSpace(tokenClaims.SessionID)
+	}
+	tokenType := strings.TrimSpace(tokenClaims.TokenType)
+	if tokenType == "" {
+		tokenType = "access"
+	}
 
 	claims := jwt.MapClaims{
-		"userId":    userID.String(),
-		"tokenType": "access",
+		"userId":    strings.TrimSpace(tokenClaims.UserID),
+		"tokenType": tokenType,
 		"jti":       jti,
 		"sid":       sid,
 		"exp":       expiresAt,
 		"iat":       now.Unix(),
 		"expiresAt": expiresAt,
+	}
+	if strings.TrimSpace(tokenClaims.OrgID) != "" {
+		claims["orgId"] = strings.TrimSpace(tokenClaims.OrgID)
+	}
+	if len(tokenClaims.Roles) > 0 {
+		claims["roles"] = tokenClaims.Roles
+	}
+	if len(tokenClaims.Permissions) > 0 {
+		claims["permissions"] = tokenClaims.Permissions
 	}
 
 	header := map[string]any{
@@ -122,9 +149,12 @@ func (a *authProvider) Validate(ctx context.Context, authorizationToken string) 
 
 	type claims struct {
 		jwt.RegisteredClaims
-		UserIdField string `json:"userId"`
-		TokenType   string `json:"tokenType"`
-		SID         string `json:"sid"`
+		UserIdField string   `json:"userId"`
+		OrgID       string   `json:"orgId"`
+		Roles       []string `json:"roles"`
+		Permissions []string `json:"permissions"`
+		TokenType   string   `json:"tokenType"`
+		SID         string   `json:"sid"`
 	}
 
 	wantKID := normalizeKMSKeyID(a.kmsClient.KeyID())
@@ -183,11 +213,14 @@ func (a *authProvider) Validate(ctx context.Context, authorizationToken string) 
 	}
 
 	return map[string]any{
-		"userId":    tc.UserIdField,
-		"jti":       tc.ID,
-		"sid":       tc.SID,
-		"expiresAt": exp,
-		"iat":       iat,
+		"userId":      tc.UserIdField,
+		"orgId":       tc.OrgID,
+		"roles":       tc.Roles,
+		"permissions": tc.Permissions,
+		"jti":         tc.ID,
+		"sid":         tc.SID,
+		"expiresAt":   exp,
+		"iat":         iat,
 	}, nil
 }
 

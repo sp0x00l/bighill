@@ -72,10 +72,11 @@ var _ = Describe("Full ML loop", func() {
 		featureSnapshotID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		sourceModelID := uuid.New()
 		servingModel := "rag-adapter-v1"
 
-		trainingRequest := startFullLoopTrainingCommand(ctx, userID, datasetID, featureSnapshotID, sourceModelID)
+		trainingRequest := startFullLoopTrainingCommand(ctx, userID, orgID, datasetID, featureSnapshotID, sourceModelID)
 		trainingRunID := uuid.MustParse(trainingRequest.TrainingRunID)
 		trainingEvent := runTrainingWorkflow(trainingRequest, servingModel)
 
@@ -154,7 +155,7 @@ var _ = Describe("Full ML loop", func() {
 		Expect(readyModel.ServingLoadStatus).To(Equal(registrymodel.ModelLoadStatusLoaded))
 		Expect(readyModel.ServingModel).To(Equal(servingModel))
 
-		inferenceUsecase, inferenceRequests, feedbacks := newInferenceUsecase(datasetID, userID, embeddingSnapshotID)
+		inferenceUsecase, inferenceRequests, feedbacks := newInferenceUsecase(datasetID, userID, orgID, embeddingSnapshotID)
 		modelEvent := modelUpdatedEvent(readyModel)
 		modelListener := inferencemessaging.NewModelUpdatedEventListener(inferenceUsecase)
 		Expect(modelListener.Handle(ctx, readyModel.ModelID, modelEvent)).To(Succeed())
@@ -163,6 +164,7 @@ var _ = Describe("Full ML loop", func() {
 		response, err := inferenceUsecase.Generate(ctx, inferencemodel.GenerateRequest{
 			RequestID: requestID,
 			UserID:    userID,
+			OrgID:     orgID,
 			DatasetID: datasetID,
 			ModelID:   readyModel.ModelID,
 			QueryText: "What changed in the dataset?",
@@ -183,6 +185,7 @@ var _ = Describe("Full ML loop", func() {
 			FeedbackID: feedbackID,
 			RequestID:  requestID,
 			UserID:     userID,
+			OrgID:      orgID,
 			Accepted:   true,
 			Rating:     5,
 			Comment:    "good context",
@@ -191,7 +194,7 @@ var _ = Describe("Full ML loop", func() {
 		Expect(feedbacks.records).To(HaveLen(1))
 
 		preferenceDatasetID := uuid.New()
-		dpoEvent := runDPOTrainingWorkflow(uuid.New(), userID, datasetID, featureSnapshotID, readyModel, preferenceDatasetID, servingModel)
+		dpoEvent := runDPOTrainingWorkflow(uuid.New(), userID, orgID, datasetID, featureSnapshotID, readyModel, preferenceDatasetID, servingModel)
 		Expect(dpoEvent.GetModelId()).NotTo(BeEmpty())
 		Expect(dpoEvent.GetAdapterUri()).To(ContainSubstring("s3://models/"))
 	})
@@ -201,6 +204,7 @@ var _ = Describe("Full ML loop", func() {
 		datasetID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 		uploadID := uuid.New()
 
@@ -286,12 +290,13 @@ var _ = Describe("Full ML loop", func() {
 		Expect(readyModel.ServingLoadStatus).To(Equal(registrymodel.ModelLoadStatusLoaded))
 		Expect(readyModel.DatasetID).To(Equal(uuid.Nil))
 
-		inferenceUsecase, _, _ := newInferenceUsecase(datasetID, userID, embeddingSnapshotID)
+		inferenceUsecase, _, _ := newInferenceUsecase(datasetID, userID, orgID, embeddingSnapshotID)
 		modelListener := inferencemessaging.NewModelUpdatedEventListener(inferenceUsecase)
 		Expect(modelListener.Handle(ctx, readyModel.ModelID, modelUpdatedEvent(readyModel))).To(Succeed())
 		response, err := inferenceUsecase.Generate(ctx, inferencemodel.GenerateRequest{
 			RequestID: uuid.New(),
 			UserID:    userID,
+			OrgID:     orgID,
 			DatasetID: datasetID,
 			ModelID:   readyModel.ModelID,
 			QueryText: "What can the uploaded base model answer with RAG?",
@@ -303,13 +308,14 @@ var _ = Describe("Full ML loop", func() {
 	})
 })
 
-func startFullLoopTrainingCommand(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, sourceModelID uuid.UUID) trainingmodel.TrainingRunRequest {
+func startFullLoopTrainingCommand(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, sourceModelID uuid.UUID) trainingmodel.TrainingRunRequest {
 	GinkgoHelper()
 
 	starter := &fullLoopWorkflowStarter{}
 	datasetResolver := fullLoopDatasetResolver{ref: trainingmodel.MaterializedDatasetRef{
 		DatasetID:         datasetID.String(),
 		UserID:            userID.String(),
+		OrgID:             orgID.String(),
 		DatasetVersion:    "1",
 		FeatureSnapshotID: featureSnapshotID.String(),
 		DatasetURI:        "s3://local-dev-bucket/features/" + featureSnapshotID.String() + ".parquet",
@@ -319,6 +325,7 @@ func startFullLoopTrainingCommand(ctx context.Context, userID uuid.UUID, dataset
 	}}
 	modelResolver := fullLoopModelResolver{ref: trainingmodel.SourceModelRef{
 		ModelID:           sourceModelID.String(),
+		OrgID:             orgID.String(),
 		ModelKind:         "BASE",
 		Name:              "mistral-7b",
 		ModelVersion:      1,
@@ -348,7 +355,7 @@ func startFullLoopTrainingCommand(ctx context.Context, userID uuid.UUID, dataset
 		"ragas-default@v1",
 	)
 	usecase := trainingapp.NewTrainingCommandUsecase(starter, starter, datasetResolver, modelResolver, catalog)
-	result, err := usecase.StartTrainingRun(ctxutil.WithTenantID(ctx, userID), trainingmodel.StartTrainingRunCommand{
+	result, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(ctx, userID, orgID), trainingmodel.StartTrainingRunCommand{
 		IdempotencyKey:    uuid.NewString(),
 		DatasetID:         datasetID.String(),
 		SourceModelID:     sourceModelID.String(),
@@ -395,7 +402,7 @@ func runTrainingWorkflow(request trainingmodel.TrainingRunRequest, servingModel 
 	return completed
 }
 
-func runDPOTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, parent *registrymodel.Model, preferenceDatasetID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
+func runDPOTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID, featureSnapshotID uuid.UUID, parent *registrymodel.Model, preferenceDatasetID uuid.UUID, servingModel string) *trainingpb.ModelTrainingCompletedEvent {
 	GinkgoHelper()
 
 	var suite testsuite.WorkflowTestSuite
@@ -418,6 +425,7 @@ func runDPOTrainingWorkflow(trainingRunID uuid.UUID, userID uuid.UUID, datasetID
 	request := trainingmodel.TrainingRunRequest{
 		TrainingRunID:        trainingRunID.String(),
 		UserID:               userID.String(),
+		OrgID:                orgID.String(),
 		DatasetID:            datasetID.String(),
 		DatasetVersion:       "2",
 		FeatureSnapshotID:    featureSnapshotID.String(),
@@ -475,9 +483,10 @@ type fullLoopDatasetResolver struct {
 	ref trainingmodel.MaterializedDatasetRef
 }
 
-func (r fullLoopDatasetResolver) ResolveMaterializedDataset(_ context.Context, userID uuid.UUID, datasetID uuid.UUID) (trainingmodel.MaterializedDatasetRef, error) {
+func (r fullLoopDatasetResolver) ResolveMaterializedDataset(_ context.Context, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID) (trainingmodel.MaterializedDatasetRef, error) {
 	ref := r.ref
 	Expect(ref.UserID).To(Equal(userID.String()))
+	Expect(ref.OrgID).To(Equal(orgID.String()))
 	Expect(ref.DatasetID).To(Equal(datasetID.String()))
 	return ref, nil
 }
@@ -486,10 +495,11 @@ type fullLoopModelResolver struct {
 	ref trainingmodel.SourceModelRef
 }
 
-func (r fullLoopModelResolver) ResolveTrainableModel(_ context.Context, userID uuid.UUID, modelID uuid.UUID) (trainingmodel.SourceModelRef, error) {
+func (r fullLoopModelResolver) ResolveTrainableModel(_ context.Context, userID uuid.UUID, orgID uuid.UUID, modelID uuid.UUID) (trainingmodel.SourceModelRef, error) {
 	ref := r.ref
 	Expect(modelID.String()).To(Equal(ref.ModelID))
 	Expect(userID).NotTo(Equal(uuid.Nil))
+	Expect(orgID.String()).To(Equal(ref.OrgID))
 	return ref, nil
 }
 
@@ -596,6 +606,7 @@ func (e *fakeTrainingExecutor) EvaluateModel(_ context.Context, spec trainingmod
 func (e *fakeTrainingExecutor) RunPromotionReport(_ context.Context, spec trainingmodel.PromotionReportJobSpec) (*trainingmodel.PromotionReport, error) {
 	return &trainingmodel.PromotionReport{
 		UserID:             spec.UserID,
+		OrgID:              spec.OrgID,
 		ModelID:            spec.ModelID,
 		TrainingRunID:      spec.TrainingRunID,
 		PromotionReportURI: spec.ReportURI,
@@ -766,7 +777,7 @@ func (r *registryMemoryRepository) ReadChampion(_ context.Context, lineage regis
 
 	var champion *registrymodel.Model
 	for _, record := range r.byModelID {
-		if record.UserID != lineage.UserID || record.Name != lineage.Name {
+		if record.OrgID != lineage.OrgID || record.Name != lineage.Name {
 			continue
 		}
 		if record.Status != registrymodel.ModelStatusReady || record.ServingLoadStatus != registrymodel.ModelLoadStatusLoaded {
@@ -875,6 +886,7 @@ func modelUpdatedEvent(model *registrymodel.Model) *modelregistrypb.ModelUpdated
 	return &modelregistrypb.ModelUpdatedEvent{
 		ModelId:           model.ModelID.String(),
 		UserId:            uuidutil.StringOrEmpty(model.UserID),
+		OrgId:             uuidutil.StringOrEmpty(model.OrgID),
 		TrainingRunId:     uuidutil.StringOrEmpty(model.TrainingRunID),
 		DatasetId:         uuidutil.StringOrEmpty(model.DatasetID),
 		ModelKind:         model.ModelKind.String(),
@@ -901,6 +913,7 @@ func modelUpdatedEvent(model *registrymodel.Model) *modelregistrypb.ModelUpdated
 func promotionReportReadyEvent(model *registrymodel.Model) *trainingpb.PromotionReportReadyEvent {
 	return &trainingpb.PromotionReportReadyEvent{
 		UserId:             uuidutil.StringOrEmpty(model.UserID),
+		OrgId:              uuidutil.StringOrEmpty(model.OrgID),
 		ModelId:            model.ModelID.String(),
 		TrainingRunId:      uuidutil.StringOrEmpty(model.TrainingRunID),
 		PromotionReportUri: "s3://local-dev-bucket/promotion/" + model.ModelID.String() + ".json",
@@ -908,11 +921,12 @@ func promotionReportReadyEvent(model *registrymodel.Model) *trainingpb.Promotion
 	}
 }
 
-func newInferenceUsecase(datasetID uuid.UUID, userID uuid.UUID, embeddingSnapshotID uuid.UUID) (inferenceapp.InferenceUsecase, *inferenceRequestMemoryRepository, *inferenceFeedbackMemoryRepository) {
+func newInferenceUsecase(datasetID uuid.UUID, userID uuid.UUID, orgID uuid.UUID, embeddingSnapshotID uuid.UUID) (inferenceapp.InferenceUsecase, *inferenceRequestMemoryRepository, *inferenceFeedbackMemoryRepository) {
 	modelRepo := newInferenceModelMemoryRepository()
 	datasetRepo := newInferenceDatasetMemoryRepository(&inferencemodel.InferenceDataset{
 		DatasetID:                datasetID,
 		UserID:                   userID,
+		OrgID:                    orgID,
 		DatasetVersion:           1,
 		ProcessingState:          inferencemodel.DatasetProcessingEmbeddingsMaterialized,
 		StorageLocation:          "s3://features/dataset.parquet",
@@ -973,12 +987,12 @@ func (r *inferenceModelMemoryRepository) UpsertModel(_ context.Context, inferenc
 	return &record, nil
 }
 
-func (r *inferenceModelMemoryRepository) ReadByID(_ context.Context, userID uuid.UUID, modelID uuid.UUID) (*inferencemodel.InferenceModel, error) {
+func (r *inferenceModelMemoryRepository) ReadByID(_ context.Context, orgID uuid.UUID, modelID uuid.UUID) (*inferencemodel.InferenceModel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	record, ok := r.byModel[modelID]
-	if !ok || (record.UserID != uuid.Nil && record.UserID != userID) {
+	if !ok || (record.OrgID != uuid.Nil && record.OrgID != orgID) {
 		return nil, errors.New("inference model not found")
 	}
 	out := *record
@@ -999,8 +1013,8 @@ func (r *inferenceDatasetMemoryRepository) UpsertDataset(_ context.Context, data
 	return &record, nil
 }
 
-func (r *inferenceDatasetMemoryRepository) ReadDataset(_ context.Context, userID uuid.UUID, datasetID uuid.UUID) (*inferencemodel.InferenceDataset, error) {
-	if r.dataset == nil || r.dataset.UserID != userID || r.dataset.DatasetID != datasetID {
+func (r *inferenceDatasetMemoryRepository) ReadDataset(_ context.Context, orgID uuid.UUID, datasetID uuid.UUID) (*inferencemodel.InferenceDataset, error) {
+	if r.dataset == nil || r.dataset.OrgID != orgID || r.dataset.DatasetID != datasetID {
 		return nil, errors.New("inference dataset not found")
 	}
 	out := *r.dataset
@@ -1032,6 +1046,7 @@ func (r *inferenceFeedbackMemoryRepository) ReadPreferenceDataset(_ context.Cont
 	return &inferencemodel.PreferenceDataset{
 		RequestID: request.RequestID,
 		UserID:    request.UserID,
+		OrgID:     request.OrgID,
 		DatasetID: request.DatasetID,
 		ModelID:   request.ModelID,
 		OutputURI: request.OutputURI,

@@ -74,7 +74,12 @@ func (u *datasetUseCase) CreateDataset(ctx context.Context, dataset *model.Datas
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if dataset != nil {
-		ctx = ctxutil.WithTenantID(ctx, dataset.UserID)
+		orgID, orgErr := requireOrgID(ctx)
+		if orgErr != nil {
+			return orgErr
+		}
+		dataset.OrgID = orgID
+		ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	}
 	model.NormalizeDatasetMetadata(dataset)
 
@@ -95,7 +100,10 @@ func (u *datasetUseCase) ReadDatasetsForUser(ctx context.Context, userID uuid.UU
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, err = contextForActorOrg(ctx, userID)
+	if err != nil {
+		return nil, 0, err
+	}
 	return u.datasetsRepository.Read(ctx, userID, pagination, filters)
 }
 
@@ -108,7 +116,10 @@ func (u *datasetUseCase) ReadDatasetForUser(ctx context.Context, datasetID uuid.
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, err = contextForActorOrg(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	return u.datasetsRepository.ReadByID(ctx, datasetID, userID)
 }
 
@@ -122,7 +133,10 @@ func (u *datasetUseCase) ReadDatasetTable(ctx context.Context, datasetID uuid.UU
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, err = contextForActorOrg(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	dataset, err = u.datasetsRepository.ReadByID(ctx, datasetID, userID)
 	if err != nil {
 		return nil, err
@@ -145,12 +159,16 @@ func (u *datasetUseCase) DeleteDataset(ctx context.Context, datasetID uuid.UUID,
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, err = contextForActorOrg(ctx, userID)
+	if err != nil {
+		return err
+	}
+	orgID, _ := ctxutil.OrgID(ctx)
 	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		if err := u.datasetsRepository.Delete(ctx, tx, datasetID, userID); err != nil {
 			return err
 		}
-		return enqueue(u.eventBuilder.DatasetDeletedMessage(datasetID, userID))
+		return enqueue(u.eventBuilder.DatasetDeletedMessage(datasetID, userID, orgID))
 	})
 }
 
@@ -163,7 +181,10 @@ func (u *datasetUseCase) PublishDataset(ctx context.Context, datasetID uuid.UUID
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, err = contextForActorOrg(ctx, userID)
+	if err != nil {
+		return err
+	}
 	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
 		return u.datasetsRepository.UpdatePublishedState(ctx, tx, datasetID, userID)
 	})
@@ -183,7 +204,12 @@ func (u *datasetUseCase) ReplaceDataset(ctx context.Context, dataset *model.Data
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if dataset != nil {
-		ctx = ctxutil.WithTenantID(ctx, dataset.UserID)
+		orgID, orgErr := requireOrgID(ctx)
+		if orgErr != nil {
+			return nil, orgErr
+		}
+		dataset.OrgID = orgID
+		ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	}
 	model.NormalizeDatasetMetadata(dataset)
 
@@ -208,7 +234,10 @@ func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, data
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, err = contextForActorOrg(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		var changed bool
 		var updateErr error
@@ -239,7 +268,12 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if materialized != nil {
-		ctx = ctxutil.WithTenantID(ctx, materialized.UserID)
+		orgID, orgErr := requireOrgID(ctx)
+		if orgErr != nil {
+			return nil, orgErr
+		}
+		materialized.OrgID = orgID
+		ctx = ctxutil.WithActorOrg(ctx, materialized.UserID, materialized.OrgID)
 	}
 	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		var changed bool
@@ -254,6 +288,22 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 		return enqueue(u.eventBuilder.DatasetUpdatedMessage(updated))
 	})
 	return updated, err
+}
+
+func requireOrgID(ctx context.Context) (uuid.UUID, error) {
+	orgID, ok := ctxutil.OrgID(ctx)
+	if !ok {
+		return uuid.Nil, domainErrors.ErrValidationFailed.Extend("org id is required")
+	}
+	return orgID, nil
+}
+
+func contextForActorOrg(ctx context.Context, userID uuid.UUID) (context.Context, error) {
+	orgID, ok := ctxutil.OrgID(ctx)
+	if !ok {
+		return ctx, domainErrors.ErrValidationFailed.Extend("org id is required")
+	}
+	return ctxutil.WithActorOrg(ctx, userID, orgID), nil
 }
 
 func isQueryableDatasetTable(dataset *model.Dataset) bool {

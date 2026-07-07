@@ -9,6 +9,7 @@ import (
 type DataFile struct {
 	DatasetID         uuid.UUID
 	UserID            uuid.UUID
+	OrgID             uuid.UUID
 	File              multipart.File
 	ContentType       string
 	Extension         string

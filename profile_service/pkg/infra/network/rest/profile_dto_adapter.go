@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"lib/shared_lib/transport"
 	"net/mail"
 	usecase "profile_service/pkg/app"
@@ -88,6 +89,24 @@ type oauthSessionResultDTO struct {
 	IsNewUser bool   `json:"isNewUser,omitempty"`
 }
 
+type organizationDTO struct {
+	OrgID       string                `json:"orgId"`
+	DisplayName string                `json:"displayName"`
+	Membership  organizationMemberDTO `json:"membership"`
+}
+
+type organizationMemberDTO struct {
+	OrgID  string `json:"orgId,omitempty"`
+	UserID string `json:"userId" validate:"required,uuid4"`
+	Email  string `json:"email,omitempty"`
+	Role   string `json:"role" validate:"required,oneof=consumer ml_researcher org_admin"`
+	Status string `json:"status,omitempty" validate:"omitempty,oneof=active invited disabled"`
+}
+
+type organizationMembersDTO struct {
+	Members []organizationMemberDTO `json:"members"`
+}
+
 type profileAccountDTO struct {
 	ID          string `json:"id"` // ID is returned on create and passed in the header elsewhere
 	Email       string `json:"email" validate:"required,max=250,email_rfc5322"`
@@ -112,6 +131,9 @@ type ProfilesDTOAdapter interface {
 	ToOAuthAuthorizeResultDTO(ctx context.Context, result *usecase.OAuthAuthorizeResult) ([]byte, error)
 	FromOAuthSessionRequestDTO(ctx context.Context, requestBytes []byte) (*usecase.OAuthSessionRequest, error)
 	ToOAuthSessionResultDTO(ctx context.Context, result *usecase.OAuthSessionResult) ([]byte, error)
+	FromOrganizationMemberDTO(ctx context.Context, orgID uuid.UUID, requestBytes []byte) (*domain.OrganizationMembership, error)
+	ToOrganizationDTO(ctx context.Context, organization *domain.Organization, membership *domain.OrganizationMembership) ([]byte, error)
+	ToOrganizationMembersDTO(ctx context.Context, memberships []*domain.OrganizationMembership) ([]byte, error)
 	ToProfileAccountDTO(ctx context.Context, profileAccount *domain.ProfileAccount) ([]byte, error)
 	ToPasswordResultDTO(ctx context.Context, isValid bool, token string) ([]byte, error)
 }
@@ -340,6 +362,75 @@ func (a *profilesDTOAdapter) ToOAuthSessionResultDTO(ctx context.Context, result
 		return nil, err
 	}
 	return payload, nil
+}
+
+func (a *profilesDTOAdapter) FromOrganizationMemberDTO(ctx context.Context, orgID uuid.UUID, requestBytes []byte) (*domain.OrganizationMembership, error) {
+	log.Trace("profilesDTOAdapter FromOrganizationMemberDTO")
+
+	var request organizationMemberDTO
+	if err := json.Unmarshal(requestBytes, &request); err != nil {
+		log.WithContext(ctx).WithError(err).Error("json unmarshalling organization member request failed")
+		return nil, fmt.Errorf("validation error. json unmarshalling organization member request failed: %w", err)
+	}
+	if err := a.validator.Struct(&request); err != nil {
+		log.WithContext(ctx).WithError(err).Warn("failed to validate organization member request")
+		return nil, fmt.Errorf("validation error. failed to validate organization member request: %w", err)
+	}
+	userID, err := uuid.Parse(request.UserID)
+	if err != nil || userID == uuid.Nil {
+		return nil, fmt.Errorf("validation error. invalid organization member user id")
+	}
+	return &domain.OrganizationMembership{
+		OrgID:  orgID,
+		UserID: userID,
+		Role:   request.Role,
+		Status: request.Status,
+	}, nil
+}
+
+func (a *profilesDTOAdapter) ToOrganizationDTO(ctx context.Context, organization *domain.Organization, membership *domain.OrganizationMembership) ([]byte, error) {
+	log.Trace("profilesDTOAdapter ToOrganizationDTO")
+
+	payload, err := json.Marshal(organizationDTO{
+		OrgID:       organization.ID.String(),
+		DisplayName: organization.DisplayName,
+		Membership:  toOrganizationMemberDTO(membership),
+	})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("json encoding organization failed")
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (a *profilesDTOAdapter) ToOrganizationMembersDTO(ctx context.Context, memberships []*domain.OrganizationMembership) ([]byte, error) {
+	log.Trace("profilesDTOAdapter ToOrganizationMembersDTO")
+
+	memberDTOs := make([]organizationMemberDTO, 0, len(memberships))
+	for _, membership := range memberships {
+		memberDTOs = append(memberDTOs, toOrganizationMemberDTO(membership))
+	}
+	payload, err := json.Marshal(organizationMembersDTO{Members: memberDTOs})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("json encoding organization members failed")
+		return nil, err
+	}
+	return payload, nil
+}
+
+func toOrganizationMemberDTO(membership *domain.OrganizationMembership) organizationMemberDTO {
+	log.Trace("toOrganizationMemberDTO")
+
+	if membership == nil {
+		return organizationMemberDTO{}
+	}
+	return organizationMemberDTO{
+		OrgID:  membership.OrgID.String(),
+		UserID: membership.UserID.String(),
+		Email:  membership.Email,
+		Role:   membership.Role,
+		Status: membership.Status,
+	}
 }
 
 func (a *profilesDTOAdapter) FromProfileAccountDTO(ctx context.Context, profileAccountBytes []byte) (*domain.ProfileAccount, error) {

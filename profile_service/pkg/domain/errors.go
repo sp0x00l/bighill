@@ -12,4 +12,6 @@ var (
 	ErrInvalidOAuthCode         = errors.New("invalid oauth code")
 	ErrOAuthEmailRequired       = errors.New("oauth provider did not return an email")
 	ErrOAuthEmailUnverified     = errors.New("oauth provider email is not verified")
+	ErrValidationFailed         = errors.New("validation failed")
+	ErrUnauthorized             = errors.New("unauthorized")
 )

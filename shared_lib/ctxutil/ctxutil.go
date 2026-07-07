@@ -8,6 +8,7 @@ import (
 )
 
 type tenantIDKey struct{}
+type orgIDKey struct{}
 type systemContextKey struct{}
 type transactionContextKey struct{}
 
@@ -24,6 +25,27 @@ func TenantID(ctx context.Context) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return tenantID, true
+}
+
+func WithOrgID(ctx context.Context, orgID uuid.UUID) context.Context {
+	if orgID == uuid.Nil {
+		return ctx
+	}
+	return context.WithValue(ctx, orgIDKey{}, orgID)
+}
+
+func WithActorOrg(ctx context.Context, userID uuid.UUID, orgID uuid.UUID) context.Context {
+	ctx = WithTenantID(ctx, userID)
+	ctx = WithOrgID(ctx, orgID)
+	return ctx
+}
+
+func OrgID(ctx context.Context) (uuid.UUID, bool) {
+	orgID, ok := ctx.Value(orgIDKey{}).(uuid.UUID)
+	if !ok || orgID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return orgID, true
 }
 
 func WithSystemContext(ctx context.Context) context.Context {

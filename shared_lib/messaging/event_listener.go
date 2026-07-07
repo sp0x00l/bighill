@@ -57,6 +57,9 @@ func AddListener[T proto.Message](s Subscriber, handler EventListener[T]) {
 		if tenantID, ok := tenantIDFromPayload(payload); ok {
 			newCtx = ctxutil.WithTenantID(newCtx, tenantID)
 		}
+		if orgID, ok := orgIDFromPayload(payload); ok {
+			newCtx = ctxutil.WithOrgID(newCtx, orgID)
+		}
 
 		return handler.Handle(newCtx, msg.ResourceKey, payload)
 	})
@@ -65,6 +68,10 @@ func AddListener[T proto.Message](s Subscriber, handler EventListener[T]) {
 
 type userIDPayload interface {
 	GetUserId() string
+}
+
+type orgIDPayload interface {
+	GetOrgId() string
 }
 
 func tenantIDFromPayload(payload any) (uuid.UUID, bool) {
@@ -81,4 +88,20 @@ func tenantIDFromPayload(payload any) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return tenantID, true
+}
+
+func orgIDFromPayload(payload any) (uuid.UUID, bool) {
+	event, ok := payload.(orgIDPayload)
+	if !ok {
+		return uuid.Nil, false
+	}
+	raw := strings.TrimSpace(event.GetOrgId())
+	if raw == "" {
+		return uuid.Nil, false
+	}
+	orgID, err := uuid.Parse(raw)
+	if err != nil || orgID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return orgID, true
 }

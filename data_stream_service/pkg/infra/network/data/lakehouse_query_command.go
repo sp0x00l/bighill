@@ -11,6 +11,7 @@ import (
 
 type lakehouseQueryCommand struct {
 	UserID     string `json:"userId"`
+	OrgID      string `json:"orgId"`
 	DatasetID  string `json:"datasetId"`
 	SQL        string `json:"sql"`
 	SnapshotID string `json:"snapshotId"`
@@ -30,12 +31,16 @@ func parseLakehouseQueryCommand(command string) (*lakehouseQueryCommand, error) 
 	}
 
 	query.UserID = strings.TrimSpace(query.UserID)
+	query.OrgID = strings.TrimSpace(query.OrgID)
 	query.DatasetID = strings.TrimSpace(query.DatasetID)
 	query.SQL = strings.TrimSpace(query.SQL)
 	query.SnapshotID = strings.TrimSpace(query.SnapshotID)
 
 	if query.UserID == "" {
 		return nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command requires userId")
+	}
+	if query.OrgID == "" {
+		return nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command requires orgId")
 	}
 	if query.DatasetID == "" {
 		return nil, streamdomain.ErrValidationFailed.Extend("lakehouse query command requires datasetId")

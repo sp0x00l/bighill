@@ -39,3 +39,17 @@ var _ = Describe("ClaimUnixSeconds", func() {
 		Expect(ok).To(BeFalse())
 	})
 })
+
+var _ = Describe("ClaimIssuedBefore", func() {
+	It("rejects claims issued before a revocation timestamp", func() {
+		Expect(auth.ClaimIssuedBefore(map[string]any{"iat": int64(1710000000)}, "iat", 1710000001)).To(BeTrue())
+	})
+
+	It("allows claims issued at the same second as the revocation timestamp", func() {
+		Expect(auth.ClaimIssuedBefore(map[string]any{"iat": int64(1710000000)}, "iat", 1710000000)).To(BeFalse())
+	})
+
+	It("allows claims issued after the revocation timestamp", func() {
+		Expect(auth.ClaimIssuedBefore(map[string]any{"iat": int64(1710000001)}, "iat", 1710000000)).To(BeFalse())
+	})
+})

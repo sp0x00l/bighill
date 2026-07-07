@@ -15,8 +15,10 @@ import (
 	"inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
 	"inference_service/pkg/infra/generation"
+	inferenceadapter "inference_service/pkg/infra/network/adapter"
 	inferencegrpc "inference_service/pkg/infra/network/grpc"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
+	inferencerest "inference_service/pkg/infra/network/rest"
 	inferencepreference "inference_service/pkg/infra/preference"
 	inferencedb "inference_service/pkg/infra/repo/db"
 	"inference_service/pkg/infra/retrieval"
@@ -28,6 +30,7 @@ import (
 	"lib/shared_lib/lifecycle"
 	logs "lib/shared_lib/logs"
 	messagingConn "lib/shared_lib/messaging"
+	serializers "lib/shared_lib/serializer"
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
 	shareduow "lib/shared_lib/uow"
@@ -52,6 +55,7 @@ type inferenceConfig struct {
 	QueryTransformer    queryTransformerConfig
 	PreferenceDataset   preferenceDatasetConfig
 	GRPCPort            int
+	HTTPPort            int
 	Health              healthConfig
 	Lifecycle           lifecycle.Config
 }
@@ -148,6 +152,7 @@ func main() {
 
 	modelRepository := inferencedb.NewInferenceModelRepository(database)
 	datasetRepository := inferencedb.NewInferenceDatasetRepository(database)
+	endpointRepository := inferencedb.NewPublishedEndpointRepository(database)
 	requestRepository := inferencedb.NewInferenceRequestRepository(database)
 	feedbackRepository := inferencedb.NewInferenceFeedbackRepository(database)
 	inferenceUnitOfWork := shareduow.New(database.Pool,
@@ -181,6 +186,7 @@ func main() {
 	preferenceEventBuilder := inferencemessaging.NewPreferenceDatasetEventBuilder(cfg.Topics.PreferenceDataset)
 	inferenceOptions := []app.InferenceOption{
 		app.WithInferenceDatasetRepository(datasetRepository),
+		app.WithPublishedEndpointRepository(endpointRepository),
 		app.WithInferenceRequestRepository(requestRepository),
 		app.WithInferenceFeedbackRepository(feedbackRepository),
 		app.WithInferenceUnitOfWork(inferenceUnitOfWork, preferenceEventBuilder),
@@ -209,6 +215,8 @@ func main() {
 		inferenceOptions...,
 	)
 	grpcService := inferencegrpc.NewInferenceGrpcServer(inferenceUsecase)
+	inferenceDTOAdapter := inferenceadapter.NewInferenceDTOAdapter(serializers.NewJSONSerializer())
+	restService := inferencerest.NewService(inferencerest.NewInferenceHandlers(inferenceUsecase, inferenceDTOAdapter).GetRoutes(), cfg.HTTPPort, serviceName)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
@@ -228,6 +236,7 @@ func main() {
 			return nil
 		}),
 		lifecycle.HealthCheckComponent("inference-healthcheck", healthCheck),
+		lifecycle.ServerComponent("inference-http", restService),
 		lifecycle.NewFuncComponent(lifecycle.ComponentConfig{
 			Name: "inference-grpc",
 			Start: func(context.Context) error {
@@ -320,6 +329,11 @@ func readInferenceConfig() inferenceConfig {
 	if env.IsDevEnv() {
 		defaultPreferenceBucketRegion = coreBucket.LocalDevS3Region
 	}
+	preferenceDatasetExportEnabled := env.WithDefaultBool("INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED", false)
+	preferenceDatasetURITemplate := env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE", "")
+	if preferenceDatasetExportEnabled && strings.TrimSpace(preferenceDatasetURITemplate) == "" {
+		log.Fatal("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE is required when preference dataset export is enabled")
+	}
 	return inferenceConfig{
 		ServiceName:        env.WithDefaultString("INFERENCE_SERVICE_NAME", "inference-service"),
 		DBName:             dbName,
@@ -368,14 +382,15 @@ func readInferenceConfig() inferenceConfig {
 			Provider: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", "disabled"),
 		},
 		PreferenceDataset: preferenceDatasetConfig{
-			ExportEnabled:    env.WithDefaultBool("INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED", false),
-			URITemplate:      env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE", "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl"),
+			ExportEnabled:    preferenceDatasetExportEnabled,
+			URITemplate:      preferenceDatasetURITemplate,
 			MinExamples:      env.WithDefaultInt("INFERENCE_SERVICE_PREFERENCE_DATASET_MIN_EXAMPLES", "1"),
 			Limit:            env.WithDefaultInt("INFERENCE_SERVICE_PREFERENCE_DATASET_LIMIT", "1000"),
 			BucketRegion:     env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION", defaultPreferenceBucketRegion),
 			UploadPartSizeMB: env.WithDefaultInt64("INFERENCE_SERVICE_PREFERENCE_DATASET_UPLOAD_PART_SIZE_MB", "10"),
 		},
 		GRPCPort: env.WithDefaultInt("INFERENCE_SERVICE_API_GRPC_PORT", "7073"),
+		HTTPPort: env.WithDefaultInt("INFERENCE_SERVICE_API_HTTP_PORT", "8087"),
 		Health: healthConfig{
 			CpuThresholdPercentage:                    env.WithDefaultInt("INFERENCE_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercent:                   env.WithDefaultInt("INFERENCE_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),

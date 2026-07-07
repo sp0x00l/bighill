@@ -9,6 +9,7 @@ import (
 	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
 	datasetpb "lib/data_contracts_lib/data_registry"
+	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -135,10 +136,11 @@ func (l *datasetDeletedEventListener) NewMessage() *datasetpb.DatasetDeletedEven
 func (l *datasetDeletedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, event *datasetpb.DatasetDeletedEvent) error {
 	log.Trace("datasetDeletedEventListener Handle")
 
-	datasetID, userID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId())
+	datasetID, userID, orgID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId(), event.GetOrgId())
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	if err := l.listener.DeleteDataset(ctx, datasetID, userID); err != nil {
 		if errors.Is(err, domain.ErrResourceNotFound) {
 			return msgConn.AlreadyProcessed(err)
@@ -154,13 +156,14 @@ func datasetFromCreatedEvent(resourceKey uuid.UUID, event *datasetpb.DatasetCrea
 	if event == nil {
 		return nil, fmt.Errorf("dataset created payload is required")
 	}
-	datasetID, userID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId())
+	datasetID, userID, orgID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId(), event.GetOrgId())
 	if err != nil {
 		return nil, err
 	}
 	return datasetFromLifecycleFields(
 		datasetID,
 		userID,
+		orgID,
 		event.GetStorageLocation(),
 		event.GetTableNamespace(),
 		event.GetTableName(),
@@ -178,13 +181,14 @@ func datasetFromUpdatedEvent(resourceKey uuid.UUID, event *datasetpb.DatasetUpda
 	if event == nil {
 		return nil, fmt.Errorf("dataset updated payload is required")
 	}
-	datasetID, userID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId())
+	datasetID, userID, orgID, err := datasetLifecycleIDs(resourceKey, event.GetDatasetId(), event.GetUserId(), event.GetOrgId())
 	if err != nil {
 		return nil, err
 	}
 	return datasetFromLifecycleFields(
 		datasetID,
 		userID,
+		orgID,
 		event.GetStorageLocation(),
 		event.GetTableNamespace(),
 		event.GetTableName(),
@@ -199,6 +203,7 @@ func datasetFromUpdatedEvent(resourceKey uuid.UUID, event *datasetpb.DatasetUpda
 func datasetFromLifecycleFields(
 	datasetID uuid.UUID,
 	userID uuid.UUID,
+	orgID uuid.UUID,
 	storageLocation string,
 	tableNamespace string,
 	tableName string,
@@ -237,6 +242,7 @@ func datasetFromLifecycleFields(
 	return &model.Dataset{
 		DatasetID:         datasetID,
 		UserID:            userID,
+		OrgID:             orgID,
 		StorageLocation:   strings.TrimSpace(storageLocation),
 		TableNamespace:    tableNamespace,
 		TableName:         tableName,
@@ -258,19 +264,23 @@ func requiredLifecycleString(fieldName string, value string) (string, error) {
 	return value, nil
 }
 
-func datasetLifecycleIDs(resourceKey uuid.UUID, datasetIDRaw string, userIDRaw string) (uuid.UUID, uuid.UUID, error) {
+func datasetLifecycleIDs(resourceKey uuid.UUID, datasetIDRaw string, userIDRaw string, orgIDRaw string) (uuid.UUID, uuid.UUID, uuid.UUID, error) {
 	log.Trace("datasetLifecycleIDs")
 
 	datasetID, err := msgConn.ParseUUID("dataset_id", datasetIDRaw)
 	if err != nil {
-		return uuid.Nil, uuid.Nil, err
+		return uuid.Nil, uuid.Nil, uuid.Nil, err
 	}
 	if datasetID != resourceKey {
-		return uuid.Nil, uuid.Nil, fmt.Errorf("dataset id %s does not match resource key %s", datasetID, resourceKey)
+		return uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("dataset id %s does not match resource key %s", datasetID, resourceKey)
 	}
 	userID, err := msgConn.ParseUUID("user_id", userIDRaw)
 	if err != nil {
-		return uuid.Nil, uuid.Nil, err
+		return uuid.Nil, uuid.Nil, uuid.Nil, err
 	}
-	return datasetID, userID, nil
+	orgID, err := msgConn.ParseUUID("org_id", orgIDRaw)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, uuid.Nil, err
+	}
+	return datasetID, userID, orgID, nil
 }

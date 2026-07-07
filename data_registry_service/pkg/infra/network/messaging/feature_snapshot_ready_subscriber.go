@@ -76,6 +76,10 @@ func featureSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.Fea
 	if err != nil {
 		return nil, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return nil, err
+	}
 	featureSnapshotID, err := msgConn.ParseUUID("feature_snapshot_id", payload.GetFeatureSnapshotId())
 	if err != nil {
 		return nil, err
@@ -120,6 +124,7 @@ func featureSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.Fea
 	return &model.Dataset{
 		ID:                datasetID,
 		UserID:            userID,
+		OrgID:             orgID,
 		Location:          location,
 		TableNamespace:    tableNamespace,
 		TableName:         tableName,

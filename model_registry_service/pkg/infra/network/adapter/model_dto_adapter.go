@@ -14,6 +14,7 @@ import (
 type ModelDTO struct {
 	ID                 string        `json:"id"`
 	UserID             string        `json:"user_id,omitempty"`
+	OrgID              string        `json:"org_id,omitempty"`
 	TrainingRunID      string        `json:"training_run_id,omitempty"`
 	DatasetID          string        `json:"dataset_id,omitempty"`
 	ModelKind          string        `json:"model_kind"`
@@ -88,6 +89,7 @@ func (a *modelDTOAdapter) toDTO(modelRecord *model.Model, baseURL string) *Model
 	return &ModelDTO{
 		ID:                 modelRecord.ModelID.String(),
 		UserID:             optionalUUIDString(modelRecord.UserID),
+		OrgID:              optionalUUIDString(modelRecord.OrgID),
 		TrainingRunID:      optionalUUIDString(modelRecord.TrainingRunID),
 		DatasetID:          optionalUUIDString(modelRecord.DatasetID),
 		ModelKind:          modelRecord.ModelKind.String(),

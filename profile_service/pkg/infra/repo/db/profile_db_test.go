@@ -25,6 +25,8 @@ type testConnectionPool struct {
 	QueryRowCalled     bool
 	CloseCalled        bool
 	QueryCalled        bool
+	QueryRowCalls      []string
+	QueryRowArgs       [][]any
 	ExecCalled         bool
 	ExecCalls          []string
 	PoolQueryCalled    bool
@@ -61,6 +63,8 @@ func (p *testConnectionPool) QueryRow(_ context.Context, sql string, args ...any
 	p.PoolQueryRowCalled = true
 	p.LastQuery = sql
 	p.LastArgs = args
+	p.QueryRowCalls = append(p.QueryRowCalls, sql)
+	p.QueryRowArgs = append(p.QueryRowArgs, args)
 	if p.NextRow != nil {
 		return p.NextRow
 	}
@@ -125,6 +129,8 @@ func (tx *testTx) Exec(_ context.Context, sql string, args ...any) (pgconn.Comma
 	tx.pool.ExecCalls = append(tx.pool.ExecCalls, sql)
 	tx.pool.LastQuery = sql
 	tx.pool.LastArgs = args
+	tx.pool.QueryRowCalls = append(tx.pool.QueryRowCalls, sql)
+	tx.pool.QueryRowArgs = append(tx.pool.QueryRowArgs, args)
 	tx.pool.ExecCalledCount++
 	nextErr := tx.pool.NextError
 	if nextErr == nil && len(tx.pool.NextExecErrors) > 0 {
@@ -161,6 +167,7 @@ func (tx *testTx) Prepare(context.Context, string, string) (*pgconn.StatementDes
 
 type mockProfileScan struct {
 	ID                         string
+	DefaultOrgID               string
 	Email                      string
 	FirstName                  string
 	LastName                   string
@@ -185,59 +192,67 @@ func (m mockProfileScan) scan(dest ...any) error {
 			err := IDPtr.Scan(m.ID)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if emailPtr, ok := dest[1].(*pgtype.Text); ok {
+		offset := 0
+		if defaultOrgIDPtr, ok := dest[1].(*pgtype.UUID); ok {
+			offset = 1
+			if m.DefaultOrgID != "" {
+				err := defaultOrgIDPtr.Scan(m.DefaultOrgID)
+				Expect(err).ShouldNot(HaveOccurred())
+			}
+		}
+		if emailPtr, ok := dest[1+offset].(*pgtype.Text); ok {
 			err := emailPtr.Scan(m.Email)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if firstnamePtr, ok := dest[2].(*pgtype.Text); ok {
+		if firstnamePtr, ok := dest[2+offset].(*pgtype.Text); ok {
 			err := firstnamePtr.Scan(m.FirstName)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if lastnamePtr, ok := dest[3].(*pgtype.Text); ok {
+		if lastnamePtr, ok := dest[3+offset].(*pgtype.Text); ok {
 			err := lastnamePtr.Scan(m.LastName)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if phoneNumberPtr, ok := dest[4].(*pgtype.Text); ok {
+		if phoneNumberPtr, ok := dest[4+offset].(*pgtype.Text); ok {
 			err := phoneNumberPtr.Scan(m.PhoneNumber)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if dateOfBirthPtr, ok := dest[5].(*pgtype.Date); ok {
+		if dateOfBirthPtr, ok := dest[5+offset].(*pgtype.Date); ok {
 			err := dateOfBirthPtr.Scan(m.DateOfBirth)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if countryCodePtr, ok := dest[6].(*pgtype.Text); ok {
+		if countryCodePtr, ok := dest[6+offset].(*pgtype.Text); ok {
 			err := countryCodePtr.Scan(m.CountryCode)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if addressLine1Ptr, ok := dest[7].(*pgtype.Text); ok {
+		if addressLine1Ptr, ok := dest[7+offset].(*pgtype.Text); ok {
 			err := addressLine1Ptr.Scan(m.AddressLine1)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if addressLine2Ptr, ok := dest[8].(*pgtype.Text); ok {
+		if addressLine2Ptr, ok := dest[8+offset].(*pgtype.Text); ok {
 			err := addressLine2Ptr.Scan(m.AddressLine2)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if cityPtr, ok := dest[9].(*pgtype.Text); ok {
+		if cityPtr, ok := dest[9+offset].(*pgtype.Text); ok {
 			err := cityPtr.Scan(m.City)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if statePtr, ok := dest[10].(*pgtype.Text); ok {
+		if statePtr, ok := dest[10+offset].(*pgtype.Text); ok {
 			err := statePtr.Scan(m.State)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if postalCodePtr, ok := dest[11].(*pgtype.Text); ok {
+		if postalCodePtr, ok := dest[11+offset].(*pgtype.Text); ok {
 			err := postalCodePtr.Scan(m.PostalCode)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if countryPtr, ok := dest[12].(*pgtype.Text); ok {
+		if countryPtr, ok := dest[12+offset].(*pgtype.Text); ok {
 			err := countryPtr.Scan(m.Country)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if huggingFaceTokenPtr, ok := dest[13].(*pgtype.Text); ok {
+		if huggingFaceTokenPtr, ok := dest[13+offset].(*pgtype.Text); ok {
 			err := huggingFaceTokenPtr.Scan(m.HuggingFaceTokenCiphertext)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
-		if emailVerifiedPtr, ok := dest[14].(*pgtype.Bool); ok {
+		if emailVerifiedPtr, ok := dest[14+offset].(*pgtype.Bool); ok {
 			err := emailVerifiedPtr.Scan(m.EmailVerified)
 			Expect(err).ShouldNot(HaveOccurred())
 		}
@@ -402,19 +417,25 @@ var _ = Describe("Profile Database", func() {
 				Expect(mockRow.ScanCalled).Should(BeTrue())
 
 				Expect(dbConnMock.QueryRowCalled).Should(BeTrue())
+				Expect(dbConnMock.QueryRowCalls).To(HaveLen(1))
 				insertQuery := `INSERT INTO test_db.profiles (id, idempotency_key, email, phone_number, country_code, password_hash, email_verified, email_verify_token_hash, email_verify_expires_at)VALUES (uuid_generate_v4(), @idempotency_key, @email, @phone_number, @country_code, @password_hash, @email_verified, @email_verify_token_hash, @email_verify_expires_at)RETURNING id;`
-				lastQuery := strings.ReplaceAll(dbConnMock.LastQuery, "\n\t", "")
+				lastQuery := strings.ReplaceAll(dbConnMock.QueryRowCalls[0], "\n\t", "")
 				Expect(lastQuery).Should(ContainSubstring(insertQuery))
-				Expect(dbConnMock.LastArgs[0]).Should(SatisfyAll(
+				Expect(dbConnMock.QueryRowArgs[0][0]).Should(SatisfyAll(
 					HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}),
 					HaveKeyWithValue("email", pgtype.Text{String: "email", Valid: true}),
 					HaveKeyWithValue("phone_number", pgtype.Text{String: "1234567890", Valid: true}),
 					HaveKeyWithValue("country_code", pgtype.Text{String: "US", Valid: true}),
 					HaveKey("email_verify_token_hash"),
 				))
-				tokenHash := dbConnMock.LastArgs[0].(pgx.NamedArgs)["email_verify_token_hash"].(pgtype.Text)
+				tokenHash := dbConnMock.QueryRowArgs[0][0].(pgx.NamedArgs)["email_verify_token_hash"].(pgtype.Text)
 				Expect(tokenHash.Valid).To(BeTrue())
 				Expect(tokenHash.String).NotTo(Equal("token-1"))
+				Expect(dbConnMock.ExecCalls).To(HaveLen(3))
+				Expect(dbConnMock.ExecCalls[0]).To(ContainSubstring("INSERT INTO test_db.organizations"))
+				Expect(dbConnMock.ExecCalls[1]).To(ContainSubstring("INSERT INTO test_db.organization_memberships"))
+				Expect(dbConnMock.ExecCalls[2]).To(ContainSubstring("UPDATE test_db.profiles SET default_org_id"))
+				Expect(profileAccount.DefaultOrgID).NotTo(Equal(uuid.Nil))
 			})
 		})
 	})
@@ -505,7 +526,7 @@ var _ = Describe("Profile Database", func() {
 				Expect(dbConnMock.QueryRowCalled).Should(BeTrue())
 				Expect(rowMock.ScanCalled).Should(BeTrue())
 
-				updateQuery := `UPDATE test_db.profilesSET email = @email, first_name = @first_name, last_name = @last_name, phone_number = @phone_number,date_of_birth = @date_of_birth, country_code = @country_code, address_line_1 = @address_line_1,address_line_2 = @address_line_2, city = @city, state = @state, postal_code = @postal_code, country = @countryWHERE id = @id AND deleted = false RETURNING id, email, first_name, last_name, phone_number, date_of_birth, country_code,address_line_1, address_line_2, city, state, postal_code, country, huggingface_token_ciphertext, email_verified;`
+				updateQuery := `UPDATE test_db.profilesSET email = @email, first_name = @first_name, last_name = @last_name, phone_number = @phone_number,date_of_birth = @date_of_birth, country_code = @country_code, address_line_1 = @address_line_1,address_line_2 = @address_line_2, city = @city, state = @state, postal_code = @postal_code, country = @countryWHERE id = @id AND deleted = false RETURNING id, default_org_id, email, first_name, last_name, phone_number, date_of_birth, country_code,address_line_1, address_line_2, city, state, postal_code, country, huggingface_token_ciphertext, email_verified;`
 				lastQuery := strings.ReplaceAll(dbConnMock.LastQuery, "\n\t", "")
 				lastQuery = strings.ReplaceAll(lastQuery, "    ", "")
 				Expect(lastQuery).Should(Equal(updateQuery))
@@ -755,7 +776,7 @@ var _ = Describe("Profile Database", func() {
 				Expect(res.PostalCode).Should(Equal("10001"))
 				Expect(res.Country).Should(Equal("Test Country"))
 
-				expectedQuery := "\n\tSELECT id, email, first_name, last_name, phone_number,\n\tdate_of_birth, country_code, address_line_1, address_line_2, city, state,\n\tpostal_code, country, huggingface_token_ciphertext, email_verified\n\tFROM test_db.profiles WHERE id = @id AND deleted = false;"
+				expectedQuery := "\n\tSELECT id, default_org_id, email, first_name, last_name, phone_number,\n\tdate_of_birth, country_code, address_line_1, address_line_2, city, state,\n\tpostal_code, country, huggingface_token_ciphertext, email_verified\n\tFROM test_db.profiles WHERE id = @id AND deleted = false;"
 				Expect(dbConnMock.LastQuery).Should(Equal(expectedQuery))
 				Expect(dbConnMock.LastArgs[0]).Should(Equal(
 					pgx.NamedArgs{

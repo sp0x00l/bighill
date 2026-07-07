@@ -21,14 +21,17 @@ var _ = Describe("MaterializeWorkflow", func() {
 		rawSnapshot := validRawSnapshot()
 		rawSnapshot.DatasetID = datasetFile.DatasetID
 		rawSnapshot.UserID = datasetFile.UserID
+		rawSnapshot.OrgID = datasetFile.OrgID
 		rawSnapshot.ProcessingProfile = model.ProcessingProfileTextRAG
 		featureSnapshot := validFeatureSnapshot(rawSnapshot.RawSnapshotID)
 		featureSnapshot.DatasetID = datasetFile.DatasetID
 		featureSnapshot.UserID = datasetFile.UserID
+		featureSnapshot.OrgID = datasetFile.OrgID
 		featureSnapshot.ProcessingProfile = model.ProcessingProfileTextRAG
 		embeddingSnapshot := validEmbeddingSnapshot(featureSnapshot.FeatureSnapshotID)
 		embeddingSnapshot.DatasetID = datasetFile.DatasetID
 		embeddingSnapshot.UserID = datasetFile.UserID
+		embeddingSnapshot.OrgID = datasetFile.OrgID
 		rawIdempotencyKey := uuid.New()
 		strategy := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
 			StrategyVersion:     "rag-v1",
@@ -57,10 +60,14 @@ var _ = Describe("MaterializeWorkflow", func() {
 		}).Return(rawSnapshot, nil)
 		env.OnActivity(usecase.BuildFeatureSnapshotActivityName, usecase.BuildFeatureSnapshotActivityInput{
 			RawSnapshotID:  rawSnapshot.RawSnapshotID,
+			UserID:         rawSnapshot.UserID,
+			OrgID:          rawSnapshot.OrgID,
 			IdempotencyKey: usecase.FeatureSnapshotIdempotencyKey(rawSnapshot.RawSnapshotID),
 		}).Return(featureSnapshot, nil)
 		env.OnActivity(usecase.MaterializeEmbeddingsActivityName, usecase.MaterializeEmbeddingsActivityInput{
 			FeatureSnapshotID: featureSnapshot.FeatureSnapshotID,
+			UserID:            featureSnapshot.UserID,
+			OrgID:             featureSnapshot.OrgID,
 			IdempotencyKey:    usecase.EmbeddingSnapshotIdempotencyKey(featureSnapshot.FeatureSnapshotID, strategy),
 			Strategy:          strategy,
 		}).Return(embeddingSnapshot, nil)
@@ -95,10 +102,12 @@ var _ = Describe("MaterializeWorkflow", func() {
 		rawSnapshot := validRawSnapshot()
 		rawSnapshot.DatasetID = datasetFile.DatasetID
 		rawSnapshot.UserID = datasetFile.UserID
+		rawSnapshot.OrgID = datasetFile.OrgID
 		rawSnapshot.ProcessingProfile = model.ProcessingProfileGenericParquet
 		featureSnapshot := validFeatureSnapshot(rawSnapshot.RawSnapshotID)
 		featureSnapshot.DatasetID = datasetFile.DatasetID
 		featureSnapshot.UserID = datasetFile.UserID
+		featureSnapshot.OrgID = datasetFile.OrgID
 		featureSnapshot.ProcessingProfile = model.ProcessingProfileGenericParquet
 		rawIdempotencyKey := uuid.New()
 
@@ -115,6 +124,8 @@ var _ = Describe("MaterializeWorkflow", func() {
 		}).Return(rawSnapshot, nil)
 		env.OnActivity(usecase.BuildFeatureSnapshotActivityName, usecase.BuildFeatureSnapshotActivityInput{
 			RawSnapshotID:  rawSnapshot.RawSnapshotID,
+			UserID:         rawSnapshot.UserID,
+			OrgID:          rawSnapshot.OrgID,
 			IdempotencyKey: usecase.FeatureSnapshotIdempotencyKey(rawSnapshot.RawSnapshotID),
 		}).Return(featureSnapshot, nil)
 

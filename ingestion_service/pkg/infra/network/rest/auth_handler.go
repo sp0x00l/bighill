@@ -13,6 +13,7 @@ import (
 
 type AuthResult struct {
 	UserID  uuid.UUID
+	OrgID   uuid.UUID
 	ExpUnix int64
 }
 
@@ -64,6 +65,17 @@ func (h *AuthHandler) Authenticate(ctx context.Context, r *http.Request) (AuthRe
 		return AuthResult{}, ErrUnauthorized().Wrap(err).WithMessage("invalid token: invalid userId")
 	}
 
+	orgVal, ok := claims["orgId"].(string)
+	if !ok || orgVal == "" {
+		log.WithContext(ctx).Warn("DataUploadHandlers auth: validated token missing orgId claim")
+		return AuthResult{}, ErrUnauthorized().WithMessage("invalid token: no orgId")
+	}
+	orgID, err := uuid.Parse(orgVal)
+	if err != nil || orgID == uuid.Nil {
+		log.WithContext(ctx).WithError(err).Warn("DataUploadHandlers auth: validated token has invalid orgId claim")
+		return AuthResult{}, ErrUnauthorized().Wrap(err).WithMessage("invalid token: invalid orgId")
+	}
+
 	sVal, _ := claims["sid"].(string)
 	if sVal == "" {
 		log.WithContext(ctx).Warn("DataUploadHandlers auth: validated token missing sid claim")
@@ -104,6 +116,7 @@ func (h *AuthHandler) Authenticate(ctx context.Context, r *http.Request) (AuthRe
 
 	return AuthResult{
 		UserID:  userID,
+		OrgID:   orgID,
 		ExpUnix: expUnix,
 	}, nil
 }

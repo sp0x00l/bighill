@@ -59,6 +59,7 @@ func ToStatusType(s string) (StatusType, error) {
 type Dataset struct {
 	ID                       uuid.UUID
 	UserID                   uuid.UUID
+	OrgID                    uuid.UUID
 	Title                    string
 	Description              string
 	Origin                   OriginType

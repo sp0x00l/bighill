@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	log "github.com/sirupsen/logrus"
+	"lib/shared_lib/ctxutil"
 )
 
 type datasetDB struct {
@@ -36,18 +37,18 @@ func (db *datasetDB) Create(ctx context.Context, tx pgx.Tx, dataset *model.Datas
 	datasetModel := Dataset{IdempotencyKey: pgtype.UUID{Bytes: idempotencyKey, Valid: true}}
 	datasetDAO := datasetModel.toDAO(dataset)
 
-	var id, userID, origin, status, processingState string
+	var id, userID, orgID, origin, status, processingState string
 	var sqlStatement = `INSERT INTO ` + db.Name +
-		`.datasets (id, user_id, title, description, location, source_type, source_connector_id, source_query, source_database, source_collection, idempotency_key, category,
+		`.datasets (id, user_id, org_id, title, description, location, source_type, source_connector_id, source_query, source_database, source_collection, idempotency_key, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata, processing_state)
-		VALUES (@id, @user_id, @title, @description, @location, @source_type::storage_type_enum, @source_connector_id, @source_query, @source_database, @source_collection, @idempotency_key, @category,
+		VALUES (@id, @user_id, @org_id, @title, @description, @location, @source_type::storage_type_enum, @source_connector_id, @source_query, @source_database, @source_collection, @idempotency_key, @category,
 		@table_namespace, @table_name, @table_format, @catalog_provider, @processing_profile, @schema_version, @schema_metadata::jsonb, @processing_state)
-		RETURNING id, user_id, origin, status, processing_state;`
+		RETURNING id, user_id, org_id, origin, status, processing_state;`
 
 	err := tx.QueryRow(ctx,
 		sqlStatement,
 		datasetDAO,
-	).Scan(&id, &userID, &origin, &status, &processingState)
+	).Scan(&id, &userID, &orgID, &origin, &status, &processingState)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -62,6 +63,8 @@ func (db *datasetDB) Create(ctx context.Context, tx pgx.Tx, dataset *model.Datas
 	}
 
 	dataset.ID = uuid.MustParse(id)
+	dataset.UserID = uuid.MustParse(userID)
+	dataset.OrgID = uuid.MustParse(orgID)
 	dataset.Origin, err = model.ToOriginType(origin)
 	if err != nil {
 		log.WithContext(ctx).Errorf("Error converting origin type: %s", origin)
@@ -83,16 +86,16 @@ func (db *datasetDB) Create(ctx context.Context, tx pgx.Tx, dataset *model.Datas
 func (db *datasetDB) Read(ctx context.Context, userID uuid.UUID, pagination core.Pagination, filters []model.Filter) ([]*model.Dataset, int, error) {
 	log.Trace("DatasetDB Read")
 
-	whereClause := "user_id = @user_id AND deleted = false"
+	whereClause := "org_id = @org_id AND deleted = false"
 	return db.readPaginatedDatasets(ctx, whereClause, pagination, filters, userID)
 }
 
 func (db *datasetDB) ReadByID(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID) (*model.Dataset, error) {
 	log.Trace("DatasetDB ReadByID")
 
-	whereClause := "id = @id AND user_id = @user_id AND deleted = false"
+	whereClause := "id = @id AND org_id = @org_id AND deleted = false"
 	query := db.getSelectSQL(whereClause)
-	row := db.Pool.QueryRow(ctx, query, pgx.NamedArgs{"user_id": userID, "id": datasetID})
+	row := db.Pool.QueryRow(ctx, query, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": datasetID}))
 	datasetModel, err := fromDatasetRow(ctx, row)
 	if err != nil {
 		return nil, err
@@ -114,8 +117,8 @@ func (db *datasetDB) Replace(ctx context.Context, tx pgx.Tx, dataset *model.Data
 		table_namespace = @table_namespace, table_name = @table_name, table_format = @table_format,
 		catalog_provider = @catalog_provider, processing_profile = @processing_profile, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb,
 		dataset_version = dataset_version + 1
-		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
-		RETURNING id, user_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
+		WHERE id = @id AND org_id = @org_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
+		RETURNING id, user_id, org_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
@@ -138,8 +141,8 @@ func (db *datasetDB) Replace(ctx context.Context, tx pgx.Tx, dataset *model.Data
 func (db *datasetDB) Delete(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, userID uuid.UUID) error {
 	log.Trace("DatasetDB Delete")
 
-	query := fmt.Sprintf(`UPDATE %s.datasets SET deleted = true WHERE id = @id AND user_id = @user_id AND deleted = false;`, db.Name)
-	cmdTag, err := tx.Exec(ctx, query, pgx.NamedArgs{"id": datasetID, "user_id": userID})
+	query := fmt.Sprintf(`UPDATE %s.datasets SET deleted = true WHERE id = @id AND org_id = @org_id AND deleted = false;`, db.Name)
+	cmdTag, err := tx.Exec(ctx, query, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": datasetID}))
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Errorf("database error. Failed to delete dataset %s", datasetID.String())
 		wrappedErr := fmt.Errorf("database error. Failed to delete dataset: %w", err)
@@ -159,9 +162,9 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, tx pgx.Tx, datas
 	query := `UPDATE ` + db.Name + `.datasets
 		SET processing_state = @processing_state::dataset_processing_state_enum,
 			dataset_version = dataset_version + 1
-		WHERE id = @id AND user_id = @user_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
+		WHERE id = @id AND org_id = @org_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
 			AND ` + requestedRank + ` > ` + currentRank + `
-		RETURNING id, user_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
+		RETURNING id, user_id, org_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
@@ -170,6 +173,7 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, tx pgx.Tx, datas
 	updated, err := fromDatasetRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{
 		"id":               datasetID,
 		"user_id":          userID,
+		"org_id":           db.orgIDFromContext(ctx),
 		"processing_state": state.String(),
 	}))
 	if err == nil {
@@ -236,7 +240,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 			embedding_provider = COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider),
 			embedding_model = COALESCE(NULLIF(@embedding_model, ''), d.embedding_model)
 		WHERE d.id = @id
-			AND d.user_id = @user_id
+			AND d.org_id = @org_id
 			AND d.status != '` + model.Blacklisted.String() + `'
 			AND d.deleted = false
 			AND (
@@ -264,7 +268,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 				OR d.embedding_provider IS DISTINCT FROM COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider)
 				OR d.embedding_model IS DISTINCT FROM COALESCE(NULLIF(@embedding_model, ''), d.embedding_model)
 			)
-		RETURNING d.id, d.user_id, d.title, d.description, d.origin, d.location, d.source_type, d.source_connector_id, d.source_query, d.source_database, d.source_collection, d.status, d.category,
+		RETURNING d.id, d.user_id, d.org_id, d.title, d.description, d.origin, d.location, d.source_type, d.source_connector_id, d.source_query, d.source_database, d.source_collection, d.status, d.category,
 			d.table_namespace, d.table_name, d.table_format, d.catalog_provider, d.processing_profile, d.schema_version, d.schema_metadata::text, d.processing_state::text,
 			d.dataset_version, d.raw_snapshot_id, d.feature_snapshot_id, d.embedding_snapshot_id, d.vector_store, d.collection_name,
 			d.embedding_dimensions, d.embedding_count, d.embedding_strategy_version, d.embedding_chunker_name, d.embedding_chunker_version,
@@ -310,17 +314,17 @@ func hasTableMaterializationMetadata(dataset *model.Dataset) bool {
 func (db *datasetDB) readMaterializationDatasetTx(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, userID uuid.UUID) (*model.Dataset, error) {
 	log.Trace("DatasetDB readMaterializationDatasetTx")
 
-	whereClause := "id = @id AND user_id = @user_id AND status != '" + model.Blacklisted.String() + "' AND deleted = false"
+	whereClause := "id = @id AND org_id = @org_id AND status != '" + model.Blacklisted.String() + "' AND deleted = false"
 	query := db.getSelectSQL(whereClause)
-	return fromDatasetRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{"user_id": userID, "id": datasetID}))
+	return fromDatasetRow(ctx, tx.QueryRow(ctx, query, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": datasetID})))
 }
 
 func (db *datasetDB) UpdatePublishedState(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, userID uuid.UUID) error {
 	log.Trace("DatasetDB UpdatePublishedState")
 
 	sqlStatement := fmt.Sprintf(`UPDATE %s.datasets SET status = '%s', published_at = LOCALTIMESTAMP 
-	WHERE id = @id AND user_id = @user_id AND status = '%s' AND deleted = false;`, db.Name, model.Published.String(), model.Draft.String())
-	cmdTag, err := tx.Exec(ctx, sqlStatement, pgx.NamedArgs{"id": datasetID, "user_id": userID})
+	WHERE id = @id AND org_id = @org_id AND status = '%s' AND deleted = false;`, db.Name, model.Published.String(), model.Draft.String())
+	cmdTag, err := tx.Exec(ctx, sqlStatement, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": datasetID}))
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Errorf("database error. Failed to update dataset published status for dataset ID: %s", datasetID.String())
 		wrappedErr := fmt.Errorf("database error. Failed to update dataset published status: %w", err)
@@ -339,6 +343,7 @@ func (db *datasetDB) readPaginatedDatasets(ctx context.Context, clause string, p
 	if userID != uuid.Nil {
 		args["user_id"] = userID
 	}
+	args["org_id"] = db.orgIDFromContext(ctx)
 	filter, err := getSQLFilterAndFillArguments(filters, clause, args)
 	if err != nil {
 		wrappedErr := fmt.Errorf("failed to get SQL filter and fill arguments: %w", err)
@@ -381,6 +386,29 @@ func (db *datasetDB) readPaginatedDatasets(ctx context.Context, clause string, p
 	return datasets, count, nil
 }
 
+func (db *datasetDB) scopedArgs(ctx context.Context, userID uuid.UUID, args pgx.NamedArgs) pgx.NamedArgs {
+	log.Trace("DatasetDB scopedArgs")
+
+	if args == nil {
+		args = pgx.NamedArgs{}
+	}
+	if userID != uuid.Nil {
+		args["user_id"] = userID
+	}
+	args["org_id"] = db.orgIDFromContext(ctx)
+	return args
+}
+
+func (db *datasetDB) orgIDFromContext(ctx context.Context) uuid.UUID {
+	log.Trace("DatasetDB orgIDFromContext")
+
+	orgID, ok := ctxutil.OrgID(ctx)
+	if !ok {
+		return uuid.Nil
+	}
+	return orgID
+}
+
 func getSQLFilterAndFillArguments(filters []model.Filter, extraClause string, args pgx.NamedArgs) (string, error) {
 	log.Trace("db GetSQLFilterAndFillArguments")
 	var sqlFilters []string
@@ -417,7 +445,7 @@ func (db *datasetDB) getPaginatedSelectSQL(filter string, pagination core.Pagina
 }
 
 func (db *datasetDB) getSelectSQL(filter string) string {
-	return fmt.Sprintf(`SELECT id, user_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
+	return fmt.Sprintf(`SELECT id, user_id, org_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 	table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 	dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 	embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,

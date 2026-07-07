@@ -58,6 +58,10 @@ func (h *TrainingHandlers) StartTrainingRun(ctx context.Context, req *http.Reque
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("User ID is required")
 	}
+	orgID, err := transport.ReadOrgIDHeader(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Org ID is required")
+	}
 	idempotencyKey, err := transport.ReadIdempotencyIDHeader(ctx, req)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("X-Request-ID is required")
@@ -71,7 +75,7 @@ func (h *TrainingHandlers) StartTrainingRun(ctx context.Context, req *http.Reque
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid training run request")
 	}
 	command.IdempotencyKey = idempotencyKey.String()
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	result, err := h.usecase.StartTrainingRun(ctx, command)
 	if err != nil {
 		if errors.Is(err, domain.ErrValidationFailed) {

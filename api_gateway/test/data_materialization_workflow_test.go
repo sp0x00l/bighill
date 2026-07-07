@@ -105,6 +105,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 
 		commandBytes, err := json.Marshal(map[string]string{
 			"userId":    user.ID.String(),
+			"orgId":     user.OrgID.String(),
 			"datasetId": datasetID.String(),
 			"sql":       "SELECT species, sepal_length FROM dataset ORDER BY sepal_length DESC LIMIT 2",
 		})

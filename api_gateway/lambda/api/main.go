@@ -75,6 +75,10 @@ func NewAPIHandler() APIHandler {
 			env.WithDefaultString("TRAINING_SERVICE_HTTP_HOST", "127.0.0.1"),
 			env.WithDefaultString("TRAINING_SERVICE_HTTP_PORT", "8085"),
 		),
+		InferenceServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("INFERENCE_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("INFERENCE_SERVICE_HTTP_PORT", "8087"),
+		),
 	}
 
 	return APIHandler{

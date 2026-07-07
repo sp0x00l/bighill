@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.raw_snapshots (
     raw_snapshot_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     dataset_id uuid NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
     idempotency_key uuid NOT NULL UNIQUE,
     source_storage_location text NOT NULL,
     storage_location text NOT NULL,
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.raw_snapshots (
 
 CREATE INDEX IF NOT EXISTS index_raw_snapshots_dataset_id ON bighill_feature_materializer_db.raw_snapshots(dataset_id);
 CREATE INDEX IF NOT EXISTS index_raw_snapshots_user_id ON bighill_feature_materializer_db.raw_snapshots(user_id);
+CREATE INDEX IF NOT EXISTS index_raw_snapshots_org_id ON bighill_feature_materializer_db.raw_snapshots(org_id);
 
 CREATE TRIGGER raw_snapshots_updated_at
 BEFORE UPDATE ON bighill_feature_materializer_db.raw_snapshots
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.feature_snapshots (
     raw_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.raw_snapshots(raw_snapshot_id),
     dataset_id uuid NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
     idempotency_key uuid NOT NULL UNIQUE,
     storage_location text NOT NULL DEFAULT '',
     table_namespace text NOT NULL,
@@ -87,6 +90,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.feature_snapshots (
 
 CREATE INDEX IF NOT EXISTS index_feature_snapshots_raw_snapshot_id ON bighill_feature_materializer_db.feature_snapshots(raw_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_feature_snapshots_dataset_id ON bighill_feature_materializer_db.feature_snapshots(dataset_id);
+CREATE INDEX IF NOT EXISTS index_feature_snapshots_org_id ON bighill_feature_materializer_db.feature_snapshots(org_id);
 
 CREATE TRIGGER feature_snapshots_updated_at
 BEFORE UPDATE ON bighill_feature_materializer_db.feature_snapshots
@@ -98,6 +102,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_snapshots (
     feature_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.feature_snapshots(feature_snapshot_id),
     dataset_id uuid NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
     idempotency_key uuid NOT NULL UNIQUE,
     vector_store text NOT NULL DEFAULT '',
     collection_name text NOT NULL DEFAULT '',
@@ -124,6 +129,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_snapshots (
 CREATE INDEX IF NOT EXISTS index_embedding_snapshots_feature_snapshot_id ON bighill_feature_materializer_db.embedding_snapshots(feature_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_embedding_snapshots_dataset_id ON bighill_feature_materializer_db.embedding_snapshots(dataset_id);
 CREATE INDEX IF NOT EXISTS index_embedding_snapshots_user_id ON bighill_feature_materializer_db.embedding_snapshots(user_id);
+CREATE INDEX IF NOT EXISTS index_embedding_snapshots_org_id ON bighill_feature_materializer_db.embedding_snapshots(org_id);
 CREATE UNIQUE INDEX IF NOT EXISTS index_embedding_snapshots_active_dataset
 ON bighill_feature_materializer_db.embedding_snapshots(dataset_id)
 WHERE active_for_retrieval = true;
@@ -138,6 +144,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_records (
     embedding_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.embedding_snapshots(embedding_snapshot_id) ON DELETE CASCADE,
     dataset_id uuid NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
     chunk_index integer NOT NULL DEFAULT 0,
     source_text text NOT NULL,
     embedding vector NOT NULL,
@@ -147,6 +154,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_records (
 CREATE INDEX IF NOT EXISTS index_embedding_records_snapshot_id ON bighill_feature_materializer_db.embedding_records(embedding_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_embedding_records_dataset_id ON bighill_feature_materializer_db.embedding_records(dataset_id);
 CREATE INDEX IF NOT EXISTS index_embedding_records_user_id ON bighill_feature_materializer_db.embedding_records(user_id);
+CREATE INDEX IF NOT EXISTS index_embedding_records_org_id ON bighill_feature_materializer_db.embedding_records(org_id);
 -- Retrieval queries must use embedding::vector(384), cosine distance, and vector_dims(embedding) = 384 to use this partial ANN index.
 CREATE INDEX IF NOT EXISTS index_embedding_records_embedding_384_hnsw
 ON bighill_feature_materializer_db.embedding_records
@@ -205,11 +213,11 @@ ALTER TABLE bighill_feature_materializer_db.raw_snapshots FORCE ROW LEVEL SECURI
 CREATE POLICY raw_snapshots_tenant_isolation ON bighill_feature_materializer_db.raw_snapshots
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
 ALTER TABLE bighill_feature_materializer_db.feature_snapshots ENABLE ROW LEVEL SECURITY;
@@ -217,11 +225,11 @@ ALTER TABLE bighill_feature_materializer_db.feature_snapshots FORCE ROW LEVEL SE
 CREATE POLICY feature_snapshots_tenant_isolation ON bighill_feature_materializer_db.feature_snapshots
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
 ALTER TABLE bighill_feature_materializer_db.embedding_snapshots ENABLE ROW LEVEL SECURITY;
@@ -229,11 +237,11 @@ ALTER TABLE bighill_feature_materializer_db.embedding_snapshots FORCE ROW LEVEL 
 CREATE POLICY embedding_snapshots_tenant_isolation ON bighill_feature_materializer_db.embedding_snapshots
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
 ALTER TABLE bighill_feature_materializer_db.embedding_records ENABLE ROW LEVEL SECURITY;
@@ -241,9 +249,9 @@ ALTER TABLE bighill_feature_materializer_db.embedding_records FORCE ROW LEVEL SE
 CREATE POLICY embedding_records_tenant_isolation ON bighill_feature_materializer_db.embedding_records
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );

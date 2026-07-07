@@ -137,7 +137,11 @@ func (s *DataRegistryServer) ReadSourceConnector(ctx context.Context, req *datar
 	if err != nil || userID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
 	}
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil || orgID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid org_id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 
 	connector, err := s.sourceUsecase.ReadSourceConnector(ctx, connectorID, userID)
 	if err != nil {
@@ -165,7 +169,11 @@ func (s *DataRegistryServer) ReadDatasetTable(ctx context.Context, req *dataregi
 	if err != nil || userID == uuid.Nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
 	}
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil || orgID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid org_id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 
 	dataset, err := s.datasetUsecase.ReadDatasetTable(ctx, datasetID, userID, req.GetSnapshotId())
 	if err != nil {
@@ -175,6 +183,7 @@ func (s *DataRegistryServer) ReadDatasetTable(ctx context.Context, req *dataregi
 	return &dataregistrypb.ReadDatasetTableResponse{
 		DatasetId:       dataset.ID.String(),
 		UserId:          dataset.UserID.String(),
+		OrgId:           dataset.OrgID.String(),
 		DatasetVersion:  int32(dataset.DatasetVersion),
 		ProcessingState: dataset.ProcessingState.String(),
 		StorageLocation: dataset.Location,
@@ -203,6 +212,7 @@ func sourceConnectorToPB(connector *model.SourceConnector) (*dataregistrypb.Sour
 	pbConnector := &dataregistrypb.SourceConnector{
 		Id:         connector.ID.String(),
 		UserId:     connector.UserID.String(),
+		OrgId:      connector.OrgID.String(),
 		CatalogId:  connector.CatalogID.String(),
 		SourceType: connector.Config.GetStorageType().String(),
 		ConfigJson: configBytes,

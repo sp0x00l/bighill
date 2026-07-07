@@ -65,6 +65,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 
 		command := map[string]string{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "postgres",
 			"sourceConnectorId": connectorID,
 			"sql":               "SELECT actor_id, first_name, last_name FROM public.actor ORDER BY actor_id LIMIT 3",
@@ -85,6 +86,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 
 		command := map[string]string{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "mysql",
 			"sourceConnectorId": connectorID,
 			"sql":               "SELECT actor_id, first_name, last_name FROM actor ORDER BY actor_id LIMIT 3",
@@ -105,6 +107,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 
 		command := map[string]string{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "clickhouse",
 			"sourceConnectorId": connectorID,
 			"sql":               "SELECT title, release_year FROM movies WHERE has(genres, 'Silent') ORDER BY release_year, title LIMIT 3",
@@ -124,6 +127,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 
 		command := map[string]any{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "mongo",
 			"sourceConnectorId": connectorID,
 			"database":          mongoDataSourceDatabase,
@@ -185,6 +189,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 
 		expectFlightInfoError(mustMarshalCommand(map[string]any{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "postgres",
 			"sourceConnectorId": "not-a-uuid",
 			"sql":               "SELECT 1",
@@ -192,6 +197,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 
 		expectFlightInfoError(mustMarshalCommand(map[string]any{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "mongo",
 			"sourceConnectorId": uuid.NewString(),
 			"database":          mongoDataSourceDatabase,
@@ -202,6 +208,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 		postgresConnectorID := createPostgresSourceConnector(user)
 		expectFlightInfoError(mustMarshalCommand(map[string]any{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "postgres",
 			"sourceConnectorId": postgresConnectorID,
 			"sql":               "SELECT missing_column FROM public.actor LIMIT 1",
@@ -210,6 +217,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 		mysqlConnectorID := createMySQLSourceConnector(user)
 		expectFlightInfoError(mustMarshalCommand(map[string]any{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "mysql",
 			"sourceConnectorId": mysqlConnectorID,
 			"sql":               "SELECT missing_column FROM actor LIMIT 1",
@@ -218,6 +226,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 		clickHouseConnectorID := createClickHouseSourceConnector(user)
 		expectFlightInfoError(mustMarshalCommand(map[string]any{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "clickhouse",
 			"sourceConnectorId": clickHouseConnectorID,
 			"sql":               "SELECT missing_column FROM movies LIMIT 1",
@@ -226,6 +235,7 @@ var _ = Describe("Data Stream datasource query", Ordered, func() {
 		mongoConnectorID := createMongoSourceConnector(user)
 		expectFlightInfoError(mustMarshalCommand(map[string]any{
 			"userId":            user.ID.String(),
+			"orgId":             user.OrgID.String(),
 			"sourceType":        "mongo",
 			"sourceConnectorId": mongoConnectorID,
 			"database":          mongoDataSourceDatabase,

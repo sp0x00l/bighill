@@ -124,7 +124,10 @@ func (u *dataUploadUseCase) UploadFile(ctx context.Context, upload *model.DataFi
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if upload != nil {
-		ctx = ctxutil.WithTenantID(ctx, upload.UserID)
+		if upload.OrgID == uuid.Nil {
+			return domain.ErrValidationFailed.Extend("org id is required")
+		}
+		ctx = ctxutil.WithActorOrg(ctx, upload.UserID, upload.OrgID)
 	}
 	storageLocation, err := u.bucket.Save(ctx, upload)
 	if err != nil {
@@ -143,7 +146,10 @@ func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request m
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, request.UserID)
+	if request.OrgID == uuid.Nil {
+		return nil, domain.ErrValidationFailed.Extend("org id is required")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
 	now := time.Now().UTC()
 	uploadID := newUploadID(model.UploadResourceDataFile, request.DatasetID, request.UserID, request.ClientNonce)
 	fileName := safeFileName(request.FileName, request.DeclaredFormat)
@@ -153,6 +159,7 @@ func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request m
 		ResourceID:          request.DatasetID,
 		DatasetID:           request.DatasetID,
 		UserID:              request.UserID,
+		OrgID:               request.OrgID,
 		ClientNonce:         strings.TrimSpace(request.ClientNonce),
 		FileName:            fileName,
 		StagingKey:          fmt.Sprintf("staging/%s/%s/%s", request.DatasetID, uploadID, fileName),
@@ -198,7 +205,10 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, request.UserID)
+	if request.OrgID == uuid.Nil {
+		return nil, domain.ErrValidationFailed.Extend("org id is required")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
 	now := time.Now().UTC()
 	resourceID := request.ResourceID
 	if resourceID == uuid.Nil {
@@ -213,6 +223,7 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 		ResourceID:          resourceID,
 		DatasetID:           request.DatasetID,
 		UserID:              request.UserID,
+		OrgID:               request.OrgID,
 		ClientNonce:         strings.TrimSpace(request.ClientNonce),
 		FileName:            fileName,
 		StagingKey:          fmt.Sprintf("staging/%s/%s/%s/%s", strings.ToLower(string(model.UploadResourceModelArtifact)), resourceID, uploadID, fileName),
@@ -256,7 +267,10 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, request.UserID)
+	if request.OrgID == uuid.Nil {
+		return nil, domain.ErrValidationFailed.Extend("org id is required")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
 	if request.ResourceID == uuid.Nil {
 		request.ResourceID = idem.FromParts("ingestion-huggingface-model-resource", request.UserID.String(), request.RepoID, strings.TrimSpace(request.Revision), strings.TrimSpace(request.ClientNonce))
 	}
@@ -285,6 +299,7 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		ResourceID:          request.ResourceID,
 		DatasetID:           request.DatasetID,
 		UserID:              request.UserID,
+		OrgID:               request.OrgID,
 		ClientNonce:         strings.TrimSpace(request.ClientNonce),
 		FileName:            "huggingface-snapshot",
 		StorageLocation:     strings.TrimSpace(downloaded.StorageLocation),
@@ -328,7 +343,10 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, request.UserID)
+	if request.OrgID == uuid.Nil {
+		return nil, domain.ErrValidationFailed.Extend("org id is required")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
 	session, err = u.uploadSessions.ReadUploadSessionForComplete(ctx, request.UploadID, request.UserID)
 	if err != nil {
 		return nil, err
@@ -348,7 +366,7 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 		return nil, domain.ErrValidationFailed.Extend("upload session is not pending")
 	}
 	if time.Now().UTC().After(session.ExpiresAt) {
-		_ = u.expireUploadSession(ctx, session.UploadID, session.UserID)
+		u.logExpireUploadSessionFailure(ctx, session)
 		return nil, domain.ErrValidationFailed.Extend("upload session expired")
 	}
 	info, err := u.bucket.HeadStagingObject(ctx, session)
@@ -356,8 +374,8 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 		return nil, fmt.Errorf("head staged upload: %w", err)
 	}
 	if err := validateStagedObject(session, info, u.maxUploadSizeBytes); err != nil {
-		_ = u.rejectUploadSession(ctx, session.UploadID, session.UserID)
-		_ = u.bucket.DeleteStagedObject(ctx, session)
+		u.logRejectUploadSessionFailure(ctx, session)
+		u.logDeleteStagedObjectFailure(ctx, session)
 		return nil, err
 	}
 	if session.ResourceType == model.UploadResourceDataFile {
@@ -367,8 +385,8 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 		}
 		detectedFormat := u.detector.DetectFileFormat(ctx, validationReader, safeIntFileSize(info.Size), []string{session.DeclaredFormat})
 		if detectedFormat != session.DeclaredFormat {
-			_ = u.rejectUploadSession(ctx, session.UploadID, session.UserID)
-			_ = u.bucket.DeleteStagedObject(ctx, session)
+			u.logRejectUploadSessionFailure(ctx, session)
+			u.logDeleteStagedObjectFailure(ctx, session)
 			return nil, domain.ErrValidationFailed.Extend("uploaded file format does not match the declared format")
 		}
 	} else if session.ResourceType == model.UploadResourceModelArtifact {
@@ -377,8 +395,8 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 			return nil, err
 		}
 		if err := validateModelArtifactContents(validationReader, session, info.Size); err != nil {
-			_ = u.rejectUploadSession(ctx, session.UploadID, session.UserID)
-			_ = u.bucket.DeleteStagedObject(ctx, session)
+			u.logRejectUploadSessionFailure(ctx, session)
+			u.logDeleteStagedObjectFailure(ctx, session)
 			return nil, err
 		}
 	} else {
@@ -467,6 +485,39 @@ func (u *dataUploadUseCase) expireUploadSession(ctx context.Context, uploadID, u
 	return u.uploadSessionUOW.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
 		return u.uploadSessions.ExpireUploadSession(ctx, tx, uploadID, userID)
 	})
+}
+
+func (u *dataUploadUseCase) logRejectUploadSessionFailure(ctx context.Context, session *model.UploadSession) {
+	log.Trace("DataUploadUseCase logRejectUploadSessionFailure")
+
+	if err := u.rejectUploadSession(ctx, session.UploadID, session.UserID); err != nil {
+		log.WithContext(ctx).WithError(err).WithFields(log.Fields{
+			"upload_id": session.UploadID.String(),
+			"user_id":   session.UserID.String(),
+		}).Warn("failed to reject upload session during cleanup")
+	}
+}
+
+func (u *dataUploadUseCase) logExpireUploadSessionFailure(ctx context.Context, session *model.UploadSession) {
+	log.Trace("DataUploadUseCase logExpireUploadSessionFailure")
+
+	if err := u.expireUploadSession(ctx, session.UploadID, session.UserID); err != nil {
+		log.WithContext(ctx).WithError(err).WithFields(log.Fields{
+			"upload_id": session.UploadID.String(),
+			"user_id":   session.UserID.String(),
+		}).Warn("failed to expire upload session during cleanup")
+	}
+}
+
+func (u *dataUploadUseCase) logDeleteStagedObjectFailure(ctx context.Context, session *model.UploadSession) {
+	log.Trace("DataUploadUseCase logDeleteStagedObjectFailure")
+
+	if err := u.bucket.DeleteStagedObject(ctx, session); err != nil {
+		log.WithContext(ctx).WithError(err).WithFields(log.Fields{
+			"upload_id": session.UploadID.String(),
+			"user_id":   session.UserID.String(),
+		}).Warn("failed to delete staged object during cleanup")
+	}
 }
 
 func (u *dataUploadUseCase) recordModelArtifact(ctx context.Context, session *model.UploadSession) (*model.UploadSession, error) {

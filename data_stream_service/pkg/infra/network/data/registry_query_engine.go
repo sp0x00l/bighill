@@ -103,6 +103,10 @@ func (e *registryQueryEngine) executeCommand(ctx context.Context, command string
 	if err != nil || userID == uuid.Nil {
 		return nil, streamdomain.ErrValidationFailed.Extend("registry query command has invalid userId")
 	}
+	orgID, err := uuid.Parse(query.OrgID)
+	if err != nil || orgID == uuid.Nil {
+		return nil, streamdomain.ErrValidationFailed.Extend("registry query command has invalid orgId")
+	}
 
 	runCtx := ctx
 	cancel := func() {}
@@ -111,7 +115,7 @@ func (e *registryQueryEngine) executeCommand(ctx context.Context, command string
 	}
 	defer cancel()
 
-	connector, err := e.registryClient.ReadSourceConnector(runCtx, connectorID, userID, query.SourceType.String())
+	connector, err := e.registryClient.ReadSourceConnector(runCtx, connectorID, userID, orgID, query.SourceType.String())
 	if err != nil {
 		return nil, err
 	}

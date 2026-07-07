@@ -7,6 +7,7 @@ import (
 	usecase "feature_materializer_service/pkg/app"
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -65,6 +66,7 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 				EmbeddingRecordID:   uuid.New(),
 				EmbeddingSnapshotID: activeSnapshot.EmbeddingSnapshotID,
 				DatasetID:           datasetID,
+				OrgID:               activeSnapshot.OrgID,
 				ChunkIndex:          1,
 				SourceText:          "matched chunk",
 				Distance:            0.25,
@@ -81,7 +83,8 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		}
 		uc := usecase.NewEmbeddingSearchUsecase(repo, providerFactory)
 
-		result, err := uc.SearchEmbeddings(context.Background(), activeSnapshot.UserID, datasetID, "what happened?", 7)
+		ctx := ctxutil.WithActorOrg(context.Background(), activeSnapshot.UserID, activeSnapshot.OrgID)
+		result, err := uc.SearchEmbeddings(ctx, activeSnapshot.UserID, datasetID, "what happened?", 7)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(repo.userID).To(Equal(activeSnapshot.UserID))
@@ -103,7 +106,8 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 			return queryEmbeddingProviderStub{dimensions: activeSnapshot.EmbeddingDimensions + 1}, nil
 		})
 
-		result, err := uc.SearchEmbeddings(context.Background(), activeSnapshot.UserID, activeSnapshot.DatasetID, "query", 5)
+		ctx := ctxutil.WithActorOrg(context.Background(), activeSnapshot.UserID, activeSnapshot.OrgID)
+		result, err := uc.SearchEmbeddings(ctx, activeSnapshot.UserID, activeSnapshot.DatasetID, "query", 5)
 
 		Expect(result).To(BeNil())
 		Expect(errors.Is(err, domain.ErrEmbeddingSearch)).To(BeTrue())
@@ -116,6 +120,7 @@ func validSearchEmbeddingSnapshot(datasetID uuid.UUID) *model.EmbeddingSnapshot 
 		FeatureSnapshotID:   uuid.New(),
 		DatasetID:           datasetID,
 		UserID:              uuid.New(),
+		OrgID:               uuid.New(),
 		VectorStore:         "pgvector",
 		CollectionName:      "movies",
 		EmbeddingDimensions: 2,

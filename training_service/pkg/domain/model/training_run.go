@@ -42,6 +42,7 @@ func ToTrainingRunStatus(value string) (TrainingRunStatus, error) {
 type TrainingRunRequest struct {
 	TrainingRunID          string
 	UserID                 string
+	OrgID                  string
 	DatasetID              string
 	DatasetVersion         string
 	FeatureSnapshotID      string
@@ -100,6 +101,7 @@ type TrainingRunStatusResult struct {
 type MaterializedDatasetRef struct {
 	DatasetID         string
 	UserID            string
+	OrgID             string
 	DatasetVersion    string
 	FeatureSnapshotID string
 	DatasetURI        string
@@ -111,6 +113,7 @@ type MaterializedDatasetRef struct {
 type SourceModelRef struct {
 	ModelID           string
 	UserID            string
+	OrgID             string
 	ModelKind         string
 	Name              string
 	ModelVersion      int
@@ -124,6 +127,7 @@ type SourceModelRef struct {
 
 type PreparedTrainingDataset struct {
 	TrainingRunID     string
+	OrgID             string
 	FeatureSnapshotID string
 	DatasetURI        string
 }
@@ -168,6 +172,7 @@ type EvaluationReport struct {
 
 type TrainingJobSpec struct {
 	TrainingRunID          string
+	OrgID                  string
 	DatasetURI             string
 	PreferenceDatasetID    string
 	ModelName              string
@@ -197,6 +202,7 @@ type TrainingJobSpec struct {
 
 type EvaluationJobSpec struct {
 	TrainingRunID        string
+	OrgID                string
 	ModelURI             string
 	EvaluationProfile    string
 	ReportURI            string
@@ -207,6 +213,7 @@ type EvaluationJobSpec struct {
 
 type PromotionReportJobSpec struct {
 	UserID                   string
+	OrgID                    string
 	ModelID                  string
 	TrainingRunID            string
 	CandidateReportURI       string
@@ -223,6 +230,7 @@ type PromotionReportJobSpec struct {
 
 type PromotionReport struct {
 	UserID              string             `json:"user_id"`
+	OrgID               string             `json:"org_id"`
 	ModelID             string             `json:"model_id"`
 	TrainingRunID       string             `json:"training_run_id"`
 	PromotionReportURI  string             `json:"promotion_report_uri"`
@@ -237,6 +245,7 @@ type PromotionReport struct {
 type TrainingRunResult struct {
 	TrainingRunID     string
 	UserID            string
+	OrgID             string
 	DatasetID         string
 	DatasetVersion    string
 	FeatureSnapshotID string

@@ -18,6 +18,7 @@ import (
 	ingestionmessaging "ingestion_service/pkg/infra/network/messaging"
 	servicerest "ingestion_service/pkg/infra/network/rest"
 	ingestionpb "lib/data_contracts_lib/ingestion"
+	"lib/shared_lib/ctxutil"
 	sharedDomain "lib/shared_lib/domain"
 	msgConn "lib/shared_lib/messaging"
 	shareduow "lib/shared_lib/uow"
@@ -209,7 +210,8 @@ func (s *stubUploadSessionRepository) CreateUploadSession(_ context.Context, _ p
 	return session, s.createErr
 }
 
-func (s *stubUploadSessionRepository) ReadUploadSessionForComplete(_ context.Context, uploadID, userID uuid.UUID) (*model.UploadSession, error) {
+func (s *stubUploadSessionRepository) ReadUploadSessionForComplete(ctx context.Context, uploadID, userID uuid.UUID) (*model.UploadSession, error) {
+	orgID, _ := ctxutil.OrgID(ctx)
 	if s.readSession == nil {
 		s.readSession = &model.UploadSession{
 			UploadID:            uploadID,
@@ -217,6 +219,7 @@ func (s *stubUploadSessionRepository) ReadUploadSessionForComplete(_ context.Con
 			DatasetID:           uuid.New(),
 			ResourceID:          uuid.New(),
 			UserID:              userID,
+			OrgID:               orgID,
 			StagingKey:          "staging/file.csv",
 			FinalKey:            "raw/file.csv",
 			DeclaredFormat:      "csv",
@@ -260,6 +263,7 @@ func (s *stubUploadSessionRepository) RecordUploadedFile(_ context.Context, _ pg
 		ResourceID:          upload.DatasetID,
 		DatasetID:           upload.DatasetID,
 		UserID:              upload.UserID,
+		OrgID:               upload.OrgID,
 		DeclaredFormat:      upload.Extension,
 		DeclaredContentType: upload.ContentType,
 		StorageLocation:     location,
@@ -284,6 +288,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		upload := &model.DataFile{
 			DatasetID:   uuid.New(),
 			UserID:      uuid.New(),
+			OrgID:       uuid.New(),
 			ContentType: "text/csv",
 			Extension:   ".csv",
 		}
@@ -300,6 +305,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
 		Expect(event.DatasetId).To(Equal(upload.DatasetID.String()))
 		Expect(event.UserId).To(Equal(upload.UserID.String()))
+		Expect(event.OrgId).To(Equal(upload.OrgID.String()))
 		Expect(event.SourceType).To(Equal("upload"))
 	})
 
@@ -311,7 +317,7 @@ var _ = Describe("DataUploadUseCase", func() {
 			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
 		)
 
-		Expect(uc.UploadFile(context.Background(), &model.DataFile{})).To(MatchError(expectedErr))
+		Expect(uc.UploadFile(context.Background(), &model.DataFile{UserID: uuid.New(), OrgID: uuid.New()})).To(MatchError(expectedErr))
 	})
 
 	It("initiates an upload session with deterministic staging keys", func() {
@@ -324,10 +330,12 @@ var _ = Describe("DataUploadUseCase", func() {
 		)
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 
 		result, err := uc.InitiateUploadSession(context.Background(), model.InitiateUploadSessionRequest{
 			DatasetID:           datasetID,
 			UserID:              userID,
+			OrgID:               orgID,
 			ClientNonce:         "retry-token",
 			FileName:            "../dataset.csv",
 			DeclaredFormat:      "csv",
@@ -345,6 +353,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(result.Fields).To(HaveKeyWithValue("key", sessions.created.StagingKey))
 		Expect(repo.signedMaxBytes).To(Equal(int64(100)))
 		Expect(sessions.created.UploadID).To(Equal(result.UploadID))
+		Expect(sessions.created.OrgID).To(Equal(orgID))
 		Expect(sessions.created.StagingKey).To(ContainSubstring("/dataset.csv"))
 		Expect(sessions.created.FinalKey).To(HavePrefix("raw/" + datasetID.String() + "/" + result.UploadID.String() + "/"))
 	})
@@ -358,11 +367,13 @@ var _ = Describe("DataUploadUseCase", func() {
 			usecase.WithUploadPolicy(2048, time.Minute, 512),
 		)
 		userID := uuid.New()
+		orgID := uuid.New()
 		datasetID := uuid.New()
 
 		result, err := uc.InitiateModelUploadSession(context.Background(), model.InitiateModelUploadSessionRequest{
 			DatasetID:           datasetID,
 			UserID:              userID,
+			OrgID:               orgID,
 			ClientNonce:         "model-retry-token",
 			FileName:            "../adapter.safetensors",
 			ArtifactType:        "lora-adapter",
@@ -381,6 +392,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(sessions.created.ResourceType).To(Equal(model.UploadResourceModelArtifact))
 		Expect(sessions.created.ResourceID).To(Equal(result.ResourceID))
 		Expect(sessions.created.DatasetID).To(Equal(datasetID))
+		Expect(sessions.created.OrgID).To(Equal(orgID))
 		Expect(sessions.created.ArtifactType).To(Equal("LORA_ADAPTER"))
 		Expect(sessions.created.DeclaredFormat).To(Equal("safetensors"))
 		Expect(sessions.created.StagingKey).To(ContainSubstring("/adapter.safetensors"))
@@ -399,8 +411,9 @@ var _ = Describe("DataUploadUseCase", func() {
 		)
 		uploadID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 
-		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: uploadID, UserID: userID})
+		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: uploadID, UserID: userID, OrgID: orgID})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(session.Status).To(Equal(model.UploadSessionPromoted))
@@ -424,6 +437,7 @@ var _ = Describe("DataUploadUseCase", func() {
 			ResourceID:          resourceID,
 			DatasetID:           datasetID,
 			UserID:              uuid.New(),
+			OrgID:               uuid.New(),
 			StagingKey:          "staging/model_artifact/" + resourceID.String() + "/adapter.zip",
 			FinalKey:            "models/artifacts/" + resourceID.String() + "/adapter.zip",
 			DeclaredFormat:      "zip",
@@ -443,7 +457,7 @@ var _ = Describe("DataUploadUseCase", func() {
 			usecase.WithUploadPolicy(8192, time.Minute, 512),
 		)
 
-		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: sessions.readSession.UploadID, UserID: sessions.readSession.UserID})
+		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: sessions.readSession.UploadID, UserID: sessions.readSession.UserID, OrgID: sessions.readSession.OrgID})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(session.Status).To(Equal(model.UploadSessionPromoted))
@@ -466,8 +480,9 @@ var _ = Describe("DataUploadUseCase", func() {
 		)
 		uploadID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 
-		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: uploadID, UserID: userID})
+		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: uploadID, UserID: userID, OrgID: orgID})
 
 		Expect(session).To(BeNil())
 		Expect(errors.Is(err, expectedErr)).To(BeTrue())
@@ -490,6 +505,7 @@ var _ = Describe("DataUploadUseCase", func() {
 			DatasetID:           uuid.New(),
 			ResourceID:          uuid.New(),
 			UserID:              uuid.New(),
+			OrgID:               uuid.New(),
 			StagingKey:          "staging/file.parquet",
 			FinalKey:            "raw/file.parquet",
 			DeclaredFormat:      "parquet",
@@ -513,7 +529,7 @@ var _ = Describe("DataUploadUseCase", func() {
 			usecase.WithUploadPolicy(int64(len(object)), time.Minute, 5*1000*1000),
 		)
 
-		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: sessions.readSession.UploadID, UserID: sessions.readSession.UserID})
+		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: sessions.readSession.UploadID, UserID: sessions.readSession.UserID, OrgID: sessions.readSession.OrgID})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(session.Status).To(Equal(model.UploadSessionPromoted))
@@ -535,9 +551,11 @@ var _ = Describe("DataUploadUseCase", func() {
 			usecase.WithModelArtifactDownloader(downloader),
 		)
 		userID := uuid.New()
+		orgID := uuid.New()
 
 		session, err := uc.OnboardHuggingFaceModel(context.Background(), model.OnboardHuggingFaceModelRequest{
 			UserID:       userID,
+			OrgID:        orgID,
 			ClientNonce:  "hf-1",
 			RepoID:       "meta-llama/Llama-3.1-8B",
 			Revision:     "main",
@@ -552,6 +570,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(session.ManifestLocation).To(ContainSubstring("/manifest.json"))
 		Expect(sessions.recordedModel).To(Equal(session))
 		Expect(downloader.received.UserID).To(Equal(userID))
+		Expect(downloader.received.OrgID).To(Equal(orgID))
 		Expect(downloader.received.HuggingFaceToken).To(Equal("hf-token"))
 		Expect(decryptor.ciphertext).To(Equal("ciphertext-1"))
 		Expect(unitOfWork.messages).To(HaveLen(1))
@@ -559,6 +578,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		var event ingestionpb.ModelArtifactIngestedEvent
 		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 		Expect(event.Source).To(Equal("HUGGING_FACE"))
 		Expect(event.HfCommitSha).To(Equal("abc123"))
 		Expect(event.SourceMetadata).To(ContainSubstring(session.UploadID.String()))
@@ -580,6 +600,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		)
 		request := model.OnboardHuggingFaceModelRequest{
 			UserID:       uuid.New(),
+			OrgID:        uuid.New(),
 			ClientNonce:  "hf-retry",
 			RepoID:       "meta-llama/Llama-3.1-8B",
 			Revision:     "main",
@@ -615,7 +636,7 @@ var _ = Describe("DataUploadUseCase", func() {
 			usecase.WithUploadPolicy(1024, time.Minute, 512),
 		)
 
-		_, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: uuid.New(), UserID: uuid.New()})
+		_, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: uuid.New(), UserID: uuid.New(), OrgID: uuid.New()})
 
 		Expect(err).To(MatchError(domain.ErrValidationFailed.Extend("uploaded file format does not match the declared format")))
 		Expect(sessions.rejected).To(BeTrue())

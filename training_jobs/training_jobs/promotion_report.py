@@ -26,6 +26,7 @@ JOB_SPEC_KEYS = (
     "candidate_metrics_metadata",
     "candidate_report_uri",
     "model_id",
+    "org_id",
     "promotion_profile",
     "report_manifest_uri",
     "report_uri",
@@ -79,6 +80,7 @@ def main(argv: list[str] | None = None) -> None:
 
     manifest = PromotionReportManifest(
         user_id=request["user_id"],
+        org_id=request["org_id"],
         model_id=model_id,
         training_run_id=request["training_run_id"],
         promotion_report_uri=request["report_uri"],

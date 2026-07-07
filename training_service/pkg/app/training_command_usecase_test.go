@@ -41,26 +41,30 @@ func (s *commandWorkflowStarterStub) ReadTrainingWorkflowStatus(_ context.Contex
 
 type datasetResolverStub struct {
 	userID    uuid.UUID
+	orgID     uuid.UUID
 	datasetID uuid.UUID
 	ref       model.MaterializedDatasetRef
 	err       error
 }
 
-func (s *datasetResolverStub) ResolveMaterializedDataset(_ context.Context, userID uuid.UUID, datasetID uuid.UUID) (model.MaterializedDatasetRef, error) {
+func (s *datasetResolverStub) ResolveMaterializedDataset(_ context.Context, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID) (model.MaterializedDatasetRef, error) {
 	s.userID = userID
+	s.orgID = orgID
 	s.datasetID = datasetID
 	return s.ref, s.err
 }
 
 type modelResolverStub struct {
 	userID  uuid.UUID
+	orgID   uuid.UUID
 	modelID uuid.UUID
 	ref     model.SourceModelRef
 	err     error
 }
 
-func (s *modelResolverStub) ResolveTrainableModel(_ context.Context, userID uuid.UUID, modelID uuid.UUID) (model.SourceModelRef, error) {
+func (s *modelResolverStub) ResolveTrainableModel(_ context.Context, userID uuid.UUID, orgID uuid.UUID, modelID uuid.UUID) (model.SourceModelRef, error) {
 	s.userID = userID
+	s.orgID = orgID
 	s.modelID = modelID
 	return s.ref, s.err
 }
@@ -68,6 +72,7 @@ func (s *modelResolverStub) ResolveTrainableModel(_ context.Context, userID uuid
 var _ = Describe("TrainingCommandUsecase", func() {
 	var (
 		userID          uuid.UUID
+		orgID           uuid.UUID
 		datasetID       uuid.UUID
 		sourceModelID   uuid.UUID
 		starter         *commandWorkflowStarterStub
@@ -78,16 +83,17 @@ var _ = Describe("TrainingCommandUsecase", func() {
 
 	BeforeEach(func() {
 		userID = uuid.New()
+		orgID = uuid.New()
 		datasetID = uuid.New()
 		sourceModelID = uuid.New()
 		starter = &commandWorkflowStarterStub{}
-		datasetResolver = &datasetResolverStub{ref: materializedDatasetRef(datasetID, userID)}
+		datasetResolver = &datasetResolverStub{ref: materializedDatasetRef(datasetID, userID, orgID)}
 		modelResolver = &modelResolverStub{ref: baseModelRef(sourceModelID)}
 		usecase = app.NewTrainingCommandUsecase(starter, starter, datasetResolver, modelResolver, trainingProfileCatalog())
 	})
 
 	It("resolves inputs and starts a base-model SFT workflow", func() {
-		result, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+		result, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey:    uuid.NewString(),
 			DatasetID:         datasetID.String(),
 			SourceModelID:     sourceModelID.String(),
@@ -99,12 +105,15 @@ var _ = Describe("TrainingCommandUsecase", func() {
 		Expect(result.TrainingRunID).NotTo(BeEmpty())
 		Expect(result.StatusURL).To(Equal("/v1/private/training-runs/" + result.TrainingRunID))
 		Expect(datasetResolver.userID).To(Equal(userID))
+		Expect(datasetResolver.orgID).To(Equal(orgID))
 		Expect(datasetResolver.datasetID).To(Equal(datasetID))
 		Expect(modelResolver.userID).To(Equal(userID))
+		Expect(modelResolver.orgID).To(Equal(orgID))
 		Expect(modelResolver.modelID).To(Equal(sourceModelID))
 		Expect(starter.requests).To(HaveLen(1))
 		request := starter.requests[0]
 		Expect(request.UserID).To(Equal(userID.String()))
+		Expect(request.OrgID).To(Equal(orgID.String()))
 		Expect(request.DatasetID).To(Equal(datasetID.String()))
 		Expect(request.DatasetURI).To(Equal("s3://lakehouse/features/movies.parquet"))
 		Expect(request.SourceModelID).To(Equal(sourceModelID.String()))
@@ -120,7 +129,7 @@ var _ = Describe("TrainingCommandUsecase", func() {
 	It("populates parent fields for fine-tuned source models", func() {
 		modelResolver.ref = fineTunedModelRef(sourceModelID)
 
-		_, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey: uuid.NewString(),
 			DatasetID:      datasetID.String(),
 			SourceModelID:  sourceModelID.String(),
@@ -137,14 +146,14 @@ var _ = Describe("TrainingCommandUsecase", func() {
 
 	It("is idempotent for the same request id", func() {
 		requestID := uuid.NewString()
-		first, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+		first, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey: requestID,
 			DatasetID:      datasetID.String(),
 			SourceModelID:  sourceModelID.String(),
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		second, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+		second, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey: requestID,
 			DatasetID:      datasetID.String(),
 			SourceModelID:  sourceModelID.String(),
@@ -165,10 +174,21 @@ var _ = Describe("TrainingCommandUsecase", func() {
 		Expect(starter.requests).To(BeEmpty())
 	})
 
+	It("rejects missing org context", func() {
+		_, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+			IdempotencyKey: uuid.NewString(),
+			DatasetID:      datasetID.String(),
+			SourceModelID:  sourceModelID.String(),
+		})
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(starter.requests).To(BeEmpty())
+	})
+
 	It("rejects unmaterialized datasets", func() {
 		datasetResolver.ref.ProcessingState = "RAW_MATERIALIZED"
 
-		_, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey: uuid.NewString(),
 			DatasetID:      datasetID.String(),
 			SourceModelID:  sourceModelID.String(),
@@ -181,7 +201,7 @@ var _ = Describe("TrainingCommandUsecase", func() {
 	It("accepts ready source models that are not currently loaded", func() {
 		modelResolver.ref.ServingLoadStatus = modelstatus.ModelLoadStatusNotLoaded.String()
 
-		_, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey: uuid.NewString(),
 			DatasetID:      datasetID.String(),
 			SourceModelID:  sourceModelID.String(),
@@ -194,7 +214,7 @@ var _ = Describe("TrainingCommandUsecase", func() {
 	It("rejects source models that are not ready", func() {
 		modelResolver.ref.Status = "PENDING"
 
-		_, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey: uuid.NewString(),
 			DatasetID:      datasetID.String(),
 			SourceModelID:  sourceModelID.String(),
@@ -205,7 +225,7 @@ var _ = Describe("TrainingCommandUsecase", func() {
 	})
 
 	It("rejects unknown profile names", func() {
-		_, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
+		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey:    uuid.NewString(),
 			DatasetID:         datasetID.String(),
 			SourceModelID:     sourceModelID.String(),
@@ -235,10 +255,11 @@ var _ = Describe("TrainingCommandUsecase", func() {
 	})
 })
 
-func materializedDatasetRef(datasetID uuid.UUID, userID uuid.UUID) model.MaterializedDatasetRef {
+func materializedDatasetRef(datasetID uuid.UUID, userID uuid.UUID, orgID uuid.UUID) model.MaterializedDatasetRef {
 	return model.MaterializedDatasetRef{
 		DatasetID:         datasetID.String(),
 		UserID:            userID.String(),
+		OrgID:             orgID.String(),
 		DatasetVersion:    "4",
 		FeatureSnapshotID: uuid.NewString(),
 		DatasetURI:        "s3://lakehouse/features/movies.parquet",

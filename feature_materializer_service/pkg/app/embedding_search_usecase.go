@@ -49,6 +49,9 @@ func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, userID uu
 	)
 	defer endFeatureMaterializerSpanOnReturn(ctx, span, &err)
 
+	if _, ok := ctxutil.OrgID(ctx); !ok {
+		return nil, domain.ErrValidationFailed.Extend("org_id is required")
+	}
 	ctx = ctxutil.WithTenantID(ctx, userID)
 	activeSnapshot, err := u.repository.ReadActiveEmbeddingSnapshot(ctx, userID, datasetID)
 	if err != nil {

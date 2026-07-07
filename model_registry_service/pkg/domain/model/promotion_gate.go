@@ -12,6 +12,7 @@ import (
 
 type Lineage struct {
 	UserID uuid.UUID
+	OrgID  uuid.UUID
 	Name   string
 }
 
@@ -38,6 +39,7 @@ type PromotionReport struct {
 
 type PromotionReportResult struct {
 	UserID              uuid.UUID
+	OrgID               uuid.UUID
 	ModelID             uuid.UUID
 	TrainingRunID       uuid.UUID
 	PromotionReportURI  string
@@ -94,6 +96,7 @@ func LineageForModel(modelRecord *Model) Lineage {
 
 	return Lineage{
 		UserID: modelRecord.UserID,
+		OrgID:  modelRecord.OrgID,
 		Name:   modelRecord.Name,
 	}
 }

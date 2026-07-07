@@ -30,6 +30,7 @@ func TestRest(t *testing.T) {
 type trainingCommandUsecaseStub struct {
 	command model.StartTrainingRunCommand
 	tenant  uuid.UUID
+	org     uuid.UUID
 	result  *model.TrainingRunStartResult
 	status  *model.TrainingRunStatusResult
 	err     error
@@ -40,6 +41,9 @@ func (s *trainingCommandUsecaseStub) StartTrainingRun(ctx context.Context, comma
 	s.command = command
 	if tenantID, ok := ctxutil.TenantID(ctx); ok {
 		s.tenant = tenantID
+	}
+	if orgID, ok := ctxutil.OrgID(ctx); ok {
+		s.org = orgID
 	}
 	return s.result, s.err
 }
@@ -59,6 +63,7 @@ var _ = Describe("TrainingHandlers", func() {
 		usecase   *trainingCommandUsecaseStub
 		handlers  *TrainingHandlers
 		userID    uuid.UUID
+		orgID     uuid.UUID
 		requestID uuid.UUID
 	)
 
@@ -75,19 +80,21 @@ var _ = Describe("TrainingHandlers", func() {
 		}
 		handlers = NewTrainingHandlers(usecase, adapter.NewTrainingRunDTOAdapter(serializers.NewJSONSerializer()))
 		userID = uuid.New()
+		orgID = uuid.New()
 		requestID = uuid.New()
 	})
 
 	It("starts training runs with auth user and X-Request-ID idempotency", func() {
 		datasetID := uuid.New()
 		modelID := uuid.New()
-		req := newTrainingRequest(`{"dataset_id":"`+datasetID.String()+`","source_model_id":"`+modelID.String()+`","training_profile":"sft-default@v1"}`, userID, requestID)
+		req := newTrainingRequest(`{"dataset_id":"`+datasetID.String()+`","source_model_id":"`+modelID.String()+`","training_profile":"sft-default@v1"}`, userID, orgID, requestID)
 
 		res, err := handlers.StartTrainingRun(context.Background(), req)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res.StatusCode()).To(Equal(http.StatusAccepted))
 		Expect(usecase.tenant).To(Equal(userID))
+		Expect(usecase.org).To(Equal(orgID))
 		Expect(usecase.command.IdempotencyKey).To(Equal(requestID.String()))
 		Expect(usecase.command.DatasetID).To(Equal(datasetID.String()))
 		Expect(usecase.command.SourceModelID).To(Equal(modelID.String()))
@@ -97,7 +104,7 @@ var _ = Describe("TrainingHandlers", func() {
 	})
 
 	It("rejects missing idempotency headers", func() {
-		req := newTrainingRequest(`{"dataset_id":"`+uuid.NewString()+`","source_model_id":"`+uuid.NewString()+`"}`, userID, uuid.Nil)
+		req := newTrainingRequest(`{"dataset_id":"`+uuid.NewString()+`","source_model_id":"`+uuid.NewString()+`"}`, userID, orgID, uuid.Nil)
 		req.Header.Del("X-Request-ID")
 
 		_, err := handlers.StartTrainingRun(context.Background(), req)
@@ -109,7 +116,7 @@ var _ = Describe("TrainingHandlers", func() {
 
 	It("maps usecase validation failures to bad requests", func() {
 		usecase.err = domain.ErrValidationFailed.Extend("dataset is not materialized")
-		req := newTrainingRequest(`{"dataset_id":"`+uuid.NewString()+`","source_model_id":"`+uuid.NewString()+`"}`, userID, requestID)
+		req := newTrainingRequest(`{"dataset_id":"`+uuid.NewString()+`","source_model_id":"`+uuid.NewString()+`"}`, userID, orgID, requestID)
 
 		_, err := handlers.StartTrainingRun(context.Background(), req)
 
@@ -120,7 +127,7 @@ var _ = Describe("TrainingHandlers", func() {
 
 	It("maps dependency failures to bad gateway", func() {
 		usecase.err = domain.ErrDependencyFailed.Extend("model registry unavailable")
-		req := newTrainingRequest(`{"dataset_id":"`+uuid.NewString()+`","source_model_id":"`+uuid.NewString()+`"}`, userID, requestID)
+		req := newTrainingRequest(`{"dataset_id":"`+uuid.NewString()+`","source_model_id":"`+uuid.NewString()+`"}`, userID, orgID, requestID)
 
 		_, err := handlers.StartTrainingRun(context.Background(), req)
 
@@ -156,11 +163,14 @@ var _ = Describe("TrainingHandlers", func() {
 	})
 })
 
-func newTrainingRequest(body string, userID uuid.UUID, requestID uuid.UUID) *http.Request {
+func newTrainingRequest(body string, userID uuid.UUID, orgID uuid.UUID, requestID uuid.UUID) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/training-runs", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if userID != uuid.Nil {
 		req.Header.Set("X-User-ID", userID.String())
+	}
+	if orgID != uuid.Nil {
+		req.Header.Set("X-Org-ID", orgID.String())
 	}
 	if requestID != uuid.Nil {
 		req.Header.Set("X-Request-ID", requestID.String())

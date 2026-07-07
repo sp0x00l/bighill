@@ -20,6 +20,7 @@ message DatasetFileUploadedEvent {
   string source_query = 13;
   string source_database = 14;
   string source_collection = 15;
+  string org_id = 16;
 }
 
 message ModelArtifactIngestedEvent {
@@ -45,4 +46,5 @@ message ModelArtifactIngestedEvent {
   string created_at = 20;
   string source_metadata = 21;
   string dataset_id = 22;
+  string org_id = 23;
 }

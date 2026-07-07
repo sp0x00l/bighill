@@ -28,16 +28,17 @@ func (r *InferenceRequestRepository) RecordInferenceRequest(ctx context.Context,
 	log.Trace("InferenceRequestRepository RecordInferenceRequest")
 
 	query := `INSERT INTO ` + r.Name + `.inference_requests (
-		request_id, user_id, dataset_id, model_id, embedding_snapshot_id, query_text, top_k,
+		request_id, user_id, org_id, dataset_id, model_id, embedding_snapshot_id, query_text, top_k,
 		metadata_filters, retrieved_context_ids, retrieved_contexts, prompt_text, answer_text,
 		prompt_strategy_version, generation_provider, generation_model, latency_ms, status, error_message
 	) VALUES (
-		@request_id, @user_id, @dataset_id, @model_id, @embedding_snapshot_id, @query_text, @top_k,
+		@request_id, @user_id, @org_id, @dataset_id, @model_id, @embedding_snapshot_id, @query_text, @top_k,
 		@metadata_filters::jsonb, @retrieved_context_ids::jsonb, @retrieved_contexts::jsonb, @prompt_text, @answer_text,
 		@prompt_strategy_version, @generation_provider, @generation_model, @latency_ms, @status::inference_request_status_enum, @error_message
 	)
 	ON CONFLICT (request_id) DO UPDATE SET
 		user_id = EXCLUDED.user_id,
+		org_id = EXCLUDED.org_id,
 		dataset_id = EXCLUDED.dataset_id,
 		model_id = EXCLUDED.model_id,
 		embedding_snapshot_id = EXCLUDED.embedding_snapshot_id,
@@ -71,6 +72,7 @@ func inferenceRequestArgs(request *model.InferenceRequest) pgx.NamedArgs {
 	return pgx.NamedArgs{
 		"request_id":              nullableUUID(request.RequestID),
 		"user_id":                 nullableUUID(request.UserID),
+		"org_id":                  nullableUUID(request.OrgID),
 		"dataset_id":              nullableUUID(request.DatasetID),
 		"model_id":                nullableUUID(request.ModelID),
 		"embedding_snapshot_id":   nullableUUID(request.EmbeddingSnapshotID),

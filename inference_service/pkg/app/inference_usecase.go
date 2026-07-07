@@ -21,7 +21,9 @@ import (
 type InferenceUsecase interface {
 	RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error)
 	RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error)
-	ReadModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
+	ReadModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
+	ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error)
+	GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error)
 	Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error)
 	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
 	ExportPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
@@ -30,6 +32,7 @@ type InferenceUsecase interface {
 type inferenceUsecase struct {
 	modelRepository           InferenceModelRepository
 	datasetRepository         InferenceDatasetRepository
+	endpointRepository        PublishedEndpointRepository
 	requestRepository         InferenceRequestRepository
 	feedbackRepository        InferenceFeedbackRepository
 	inferenceUnitOfWork       InferenceUnitOfWorkAdapter
@@ -52,6 +55,14 @@ func WithInferenceDatasetRepository(repository InferenceDatasetRepository) Infer
 
 	return func(u *inferenceUsecase) {
 		u.datasetRepository = repository
+	}
+}
+
+func WithPublishedEndpointRepository(repository PublishedEndpointRepository) InferenceOption {
+	log.Trace("WithPublishedEndpointRepository")
+
+	return func(u *inferenceUsecase) {
+		u.endpointRepository = repository
 	}
 }
 
@@ -170,32 +181,78 @@ func (u *inferenceUsecase) RecordModelUpdated(ctx context.Context, inferenceMode
 	log.Trace("InferenceUsecase RecordModelUpdated")
 
 	if inferenceModel != nil {
-		ctx = ctxutil.WithTenantID(ctx, inferenceModel.UserID)
+		ctx = contextForActorOrg(ctx, inferenceModel.UserID, inferenceModel.OrgID)
 	}
-	return u.modelRepository.UpsertModel(ctx, inferenceModel, idempotencyKey)
+	record, err := u.modelRepository.UpsertModel(ctx, inferenceModel, idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := u.upsertEndpointProjection(ctx, record); err != nil {
+		return nil, err
+	}
+	return record, nil
 }
 
 func (u *inferenceUsecase) RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error) {
 	log.Trace("InferenceUsecase RecordDatasetUpdated")
 
 	if dataset != nil {
-		ctx = ctxutil.WithTenantID(ctx, dataset.UserID)
+		ctx = contextForActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	}
 	return u.datasetRepository.UpsertDataset(ctx, dataset, idempotencyKey)
 }
 
-func (u *inferenceUsecase) ReadModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error) {
+func (u *inferenceUsecase) ReadModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error) {
 	log.Trace("InferenceUsecase ReadModel")
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
-	return u.modelRepository.ReadByID(ctx, userID, modelID)
+	ctx = ctxutil.WithOrgID(ctx, orgID)
+	return u.modelRepository.ReadByID(ctx, orgID, modelID)
+}
+
+func (u *inferenceUsecase) ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error) {
+	log.Trace("InferenceUsecase ListEndpoints")
+
+	if u.endpointRepository == nil {
+		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
+	}
+	ctx = ctxutil.WithOrgID(ctx, orgID)
+	endpoints, err := u.endpointRepository.ListEndpoints(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.PublishedEndpoint, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		if endpoint != nil && endpoint.IsReady() {
+			out = append(out, endpoint)
+		}
+	}
+	return out, nil
+}
+
+func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error) {
+	log.Trace("InferenceUsecase GenerateForEndpoint")
+
+	if u.endpointRepository == nil {
+		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
+	}
+	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, endpointID)
+	if err != nil {
+		return nil, err
+	}
+	if !endpoint.IsReady() {
+		return nil, domain.ErrModelNotReady.Extend("inference endpoint is not ready")
+	}
+	request.DatasetID = endpoint.DatasetID
+	request.ModelID = endpoint.ModelID
+	return u.Generate(ctx, request)
 }
 
 func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
 	log.Trace("InferenceUsecase RecordFeedback")
 
 	if feedback != nil {
-		ctx = ctxutil.WithTenantID(ctx, feedback.UserID)
+		ctx = contextForActorOrg(ctx, feedback.UserID, feedback.OrgID)
 	}
 	record, err := u.recordFeedback(ctx, feedback, idempotencyKey)
 	if err != nil {
@@ -207,7 +264,7 @@ func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.I
 func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
 	log.Trace("InferenceUsecase ExportPreferenceDataset")
 
-	ctx = ctxutil.WithTenantID(ctx, request.UserID)
+	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
 	dataset, err := u.feedbackRepository.ReadPreferenceDataset(ctx, request)
 	if err != nil {
 		return nil, err
@@ -274,7 +331,7 @@ func (u *inferenceUsecase) recordPreferenceDatasetSnapshot(ctx context.Context, 
 func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateRequest) (response *model.GenerateResponse, err error) {
 	log.Trace("InferenceUsecase Generate")
 
-	ctx = ctxutil.WithTenantID(ctx, request.UserID)
+	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
 	startedAt := time.Now()
 
 	var dataset *model.InferenceDataset
@@ -283,11 +340,11 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	var promptText string
 	var answerText string
 
-	dataset, err = u.datasetRepository.ReadDataset(ctx, request.UserID, request.DatasetID)
+	dataset, err = u.datasetRepository.ReadDataset(ctx, request.OrgID, request.DatasetID)
 	if err != nil {
 		return nil, err
 	}
-	inferenceModel, err = u.modelRepository.ReadByID(ctx, request.UserID, request.ModelID)
+	inferenceModel, err = u.modelRepository.ReadByID(ctx, request.OrgID, request.ModelID)
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +374,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		transformed, transformErr := u.queryTransformer.TransformQuery(transformCtx, model.QueryTransformRequest{
 			RequestID:       request.RequestID,
 			UserID:          request.UserID,
+			OrgID:           request.OrgID,
 			DatasetID:       request.DatasetID,
 			ModelID:         request.ModelID,
 			QueryText:       request.QueryText,
@@ -384,6 +442,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 
 	response = &model.GenerateResponse{
 		RequestID:             request.RequestID,
+		OrgID:                 request.OrgID,
 		DatasetID:             request.DatasetID,
 		ModelID:               inferenceModel.ModelID,
 		QueryText:             request.QueryText,
@@ -449,6 +508,7 @@ func preferenceDatasetID(dataset *model.PreferenceDataset) uuid.UUID {
 	}
 	parts := []string{
 		"preference-dataset",
+		dataset.OrgID.String(),
 		dataset.DatasetID.String(),
 		dataset.ModelID.String(),
 		strings.TrimSpace(dataset.ParentAdapterURI),
@@ -460,6 +520,51 @@ func preferenceDatasetID(dataset *model.PreferenceDataset) uuid.UUID {
 		parts = append(parts, example.Split)
 	}
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join(parts, ":")))
+}
+
+func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferenceModel *model.InferenceModel) error {
+	log.Trace("InferenceUsecase upsertEndpointProjection")
+
+	if u.endpointRepository == nil || inferenceModel == nil {
+		return nil
+	}
+	if inferenceModel.OrgID == uuid.Nil || inferenceModel.UserID == uuid.Nil || inferenceModel.DatasetID == uuid.Nil {
+		return nil
+	}
+	status := model.PublishedEndpointStatusDisabled
+	if inferenceModel.Status == model.ModelStatusReady && inferenceModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
+		status = model.PublishedEndpointStatusReady
+	}
+	_, err := u.endpointRepository.UpsertEndpoint(ctx, &model.PublishedEndpoint{
+		EndpointID:      publishedEndpointID(inferenceModel),
+		OrgID:           inferenceModel.OrgID,
+		ModelID:         inferenceModel.ModelID,
+		DatasetID:       inferenceModel.DatasetID,
+		Status:          status,
+		DisplayName:     inferenceModel.Name,
+		CreatedByUserID: inferenceModel.UserID,
+	})
+	return err
+}
+
+func publishedEndpointID(inferenceModel *model.InferenceModel) uuid.UUID {
+	log.Trace("publishedEndpointID")
+
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
+		"published-inference-endpoint",
+		inferenceModel.OrgID.String(),
+		inferenceModel.ModelID.String(),
+		inferenceModel.DatasetID.String(),
+	}, ":")))
+}
+
+func contextForActorOrg(ctx context.Context, userID uuid.UUID, orgID uuid.UUID) context.Context {
+	log.Trace("contextForActorOrg")
+
+	if orgID == uuid.Nil && userID == uuid.Nil {
+		return ctx
+	}
+	return ctxutil.WithActorOrg(ctx, userID, orgID)
 }
 
 func preferenceDatasetFormat(format string) string {
@@ -538,6 +643,7 @@ func inferenceRequestRecord(request model.GenerateRequest, dataset *model.Infere
 	return &model.InferenceRequest{
 		RequestID:             request.RequestID,
 		UserID:                request.UserID,
+		OrgID:                 request.OrgID,
 		DatasetID:             dataset.DatasetID,
 		ModelID:               inferenceModel.ModelID,
 		EmbeddingSnapshotID:   dataset.EmbeddingSnapshotID,

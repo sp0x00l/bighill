@@ -129,7 +129,7 @@ func (e *RayExecutor) RunPromotionReport(ctx context.Context, spec model.Promoti
 		return nil, err
 	}
 	return waitForRayJob(ctx, e, domain.ErrEvaluateModel, spec.SubmissionID, entrypoint, promotionReportEnv(spec), func(ctx context.Context) (*model.PromotionReport, error) {
-		return e.readPromotionReport(ctx, spec.ReportManifestURI, spec.ModelID)
+		return e.readPromotionReport(ctx, spec.ReportManifestURI, spec.ModelID, spec.OrgID)
 	})
 }
 
@@ -324,10 +324,10 @@ func (e *RayExecutor) readEvaluationReport(ctx context.Context, location string,
 	return readEvaluationReport(ctx, e.manifestReader, location, trainingRunID)
 }
 
-func (e *RayExecutor) readPromotionReport(ctx context.Context, location string, modelID string) (*model.PromotionReport, error) {
+func (e *RayExecutor) readPromotionReport(ctx context.Context, location string, modelID string, orgID string) (*model.PromotionReport, error) {
 	log.Trace("RayExecutor readPromotionReport")
 
-	return readPromotionReport(ctx, e.manifestReader, location, modelID)
+	return readPromotionReport(ctx, e.manifestReader, location, modelID, orgID)
 }
 
 func readEvaluationReport(ctx context.Context, manifestReader ManifestReader, location string, trainingRunID string) (*model.EvaluationReport, error) {
@@ -360,7 +360,7 @@ func readEvaluationReport(ctx context.Context, manifestReader ManifestReader, lo
 	return &report, nil
 }
 
-func readPromotionReport(ctx context.Context, manifestReader ManifestReader, location string, modelID string) (*model.PromotionReport, error) {
+func readPromotionReport(ctx context.Context, manifestReader ManifestReader, location string, modelID string, orgID string) (*model.PromotionReport, error) {
 	log.Trace("readPromotionReport")
 
 	raw, err := manifestReader.Read(ctx, location)
@@ -373,6 +373,9 @@ func readPromotionReport(ctx context.Context, manifestReader ManifestReader, loc
 	}
 	if strings.TrimSpace(report.ModelID) != modelID {
 		return nil, domain.ErrEvaluateModel.Extend("promotion report manifest has mismatched model id")
+	}
+	if strings.TrimSpace(report.OrgID) != orgID {
+		return nil, domain.ErrEvaluateModel.Extend("promotion report manifest has mismatched org id")
 	}
 	if strings.TrimSpace(report.PromotionReportURI) == "" {
 		return nil, domain.ErrEvaluateModel.Extend("promotion report manifest is incomplete")
@@ -436,6 +439,7 @@ func promotionReportEntrypoint(entrypoint string, spec model.PromotionReportJobS
 
 	raw, err := json.Marshal(promotionReportJobRequest{
 		UserID:                   spec.UserID,
+		OrgID:                    spec.OrgID,
 		ModelID:                  spec.ModelID,
 		TrainingRunID:            spec.TrainingRunID,
 		CandidateReportURI:       spec.CandidateReportURI,
@@ -456,6 +460,7 @@ func promotionReportEntrypoint(entrypoint string, spec model.PromotionReportJobS
 
 type promotionReportJobRequest struct {
 	UserID                   string `json:"user_id"`
+	OrgID                    string `json:"org_id"`
 	ModelID                  string `json:"model_id"`
 	TrainingRunID            string `json:"training_run_id"`
 	CandidateReportURI       string `json:"candidate_report_uri"`

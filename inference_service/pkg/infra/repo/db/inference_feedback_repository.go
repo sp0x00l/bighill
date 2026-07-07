@@ -43,19 +43,21 @@ func (r *InferenceFeedbackRepository) feedbackQuery() string {
 
 	return `WITH upserted_feedback AS (
 		INSERT INTO ` + r.Name + `.inference_feedback (
-			feedback_id, idempotency_key, request_id, user_id, accepted, rating, comment, preferred_answer
+			feedback_id, idempotency_key, request_id, user_id, org_id, accepted, rating, comment, preferred_answer
 		) VALUES (
-			@feedback_id, @idempotency_key, @request_id, @user_id, @accepted, @rating, @comment, @preferred_answer
+			@feedback_id, @idempotency_key, @request_id, @user_id, @org_id, @accepted, @rating, @comment, @preferred_answer
 		)
 		ON CONFLICT (idempotency_key) DO UPDATE SET
+			user_id = EXCLUDED.user_id,
+			org_id = EXCLUDED.org_id,
 			accepted = EXCLUDED.accepted,
 			rating = EXCLUDED.rating,
 			comment = EXCLUDED.comment,
 			preferred_answer = EXCLUDED.preferred_answer
-		RETURNING feedback_id::text, request_id::text, user_id::text, accepted, rating, comment, preferred_answer
+		RETURNING feedback_id::text, request_id::text, user_id::text, org_id::text, accepted, rating, comment, preferred_answer
 		), upserted_preference AS (
 			INSERT INTO ` + r.Name + `.preference_examples (
-				preference_example_id, feedback_id, request_id, user_id, dataset_id, model_id, prompt_text,
+				preference_example_id, feedback_id, request_id, user_id, org_id, dataset_id, model_id, prompt_text,
 				accepted_answer, rejected_answer, rating, feedback_label
 			)
 		SELECT
@@ -63,6 +65,7 @@ func (r *InferenceFeedbackRepository) feedbackQuery() string {
 				f.feedback_id::uuid,
 				req.request_id,
 				f.user_id::uuid,
+				f.org_id::uuid,
 				req.dataset_id,
 			req.model_id,
 			req.prompt_text,
@@ -73,16 +76,17 @@ func (r *InferenceFeedbackRepository) feedbackQuery() string {
 		FROM upserted_feedback f
 		JOIN ` + r.Name + `.inference_requests req ON req.request_id = f.request_id::uuid
 		WHERE req.model_id IS NOT NULL
-		  AND req.user_id = f.user_id::uuid
+		  AND req.org_id = f.org_id::uuid
 		ON CONFLICT (feedback_id) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
+			org_id = EXCLUDED.org_id,
 			accepted_answer = EXCLUDED.accepted_answer,
 			rejected_answer = EXCLUDED.rejected_answer,
 			rating = EXCLUDED.rating,
 			feedback_label = EXCLUDED.feedback_label
 		RETURNING preference_example_id
 	)
-	SELECT feedback_id, request_id, user_id, accepted, rating, comment, preferred_answer
+	SELECT feedback_id, request_id, user_id, org_id, accepted, rating, comment, preferred_answer
 	FROM upserted_feedback`
 }
 
@@ -97,6 +101,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 		SELECT
 			req.request_id,
 			req.user_id,
+			req.org_id,
 			req.dataset_id,
 			req.model_id,
 			m.adapter_uri,
@@ -106,6 +111,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 		JOIN ` + r.Name + `.inference_models m ON m.model_id = req.model_id
 		WHERE req.request_id = @request_id
 		  AND req.user_id = @user_id
+		  AND req.org_id = @org_id
 		  AND (@dataset_id::uuid IS NULL OR req.dataset_id = @dataset_id)
 		  AND (@model_id::uuid IS NULL OR req.model_id = @model_id)
 		  AND req.model_id IS NOT NULL
@@ -116,6 +122,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 			p.feedback_id::text,
 			p.request_id::text,
 			p.user_id::text,
+			p.org_id::text,
 			p.dataset_id::text,
 			p.model_id::text,
 			CASE WHEN substr(md5(p.preference_example_id::text), 1, 1) IN ('0', '1', '2') THEN 'EVAL' ELSE 'TRAIN' END AS split,
@@ -126,7 +133,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 			p.feedback_label,
 			p.created_at
 		FROM ` + r.Name + `.preference_examples p
-		JOIN request_scope s ON s.user_id = p.user_id AND s.dataset_id = p.dataset_id AND s.model_id = p.model_id
+		JOIN request_scope s ON s.org_id = p.org_id AND s.dataset_id = p.dataset_id AND s.model_id = p.model_id
 		WHERE p.accepted_answer <> ''
 		  AND p.rejected_answer <> ''
 			  AND p.feedback_label = 'REJECTED'
@@ -134,7 +141,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 			ORDER BY p.prompt_text, p.accepted_answer, p.rejected_answer, p.created_at DESC, p.preference_example_id DESC
 		), limited_examples AS (
 				SELECT
-					preference_example_id, feedback_id, request_id, user_id, dataset_id, model_id,
+					preference_example_id, feedback_id, request_id, user_id, org_id, dataset_id, model_id,
 					split, prompt_text, accepted_answer, rejected_answer, rating, feedback_label, created_at
 			FROM eligible_examples
 			ORDER BY created_at DESC, preference_example_id DESC
@@ -143,6 +150,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 	SELECT
 		s.dataset_id::text,
 		s.user_id::text,
+		s.org_id::text,
 		s.model_id::text,
 		s.adapter_uri,
 		s.base_model,
@@ -153,6 +161,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 					'feedback_id', e.feedback_id,
 					'request_id', e.request_id,
 					'user_id', e.user_id,
+					'org_id', e.org_id,
 					'dataset_id', e.dataset_id,
 					'model_id', e.model_id,
 					'split', e.split,
@@ -169,7 +178,8 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 	parentAdapterURI := ""
 	parentBaseModel := ""
 	parentModelVersion := 0
-	if err := row.Scan(&datasetID, &userID, &modelID, &parentAdapterURI, &parentBaseModel, &parentModelVersion, &raw); err != nil {
+	orgID := ""
+	if err := row.Scan(&datasetID, &userID, &orgID, &modelID, &parentAdapterURI, &parentBaseModel, &parentModelVersion, &raw); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, domain.ErrValidationFailed.Extend("preference dataset request does not match an inference request with a model")
 		}
@@ -183,6 +193,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 	return &model.PreferenceDataset{
 		RequestID:          request.RequestID,
 		UserID:             uuid.MustParse(userID),
+		OrgID:              uuid.MustParse(orgID),
 		DatasetID:          uuid.MustParse(datasetID),
 		ModelID:            uuid.MustParse(modelID),
 		ParentAdapterURI:   parentAdapterURI,
@@ -201,11 +212,11 @@ func (r *InferenceFeedbackRepository) RecordPreferenceDatasetSnapshot(ctx contex
 	log.Trace("InferenceFeedbackRepository RecordPreferenceDatasetSnapshot")
 
 	query := `INSERT INTO ` + r.Name + `.preference_dataset_snapshots (
-					preference_dataset_id, user_id, dataset_id, model_id, parent_adapter_uri, parent_base_model,
+					preference_dataset_id, user_id, org_id, dataset_id, model_id, parent_adapter_uri, parent_base_model,
 					parent_model_version, source_request_id, output_uri, evaluation_output_uri,
 					format, eligibility_policy, example_count, min_examples, limit_count
 				) VALUES (
-					@preference_dataset_id, @user_id, @dataset_id, @model_id, @parent_adapter_uri, @parent_base_model,
+					@preference_dataset_id, @user_id, @org_id, @dataset_id, @model_id, @parent_adapter_uri, @parent_base_model,
 					@parent_model_version, @source_request_id, @output_uri, @evaluation_output_uri,
 				@format, @eligibility_policy, @example_count, @min_examples, @limit_count
 		)
@@ -227,6 +238,7 @@ func feedbackArgs(feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) p
 		"idempotency_key":       nullableUUID(idempotencyKey),
 		"request_id":            nullableUUID(feedback.RequestID),
 		"user_id":               nullableUUID(feedback.UserID),
+		"org_id":                nullableUUID(feedback.OrgID),
 		"accepted":              feedback.Accepted,
 		"rating":                feedback.Rating,
 		"comment":               feedback.Comment,
@@ -245,6 +257,7 @@ func preferenceDatasetArgs(request model.PreferenceDatasetExportRequest) pgx.Nam
 	return pgx.NamedArgs{
 		"request_id": nullableUUID(request.RequestID),
 		"user_id":    nullableUUID(request.UserID),
+		"org_id":     nullableUUID(request.OrgID),
 		"dataset_id": nullableUUID(request.DatasetID),
 		"model_id":   nullableUUID(request.ModelID),
 		"limit":      limit,
@@ -257,6 +270,7 @@ func preferenceDatasetSnapshotArgs(dataset *model.PreferenceDataset, request mod
 	return pgx.NamedArgs{
 		"preference_dataset_id": nullableUUID(dataset.PreferenceDatasetID),
 		"user_id":               nullableUUID(dataset.UserID),
+		"org_id":                nullableUUID(dataset.OrgID),
 		"dataset_id":            nullableUUID(dataset.DatasetID),
 		"model_id":              nullableUUID(dataset.ModelID),
 		"parent_adapter_uri":    strings.TrimSpace(dataset.ParentAdapterURI),
@@ -293,12 +307,13 @@ func ensurePreferenceTrainingSplit(examples []model.PreferenceExample) []model.P
 func scanInferenceFeedback(row pgx.Row) (*model.InferenceFeedback, error) {
 	log.Trace("scanInferenceFeedback")
 
-	var feedbackID, requestID, userID string
+	var feedbackID, requestID, userID, orgID string
 	record := &model.InferenceFeedback{}
 	if err := row.Scan(
 		&feedbackID,
 		&requestID,
 		&userID,
+		&orgID,
 		&record.Accepted,
 		&record.Rating,
 		&record.Comment,
@@ -309,6 +324,7 @@ func scanInferenceFeedback(row pgx.Row) (*model.InferenceFeedback, error) {
 	record.FeedbackID = uuid.MustParse(feedbackID)
 	record.RequestID = uuid.MustParse(requestID)
 	record.UserID = uuid.MustParse(userID)
+	record.OrgID = uuid.MustParse(orgID)
 	return record, nil
 }
 
@@ -320,6 +336,7 @@ func decodePreferenceExamples(raw string) ([]model.PreferenceExample, error) {
 		FeedbackID          string `json:"feedback_id"`
 		RequestID           string `json:"request_id"`
 		UserID              string `json:"user_id"`
+		OrgID               string `json:"org_id"`
 		DatasetID           string `json:"dataset_id"`
 		ModelID             string `json:"model_id"`
 		Split               string `json:"split"`
@@ -339,6 +356,7 @@ func decodePreferenceExamples(raw string) ([]model.PreferenceExample, error) {
 			FeedbackID:          uuid.MustParse(row.FeedbackID),
 			RequestID:           uuid.MustParse(row.RequestID),
 			UserID:              uuid.MustParse(row.UserID),
+			OrgID:               uuid.MustParse(row.OrgID),
 			DatasetID:           uuid.MustParse(row.DatasetID),
 			ModelID:             uuid.MustParse(row.ModelID),
 			Split:               strings.TrimSpace(row.Split),

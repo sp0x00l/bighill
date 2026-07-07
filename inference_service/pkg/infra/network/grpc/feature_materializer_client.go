@@ -8,6 +8,7 @@ import (
 	usecase "inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
 	featurepb "lib/data_contracts_lib/feature_materializer"
+	"lib/shared_lib/ctxutil"
 	rpcLib "lib/shared_lib/rpc"
 
 	"github.com/google/uuid"
@@ -78,9 +79,14 @@ func (c *featureMaterializerClient) Close() error {
 func (c *featureMaterializerClient) SearchEmbeddings(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error) {
 	log.Trace("featureMaterializerClient SearchEmbeddings")
 
+	orgID, ok := ctxutil.OrgID(ctx)
+	if !ok {
+		return nil, fmt.Errorf("org id is required")
+	}
 	resp, err := c.client.SearchEmbeddings(ctx, &featurepb.SearchEmbeddingsRequest{
 		DatasetId:       datasetID.String(),
 		UserId:          userID.String(),
+		OrgId:           orgID.String(),
 		QueryText:       queryText,
 		TopK:            int32(topK),
 		MetadataFilters: metadataFilters,

@@ -125,6 +125,7 @@ func main() {
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
 
 	modelRepository := modeldb.NewModelRepository(database)
+	endpointRepository := modeldb.NewPublishedEndpointRepository(database)
 	modelUnitOfWork := shareduow.New(database.Pool,
 		shareduow.WithTransactionalOutbox(orderedOutbox),
 		shareduow.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
@@ -145,6 +146,7 @@ func main() {
 		log.WithContext(cancelCtx).Info("served model reconciliation disabled; model serving status will only change through explicit registry events")
 	}
 	modelEventBuilder := registrymessaging.NewModelEventBuilder(cfg.Topics.ModelRegistry)
+	modelUsecaseOptions = append(modelUsecaseOptions, app.WithPublishedEndpointRepository(endpointRepository))
 	modelUsecase := app.NewModelRegistryUsecase(modelRepository, modelUnitOfWork, modelEventBuilder, modelUsecaseOptions...)
 	modelDTOAdapter := registryadapter.NewModelDTOAdapter(serializers.NewJSONSerializer())
 	modelRoutes := registryrest.NewModelHandlers(modelUsecase, modelDTOAdapter).GetRoutes()

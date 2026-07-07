@@ -6,6 +6,7 @@ type InferenceFeedback struct {
 	FeedbackID      uuid.UUID
 	RequestID       uuid.UUID
 	UserID          uuid.UUID
+	OrgID           uuid.UUID
 	Accepted        bool
 	Rating          int
 	Comment         string
@@ -17,6 +18,7 @@ type PreferenceExample struct {
 	FeedbackID          uuid.UUID
 	RequestID           uuid.UUID
 	UserID              uuid.UUID
+	OrgID               uuid.UUID
 	DatasetID           uuid.UUID
 	ModelID             uuid.UUID
 	Split               string
@@ -30,6 +32,7 @@ type PreferenceExample struct {
 type PreferenceDatasetExportRequest struct {
 	RequestID   uuid.UUID
 	UserID      uuid.UUID
+	OrgID       uuid.UUID
 	DatasetID   uuid.UUID
 	ModelID     uuid.UUID
 	OutputURI   string
@@ -41,6 +44,7 @@ type PreferenceDataset struct {
 	PreferenceDatasetID uuid.UUID
 	RequestID           uuid.UUID
 	UserID              uuid.UUID
+	OrgID               uuid.UUID
 	DatasetID           uuid.UUID
 	ModelID             uuid.UUID
 	ParentAdapterURI    string

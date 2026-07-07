@@ -135,6 +135,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 
 		modelID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		trainingRunID := uuid.New()
 		datasetID := uuid.New()
 		Expect(upsertInferenceTenant(ctx, database, userID)).To(Succeed())
@@ -144,6 +145,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		}, &modelregistrypb.ModelUpdatedEvent{
 			ModelId:           modelID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			TrainingRunId:     trainingRunID.String(),
 			DatasetId:         datasetID.String(),
 			ModelKind:         model.ModelKindFineTuned.String(),
@@ -165,7 +167,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			record, err := models.ReadByID(ctxutil.WithTenantID(ctx, userID), userID, modelID)
+			record, err := models.ReadByID(ctxutil.WithActorOrg(ctx, userID, orgID), orgID, modelID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(record.TrainingRunID).To(Equal(trainingRunID))
 			g.Expect(record.DatasetID).To(Equal(datasetID))
@@ -213,12 +215,14 @@ var _ = Describe("Inference service integration", Ordered, func() {
 
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		Expect(upsertInferenceTenant(ctx, database, userID)).To(Succeed())
-		_, err = models.UpsertModel(ctxutil.WithTenantID(ctx, userID), &model.InferenceModel{
+		_, err = models.UpsertModel(ctxutil.WithActorOrg(ctx, userID, orgID), &model.InferenceModel{
 			ModelID:           modelID,
 			UserID:            userID,
+			OrgID:             orgID,
 			TrainingRunID:     uuid.New(),
 			DatasetID:         datasetID,
 			ModelKind:         model.ModelKindFineTuned,
@@ -245,6 +249,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		}, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:                datasetID.String(),
 			UserId:                   userID.String(),
+			OrgId:                    orgID.String(),
 			DatasetVersion:           6,
 			ProcessingState:          "EMBEDDINGS_MATERIALIZED",
 			StorageLocation:          "s3://local-dev-bucket/features/movies.parquet",
@@ -272,7 +277,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			record, err := datasets.ReadDataset(ctxutil.WithTenantID(ctx, userID), userID, datasetID)
+			record, err := datasets.ReadDataset(ctxutil.WithActorOrg(ctx, userID, orgID), orgID, datasetID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(record.UserID).To(Equal(userID))
 			g.Expect(record.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
@@ -297,6 +302,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		response, err := client.Generate(ctx, &inferencepb.GenerateRequest{
 			RequestId: uuid.NewString(),
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 			DatasetId: datasetID.String(),
 			ModelId:   modelID.String(),
 			QueryText: "what movie context is available?",
@@ -313,6 +319,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			FeedbackId: feedbackID.String(),
 			RequestId:  response.GetRequestId(),
 			UserId:     userID.String(),
+			OrgId:      orgID.String(),
 			Accepted:   false,
 			Rating:     -1,
 			Comment:    "not enough detail",
@@ -321,7 +328,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(feedback.GetFeedbackId()).To(Equal(feedbackID.String()))
 		var label string
 		var rejectedAnswer string
-		Expect(database.Pool.QueryRow(ctxutil.WithTenantID(ctx, userID), `
+		Expect(database.Pool.QueryRow(ctxutil.WithActorOrg(ctx, userID, orgID), `
 			SELECT feedback_label, rejected_answer
 			FROM `+database.Name+`.preference_examples
 			WHERE feedback_id = $1
@@ -333,13 +340,15 @@ var _ = Describe("Inference service integration", Ordered, func() {
 	It("over-fetches, reranks, packs, generates, and audits the reranked context", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		modelID := uuid.New()
 		embeddingSnapshotID := uuid.New()
 		requestID := uuid.New()
 		Expect(upsertInferenceTenant(ctx, database, userID)).To(Succeed())
-		_, err := models.UpsertModel(ctxutil.WithTenantID(ctx, userID), &model.InferenceModel{
+		_, err := models.UpsertModel(ctxutil.WithActorOrg(ctx, userID, orgID), &model.InferenceModel{
 			ModelID:           modelID,
 			UserID:            userID,
+			OrgID:             orgID,
 			TrainingRunID:     uuid.New(),
 			DatasetID:         datasetID,
 			ModelKind:         model.ModelKindFineTuned,
@@ -360,9 +369,10 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			Status:            model.ModelStatusReady,
 		}, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
-		_, err = datasets.UpsertDataset(ctxutil.WithTenantID(ctx, userID), &model.InferenceDataset{
+		_, err = datasets.UpsertDataset(ctxutil.WithActorOrg(ctx, userID, orgID), &model.InferenceDataset{
 			DatasetID:                datasetID,
 			UserID:                   userID,
+			OrgID:                    orgID,
 			DatasetVersion:           1,
 			ProcessingState:          model.DatasetProcessingEmbeddingsMaterialized,
 			EmbeddingSnapshotID:      embeddingSnapshotID,
@@ -396,6 +406,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		response, err := usecase.Generate(ctx, model.GenerateRequest{
 			RequestID: requestID,
 			UserID:    userID,
+			OrgID:     orgID,
 			DatasetID: datasetID,
 			ModelID:   modelID,
 			QueryText: "which context wins?",
@@ -409,7 +420,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(response.Contexts[0].SourceText).To(Equal("highest relevance context"))
 		Expect(response.Answer).To(ContainSubstring("highest relevance context"))
 		var auditedContexts string
-		Expect(database.Pool.QueryRow(ctxutil.WithTenantID(ctx, userID), `
+		Expect(database.Pool.QueryRow(ctxutil.WithActorOrg(ctx, userID, orgID), `
 			SELECT retrieved_contexts::text
 			FROM `+database.Name+`.inference_requests
 			WHERE request_id = $1

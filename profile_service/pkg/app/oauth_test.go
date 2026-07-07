@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	auth "lib/shared_lib/auth"
+	"lib/shared_lib/authz"
 	sharedclock "lib/shared_lib/clock"
 	msgConn "lib/shared_lib/messaging"
 	shareduow "lib/shared_lib/uow"
@@ -31,6 +32,8 @@ type profileDBStub struct {
 	createOAuthProfileError  error
 	saveOAuthIdentityError   error
 	saveOAuthIdentityCalled  bool
+	defaultMembership        *domain.OrganizationMembership
+	defaultMembershipError   error
 }
 
 func (s *profileDBStub) Save(context.Context, *domain.ProfileAccount, uuid.UUID) error {
@@ -97,6 +100,35 @@ func (s *profileDBStub) Delete(context.Context, uuid.UUID) error {
 func (s *profileDBStub) DeleteTx(context.Context, pgx.Tx, uuid.UUID) error {
 	return nil
 }
+func (s *profileDBStub) ReadDefaultMembership(_ context.Context, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+	if s.defaultMembershipError != nil {
+		return nil, s.defaultMembershipError
+	}
+	if s.defaultMembership != nil {
+		return s.defaultMembership, nil
+	}
+	return &domain.OrganizationMembership{
+		OrgID:  uuid.New(),
+		UserID: userID,
+		Role:   domain.OrgMemberRoleOrgAdmin,
+		Status: domain.OrgMemberStatusActive,
+	}, nil
+}
+func (s *profileDBStub) ReadMembership(context.Context, uuid.UUID, uuid.UUID) (*domain.OrganizationMembership, error) {
+	return nil, domain.ErrProfileNotFound
+}
+func (s *profileDBStub) ReadOrganization(context.Context, uuid.UUID) (*domain.Organization, error) {
+	return nil, domain.ErrProfileNotFound
+}
+func (s *profileDBStub) ListMemberships(context.Context, uuid.UUID) ([]*domain.OrganizationMembership, error) {
+	return nil, nil
+}
+func (s *profileDBStub) UpsertMembership(context.Context, pgx.Tx, *domain.OrganizationMembership) (*domain.OrganizationMembership, error) {
+	return nil, nil
+}
+func (s *profileDBStub) DeleteMembership(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error {
+	return nil
+}
 
 type oauthUnitOfWorkStub struct {
 	messages []shareduow.OutboundMessage
@@ -137,12 +169,17 @@ func oauthOutboundMessage(msgType msgConn.MsgType, resourceKey uuid.UUID) shared
 }
 
 type authProviderStub struct {
-	token string
-	sid   string
-	exp   int64
+	token      string
+	sid        string
+	exp        int64
+	lastClaims authz.TokenClaims
 }
 
 func (s *authProviderStub) CreateToken(context.Context, uuid.UUID, int) (string, string, int64, error) {
+	return s.token, s.sid, s.exp, nil
+}
+func (s *authProviderStub) CreateAccessToken(_ context.Context, claims authz.TokenClaims, _ int) (string, string, int64, error) {
+	s.lastClaims = claims
 	return s.token, s.sid, s.exp, nil
 }
 func (s *authProviderStub) Validate(context.Context, string) (map[string]any, error) {
@@ -291,6 +328,9 @@ var _ = Describe("OAuth usecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Token).To(Equal("token-1"))
 		Expect(result.IsNewUser).To(BeTrue())
+		Expect(authProvider.lastClaims.UserID).To(Equal(userID.String()))
+		Expect(authProvider.lastClaims.Roles).To(Equal([]string{domain.OrgMemberRoleOrgAdmin}))
+		Expect(authProvider.lastClaims.Permissions).To(ContainElement(authz.PermissionOrgMembersWrite))
 		Expect(builderStub.createdCalled).To(BeTrue())
 		Expect(authStore.createSessionCalled).To(BeTrue())
 		Expect(dbStub.saveOAuthIdentityCalled).To(BeTrue())

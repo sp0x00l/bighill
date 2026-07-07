@@ -25,3 +25,8 @@ func ClaimUnixSeconds(claims map[string]any, name string) (int64, bool) {
 		return 0, false
 	}
 }
+
+func ClaimIssuedBefore(claims map[string]any, name string, unixSeconds int64) bool {
+	claimSeconds, ok := ClaimUnixSeconds(claims, name)
+	return ok && unixSeconds > 0 && claimSeconds < unixSeconds
+}

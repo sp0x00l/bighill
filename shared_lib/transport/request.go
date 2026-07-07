@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"lib/shared_lib/authz"
 	"net/http"
 	"net/url"
 
@@ -61,40 +62,19 @@ func ReadIdempotencyIDHeader(ctx context.Context, r *http.Request) (uuid.UUID, e
 func ReadUserIDHeader(ctx context.Context, r *http.Request) (uuid.UUID, error) {
 	log.Trace("ReadUserIDHeader")
 
-	userIDValue := r.Header.Get("X-User-ID")
-	if userIDValue == "" {
-		err := fmt.Errorf("X-User-ID header missing")
-		log.WithContext(ctx).Error(err.Error())
-		return uuid.Nil, err
-	}
+	return authz.ReadUserIDHeader(ctx, r)
+}
 
-	userID, err := uuid.Parse(userIDValue)
-	if err != nil {
-		err := fmt.Errorf("invalid user ID")
-		log.WithContext(ctx).WithError(err).Error(err.Error())
-		return uuid.Nil, err
-	}
+func ReadOrgIDHeader(ctx context.Context, r *http.Request) (uuid.UUID, error) {
+	log.Trace("ReadOrgIDHeader")
 
-	if userID == uuid.Nil {
-		err := fmt.Errorf("invalid user ID")
-		log.WithContext(ctx).Error(err.Error())
-		return uuid.Nil, err
-	}
-
-	return userID, nil
+	return authz.ReadOrgIDHeader(ctx, r)
 }
 
 func ReadSessionIDHeader(ctx context.Context, r *http.Request) (string, error) {
 	log.Trace("ReadSessionIDHeader")
 
-	sessionID := r.Header.Get("X-Session-ID")
-	if sessionID == "" {
-		err := fmt.Errorf("X-Session-ID header missing")
-		log.WithContext(ctx).Error(err.Error())
-		return "", err
-	}
-
-	return sessionID, nil
+	return authz.ReadSessionIDHeader(ctx, r)
 }
 
 func ReadReqBody(ctx context.Context, r *http.Request) ([]byte, error) {

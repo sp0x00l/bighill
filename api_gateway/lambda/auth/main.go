@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"lib/shared_lib/authz"
 	"lib/shared_lib/logs"
 	"lib/shared_lib/observability"
 	"net"
@@ -107,12 +108,12 @@ func (h AuthHandler) Invoke(ctx context.Context, req events.APIGatewayCustomAuth
 			errors.Is(err, auth.ErrExpired):
 			log.WithContext(ctx).Warnf("authentication failed: %v -> 401", err)
 			if isDevEnv {
-				return generatePolicy("unauthorized", "unauthorized", "Deny", req.MethodArn), nil
+				return generateDenyPolicy(req.MethodArn), nil
 			}
 			return events.APIGatewayCustomAuthorizerResponse{}, errors.New("Unauthorized")
 		case errors.Is(err, auth.ErrAccessDenied):
 			log.WithContext(ctx).Warn("authorization denied -> 403")
-			return generatePolicy("unauthorized", "unauthorized", "Deny", req.MethodArn), nil
+			return generateDenyPolicy(req.MethodArn), nil
 		default:
 			log.WithContext(ctx).WithError(err).Error("authorizer internal error -> 5xx")
 			return events.APIGatewayCustomAuthorizerResponse{}, fmt.Errorf("authorizer failure")
@@ -122,13 +123,28 @@ func (h AuthHandler) Invoke(ctx context.Context, req events.APIGatewayCustomAuth
 	userID, ok := claims["userId"].(string)
 	if !ok || userID == "" {
 		log.WithContext(ctx).Warn("missing or invalid userId in claims")
-		return generatePolicy("unauthorized", "unauthorized", "Deny", req.MethodArn), nil
+		return generateDenyPolicy(req.MethodArn), nil
 	}
 
 	sid, ok := claims["sid"].(string)
 	if !ok || sid == "" {
 		log.WithContext(ctx).Warn("missing or invalid sid in claims")
-		return generatePolicy("unauthorized", "unauthorized", "Deny", req.MethodArn), nil
+		return generateDenyPolicy(req.MethodArn), nil
+	}
+	orgID, ok := claims["orgId"].(string)
+	if !ok || orgID == "" {
+		log.WithContext(ctx).Warn("missing or invalid orgId in claims")
+		return generateDenyPolicy(req.MethodArn), nil
+	}
+	roles, _ := claims["roles"].([]string)
+	if len(roles) == 0 {
+		log.WithContext(ctx).Warn("missing roles in claims")
+		return generateDenyPolicy(req.MethodArn), nil
+	}
+	permissions, _ := claims["permissions"].([]string)
+	if len(permissions) == 0 {
+		log.WithContext(ctx).Warn("missing permissions in claims")
+		return generateDenyPolicy(req.MethodArn), nil
 	}
 
 	sessionExists, err := authStore.SessionExists(ctx, sid)
@@ -138,7 +154,7 @@ func (h AuthHandler) Invoke(ctx context.Context, req events.APIGatewayCustomAuth
 	}
 	if !sessionExists {
 		log.WithContext(ctx).Warn("session does not exist or has been revoked")
-		return generatePolicy("unauthorized", "unauthorized", "Deny", req.MethodArn), nil
+		return generateDenyPolicy(req.MethodArn), nil
 	}
 
 	revokedAfter, err := authStore.GetUserRevokedAfter(ctx, userID)
@@ -147,21 +163,27 @@ func (h AuthHandler) Invoke(ctx context.Context, req events.APIGatewayCustomAuth
 		return events.APIGatewayCustomAuthorizerResponse{}, fmt.Errorf("authorizer failure")
 	}
 	if revokedAfter > 0 {
-		iat, ok := auth.ClaimUnixSeconds(claims, "iat")
+		_, ok := auth.ClaimUnixSeconds(claims, "iat")
 		if !ok {
 			log.WithContext(ctx).Warn("missing or invalid iat in claims")
-			return generatePolicy("unauthorized", "unauthorized", "Deny", req.MethodArn), nil
+			return generateDenyPolicy(req.MethodArn), nil
 		}
-		if iat <= revokedAfter {
+		if auth.ClaimIssuedBefore(claims, "iat", revokedAfter) {
 			log.WithContext(ctx).Warn("token issued before user sessions were revoked")
-			return generatePolicy("unauthorized", "unauthorized", "Deny", req.MethodArn), nil
+			return generateDenyPolicy(req.MethodArn), nil
 		}
 	}
 
-	return generatePolicy(userID, sid, "Allow", req.MethodArn), nil
+	return generatePolicy(userID, sid, orgID, roles, permissions, "Allow", req.MethodArn), nil
 }
 
-func generatePolicy(userID, sessionID, effect, resource string) events.APIGatewayCustomAuthorizerResponse {
+func generateDenyPolicy(resource string) events.APIGatewayCustomAuthorizerResponse {
+	log.Trace("API Gateway auth generateDenyPolicy")
+
+	return generatePolicy("unauthorized", "unauthorized", "", nil, nil, "Deny", resource)
+}
+
+func generatePolicy(userID, sessionID, orgID string, roles []string, permissions []string, effect, resource string) events.APIGatewayCustomAuthorizerResponse {
 	log.Trace("API Gateway auth generatePolicy")
 
 	wildcardResource := resource
@@ -172,8 +194,11 @@ func generatePolicy(userID, sessionID, effect, resource string) events.APIGatewa
 	authResponse := events.APIGatewayCustomAuthorizerResponse{
 		PrincipalID: userID,
 		Context: map[string]any{
-			"userId": userID,
-			"sid":    sessionID,
+			"userId":      userID,
+			"sid":         sessionID,
+			"orgId":       orgID,
+			"roles":       authz.EncodeStringSlice(roles),
+			"permissions": authz.EncodeStringSlice(permissions),
 		},
 	}
 	if effect != "" && wildcardResource != "" {

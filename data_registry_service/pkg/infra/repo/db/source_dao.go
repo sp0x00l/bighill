@@ -16,6 +16,7 @@ import (
 type DatasetDAO struct {
 	ID                       pgtype.UUID
 	UserID                   pgtype.UUID
+	OrgID                    pgtype.UUID
 	Title                    pgtype.Text
 	Description              pgtype.Text
 	Origin                   pgtype.Text
@@ -67,6 +68,7 @@ func toDatasetDAO(row datasetScanner) (*DatasetDAO, error) {
 	err := row.Scan(
 		&dataset.ID,
 		&dataset.UserID,
+		&dataset.OrgID,
 		&dataset.Title,
 		&dataset.Description,
 		&dataset.Origin,
@@ -125,6 +127,7 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 	dao := pgx.NamedArgs{
 		"id":          pgtype.UUID{Bytes: dataset.ID, Valid: true},
 		"user_id":     pgtype.UUID{Bytes: dataset.UserID, Valid: true},
+		"org_id":      pgtype.UUID{Bytes: dataset.OrgID, Valid: dataset.OrgID != uuid.Nil},
 		"title":       pgtype.Text{String: dataset.Title, Valid: true},
 		"description": pgtype.Text{String: dataset.Description, Valid: dataset.Description != ""},
 		"origin":      pgtype.Text{String: dataset.Origin.String(), Valid: true},
@@ -220,6 +223,7 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 	return &model.Dataset{
 		ID:                       dao.ID.Bytes,
 		UserID:                   dao.UserID.Bytes,
+		OrgID:                    dao.OrgID.Bytes,
 		Title:                    dao.Title.String,
 		Description:              dao.Description.String,
 		Origin:                   origin,

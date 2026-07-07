@@ -39,6 +39,7 @@ EXECUTE FUNCTION updated_at_column();
 CREATE TABLE IF NOT EXISTS bighill_ingestion_db.datasets(
     dataset_id uuid NOT NULL UNIQUE,
     user_id uuid NOT NULL REFERENCES bighill_ingestion_db.tenants(id),
+    org_id uuid NOT NULL,
     storage_location text NOT NULL DEFAULT '',
     table_namespace text NOT NULL DEFAULT '',
     table_name text NOT NULL DEFAULT '',
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS bighill_ingestion_db.datasets(
 );
 
 CREATE INDEX index_dataset_user_id ON bighill_ingestion_db.datasets(dataset_id, user_id);
+CREATE INDEX index_datasets_org_id ON bighill_ingestion_db.datasets(org_id);
 
 CREATE TABLE IF NOT EXISTS bighill_ingestion_db.outbox_messages (
     outbox_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -89,6 +91,7 @@ CREATE TABLE IF NOT EXISTS bighill_ingestion_db.upload_sessions (
     resource_id uuid NOT NULL,
     dataset_id uuid REFERENCES bighill_ingestion_db.datasets(dataset_id),
     user_id uuid NOT NULL REFERENCES bighill_ingestion_db.tenants(id),
+    org_id uuid NOT NULL,
     client_nonce text NOT NULL DEFAULT '',
     file_name text NOT NULL DEFAULT '',
     staging_key text NOT NULL DEFAULT '',
@@ -122,9 +125,13 @@ CREATE TABLE IF NOT EXISTS bighill_ingestion_db.upload_sessions (
 
 CREATE INDEX IF NOT EXISTS index_upload_sessions_dataset_user
 ON bighill_ingestion_db.upload_sessions(dataset_id, user_id, created_at);
+CREATE INDEX IF NOT EXISTS index_upload_sessions_dataset_org
+ON bighill_ingestion_db.upload_sessions(dataset_id, org_id, created_at);
 
 CREATE INDEX IF NOT EXISTS index_upload_sessions_resource_user
 ON bighill_ingestion_db.upload_sessions(resource_type, resource_id, user_id, created_at);
+CREATE INDEX IF NOT EXISTS index_upload_sessions_resource_org
+ON bighill_ingestion_db.upload_sessions(resource_type, resource_id, org_id, created_at);
 
 CREATE INDEX IF NOT EXISTS index_upload_sessions_pending_expiry
 ON bighill_ingestion_db.upload_sessions(status, expires_at);
@@ -150,11 +157,11 @@ ALTER TABLE bighill_ingestion_db.datasets FORCE ROW LEVEL SECURITY;
 CREATE POLICY datasets_tenant_isolation ON bighill_ingestion_db.datasets
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
 ALTER TABLE bighill_ingestion_db.upload_sessions ENABLE ROW LEVEL SECURITY;
@@ -162,9 +169,9 @@ ALTER TABLE bighill_ingestion_db.upload_sessions FORCE ROW LEVEL SECURITY;
 CREATE POLICY upload_sessions_tenant_isolation ON bighill_ingestion_db.upload_sessions
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = user_id
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );

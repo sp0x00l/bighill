@@ -47,7 +47,12 @@ func (u *sourceUsecase) CreateSourceConnector(ctx context.Context, sourceConnect
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if sourceConnector != nil {
-		ctx = ctxutil.WithTenantID(ctx, sourceConnector.UserID)
+		orgID, orgErr := requireOrgID(ctx)
+		if orgErr != nil {
+			return orgErr
+		}
+		sourceConnector.OrgID = orgID
+		ctx = ctxutil.WithActorOrg(ctx, sourceConnector.UserID, sourceConnector.OrgID)
 	}
 	id := uuid.New()
 	name := id.String()
@@ -81,7 +86,10 @@ func (u *sourceUsecase) ReadSourceConnector(ctx context.Context, connectorID, us
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, err = contextForActorOrg(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	return u.sourceRepository.ReadByID(ctx, connectorID, userID)
 }
 
@@ -99,7 +107,12 @@ func (u *sourceUsecase) ReplaceSourceConnector(ctx context.Context, sourceConnec
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	if sourceConnector != nil {
-		ctx = ctxutil.WithTenantID(ctx, sourceConnector.UserID)
+		orgID, orgErr := requireOrgID(ctx)
+		if orgErr != nil {
+			return orgErr
+		}
+		sourceConnector.OrgID = orgID
+		ctx = ctxutil.WithActorOrg(ctx, sourceConnector.UserID, sourceConnector.OrgID)
 	}
 	originalSourceConn, err := u.sourceRepository.ReadByID(ctx, sourceConnector.ID, sourceConnector.UserID)
 	if err != nil {
@@ -127,7 +140,10 @@ func (u *sourceUsecase) DeleteSourceConnector(ctx context.Context, connectorID, 
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx, err = contextForActorOrg(ctx, userID)
+	if err != nil {
+		return err
+	}
 	catalogID, err := u.getCatalogID(ctx, connectorID, userID)
 	if err != nil {
 		return err

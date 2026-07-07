@@ -14,6 +14,7 @@ import (
 )
 
 const resetSessionContextTimeout = 5 * time.Second
+const profileDatabaseName = "bighill_profile_db"
 
 type sessionContextExecutor interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -50,29 +51,40 @@ func configureTenantSessionHooks(config *pgxpool.Config, dbName string) {
 
 func applyConnectionSessionContext(ctx context.Context, conn sessionContextExecutor, dbName string) error {
 	if ctxutil.IsSystemContext(ctx) {
-		return setConnectionSessionContext(ctx, conn, "", "true")
+		return setConnectionSessionContext(ctx, conn, "", "", "true")
+	}
+	orgIDText := ""
+	if orgID, ok := ctxutil.OrgID(ctx); ok {
+		orgIDText = orgID.String()
 	}
 	if tenantID, ok := ctxutil.TenantID(ctx); ok {
 		tenantIDText := tenantID.String()
-		if err := setConnectionSessionContext(ctx, conn, tenantIDText, ""); err != nil {
+		if err := setConnectionSessionContext(ctx, conn, tenantIDText, orgIDText, ""); err != nil {
 			return err
+		}
+		if dbName == profileDatabaseName {
+			return nil
 		}
 		if err := ensureTenantProjection(ctx, conn, dbName, tenantIDText); err != nil {
 			return err
 		}
 		return nil
 	}
+	if orgIDText != "" {
+		return setConnectionSessionContext(ctx, conn, "", orgIDText, "")
+	}
 	return resetConnectionSessionContext(ctx, conn)
 }
 
 func resetConnectionSessionContext(ctx context.Context, conn sessionContextExecutor) error {
-	return setConnectionSessionContext(ctx, conn, "", "")
+	return setConnectionSessionContext(ctx, conn, "", "", "")
 }
 
-func setConnectionSessionContext(ctx context.Context, conn sessionContextExecutor, tenantID string, systemContext string) error {
+func setConnectionSessionContext(ctx context.Context, conn sessionContextExecutor, userID string, orgID string, systemContext string) error {
 	if _, err := conn.Exec(ctx,
-		`SELECT set_config('app.current_user_id', $1, false), set_config('app.system_context', $2, false)`,
-		tenantID,
+		`SELECT set_config('app.current_user_id', $1, false), set_config('app.current_org_id', $2, false), set_config('app.system_context', $3, false)`,
+		userID,
+		orgID,
 		systemContext,
 	); err != nil {
 		return fmt.Errorf("set database session context: %w", err)

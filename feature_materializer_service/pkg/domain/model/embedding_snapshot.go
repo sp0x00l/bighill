@@ -7,6 +7,7 @@ type EmbeddingSnapshot struct {
 	FeatureSnapshotID   uuid.UUID
 	DatasetID           uuid.UUID
 	UserID              uuid.UUID
+	OrgID               uuid.UUID
 	VectorStore         string
 	CollectionName      string
 	EmbeddingDimensions int

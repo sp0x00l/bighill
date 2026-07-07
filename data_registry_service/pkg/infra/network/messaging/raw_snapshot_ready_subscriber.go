@@ -75,6 +75,10 @@ func rawSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.RawSnap
 	if err != nil {
 		return nil, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return nil, err
+	}
 	rawSnapshotID, err := msgConn.ParseUUID("raw_snapshot_id", payload.GetRawSnapshotId())
 	if err != nil {
 		return nil, err
@@ -114,6 +118,7 @@ func rawSnapshotReadyToDataset(resourceKey uuid.UUID, payload *featurepb.RawSnap
 	return &model.Dataset{
 		ID:                datasetID,
 		UserID:            userID,
+		OrgID:             orgID,
 		Location:          location,
 		TableNamespace:    tableNamespace,
 		TableName:         tableName,

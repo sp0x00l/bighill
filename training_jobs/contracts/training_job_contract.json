@@ -68,6 +68,7 @@
     "candidate_metrics_metadata",
     "candidate_report_uri",
     "model_id",
+    "org_id",
     "promotion_profile",
     "report_manifest_uri",
     "report_uri",
@@ -182,6 +183,7 @@
     "evidently_report_uri",
     "failure_reason",
     "model_id",
+    "org_id",
     "promotion_report_uri",
     "training_run_id",
     "user_id"
@@ -194,6 +196,7 @@
     "evidently_report_uri": "string",
     "failure_reason": "string",
     "model_id": "string",
+    "org_id": "string",
     "promotion_report_uri": "string",
     "training_run_id": "string",
     "user_id": "string"

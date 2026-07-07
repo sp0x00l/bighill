@@ -50,6 +50,9 @@ func (f *registryFixture) ReadSourceConnector(_ context.Context, req *dataregist
 	if req.GetUserId() != connector.GetUserId() {
 		return nil, grpcstatus.Error(codes.NotFound, "source connector not found")
 	}
+	if req.GetOrgId() != connector.GetOrgId() {
+		return nil, grpcstatus.Error(codes.NotFound, "source connector not found")
+	}
 	if req.GetSourceType() != "" && !strings.EqualFold(req.GetSourceType(), connector.GetSourceType()) {
 		return nil, grpcstatus.Error(codes.FailedPrecondition, "source connector type mismatch")
 	}
@@ -64,6 +67,9 @@ func (f *registryFixture) ReadDatasetTable(_ context.Context, req *dataregistryp
 	if req.GetUserId() != table.GetUserId() {
 		return nil, grpcstatus.Error(codes.NotFound, "dataset table not found")
 	}
+	if req.GetOrgId() != table.GetOrgId() {
+		return nil, grpcstatus.Error(codes.NotFound, "dataset table not found")
+	}
 	return table, nil
 }
 
@@ -76,12 +82,14 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 		fixture      *registryFixture
 		queryEngine  data.QueryEngine
 		userID       uuid.UUID
+		orgID        uuid.UUID
 		connectorIDs map[string]string
 	)
 
 	BeforeAll(func() {
 		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
 		userID = uuid.New()
+		orgID = uuid.New()
 		connectorIDs = map[string]string{
 			"postgres":   uuid.NewString(),
 			"mysql":      uuid.NewString(),
@@ -97,6 +105,7 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 			connectorIDs["postgres"]: {
 				Id:         connectorIDs["postgres"],
 				UserId:     userID.String(),
+				OrgId:      orgID.String(),
 				SourceType: "postgres",
 				PostgresConfig: &dataregistrypb.PostgresSourceConfig{
 					Hostname:           "127.0.0.1",
@@ -110,6 +119,7 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 			connectorIDs["mysql"]: {
 				Id:         connectorIDs["mysql"],
 				UserId:     userID.String(),
+				OrgId:      orgID.String(),
 				SourceType: "mysql",
 				MysqlConfig: &dataregistrypb.MySQLSourceConfig{
 					Hostname:           "127.0.0.1",
@@ -123,6 +133,7 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 			connectorIDs["clickhouse"]: {
 				Id:         connectorIDs["clickhouse"],
 				UserId:     userID.String(),
+				OrgId:      orgID.String(),
 				SourceType: "clickhouse",
 				ClickhouseConfig: &dataregistrypb.ClickHouseSourceConfig{
 					Hostname:           "127.0.0.1",
@@ -136,6 +147,7 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 			connectorIDs["mongo"]: {
 				Id:         connectorIDs["mongo"],
 				UserId:     userID.String(),
+				OrgId:      orgID.String(),
 				SourceType: "mongo",
 				MongoConfig: &dataregistrypb.MongoSourceConfig{
 					Hosts:              []*dataregistrypb.MongoHost{{Hostname: "127.0.0.1", Port: 27017}},
@@ -184,21 +196,21 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 	It("streams Arrow records from Postgres, MySQL, ClickHouse, and Mongo datasources", func() {
 		requireExternalDatasourceFixtures()
 
-		postgres := execute(ctx, queryEngine, command(userID, connectorIDs["postgres"], "postgres", "SELECT actor_id, first_name FROM public.actor ORDER BY actor_id LIMIT 3", "", "", 0))
+		postgres := execute(ctx, queryEngine, command(userID, orgID, connectorIDs["postgres"], "postgres", "SELECT actor_id, first_name FROM public.actor ORDER BY actor_id LIMIT 3", "", "", 0))
 		Expect(postgres.TotalRecords).To(Equal(int64(3)))
 		Expect(postgres.Schema.Field(0).Name).To(Equal("actor_id"))
 		Expect(firstValue(postgres, "first_name")).To(Equal("PENELOPE"))
 
-		mysql := execute(ctx, queryEngine, command(userID, connectorIDs["mysql"], "mysql", "SELECT actor_id, first_name FROM actor ORDER BY actor_id LIMIT 3", "", "", 0))
+		mysql := execute(ctx, queryEngine, command(userID, orgID, connectorIDs["mysql"], "mysql", "SELECT actor_id, first_name FROM actor ORDER BY actor_id LIMIT 3", "", "", 0))
 		Expect(mysql.TotalRecords).To(Equal(int64(3)))
 		Expect(firstValue(mysql, "first_name")).To(Equal("PENELOPE"))
 
-		clickhouse := execute(ctx, queryEngine, command(userID, connectorIDs["clickhouse"], "clickhouse", "SELECT title, release_year FROM movies WHERE has(genres, 'Silent') ORDER BY release_year, title LIMIT 3", "", "", 0))
+		clickhouse := execute(ctx, queryEngine, command(userID, orgID, connectorIDs["clickhouse"], "clickhouse", "SELECT title, release_year FROM movies WHERE has(genres, 'Silent') ORDER BY release_year, title LIMIT 3", "", "", 0))
 		Expect(clickhouse.TotalRecords).To(Equal(int64(3)))
 		Expect(firstValue(clickhouse, "title")).To(Equal("Capture of Boer Battery by British"))
 		Expect(firstValue(clickhouse, "release_year")).To(BeNumerically("==", 1900))
 
-		mongo := execute(ctx, queryEngine, command(userID, connectorIDs["mongo"], "mongo", "", "sample_db", "movies", 3))
+		mongo := execute(ctx, queryEngine, command(userID, orgID, connectorIDs["mongo"], "mongo", "", "sample_db", "movies", 3))
 		Expect(mongo.TotalRecords).To(Equal(int64(3)))
 		Expect(mongo.Schema.FieldIndices("title")).NotTo(BeEmpty())
 		Expect(firstValue(mongo, "title")).NotTo(BeEmpty())
@@ -210,10 +222,10 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 
 		requireExternalDatasourceFixtures()
 
-		_, err = queryEngine.GetSchema(ctx, &flight.FlightDescriptor{Type: flight.DescriptorCMD, Cmd: command(userID, connectorIDs["clickhouse"], "clickhouse", "SELECT missing_column FROM movies LIMIT 1", "", "", 0)})
+		_, err = queryEngine.GetSchema(ctx, &flight.FlightDescriptor{Type: flight.DescriptorCMD, Cmd: command(userID, orgID, connectorIDs["clickhouse"], "clickhouse", "SELECT missing_column FROM movies LIMIT 1", "", "", 0)})
 		Expect(err).To(MatchError(ContainSubstring("query clickhouse source")))
 
-		_, err = queryEngine.GetSchema(ctx, &flight.FlightDescriptor{Type: flight.DescriptorCMD, Cmd: command(userID, uuid.NewString(), "postgres", "SELECT 1", "", "", 0)})
+		_, err = queryEngine.GetSchema(ctx, &flight.FlightDescriptor{Type: flight.DescriptorCMD, Cmd: command(userID, orgID, uuid.NewString(), "postgres", "SELECT 1", "", "", 0)})
 		Expect(err).To(MatchError(ContainSubstring("read source connector")))
 	})
 
@@ -234,6 +246,7 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 		fixture.tables[datasetID.String()] = &dataregistrypb.ReadDatasetTableResponse{
 			DatasetId:       datasetID.String(),
 			UserId:          userID.String(),
+			OrgId:           orgID.String(),
 			DatasetVersion:  7,
 			ProcessingState: "FEATURE_MATERIALIZED",
 			StorageLocation: tmpDir,
@@ -261,7 +274,7 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 			}
 		})
 
-		result := execute(ctx, lakehouseEngine, lakehouseIntegrationCommand(userID, datasetID, "SELECT title, year FROM dataset ORDER BY year LIMIT 2"))
+		result := execute(ctx, lakehouseEngine, lakehouseIntegrationCommand(userID, orgID, datasetID, "SELECT title, year FROM dataset ORDER BY year LIMIT 2"))
 		Expect(result.TotalRecords).To(Equal(int64(2)))
 		Expect(firstValue(result, "title")).To(Equal("Metropolis"))
 
@@ -285,6 +298,7 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 		fixture.tables[datasetID.String()] = &dataregistrypb.ReadDatasetTableResponse{
 			DatasetId:       datasetID.String(),
 			UserId:          userID.String(),
+			OrgId:           orgID.String(),
 			DatasetVersion:  8,
 			ProcessingState: "FEATURE_MATERIALIZED",
 			StorageLocation: tmpDir,
@@ -311,7 +325,7 @@ var _ = Describe("Data stream datasource integration", Ordered, func() {
 			}
 		})
 
-		_, err = lakehouseEngine.Execute(ctx, &flight.Ticket{Ticket: lakehouseIntegrationCommand(userID, datasetID, "SELECT title FROM dataset LIMIT 1")})
+		_, err = lakehouseEngine.Execute(ctx, &flight.Ticket{Ticket: lakehouseIntegrationCommand(userID, orgID, datasetID, "SELECT title FROM dataset LIMIT 1")})
 		Expect(err).To(MatchError(ContainSubstring("read query engine envelope footer")))
 	})
 })
@@ -335,9 +349,10 @@ func requireExternalDatasourceFixtures() {
 	}
 }
 
-func command(userID uuid.UUID, connectorID, sourceType, sql, databaseName, collection string, limit int64) []byte {
+func command(userID, orgID uuid.UUID, connectorID, sourceType, sql, databaseName, collection string, limit int64) []byte {
 	payload := map[string]any{
 		"userId":            userID.String(),
+		"orgId":             orgID.String(),
 		"sourceType":        sourceType,
 		"sourceConnectorId": connectorID,
 	}
@@ -358,9 +373,10 @@ func command(userID uuid.UUID, connectorID, sourceType, sql, databaseName, colle
 	return bytes
 }
 
-func lakehouseIntegrationCommand(userID, datasetID uuid.UUID, sql string) []byte {
+func lakehouseIntegrationCommand(userID, orgID, datasetID uuid.UUID, sql string) []byte {
 	payload := map[string]any{
 		"userId":    userID.String(),
+		"orgId":     orgID.String(),
 		"datasetId": datasetID.String(),
 		"sql":       sql,
 	}

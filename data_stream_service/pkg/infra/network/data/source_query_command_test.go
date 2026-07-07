@@ -13,6 +13,7 @@ var _ = Describe("source query command", func() {
 	It("defaults omitted sourceType to postgres", func() {
 		query, err := parseSourceQueryCommand(sourceQueryJSON(map[string]any{
 			"userId":            "user-1",
+			"orgId":             "org-1",
 			"sourceConnectorId": "connector-1",
 			"sql":               "select 1",
 		}))
@@ -39,6 +40,7 @@ var _ = Describe("source query command", func() {
 		for _, tc := range cases {
 			payload := map[string]any{
 				"userId":            "user-1",
+				"orgId":             "org-1",
 				"sourceConnectorId": "connector-1",
 				"sourceType":        tc.input,
 				"sql":               "select 1",
@@ -63,6 +65,7 @@ var _ = Describe("source query command", func() {
 	It("allows mongo commands with database and collection instead of SQL", func() {
 		query, err := parseSourceQueryCommand(sourceQueryJSON(map[string]any{
 			"userId":            "user-1",
+			"orgId":             "org-1",
 			"sourceConnectorId": "connector-1",
 			"sourceType":        "mongo",
 			"database":          "sample",
@@ -80,6 +83,7 @@ var _ = Describe("source query command", func() {
 	It("rejects invalid source types", func() {
 		_, err := parseSourceQueryCommand(sourceQueryJSON(map[string]any{
 			"userId":            "user-1",
+			"orgId":             "org-1",
 			"sourceConnectorId": "connector-1",
 			"sourceType":        "sqlite",
 			"sql":               "select 1",
@@ -91,11 +95,22 @@ var _ = Describe("source query command", func() {
 	It("requires SQL for SQL-backed sources", func() {
 		_, err := parseSourceQueryCommand(sourceQueryJSON(map[string]any{
 			"userId":            "user-1",
+			"orgId":             "org-1",
 			"sourceConnectorId": "connector-1",
 			"sourceType":        "mysql",
 		}))
 
 		Expect(err).To(MatchError(ContainSubstring("requires sql")))
+	})
+
+	It("requires orgId", func() {
+		_, err := parseSourceQueryCommand(sourceQueryJSON(map[string]any{
+			"userId":            "user-1",
+			"sourceConnectorId": "connector-1",
+			"sql":               "select 1",
+		}))
+
+		Expect(err).To(MatchError(ContainSubstring("requires orgId")))
 	})
 })
 

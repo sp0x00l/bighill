@@ -5,6 +5,7 @@ import "github.com/google/uuid"
 type Model struct {
 	ModelID            uuid.UUID
 	UserID             uuid.UUID
+	OrgID              uuid.UUID
 	TrainingRunID      uuid.UUID
 	DatasetID          uuid.UUID
 	ModelKind          ModelKind

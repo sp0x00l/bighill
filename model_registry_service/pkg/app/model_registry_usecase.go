@@ -22,7 +22,7 @@ import (
 
 type ModelRegistryUsecase interface {
 	RegisterModel(ctx context.Context, registeredModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
-	ReadModel(ctx context.Context, modelID uuid.UUID) (*model.Model, error)
+	ReadModelSystem(ctx context.Context, modelID uuid.UUID) (*model.Model, error)
 	ReadModelForUser(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.Model, error)
 	ListModels(ctx context.Context, userID uuid.UUID, pagination transport.Pagination, filter model.ListFilter) ([]*model.Model, int, error)
 	MarkModelReady(ctx context.Context, modelID uuid.UUID, artifactLocation string) (*model.Model, error)
@@ -36,11 +36,12 @@ type ModelRegistryUsecase interface {
 }
 
 type modelRegistryUsecase struct {
-	repo            ModelRepository
-	unitOfWork      ModelUnitOfWorkAdapter
-	eventBuilder    ModelEventBuilder
-	servingDeployer ModelServingDeployer
-	gatePolicy      model.GatePolicy
+	repo               ModelRepository
+	endpointRepository PublishedEndpointRepository
+	unitOfWork         ModelUnitOfWorkAdapter
+	eventBuilder       ModelEventBuilder
+	servingDeployer    ModelServingDeployer
+	gatePolicy         model.GatePolicy
 }
 
 type ModelRegistryOption func(*modelRegistryUsecase)
@@ -58,6 +59,14 @@ func WithPromotionGatePolicy(policy model.GatePolicy) ModelRegistryOption {
 
 	return func(u *modelRegistryUsecase) {
 		u.gatePolicy = policy
+	}
+}
+
+func WithPublishedEndpointRepository(repository PublishedEndpointRepository) ModelRegistryOption {
+	log.Trace("WithPublishedEndpointRepository")
+
+	return func(u *modelRegistryUsecase) {
+		u.endpointRepository = repository
 	}
 }
 
@@ -96,8 +105,8 @@ func (u *modelRegistryUsecase) RegisterModel(ctx context.Context, registeredMode
 	return out, nil
 }
 
-func (u *modelRegistryUsecase) ReadModel(ctx context.Context, modelID uuid.UUID) (out *model.Model, err error) {
-	log.Trace("ModelRegistryUsecase ReadModel")
+func (u *modelRegistryUsecase) ReadModelSystem(ctx context.Context, modelID uuid.UUID) (out *model.Model, err error) {
+	log.Trace("ModelRegistryUsecase ReadModelSystem")
 
 	ctx = ctxutil.WithSystemContext(ctx)
 	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.read",
@@ -111,7 +120,7 @@ func (u *modelRegistryUsecase) ReadModel(ctx context.Context, modelID uuid.UUID)
 func (u *modelRegistryUsecase) ReadModelForUser(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (out *model.Model, err error) {
 	log.Trace("ModelRegistryUsecase ReadModelForUser")
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx = ensureActorContext(ctx, userID)
 	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.read_for_user",
 		attribute.String("user_id", userID.String()),
 		attribute.String("model_id", modelID.String()),
@@ -124,7 +133,7 @@ func (u *modelRegistryUsecase) ReadModelForUser(ctx context.Context, userID uuid
 func (u *modelRegistryUsecase) ListModels(ctx context.Context, userID uuid.UUID, pagination transport.Pagination, filter model.ListFilter) (out []*model.Model, total int, err error) {
 	log.Trace("ModelRegistryUsecase ListModels")
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	ctx = ensureActorContext(ctx, userID)
 	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "model.list",
 		attribute.String("user_id", userID.String()),
 		attribute.Int("page", pagination.Page),
@@ -225,6 +234,7 @@ func (u *modelRegistryUsecase) RecordModelArtifactIngested(ctx context.Context, 
 	ingestedModel.Status = model.ModelStatusEvaluated
 	if ingestedModel.ModelKind == model.ModelKindBase {
 		ingestedModel.UserID = uuid.Nil
+		ingestedModel.OrgID = uuid.Nil
 		ctx = ctxutil.WithSystemContext(ctx)
 	} else {
 		ctx = contextForModel(ctx, ingestedModel)
@@ -293,6 +303,9 @@ func (u *modelRegistryUsecase) RecordPromotionReportReady(ctx context.Context, r
 	}
 	if report.UserID != uuid.Nil && candidate.UserID != report.UserID {
 		return nil, fmt.Errorf("%w: promotion report user id does not match candidate", domain.ErrValidationFailed)
+	}
+	if report.OrgID != uuid.Nil && candidate.OrgID != report.OrgID {
+		return nil, fmt.Errorf("%w: promotion report org id does not match candidate", domain.ErrValidationFailed)
 	}
 	if report.TrainingRunID != uuid.Nil && candidate.TrainingRunID != report.TrainingRunID {
 		return nil, fmt.Errorf("%w: promotion report training run id does not match candidate", domain.ErrValidationFailed)
@@ -412,6 +425,9 @@ func (u *modelRegistryUsecase) createModel(ctx context.Context, registeredModel 
 		if err != nil {
 			return err
 		}
+		if err := u.upsertPublishedEndpoint(ctx, tx, created); err != nil {
+			return err
+		}
 		if err := enqueue(u.eventBuilder.ModelUpdatedMessage(created)); err != nil {
 			return fmt.Errorf("enqueue model updated: %w", err)
 		}
@@ -428,6 +444,9 @@ func (u *modelRegistryUsecase) createCandidateModel(ctx context.Context, registe
 	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		created, err := u.repo.Create(ctx, tx, registeredModel, idempotencyKey)
 		if err != nil {
+			return err
+		}
+		if err := u.upsertPublishedEndpoint(ctx, tx, created); err != nil {
 			return err
 		}
 		if err := enqueue(u.eventBuilder.ModelUpdatedMessage(created)); err != nil {
@@ -455,6 +474,9 @@ func (u *modelRegistryUsecase) recordPromotionDecision(ctx context.Context, cand
 		if err != nil {
 			return err
 		}
+		if err := u.upsertPublishedEndpoint(ctx, tx, updated); err != nil {
+			return err
+		}
 		if err := enqueue(u.eventBuilder.ModelUpdatedMessage(updated)); err != nil {
 			return fmt.Errorf("enqueue model updated: %w", err)
 		}
@@ -471,6 +493,9 @@ func (u *modelRegistryUsecase) updateModelStatus(ctx context.Context, modelID uu
 	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		updated, err := u.repo.UpdateStatus(ctx, tx, modelID, status, artifactLocation, failureReason)
 		if err != nil {
+			return err
+		}
+		if err := u.upsertPublishedEndpoint(ctx, tx, updated); err != nil {
 			return err
 		}
 		if err := enqueue(u.eventBuilder.ModelUpdatedMessage(updated)); err != nil {
@@ -491,6 +516,9 @@ func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedMo
 		if err != nil {
 			return err
 		}
+		if err := u.upsertPublishedEndpoint(ctx, tx, updated); err != nil {
+			return err
+		}
 		if changed {
 			if err := enqueue(u.eventBuilder.ModelUpdatedMessage(updated)); err != nil {
 				return fmt.Errorf("enqueue model updated: %w", err)
@@ -502,13 +530,57 @@ func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedMo
 	return modelRecord, err
 }
 
+func (u *modelRegistryUsecase) upsertPublishedEndpoint(ctx context.Context, tx pgx.Tx, modelRecord *model.Model) error {
+	log.Trace("ModelRegistryUsecase upsertPublishedEndpoint")
+
+	if u.endpointRepository == nil || modelRecord == nil {
+		return nil
+	}
+	if modelRecord.OrgID == uuid.Nil || modelRecord.UserID == uuid.Nil || modelRecord.DatasetID == uuid.Nil {
+		return nil
+	}
+	status := model.PublishedEndpointStatusDisabled
+	if modelRecord.Status == model.ModelStatusReady && modelRecord.ServingLoadStatus == model.ModelLoadStatusLoaded {
+		status = model.PublishedEndpointStatusReady
+	}
+	return u.endpointRepository.UpsertEndpoint(ctx, tx, &model.PublishedEndpoint{
+		EndpointID:      publishedEndpointID(modelRecord),
+		OrgID:           modelRecord.OrgID,
+		ModelID:         modelRecord.ModelID,
+		DatasetID:       modelRecord.DatasetID,
+		Status:          status,
+		DisplayName:     modelRecord.Name,
+		CreatedByUserID: modelRecord.UserID,
+	})
+}
+
+func publishedEndpointID(modelRecord *model.Model) uuid.UUID {
+	log.Trace("publishedEndpointID")
+
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf(
+		"published-inference-endpoint:%s:%s:%s",
+		modelRecord.OrgID.String(),
+		modelRecord.ModelID.String(),
+		modelRecord.DatasetID.String(),
+	)))
+}
+
 func contextForModel(ctx context.Context, modelRecord *model.Model) context.Context {
 	log.Trace("contextForModel")
 
-	if modelRecord.UserID == uuid.Nil {
-		return ctxutil.WithSystemContext(ctx)
+	if modelRecord.UserID == uuid.Nil && modelRecord.OrgID == uuid.Nil {
+		return ctx
 	}
-	return ctxutil.WithTenantID(ctx, modelRecord.UserID)
+	return ctxutil.WithActorOrg(ctx, modelRecord.UserID, modelRecord.OrgID)
+}
+
+func ensureActorContext(ctx context.Context, userID uuid.UUID) context.Context {
+	log.Trace("ensureActorContext")
+
+	if _, ok := ctxutil.TenantID(ctx); ok {
+		return ctx
+	}
+	return ctxutil.WithTenantID(ctx, userID)
 }
 
 func promotionDeltasJSON(deltas map[string]float64) (string, error) {

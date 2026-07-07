@@ -43,6 +43,7 @@ func ToDatasetProcessingState(value string) (DatasetProcessingState, error) {
 type InferenceDataset struct {
 	DatasetID                uuid.UUID
 	UserID                   uuid.UUID
+	OrgID                    uuid.UUID
 	DatasetVersion           int
 	ProcessingState          DatasetProcessingState
 	StorageLocation          string

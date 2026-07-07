@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"lib/shared_lib/authz"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,25 @@ var _ = Describe("AuthProvider", func() {
 			claims, err := authProvider.Validate(ctx, "Bearer "+token)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(claims).To(HaveKeyWithValue("userId", userID.String()))
+		})
+
+		It("should validate org, role, and permission claims for access tokens", func() {
+			orgID := uuid.New()
+			permissions := authz.PermissionsForRole(authz.RoleMLResearcher)
+			token, _, _, err := authProvider.CreateAccessToken(ctx, authz.TokenClaims{
+				UserID:      userID.String(),
+				OrgID:       orgID.String(),
+				Roles:       []string{authz.RoleMLResearcher},
+				Permissions: permissions,
+			}, 15)
+			Expect(err).NotTo(HaveOccurred())
+
+			claims, err := authProvider.Validate(ctx, "Bearer "+token)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(claims).To(HaveKeyWithValue("userId", userID.String()))
+			Expect(claims).To(HaveKeyWithValue("orgId", orgID.String()))
+			Expect(claims["roles"]).To(Equal([]string{authz.RoleMLResearcher}))
+			Expect(claims["permissions"]).To(Equal(permissions))
 		})
 	})
 

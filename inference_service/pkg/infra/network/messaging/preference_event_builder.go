@@ -28,6 +28,7 @@ func (b *PreferenceDatasetEventBuilder) PreferenceDatasetReadyMessage(dataset *m
 	payload := mustMarshal(&inferencepb.PreferenceDatasetReadyEvent{
 		PreferenceDatasetId: dataset.PreferenceDatasetID.String(),
 		UserId:              dataset.UserID.String(),
+		OrgId:               dataset.OrgID.String(),
 		DatasetId:           dataset.DatasetID.String(),
 		ModelId:             dataset.ModelID.String(),
 		SourceRequestId:     dataset.RequestID.String(),

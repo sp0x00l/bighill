@@ -54,6 +54,7 @@ class EvaluationReportManifest:
 @dataclass(frozen=True)
 class PromotionReportManifest:
     user_id: str
+    org_id: str
     model_id: str
     training_run_id: str
     promotion_report_uri: str

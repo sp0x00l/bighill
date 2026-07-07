@@ -15,6 +15,7 @@ import (
 type SourceConnectorDAO struct {
 	ID          pgtype.UUID
 	UserID      pgtype.UUID
+	OrgID       pgtype.UUID
 	CatalogID   pgtype.UUID
 	StorageType pgtype.Text
 	Config      []byte
@@ -32,6 +33,7 @@ func toSourceConnDAO(ctx context.Context, sourceConnector *model.SourceConnector
 	dao := pgx.NamedArgs{
 		"id":           pgtype.UUID{Bytes: sourceConnector.ID, Valid: true},
 		"user_id":      pgtype.UUID{Bytes: sourceConnector.UserID, Valid: true},
+		"org_id":       pgtype.UUID{Bytes: sourceConnector.OrgID, Valid: sourceConnector.OrgID != uuid.Nil},
 		"catalog_id":   pgtype.UUID{Bytes: sourceConnector.CatalogID, Valid: true},
 		"storage_type": pgtype.Text{String: sourceConnector.Config.GetStorageType().String(), Valid: true},
 		"config":       serializedCfg,
@@ -55,6 +57,7 @@ func fromSourceConnDAO(ctx context.Context, sourceConnector *model.SourceConnect
 
 	sourceConnector.ID = dao.ID.Bytes
 	sourceConnector.UserID = dao.UserID.Bytes
+	sourceConnector.OrgID = dao.OrgID.Bytes
 	// CatalogID is only needed for catalog integration operations.
 	if dao.CatalogID.Valid {
 		sourceConnector.CatalogID = dao.CatalogID.Bytes

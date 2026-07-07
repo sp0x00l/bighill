@@ -8,6 +8,7 @@ import (
 	"feature_materializer_service/pkg/domain/model"
 	dataregistrypb "lib/data_contracts_lib/data_registry"
 	ingestionpb "lib/data_contracts_lib/ingestion"
+	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 
 	"github.com/google/uuid"
@@ -84,6 +85,7 @@ func (l *datasetFileUploadedEventListener) Handle(ctx context.Context, resourceK
 	if err != nil {
 		return msgConn.NonRetryable(err)
 	}
+	ctx = ctxutil.WithActorOrg(ctx, datasetFile.UserID, datasetFile.OrgID)
 	return l.listener.StartMaterializationWorkflow(ctx, datasetFile, idempotencyKey)
 }
 
@@ -106,6 +108,10 @@ func eventToDatasetFile(resourceKey uuid.UUID, payload *ingestionpb.DatasetFileU
 	}
 
 	userID, err := msgConn.ParseUUID("user_id", payload.GetUserId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
@@ -146,6 +152,7 @@ func eventToDatasetFile(resourceKey uuid.UUID, payload *ingestionpb.DatasetFileU
 	datasetFile := &model.DatasetFile{
 		DatasetID:         datasetID,
 		UserID:            userID,
+		OrgID:             orgID,
 		StorageLocation:   storageLocation,
 		ContentType:       contentType,
 		FileExtension:     fileExtension,
@@ -194,6 +201,7 @@ func (l *datasetCreatedEventListener) Handle(ctx context.Context, resourceKey uu
 	if !ok {
 		return nil
 	}
+	ctx = ctxutil.WithActorOrg(ctx, datasetFile.UserID, datasetFile.OrgID)
 	return l.listener.StartMaterializationWorkflow(ctx, datasetFile, idempotencyKey)
 }
 
@@ -232,6 +240,7 @@ func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uu
 	if !ok {
 		return nil
 	}
+	ctx = ctxutil.WithActorOrg(ctx, datasetFile.UserID, datasetFile.OrgID)
 	return l.listener.StartMaterializationWorkflow(ctx, datasetFile, idempotencyKey)
 }
 
@@ -245,6 +254,7 @@ func datasetCreatedToSourceDatasetFile(resourceKey uuid.UUID, payload *dataregis
 		ResourceKey:       resourceKey,
 		DatasetID:         payload.GetDatasetId(),
 		UserID:            payload.GetUserId(),
+		OrgID:             payload.GetOrgId(),
 		DatasetVersion:    payload.GetDatasetVersion(),
 		SourceType:        payload.GetSourceType(),
 		SourceConnectorID: payload.GetSourceConnectorId(),
@@ -269,6 +279,7 @@ func datasetUpdatedToSourceDatasetFile(resourceKey uuid.UUID, payload *dataregis
 		ResourceKey:       resourceKey,
 		DatasetID:         payload.GetDatasetId(),
 		UserID:            payload.GetUserId(),
+		OrgID:             payload.GetOrgId(),
 		DatasetVersion:    payload.GetDatasetVersion(),
 		SourceType:        payload.GetSourceType(),
 		SourceConnectorID: payload.GetSourceConnectorId(),
@@ -287,6 +298,7 @@ type sourceDatasetRegistryEvent struct {
 	ResourceKey       uuid.UUID
 	DatasetID         string
 	UserID            string
+	OrgID             string
 	DatasetVersion    int32
 	SourceType        string
 	SourceConnectorID string
@@ -325,6 +337,10 @@ func sourceDatasetFileFromRegistryEvent(event sourceDatasetRegistryEvent) (*mode
 	if err != nil {
 		return nil, uuid.Nil, false, err
 	}
+	orgID, err := msgConn.ParseUUID("org_id", event.OrgID)
+	if err != nil {
+		return nil, uuid.Nil, false, err
+	}
 	connectorID, err := msgConn.ParseUUID("source_connector_id", sourceConnectorID)
 	if err != nil {
 		return nil, uuid.Nil, false, err
@@ -353,6 +369,7 @@ func sourceDatasetFileFromRegistryEvent(event sourceDatasetRegistryEvent) (*mode
 	datasetFile := &model.DatasetFile{
 		DatasetID:         datasetID,
 		UserID:            userID,
+		OrgID:             orgID,
 		SourceType:        sourceType,
 		SourceConnectorID: connectorID,
 		SourceQuery:       strings.TrimSpace(event.SourceQuery),

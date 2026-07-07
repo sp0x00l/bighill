@@ -43,12 +43,14 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 	It("maps the protobuf event into the materialization workflow starter", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		uc := &recordingRawSnapshotUsecase{}
 		listener := featuremessaging.NewDatasetFileUploadedEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
 			ContentType:       "text/csv",
 			FileExtension:     "csv",
@@ -62,6 +64,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.datasetFile.DatasetID).To(Equal(datasetID))
 		Expect(uc.datasetFile.UserID).To(Equal(userID))
+		Expect(uc.datasetFile.OrgID).To(Equal(orgID))
 		Expect(uc.datasetFile.TableNamespace).To(Equal("features"))
 		Expect(uc.datasetFile.TableName).To(Equal("movies"))
 		Expect(uc.datasetFile.ProcessingProfile).To(Equal(model.ProcessingProfileTextRAG))
@@ -76,6 +79,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            uuid.NewString(),
+			OrgId:             uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
 			ContentType:       "text/csv",
 			FileExtension:     "csv",
@@ -93,6 +97,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		event := &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            uuid.NewString(),
+			OrgId:             uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
 			ContentType:       "text/csv",
 			FileExtension:     "csv",
@@ -116,6 +121,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId:         uuid.NewString(),
 			UserId:            uuid.NewString(),
+			OrgId:             uuid.NewString(),
 			StorageLocation:   "s3://local-dev-bucket/raw/user/dataset/file.csv",
 			ContentType:       "text/csv",
 			FileExtension:     "csv",
@@ -137,6 +143,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &ingestionpb.DatasetFileUploadedEvent{
 			DatasetId: datasetID.String(),
 			UserId:    uuid.NewString(),
+			OrgId:     uuid.NewString(),
 		})
 
 		Expect(err).To(HaveOccurred())
@@ -146,6 +153,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 	It("maps connector-backed dataset created events into the materialization workflow starter", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		connectorID := uuid.New()
 		uc := &recordingRawSnapshotUsecase{}
 		listener := featuremessaging.NewDatasetCreatedEventListener(uc)
@@ -153,6 +161,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &dataregistrypb.DatasetCreatedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			DatasetVersion:    3,
 			TableNamespace:    "features",
 			TableName:         "movies",
@@ -169,6 +178,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		Expect(listener.NewMessage()).To(Equal(&dataregistrypb.DatasetCreatedEvent{}))
 		Expect(uc.datasetFile.DatasetID).To(Equal(datasetID))
 		Expect(uc.datasetFile.UserID).To(Equal(userID))
+		Expect(uc.datasetFile.OrgID).To(Equal(orgID))
 		Expect(uc.datasetFile.SourceConnectorID).To(Equal(connectorID))
 		Expect(uc.datasetFile.SourceType).To(Equal("postgres"))
 		Expect(uc.datasetFile.SourceQuery).To(Equal("SELECT title FROM movies"))
@@ -201,10 +211,12 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 	It("maps connector-backed dataset updated events into deterministic materialization starts", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		connectorID := uuid.New()
 		event := &dataregistrypb.DatasetUpdatedEvent{
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			DatasetVersion:    4,
 			TableNamespace:    "features",
 			TableName:         "movies",
@@ -223,6 +235,7 @@ var _ = Describe("DatasetFileUploadedEventListener", func() {
 		Expect(featuremessaging.NewDatasetUpdatedEventListener(second).Handle(context.Background(), datasetID, event)).To(Succeed())
 
 		Expect(first.idempotencyKey).To(Equal(second.idempotencyKey))
+		Expect(first.datasetFile.OrgID).To(Equal(orgID))
 		Expect(first.datasetFile.SourceType).To(Equal("mongo"))
 		Expect(first.datasetFile.SourceDatabase).To(Equal("catalog"))
 		Expect(first.datasetFile.SourceCollection).To(Equal("movies"))

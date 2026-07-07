@@ -27,7 +27,7 @@ func NewTrainingEventBuilder(topic string) *TrainingEventBuilder {
 func (b *TrainingEventBuilder) ModelTrainingCompletedMessage(result *model.TrainingRunResult) (msgConn.OutboundMessage, error) {
 	log.Trace("TrainingEventBuilder ModelTrainingCompletedMessage")
 
-	datasetID, modelID, userID, err := parseTrainingResultIDs(result)
+	datasetID, modelID, userID, orgID, err := parseTrainingResultIDs(result)
 	if err != nil {
 		return msgConn.OutboundMessage{}, err
 	}
@@ -51,6 +51,7 @@ func (b *TrainingEventBuilder) ModelTrainingCompletedMessage(result *model.Train
 		ServingModel:      result.ServingModel,
 		ServingLoadStatus: result.ServingLoadStatus,
 		UserId:            userID.String(),
+		OrgId:             orgID.String(),
 	})
 	return msgConn.OutboundMessage{
 		Topic: b.topic,
@@ -66,7 +67,7 @@ func (b *TrainingEventBuilder) ModelTrainingCompletedMessage(result *model.Train
 func (b *TrainingEventBuilder) ModelTrainingFailedMessage(result *model.TrainingRunResult) (msgConn.OutboundMessage, error) {
 	log.Trace("TrainingEventBuilder ModelTrainingFailedMessage")
 
-	datasetID, modelID, userID, err := parseTrainingResultIDs(result)
+	datasetID, modelID, userID, orgID, err := parseTrainingResultIDs(result)
 	if err != nil {
 		return msgConn.OutboundMessage{}, err
 	}
@@ -81,6 +82,7 @@ func (b *TrainingEventBuilder) ModelTrainingFailedMessage(result *model.Training
 		BaseModel:         result.BaseModel,
 		FailureReason:     result.FailureReason,
 		UserId:            userID.String(),
+		OrgId:             orgID.String(),
 	})
 	return msgConn.OutboundMessage{
 		Topic: b.topic,
@@ -107,6 +109,10 @@ func (b *TrainingEventBuilder) PromotionReportReadyMessage(report *model.Promoti
 	if err != nil || userID == uuid.Nil {
 		return msgConn.OutboundMessage{}, fmt.Errorf("user id is invalid: %w", err)
 	}
+	orgID, err := uuid.Parse(report.OrgID)
+	if err != nil || orgID == uuid.Nil {
+		return msgConn.OutboundMessage{}, fmt.Errorf("org id is invalid: %w", err)
+	}
 	trainingRunID, err := uuid.Parse(report.TrainingRunID)
 	if err != nil || trainingRunID == uuid.Nil {
 		return msgConn.OutboundMessage{}, fmt.Errorf("training run id is invalid: %w", err)
@@ -117,6 +123,7 @@ func (b *TrainingEventBuilder) PromotionReportReadyMessage(report *model.Promoti
 	}
 	payload := marshalTrainingEvent(&trainingpb.PromotionReportReadyEvent{
 		UserId:              userID.String(),
+		OrgId:               orgID.String(),
 		ModelId:             modelID.String(),
 		TrainingRunId:       trainingRunID.String(),
 		PromotionReportUri:  report.PromotionReportURI,
@@ -138,25 +145,29 @@ func (b *TrainingEventBuilder) PromotionReportReadyMessage(report *model.Promoti
 	}, nil
 }
 
-func parseTrainingResultIDs(result *model.TrainingRunResult) (uuid.UUID, uuid.UUID, uuid.UUID, error) {
+func parseTrainingResultIDs(result *model.TrainingRunResult) (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, error) {
 	log.Trace("parseTrainingResultIDs")
 
 	if result == nil {
-		return uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("training result is required")
+		return uuid.Nil, uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("training result is required")
 	}
 	datasetID, err := uuid.Parse(result.DatasetID)
 	if err != nil || datasetID == uuid.Nil {
-		return uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("dataset id is invalid: %w", err)
+		return uuid.Nil, uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("dataset id is invalid: %w", err)
 	}
 	modelID, err := uuid.Parse(result.ModelID)
 	if err != nil || modelID == uuid.Nil {
-		return uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("model id is invalid: %w", err)
+		return uuid.Nil, uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("model id is invalid: %w", err)
 	}
 	userID, err := uuid.Parse(result.UserID)
 	if err != nil || userID == uuid.Nil {
-		return uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("user id is invalid: %w", err)
+		return uuid.Nil, uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("user id is invalid: %w", err)
 	}
-	return datasetID, modelID, userID, nil
+	orgID, err := uuid.Parse(result.OrgID)
+	if err != nil || orgID == uuid.Nil {
+		return uuid.Nil, uuid.Nil, uuid.Nil, uuid.Nil, fmt.Errorf("org id is invalid: %w", err)
+	}
+	return datasetID, modelID, userID, orgID, nil
 }
 
 func marshalPromotionDeltas(deltas map[string]float64) (string, error) {

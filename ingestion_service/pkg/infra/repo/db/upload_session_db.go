@@ -30,14 +30,14 @@ func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, tx pgx.Tx, s
 	log.Trace("UploadSessionDB CreateUploadSession")
 
 	query := `INSERT INTO ` + db.Name + `.upload_sessions (
-		upload_id, resource_type, resource_id, dataset_id, user_id, client_nonce, file_name, staging_key, final_key,
+		upload_id, resource_type, resource_id, dataset_id, user_id, org_id, client_nonce, file_name, staging_key, final_key,
 		declared_format, declared_content_type, declared_size_bytes, status,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile,
 		artifact_type, model_name, model_version, base_model,
 		source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
 		created_at, expires_at
 	) VALUES (
-		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @client_nonce, @file_name, @staging_key, @final_key,
+		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @org_id, @client_nonce, @file_name, @staging_key, @final_key,
 		@declared_format, @declared_content_type, @declared_size_bytes, @status::upload_session_status_enum,
 		@table_namespace, @table_name, NULLIF(@table_format, '')::table_format_enum, NULLIF(@catalog_provider, '')::catalog_provider_enum, NULLIF(@processing_profile, '')::processing_profile_enum,
 		@artifact_type, @model_name, @model_version, @base_model,
@@ -71,8 +71,8 @@ func (db *UploadSessionDB) ReadUploadSessionForComplete(ctx context.Context, upl
 
 	query := `SELECT ` + uploadSessionColumns() + `
 		FROM ` + db.Name + `.upload_sessions
-		WHERE upload_id = @upload_id AND user_id = @user_id`
-	session, err := scanUploadSession(db.Pool.QueryRow(ctx, query, uploadSessionIDsDAO(uploadID, userID)))
+		WHERE upload_id = @upload_id AND org_id = @org_id`
+	session, err := scanUploadSession(db.Pool.QueryRow(ctx, query, uploadSessionIDsDAO(ctx, uploadID, userID)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrResourceNotFound
@@ -91,7 +91,7 @@ func (db *UploadSessionDB) PromoteUploadSession(ctx context.Context, tx pgx.Tx, 
 		checksum = @checksum,
 		status = 'PROMOTED'::upload_session_status_enum,
 		updated_at = now()
-		WHERE upload_id = @upload_id AND user_id = @user_id AND status = 'PENDING'
+		WHERE upload_id = @upload_id AND org_id = @org_id AND status = 'PENDING'
 		RETURNING ` + uploadSessionColumns()
 	promoted, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionDAO(session)))
 	if err != nil {
@@ -134,6 +134,7 @@ func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, tx pgx.Tx, up
 		ResourceID:          upload.DatasetID,
 		DatasetID:           upload.DatasetID,
 		UserID:              upload.UserID,
+		OrgID:               upload.OrgID,
 		FileName:            "multipart-upload." + upload.Extension,
 		StorageLocation:     storageLocation,
 		DeclaredFormat:      upload.Extension,
@@ -147,11 +148,11 @@ func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, tx pgx.Tx, up
 	}
 
 	query := `INSERT INTO ` + db.Name + `.upload_sessions (
-		upload_id, resource_type, resource_id, dataset_id, user_id, file_name, storage_location, declared_format,
+		upload_id, resource_type, resource_id, dataset_id, user_id, org_id, file_name, storage_location, declared_format,
 		declared_content_type, status, table_namespace, table_name, table_format,
 		catalog_provider, processing_profile, artifact_type, model_name, model_version, base_model, created_at, expires_at
 	) VALUES (
-		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @file_name, @storage_location, @declared_format,
+		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @org_id, @file_name, @storage_location, @declared_format,
 		@declared_content_type, 'PROMOTED'::upload_session_status_enum, @table_namespace, @table_name, @table_format::table_format_enum,
 		@catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @artifact_type, @model_name, @model_version, @base_model, now(), now()
 	)
@@ -181,13 +182,13 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, tx pgx.Tx, s
 		session.ExpiresAt = now
 	}
 	query := `INSERT INTO ` + db.Name + `.upload_sessions (
-		upload_id, resource_type, resource_id, dataset_id, user_id, client_nonce, file_name, storage_location,
+		upload_id, resource_type, resource_id, dataset_id, user_id, org_id, client_nonce, file_name, storage_location,
 		declared_format, declared_content_type, declared_size_bytes, actual_size_bytes, checksum, status,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile,
 		artifact_type, model_name, model_version, base_model,
 		source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha, created_at, expires_at
 	) VALUES (
-		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @client_nonce, @file_name, @storage_location,
+		@upload_id, @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @org_id, @client_nonce, @file_name, @storage_location,
 		@declared_format, @declared_content_type, @declared_size_bytes, @actual_size_bytes, @checksum, 'PROMOTED'::upload_session_status_enum,
 		@table_namespace, @table_name, NULLIF(@table_format, '')::table_format_enum, NULLIF(@catalog_provider, '')::catalog_provider_enum, NULLIF(@processing_profile, '')::processing_profile_enum,
 		@artifact_type, @model_name, @model_version, @base_model,
@@ -210,8 +211,8 @@ func (db *UploadSessionDB) readUploadSessionTx(ctx context.Context, tx pgx.Tx, u
 
 	query := `SELECT ` + uploadSessionColumns() + `
 		FROM ` + db.Name + `.upload_sessions
-		WHERE upload_id = @upload_id AND user_id = @user_id`
-	session, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionIDsDAO(uploadID, userID)))
+		WHERE upload_id = @upload_id AND org_id = @org_id`
+	session, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionIDsDAO(ctx, uploadID, userID)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrResourceNotFound
@@ -225,10 +226,11 @@ func (db *UploadSessionDB) setUploadSessionStatus(ctx context.Context, tx pgx.Tx
 	log.Trace("UploadSessionDB setUploadSessionStatus")
 
 	query := `UPDATE ` + db.Name + `.upload_sessions SET status = @status::upload_session_status_enum, updated_at = now()
-		WHERE upload_id = @upload_id AND user_id = @user_id AND status = 'PENDING'`
+		WHERE upload_id = @upload_id AND org_id = @org_id AND status = 'PENDING'`
 	cmd, err := tx.Exec(ctx, query, pgx.NamedArgs{
 		"upload_id": pgtype.UUID{Bytes: uploadID, Valid: true},
 		"user_id":   pgtype.UUID{Bytes: userID, Valid: true},
+		"org_id":    pgtype.UUID{Bytes: orgIDFromContext(ctx), Valid: orgIDFromContext(ctx) != uuid.Nil},
 		"status":    string(status),
 	})
 	if err != nil {
@@ -266,6 +268,7 @@ func uploadSessionDAO(session *model.UploadSession) pgx.NamedArgs {
 		"resource_id":           pgtype.UUID{Bytes: resourceID, Valid: resourceID != uuid.Nil},
 		"dataset_id":            pgtype.UUID{Bytes: session.DatasetID, Valid: session.DatasetID != uuid.Nil},
 		"user_id":               pgtype.UUID{Bytes: session.UserID, Valid: session.UserID != uuid.Nil},
+		"org_id":                pgtype.UUID{Bytes: session.OrgID, Valid: session.OrgID != uuid.Nil},
 		"client_nonce":          session.ClientNonce,
 		"file_name":             session.FileName,
 		"staging_key":           session.StagingKey,
@@ -297,17 +300,18 @@ func uploadSessionDAO(session *model.UploadSession) pgx.NamedArgs {
 	}
 }
 
-func uploadSessionIDsDAO(uploadID, userID uuid.UUID) pgx.NamedArgs {
+func uploadSessionIDsDAO(ctx context.Context, uploadID, userID uuid.UUID) pgx.NamedArgs {
 	return pgx.NamedArgs{
 		"upload_id": pgtype.UUID{Bytes: uploadID, Valid: true},
 		"user_id":   pgtype.UUID{Bytes: userID, Valid: true},
+		"org_id":    pgtype.UUID{Bytes: orgIDFromContext(ctx), Valid: orgIDFromContext(ctx) != uuid.Nil},
 	}
 }
 
 func uploadSessionColumns() string {
 	log.Trace("uploadSessionColumns")
 
-	return `upload_id::text, resource_type::text, resource_id::text, COALESCE(dataset_id::text, ''), user_id::text, client_nonce, file_name,
+	return `upload_id::text, resource_type::text, resource_id::text, COALESCE(dataset_id::text, ''), user_id::text, org_id::text, client_nonce, file_name,
 		staging_key, final_key, storage_location, declared_format, declared_content_type,
 		declared_size_bytes, actual_size_bytes, checksum, status::text, table_namespace, table_name,
 		COALESCE(table_format::text, ''), COALESCE(catalog_provider::text, ''), COALESCE(processing_profile::text, ''),
@@ -319,7 +323,7 @@ func uploadSessionColumns() string {
 func scanUploadSession(row pgx.Row) (*model.UploadSession, error) {
 	log.Trace("scanUploadSession")
 
-	var uploadID, resourceType, resourceID, datasetID, userID, status string
+	var uploadID, resourceType, resourceID, datasetID, userID, orgID, status string
 	session := &model.UploadSession{}
 	if err := row.Scan(
 		&uploadID,
@@ -327,6 +331,7 @@ func scanUploadSession(row pgx.Row) (*model.UploadSession, error) {
 		&resourceID,
 		&datasetID,
 		&userID,
+		&orgID,
 		&session.ClientNonce,
 		&session.FileName,
 		&session.StagingKey,
@@ -365,6 +370,7 @@ func scanUploadSession(row pgx.Row) (*model.UploadSession, error) {
 		session.DatasetID = uuid.MustParse(datasetID)
 	}
 	session.UserID = uuid.MustParse(userID)
+	session.OrgID = uuid.MustParse(orgID)
 	session.Status = model.UploadSessionStatus(status)
 	return session, nil
 }

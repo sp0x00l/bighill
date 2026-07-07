@@ -52,6 +52,7 @@ var _ = Describe("AuthHandler", func() {
 	var (
 		ctx       context.Context
 		userID    uuid.UUID
+		orgID     uuid.UUID
 		validator *fakeTokenValidator
 		store     *fakeAuthSessionStore
 		handler   *serviceRest.AuthHandler
@@ -60,9 +61,11 @@ var _ = Describe("AuthHandler", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		userID = uuid.New()
+		orgID = uuid.New()
 		validator = &fakeTokenValidator{
 			claims: map[string]any{
 				"userId":    userID.String(),
+				"orgId":     orgID.String(),
 				"sid":       "session-id",
 				"iat":       int64(100),
 				"expiresAt": int64(200),
@@ -80,6 +83,7 @@ var _ = Describe("AuthHandler", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.UserID).To(Equal(userID))
+		Expect(result.OrgID).To(Equal(orgID))
 		Expect(result.ExpUnix).To(Equal(int64(200)))
 		Expect(validator.receivedToken).To(Equal("Bearer token"))
 		Expect(store.receivedSID).To(Equal("session-id"))

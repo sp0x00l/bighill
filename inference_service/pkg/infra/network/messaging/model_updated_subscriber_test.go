@@ -44,6 +44,14 @@ func (u *recordingInferenceUsecase) ReadModel(context.Context, uuid.UUID, uuid.U
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) ListEndpoints(context.Context, uuid.UUID) ([]*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) GenerateForEndpoint(context.Context, uuid.UUID, model.GenerateRequest) (*model.GenerateResponse, error) {
+	return nil, nil
+}
+
 func (u *recordingInferenceUsecase) Generate(context.Context, model.GenerateRequest) (*model.GenerateResponse, error) {
 	return nil, nil
 }
@@ -76,6 +84,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 	It("maps a model updated event into the inference use case", func() {
 		modelID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		trainingRunID := uuid.New()
 		datasetID := uuid.New()
 		uc := &recordingInferenceUsecase{}
@@ -84,6 +93,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		err := listener.Handle(context.Background(), modelID, &modelregistrypb.ModelUpdatedEvent{
 			ModelId:           modelID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			TrainingRunId:     trainingRunID.String(),
 			DatasetId:         datasetID.String(),
 			ModelKind:         "FINE_TUNED",
@@ -107,6 +117,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.model.ModelID).To(Equal(modelID))
 		Expect(uc.model.UserID).To(Equal(userID))
+		Expect(uc.model.OrgID).To(Equal(orgID))
 		Expect(uc.model.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.model.DatasetID).To(Equal(datasetID))
 		Expect(uc.model.ModelKind).To(Equal(model.ModelKindFineTuned))
@@ -119,13 +130,11 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 
 	It("maps an ingested base model update without training or dataset ids", func() {
 		modelID := uuid.New()
-		userID := uuid.New()
 		uc := &recordingInferenceUsecase{}
 		listener := inferencemessaging.NewModelUpdatedEventListener(uc)
 
 		err := listener.Handle(context.Background(), modelID, &modelregistrypb.ModelUpdatedEvent{
 			ModelId:           modelID.String(),
-			UserId:            userID.String(),
 			ModelKind:         "BASE",
 			Source:            "UPLOAD",
 			SourceUri:         "s3://local-dev-bucket/models/base-model",
@@ -145,7 +154,8 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.model.ModelID).To(Equal(modelID))
-		Expect(uc.model.UserID).To(Equal(userID))
+		Expect(uc.model.UserID).To(Equal(uuid.Nil))
+		Expect(uc.model.OrgID).To(Equal(uuid.Nil))
 		Expect(uc.model.TrainingRunID).To(Equal(uuid.Nil))
 		Expect(uc.model.DatasetID).To(Equal(uuid.Nil))
 		Expect(uc.model.ModelKind).To(Equal(model.ModelKindBase))
@@ -163,6 +173,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		err := listener.Handle(context.Background(), modelID, &modelregistrypb.ModelUpdatedEvent{
 			ModelId:       modelID.String(),
 			UserId:        uuid.NewString(),
+			OrgId:         uuid.NewString(),
 			TrainingRunId: uuid.NewString(),
 			DatasetId:     uuid.NewString(),
 			BaseModel:     "base-model",
@@ -200,6 +211,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 	It("maps a dataset updated event into the inference use case", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		rawSnapshotID := uuid.New()
 		featureSnapshotID := uuid.New()
 		embeddingSnapshotID := uuid.New()
@@ -209,6 +221,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:                datasetID.String(),
 			UserId:                   userID.String(),
+			OrgId:                    orgID.String(),
 			DatasetVersion:           5,
 			ProcessingState:          "EMBEDDINGS_MATERIALIZED",
 			StorageLocation:          "s3://lakehouse/features/movies.parquet",
@@ -238,6 +251,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.dataset.DatasetID).To(Equal(datasetID))
 		Expect(uc.dataset.UserID).To(Equal(userID))
+		Expect(uc.dataset.OrgID).To(Equal(orgID))
 		Expect(uc.dataset.DatasetVersion).To(Equal(5))
 		Expect(uc.dataset.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 		Expect(uc.dataset.RawSnapshotID).To(Equal(rawSnapshotID))
@@ -256,6 +270,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:       datasetID.String(),
 			UserId:          uuid.NewString(),
+			OrgId:           uuid.NewString(),
 			ProcessingState: "PENDING",
 		})
 
@@ -270,6 +285,7 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
 			DatasetId:       datasetID.String(),
 			UserId:          uuid.NewString(),
+			OrgId:           uuid.NewString(),
 			ProcessingState: "EMBEDDINGS_MATERIALIZED",
 			RawSnapshotId:   "not-a-uuid",
 		})

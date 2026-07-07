@@ -25,19 +25,21 @@ type lakehouseRegistryClientStub struct {
 	calls      int
 	datasetID  uuid.UUID
 	userID     uuid.UUID
+	orgID      uuid.UUID
 	snapshotID string
 	table      *dataregistrypb.ReadDatasetTableResponse
 	err        error
 }
 
-func (s *lakehouseRegistryClientStub) ReadSourceConnector(context.Context, uuid.UUID, uuid.UUID, string) (*dataregistrypb.SourceConnector, error) {
+func (s *lakehouseRegistryClientStub) ReadSourceConnector(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) (*dataregistrypb.SourceConnector, error) {
 	return nil, fmt.Errorf("should not be called")
 }
 
-func (s *lakehouseRegistryClientStub) ReadDatasetTable(_ context.Context, datasetID, userID uuid.UUID, snapshotID string) (*dataregistrypb.ReadDatasetTableResponse, error) {
+func (s *lakehouseRegistryClientStub) ReadDatasetTable(_ context.Context, datasetID, userID, orgID uuid.UUID, snapshotID string) (*dataregistrypb.ReadDatasetTableResponse, error) {
 	s.calls++
 	s.datasetID = datasetID
 	s.userID = userID
+	s.orgID = orgID
 	s.snapshotID = snapshotID
 	if s.err != nil {
 		return nil, s.err
@@ -59,6 +61,7 @@ var _ = Describe("lakehouse query engine", func() {
 		binaryPath := filepath.Join(tmpDir, "fake-datafusion")
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 
 		Expect(os.MkdirAll(filepath.Dir(localObjectPath), 0755)).To(Succeed())
 		Expect(os.WriteFile(localObjectPath, []byte("parquet"), 0600)).To(Succeed())
@@ -72,6 +75,7 @@ var _ = Describe("lakehouse query engine", func() {
 		client := &lakehouseRegistryClientStub{table: &dataregistrypb.ReadDatasetTableResponse{
 			DatasetId:       datasetID.String(),
 			UserId:          userID.String(),
+			OrgId:           orgID.String(),
 			StorageLocation: "s3://local-dev-bucket/lakehouse/features/movies/data.parquet",
 			TableNamespace:  "features",
 			TableName:       "movies",
@@ -85,7 +89,7 @@ var _ = Describe("lakehouse query engine", func() {
 			timeout:    time.Second,
 		}, time.Second)
 
-		result, err := engine.Execute(context.Background(), &flight.Ticket{Ticket: lakehouseCommand(userID, datasetID, "SELECT * FROM dataset LIMIT 2", "")})
+		result, err := engine.Execute(context.Background(), &flight.Ticket{Ticket: lakehouseCommand(userID, orgID, datasetID, "SELECT * FROM dataset LIMIT 2", "")})
 		Expect(err).NotTo(HaveOccurred())
 		defer func() {
 			for _, record := range result.Records {
@@ -97,6 +101,7 @@ var _ = Describe("lakehouse query engine", func() {
 		Expect(client.calls).To(Equal(1))
 		Expect(client.datasetID).To(Equal(datasetID))
 		Expect(client.userID).To(Equal(userID))
+		Expect(client.orgID).To(Equal(orgID))
 
 		argsBytes, err := os.ReadFile(argsPath)
 		Expect(err).NotTo(HaveOccurred())
@@ -110,6 +115,7 @@ var _ = Describe("lakehouse query engine", func() {
 		binaryPath := filepath.Join(tmpDir, "fake-datafusion")
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		Expect(os.WriteFile(binaryPath, []byte("#!/usr/bin/env sh\nprintf '%s\\n' \"$@\" > \"$FAKE_DATAFUSION_ARGS\"\necho 'iceberg unavailable' >&2\nexit 42\n"), 0700)).To(Succeed())
 		Expect(os.Setenv("FAKE_DATAFUSION_ARGS", argsPath)).To(Succeed())
 		DeferCleanup(os.Unsetenv, "FAKE_DATAFUSION_ARGS")
@@ -117,6 +123,7 @@ var _ = Describe("lakehouse query engine", func() {
 		client := &lakehouseRegistryClientStub{table: &dataregistrypb.ReadDatasetTableResponse{
 			DatasetId:       datasetID.String(),
 			UserId:          userID.String(),
+			OrgId:           orgID.String(),
 			StorageLocation: "s3://warehouse/features/movies",
 			TableNamespace:  "features",
 			TableName:       "movies",
@@ -142,7 +149,7 @@ var _ = Describe("lakehouse query engine", func() {
 
 		_, err := engine.GetSchema(context.Background(), &flight.FlightDescriptor{
 			Type: flight.DescriptorCMD,
-			Cmd:  lakehouseCommand(userID, datasetID, "SELECT * FROM dataset", ""),
+			Cmd:  lakehouseCommand(userID, orgID, datasetID, "SELECT * FROM dataset", ""),
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("run datafusion iceberg query engine")))
@@ -171,9 +178,11 @@ var _ = Describe("lakehouse query engine", func() {
 	It("fails closed for Polaris Iceberg queries without catalog credentials", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		client := &lakehouseRegistryClientStub{table: &dataregistrypb.ReadDatasetTableResponse{
 			DatasetId:       datasetID.String(),
 			UserId:          userID.String(),
+			OrgId:           orgID.String(),
 			StorageLocation: "s3://warehouse/features/movies",
 			TableNamespace:  "features",
 			TableName:       "movies",
@@ -197,7 +206,7 @@ var _ = Describe("lakehouse query engine", func() {
 
 		_, err := engine.GetSchema(context.Background(), &flight.FlightDescriptor{
 			Type: flight.DescriptorCMD,
-			Cmd:  lakehouseCommand(userID, datasetID, "SELECT * FROM dataset", ""),
+			Cmd:  lakehouseCommand(userID, orgID, datasetID, "SELECT * FROM dataset", ""),
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("polaris credential or token is required")))
@@ -215,9 +224,10 @@ var _ = Describe("lakehouse query engine", func() {
 	})
 })
 
-func lakehouseCommand(userID, datasetID uuid.UUID, sql, snapshotID string) []byte {
+func lakehouseCommand(userID, orgID, datasetID uuid.UUID, sql, snapshotID string) []byte {
 	payload := map[string]any{
 		"userId":    userID.String(),
+		"orgId":     orgID.String(),
 		"datasetId": datasetID.String(),
 		"sql":       sql,
 	}
