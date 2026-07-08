@@ -49,12 +49,12 @@ var _ = Describe("DatasetDB", func() {
 			Expect(args).To(HaveKeyWithValue("table_name", dataset.TableName))
 		})
 
-		It("returns a domain validation error when the tenant projection is missing", func() {
+		It("returns a dependency-not-ready error when the tenant projection is missing", func() {
 			pool.err = &pgconn.PgError{Code: "23503"}
 
 			err := repo.Upsert(ctx, dataset)
 
-			Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+			Expect(errors.Is(err, domain.ErrDependencyNotReady)).To(BeTrue())
 		})
 
 		It("wraps database errors", func() {

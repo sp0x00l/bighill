@@ -4,7 +4,7 @@
 
 `training_service` owns the training and evaluation workflow. It listens for dataset and preference-dataset facts, starts Temporal workflows, prepares training/evaluation requests, submits GPU jobs through the configured executor, and publishes training outcomes.
 
-The service is the control plane for model creation. Python/GPU work runs in `training_jobs`; durable orchestration stays in Temporal and Go.
+The service is the control plane for model creation. Python/GPU work runs in the service-owned `training_jobs` package; durable orchestration stays in Temporal and Go.
 
 ## MLOps / Platform Pieces
 

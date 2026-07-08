@@ -12,7 +12,7 @@ The Go control plane builds recipes and submits jobs; this package performs the 
 - Ragas-compatible evaluation support where configured.
 - External evaluator command hook for custom benchmark suites.
 - S3-compatible object storage for model artifacts, metrics, reports, and manifests.
-- Shared Go/Python job contract fixture under `training_jobs/contracts`.
+- Shared Go/Python job contract fixture under `training_service/test/training_jobs/contracts`.
 
 ## How It Fits
 
@@ -23,4 +23,4 @@ The Go control plane builds recipes and submits jobs; this package performs the 
 
 ## Local Development
 
-The package is built into `training-jobs.Dockerfile`. Unit tests should validate both Python behavior and the shared job contract so the Go env/manifest boundary does not drift.
+The package is built into `training-jobs.Dockerfile`. Unit tests live under `training_service/test/training_jobs` so test-only fixtures are kept out of the production job image.

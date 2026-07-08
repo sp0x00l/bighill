@@ -74,7 +74,7 @@ var _ = Describe("Training job contract", func() {
 })
 
 func readTrainingJobContract() trainingJobContract {
-	path := filepath.Join("..", "..", "..", "..", "training_jobs", "contracts", "training_job_contract.json")
+	path := filepath.Join("..", "..", "..", "test", "training_jobs", "contracts", "training_job_contract.json")
 	raw, err := os.ReadFile(path)
 	Expect(err).NotTo(HaveOccurred())
 	var spec trainingJobContract

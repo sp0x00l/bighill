@@ -53,7 +53,7 @@ func (db *DatasetDB) Upsert(ctx context.Context, dataset *model.Dataset) error {
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("database error. Failed to upsert dataset")
 		if coreDb.IsForeignKeyViolation(err) {
-			return domain.ErrValidationFailed.Extend("tenant projection is not ready")
+			return domain.ErrDependencyNotReady.Extend("tenant projection is not ready")
 		}
 		return fmt.Errorf("database error. Failed to upsert dataset: %w", err)
 	}

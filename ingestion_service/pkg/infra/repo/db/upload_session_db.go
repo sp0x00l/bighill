@@ -73,7 +73,7 @@ func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, tx pgx.Tx, s
 	out, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionDAO(session)))
 	if err != nil {
 		if coreDb.IsForeignKeyViolation(err) {
-			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
+			return nil, domain.ErrDependencyNotReady.Extend("tenant projection is not ready")
 		}
 		return nil, fmt.Errorf("create upload session: %w", err)
 	}
@@ -172,7 +172,7 @@ func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, tx pgx.Tx, up
 	recorded, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionDAO(session)))
 	if err != nil {
 		if coreDb.IsForeignKeyViolation(err) {
-			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
+			return nil, domain.ErrDependencyNotReady.Extend("tenant projection is not ready")
 		}
 		return nil, fmt.Errorf("record direct upload session: %w", err)
 	}
@@ -239,7 +239,7 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, tx pgx.Tx, s
 	recorded, err := scanUploadSession(tx.QueryRow(ctx, query, uploadSessionDAO(session)))
 	if err != nil {
 		if coreDb.IsForeignKeyViolation(err) {
-			return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
+			return nil, domain.ErrDependencyNotReady.Extend("tenant projection is not ready")
 		}
 		return nil, fmt.Errorf("record model artifact session: %w", err)
 	}

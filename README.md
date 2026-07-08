@@ -70,35 +70,48 @@ work stays in batch jobs behind clean boundaries.
 
 ## Runtime environments
 
-Services read the runtime mode from `ENVIRONMENT`. The accepted values are `LOCAL-DEV`, `CICD`,
-`STAGING`, and `PRODUCTION`; unset or unknown values are not treated as dev. `env.IsDevEnv()` is true
-only for `LOCAL-DEV` and `CICD`, so staging and production share the same fail-closed behavior.
+Services read the runtime mode from `ENVIRONMENT`. The repo-standard values used by `config.sh`
+files and Helm values are `local-dev`, `cicd`, `staging`, and `prod`; services trim and uppercase the
+value internally before comparing it as `LOCAL-DEV`, `CICD`, `STAGING`, or `PROD`. Unset or unknown
+values are not treated as dev. `env.IsDevEnv()` is true only for `local-dev` and `cicd`, so staging
+and prod share the same fail-closed behavior.
 
-| Environment | `IsDevEnv()` | External ML backends | Storage policy | Failure behavior |
-|-------------|--------------|----------------------|----------------|------------------|
-| `LOCAL-DEV` | true | Ollama/vLLM-compatible generation, TEI-compatible embeddings, TEI-compatible reranking | `local-dev-bucket` is allowed | Missing provider names, endpoints, or models fail service startup |
-| `CICD` | true | Same provider contracts as local, backed by test-owned protocol-compatible services where needed | Test-local buckets are allowed | Missing provider names, endpoints, or models fail service startup |
-| `STAGING` | false | Production-parity generation, embeddings, and reranking | `local-dev-bucket` is rejected | Same fail-closed startup policy as production |
-| `PRODUCTION` | false | Production generation, embeddings, and reranking | `local-dev-bucket` is rejected | Same fail-closed startup policy as staging |
+| Environment | `IsDevEnv()` | Runtime provider contract | Storage policy | Failure behavior |
+|-------------|--------------|---------------------------|----------------|------------------|
+| `local-dev` | true | Local-compatible generation, TEI-compatible embeddings, TEI-compatible reranking | `local-dev-bucket` is allowed | Missing provider names, endpoints, or models fail service startup |
+| `cicd` | true | Same provider contracts as local, backed by test-owned protocol-compatible services where needed | Test-local buckets are allowed | Missing provider names, endpoints, or models fail service startup |
+| `staging` | false | Production-parity generation, embeddings, and reranking | `local-dev-bucket` is rejected | Same fail-closed startup policy as prod |
+| `prod` | false | Production generation, embeddings, and reranking | `local-dev-bucket` is rejected | Same fail-closed startup policy as staging |
 
-The base Helm charts are local-dev oriented but still use the same runtime provider contract as
-staging and production. Local runs need reachable local-compatible services, for example Ollama for
-generation and TEI-compatible endpoints for embeddings and reranking.
+The provider contract is the same across environments: model records carry `serving_protocol`,
+`serving_target`, and `serving_model`, and `inference_service` dispatches to the matching generation
+adapter from that recorded state. What changes by environment is how that serving state is produced.
 
-The Kubernetes orchestration paths are different. The local-dev and CI service-script paths use
-local substitutes for control-plane integration points that otherwise require a cluster, CRDs, GPU
-nodes, or batch-job permissions. Staging and production use the Kubernetes-backed path.
+For local and CI service-script runs, `model_serving_service` uses
+`MODEL_SERVING_SERVICE_BACKEND=local`. That backend uses the shared local served-model store instead
+of Kubernetes resources. For base/shared models, it verifies that the requested Ollama tag is present
+through `/api/tags`; when the tag is available, it records `serving_protocol=OLLAMA_GENERATE`, the
+Ollama endpoint as `serving_target`, and the tag as `serving_model`. `inference_service` then calls
+Ollama's `/api/generate` endpoint. In this path, Ollama is the local model runtime, not the platform
+serving orchestrator.
 
-| Orchestrated path | `LOCAL-DEV` / `CICD` | `STAGING` / `PRODUCTION` |
-|-------------------|----------------------|---------------------------|
-| Model serving reconciliation | Local served-model store when using service scripts; no Kubernetes/vLLM required for local loops | Kubernetes `ServedModel` CRD, vLLM Deployment/Service reconciliation |
-| Model registry serving backend | Local served-model backend when using service scripts | Kubernetes `ServedModel` backend |
-| Training execution | Direct Ray Jobs API when using service scripts | KubeRay job creation from Temporal activities |
+The local backend verifies only base/shared tags. It does not convert or load
+fine-tuned `HF_PEFT_ADAPTER` artifacts into Ollama; that requires HF-PEFT to GGUF conversion plus
+`ollama create`. Ollama-style embeddings are supported through `/api/embed`, but the local default is
+the TEI-compatible embedding endpoint.
+
+Staging and prod use the Kubernetes-backed serving path. `model_serving_service` reconciles
+`ServedModel` resources into vLLM Deployment/Service resources and records
+`serving_protocol=OPENAI_CHAT_COMPLETIONS` for loaded vLLM runtimes. Base Helm values are
+local-dev oriented but can still default to Kubernetes-backed orchestrators; service scripts select
+the local substitutes. Use environment-specific values when the target is a non-Kubernetes local loop.
+
+| Orchestrated path | `local-dev` / `cicd` service scripts | `staging` / `prod` |
+|-------------------|--------------------------------------|--------------------|
+| Model serving reconciliation | Local served-model store; no Kubernetes/vLLM required for local loops | Kubernetes `ServedModel` CRD, vLLM Deployment/Service reconciliation |
+| Model registry serving backend | Local served-model backend | Kubernetes `ServedModel` backend |
+| Training execution | Direct Ray Jobs API | KubeRay job creation from Temporal activities |
 | Hugging Face model downloads | Local command execution | Kubernetes Job execution |
-
-Be careful with base Helm values: several local-dev charts still default to Kubernetes-backed
-orchestrators, while the service scripts select local substitutes. Use environment-specific values
-when the target is a non-Kubernetes local loop.
 
 ### Model-family serving boundary
 
@@ -113,9 +126,9 @@ The hard limitation is the serving protocol and runtime implementation boundary:
   those protocol/runtime implementations;
 - adding a new wire protocol does require a DB enum update, Go enum update, provisioning
   implementation, inference adapter registration, and tests;
-- local-dev does not yet load fine-tuned `HF_PEFT_ADAPTER` artifacts into Ollama. It only verifies
-  base/shared model tags. Fine-tuned local serving needs HF-PEFT to GGUF conversion plus
-  `ollama create`.
+- the local service-script backend does not yet load fine-tuned `HF_PEFT_ADAPTER` artifacts into
+  Ollama. It only verifies base/shared model tags. Fine-tuned local serving needs HF-PEFT to GGUF
+  conversion plus `ollama create`.
 
 ---
 
@@ -137,7 +150,7 @@ sequenceDiagram
     participant DR as data_registry
     participant FM as feature_materializer
     participant TR as training_service
-    participant RAY as Ray / training_jobs
+    participant RAY as Ray / training_service/training_jobs
     participant MR as model_registry
     participant SV as model_serving
     participant IF as inference_service
@@ -241,7 +254,7 @@ sequenceDiagram
    them, and returns a `training_run_id` immediately. The base model is carried as *data*, never as
    service config.
 6. **Train → evaluate.** A durable Temporal workflow prepares the data, runs the GPU training job on
-   Ray (`training_jobs`, Axolotl-style recipes), evaluates the result, and emits
+   Ray (`training_service/training_jobs`, Axolotl-style recipes), evaluates the result, and emits
    `model_training_completed`.
 7. **Promotion gate.** `model_registry` records the new model as a **CANDIDATE** — it is *not* served
    yet — and asks `training_service` for a promotion report (Deepchecks / Evidently). The gate then
@@ -272,7 +285,7 @@ sequenceDiagram
 | `feature_materializer_service/` | Snapshots, chunking, embeddings, pgvector search |
 | `data_stream_service/` | Arrow Flight query gateway + DataFusion executor (`internal/`) |
 | `training_service/` | Temporal training workflows (SFT/DPO), Ray/KubeRay dispatch |
-| `training_jobs/` | Python GPU jobs (Axolotl train, evaluation) run by Ray |
+| `training_service/training_jobs/` | Python GPU jobs (Axolotl train, evaluation) run by Ray |
 | `model_registry_service/` | Model records, promotion gating, serving intent + status, outbox |
 | `model_serving_service/` | K8s operator that reconciles serving to vLLM; `localserving` for dev |
 | `inference_service/` | RAG inference, retrieval/rerank/query-rewrite, generation, auditing, feedback |

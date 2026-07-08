@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
 	"ingestion_service/pkg/infra/network/adapter"
 	serviceRest "ingestion_service/pkg/infra/network/rest"
@@ -357,6 +358,39 @@ var _ = Describe("DataUploadHandlers", func() {
 		Expect(body).To(HaveKeyWithValue("hf_repo_id", "meta-llama/Llama-3.1-8B"))
 		Expect(body).To(HaveKeyWithValue("hf_revision", "main"))
 		Expect(body).To(HaveKeyWithValue("hf_commit_sha", "abc123"))
+	})
+
+	It("returns service unavailable when Hugging Face onboarding waits on tenant projection", func() {
+		uploadUseCase.err = domain.ErrDependencyNotReady.Extend("tenant projection is not ready")
+		resourceID := uuid.New()
+		req := httptest.NewRequest(http.MethodPost, "/v1/models/onboard/huggingface", bytes.NewReader([]byte(`{"resource_id":"`+resourceID.String()+`","repo_id":"meta-llama/Llama-3.1-8B","revision":"main","client_nonce":"hf-1","model_name":"llama","model_version":"1","base_model":"meta-llama/Llama-3.1-8B"}`)))
+
+		response, err := handler.OnboardHuggingFaceModel(context.Background(), req)
+
+		Expect(response).To(BeNil())
+		Expect(err).To(MatchError("tenant projection is not ready"))
+		httpErr, ok := err.(*serviceRest.HTTPError)
+		Expect(ok).To(BeTrue())
+		Expect(httpErr.StatusCode()).To(Equal(http.StatusServiceUnavailable))
+	})
+
+	It("pipes Hugging Face response codes back to the caller", func() {
+		uploadUseCase.err = &domain.ExternalProviderError{
+			Provider:   "Hugging Face",
+			StatusCode: http.StatusForbidden,
+			Code:       "GATED_REPO",
+			Message:    "Access to model meta-llama/Meta-Llama-3-8B is restricted",
+		}
+		resourceID := uuid.New()
+		req := httptest.NewRequest(http.MethodPost, "/v1/models/onboard/huggingface", bytes.NewReader([]byte(`{"resource_id":"`+resourceID.String()+`","repo_id":"meta-llama/Meta-Llama-3-8B","revision":"main","client_nonce":"hf-1","model_name":"llama","model_version":"1","base_model":"meta-llama/Meta-Llama-3-8B"}`)))
+
+		response, err := handler.OnboardHuggingFaceModel(context.Background(), req)
+
+		Expect(response).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("Hugging Face returned 403 (GATED_REPO)")))
+		httpErr, ok := err.(*serviceRest.HTTPError)
+		Expect(ok).To(BeTrue())
+		Expect(httpErr.StatusCode()).To(Equal(http.StatusForbidden))
 	})
 
 	It("accepts PDF uploads at the REST boundary", func() {

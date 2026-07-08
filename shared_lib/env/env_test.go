@@ -264,27 +264,30 @@ var _ = Describe("environment variables", func() {
 			})
 
 			It("recognizes local dev and cicd as dev environments", func() {
-				Expect(os.Setenv("ENVIRONMENT", "LOCAL-DEV")).To(Succeed())
+				Expect(os.Setenv("ENVIRONMENT", "local-dev")).To(Succeed())
 				config.ResetEnvironmentCache()
 				Expect(config.IsKnownEnvironment()).To(BeTrue())
 				Expect(config.IsDevEnv()).To(BeTrue())
+				Expect(config.IsLocalDev()).To(BeTrue())
 
-				Expect(os.Setenv("ENVIRONMENT", "CICD")).To(Succeed())
+				Expect(os.Setenv("ENVIRONMENT", "cicd")).To(Succeed())
 				config.ResetEnvironmentCache()
 				Expect(config.IsKnownEnvironment()).To(BeTrue())
 				Expect(config.IsDevEnv()).To(BeTrue())
 			})
 
-			It("does not treat staging or production as dev environments", func() {
-				Expect(os.Setenv("ENVIRONMENT", "STAGING")).To(Succeed())
+			It("does not treat staging or prod as dev environments", func() {
+				Expect(os.Setenv("ENVIRONMENT", "staging")).To(Succeed())
 				config.ResetEnvironmentCache()
 				Expect(config.IsKnownEnvironment()).To(BeTrue())
 				Expect(config.IsDevEnv()).To(BeFalse())
+				Expect(config.IsStaging()).To(BeTrue())
 
-				Expect(os.Setenv("ENVIRONMENT", "PRODUCTION")).To(Succeed())
+				Expect(os.Setenv("ENVIRONMENT", "prod")).To(Succeed())
 				config.ResetEnvironmentCache()
 				Expect(config.IsKnownEnvironment()).To(BeTrue())
 				Expect(config.IsDevEnv()).To(BeFalse())
+				Expect(config.IsProduction()).To(BeTrue())
 			})
 
 			It("fails loudly for unknown environments", func() {

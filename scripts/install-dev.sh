@@ -141,7 +141,7 @@ install_python_tooling()
     echo "installing Python developer tooling"
     pyenv exec python -m pip install --upgrade pip
     pyenv exec python -m pip install --upgrade aws-sam-cli grpcio-tools
-    pyenv exec python -m pip install --upgrade -e "$ROOT_DIR/training_jobs[runtime]"
+    pyenv exec python -m pip install --upgrade -e "$ROOT_DIR/training_service/training_jobs[runtime]"
     pyenv rehash
 }
 

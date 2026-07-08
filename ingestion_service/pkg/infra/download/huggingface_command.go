@@ -63,6 +63,15 @@ type huggingFaceDownloadResult struct {
 	HFCommitSHA       string `json:"hf_commit_sha"`
 }
 
+type huggingFaceCommandError struct {
+	Provider   string `json:"provider"`
+	HTTPStatus int    `json:"http_status"`
+	ErrorCode  string `json:"error_code"`
+	Message    string `json:"message"`
+	RepoID     string `json:"repo_id"`
+	Revision   string `json:"revision"`
+}
+
 func NewHuggingFaceCommandDownloader(config HuggingFaceCommandDownloaderConfig) (*HuggingFaceCommandDownloader, error) {
 	log.Trace("NewHuggingFaceCommandDownloader")
 
@@ -86,6 +95,9 @@ func (d *HuggingFaceCommandDownloader) DownloadHuggingFaceModel(ctx context.Cont
 		Timeout: d.timeout,
 	})
 	if err != nil {
+		if providerErr, ok := providerErrorFromCommandStderr(runResult.Stderr); ok {
+			return nil, providerErr
+		}
 		return nil, fmt.Errorf("%w: hugging face download command failed: %w: %s", domain.ErrValidationFailed, err, strings.TrimSpace(runResult.Stderr))
 	}
 	var downloadResult huggingFaceDownloadResult
@@ -93,6 +105,36 @@ func (d *HuggingFaceCommandDownloader) DownloadHuggingFaceModel(ctx context.Cont
 		return nil, fmt.Errorf("%w: parse hugging face download result: %w", domain.ErrValidationFailed, err)
 	}
 	return downloadResultToArtifact(request, downloadResult)
+}
+
+func providerErrorFromCommandStderr(stderr string) (*domain.ExternalProviderError, bool) {
+	log.Trace("providerErrorFromCommandStderr")
+
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var payload huggingFaceCommandError
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			continue
+		}
+		if strings.TrimSpace(payload.ErrorCode) == "" && payload.HTTPStatus == 0 {
+			continue
+		}
+		provider := strings.TrimSpace(payload.Provider)
+		if provider == "" {
+			provider = "Hugging Face"
+		}
+		return &domain.ExternalProviderError{
+			Provider:   provider,
+			StatusCode: payload.HTTPStatus,
+			Code:       strings.TrimSpace(payload.ErrorCode),
+			Message:    strings.TrimSpace(payload.Message),
+		}, true
+	}
+	return nil, false
 }
 
 func (k HuggingFaceJobEnvKeys) trimmed() HuggingFaceJobEnvKeys {

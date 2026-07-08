@@ -2,11 +2,13 @@ package download_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
 	"ingestion_service/pkg/infra/download"
 
@@ -56,6 +58,40 @@ printf '{"resource_id":"%s","storage_location":"s3://bucket/models/%s/snapshot",
 		Expect(result.ResourceID).To(Equal(resourceID))
 		Expect(result.StorageLocation).To(Equal("s3://bucket/models/" + resourceID.String() + "/snapshot"))
 		Expect(result.HFCommitSHA).To(Equal("abc"))
+	})
+
+	It("maps structured Hugging Face command errors to provider errors", func() {
+		dir := GinkgoT().TempDir()
+		script := filepath.Join(dir, "hf-download")
+		Expect(os.WriteFile(script, []byte(`#!/usr/bin/env sh
+printf 'progress before failure\n' >&2
+printf '{"provider":"Hugging Face","http_status":403,"error_code":"GATED_REPO","message":"Access to model meta-llama/Meta-Llama-3-8B is restricted","repo_id":"meta-llama/Meta-Llama-3-8B","revision":"main"}\n' >&2
+exit 1
+`), 0o755)).To(Succeed())
+		downloader, err := download.NewHuggingFaceCommandDownloader(download.HuggingFaceCommandDownloaderConfig{
+			Command:   script,
+			OutputURI: "s3://bucket/models",
+			Timeout:   10 * time.Second,
+			EnvKeys:   testHuggingFaceJobEnvKeys(),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = downloader.DownloadHuggingFaceModel(context.Background(), model.OnboardHuggingFaceModelRequest{
+			ResourceID:       uuid.New(),
+			RepoID:           "meta-llama/Meta-Llama-3-8B",
+			Revision:         "main",
+			ModelName:        "llama",
+			ModelVersion:     "1",
+			BaseModel:        "meta-llama/Meta-Llama-3-8B",
+			HuggingFaceToken: "hf-token",
+		})
+
+		var providerErr *domain.ExternalProviderError
+		Expect(errors.As(err, &providerErr)).To(BeTrue())
+		Expect(providerErr.Provider).To(Equal("Hugging Face"))
+		Expect(providerErr.StatusCode).To(Equal(403))
+		Expect(providerErr.Code).To(Equal("GATED_REPO"))
+		Expect(providerErr.Error()).To(ContainSubstring("Hugging Face returned 403 (GATED_REPO)"))
 	})
 })
 

@@ -103,12 +103,27 @@ func ErrInternalServer() *HTTPError {
 	return &HTTPError{statusCode: http.StatusInternalServerError, message: http.StatusText(http.StatusInternalServerError)}
 }
 
+func ErrBadGateway() *HTTPError {
+	return &HTTPError{statusCode: http.StatusBadGateway, message: http.StatusText(http.StatusBadGateway)}
+}
+
+func ErrServiceUnavailable() *HTTPError {
+	return &HTTPError{statusCode: http.StatusServiceUnavailable, message: http.StatusText(http.StatusServiceUnavailable)}
+}
+
 func ErrUnauthorized() *HTTPError {
 	return &HTTPError{statusCode: http.StatusUnauthorized, message: http.StatusText(http.StatusUnauthorized)}
 }
 
 func ErrNotFound() *HTTPError {
 	return &HTTPError{statusCode: http.StatusNotFound, message: http.StatusText(http.StatusNotFound)}
+}
+
+func ErrExternalProviderStatus(providerStatus int) *HTTPError {
+	if providerStatus >= http.StatusBadRequest && providerStatus < http.StatusInternalServerError {
+		return &HTTPError{statusCode: providerStatus, message: http.StatusText(providerStatus)}
+	}
+	return ErrBadGateway()
 }
 
 func (e *HTTPError) Error() string {
@@ -123,6 +138,10 @@ func (e *HTTPError) Error() string {
 
 func (e *HTTPError) Unwrap() error {
 	return e.cause
+}
+
+func (e *HTTPError) StatusCode() int {
+	return e.statusCode
 }
 
 func (e *HTTPError) Wrap(err error) *HTTPError {

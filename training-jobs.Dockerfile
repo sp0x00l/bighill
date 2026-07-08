@@ -17,8 +17,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git build-essential curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY ./training_jobs/pyproject.toml ./pyproject.toml
-COPY ./training_jobs/training_jobs ./training_jobs
+COPY ./training_service/training_jobs/pyproject.toml ./pyproject.toml
+COPY ./training_service/training_jobs/training_jobs ./training_jobs
 
 RUN pip install --upgrade pip && \
     pip install ".[runtime]" && \

@@ -15,7 +15,7 @@ const (
 	devbuild     = "LOCAL-DEV"
 	cicdBuild    = "CICD"
 	stagingBuild = "STAGING"
-	prodBuild    = "PRODUCTION"
+	prodBuild    = "PROD"
 )
 
 var (

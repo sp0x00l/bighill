@@ -17,6 +17,7 @@ test()
     cd $BIGHILL_ROOT/training_service
     . ./scripts/config.sh $1
     ginkgo -timeout=120s -r -v --output-dir=../test_results/training_service -procs=1 -race
+    PYTHONPATH="$BIGHILL_ROOT/training_service/training_jobs" python3 -m unittest discover -s "$BIGHILL_ROOT/training_service/test/training_jobs/tests" -p '*_test.py'
 
     echo "training service test complete"
     cd $CURRENT_DIR

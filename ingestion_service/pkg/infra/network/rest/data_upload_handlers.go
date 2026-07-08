@@ -560,8 +560,15 @@ func (h *DataUploadHandlers) resolveInitiateUploadFormat(ctx context.Context, fi
 }
 
 func (h *DataUploadHandlers) uploadError(ctx context.Context, err error, message string) error {
+	var providerErr *domain.ExternalProviderError
+	if errors.As(err, &providerErr) {
+		return ErrExternalProviderStatus(providerErr.StatusCode).Wrap(err).WithMessage(providerErr.Error())
+	}
 	if errors.Is(err, domain.ErrResourceNotFound) {
 		return ErrNotFound().WithMessage("Upload session not found")
+	}
+	if errors.Is(err, domain.ErrDependencyNotReady) {
+		return ErrServiceUnavailable().Wrap(err).WithMessage(err.Error())
 	}
 	if errors.Is(err, domain.ErrValidationFailed) {
 		return ErrBadRequest().Wrap(err).WithMessage(err.Error())

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -73,7 +74,49 @@ def validate_snapshot(snapshot_dir: Path) -> None:
         raise RuntimeError("downloaded Hugging Face model is missing safetensors weights")
 
 
-def main() -> None:
+def provider_status(err: Exception) -> int:
+    response = getattr(err, "response", None)
+    return int(getattr(response, "status_code", 0) or 0)
+
+
+def provider_message(err: Exception) -> str:
+    lines = [line.strip() for line in str(err).splitlines() if line.strip()]
+    return lines[-1] if lines else err.__class__.__name__
+
+
+def hugging_face_error_code(err: Exception, status: int) -> str:
+    name = err.__class__.__name__
+    if name == "GatedRepoError":
+        return "GATED_REPO"
+    if name == "RepositoryNotFoundError":
+        return "REPO_NOT_FOUND"
+    if status == 401:
+        return "UNAUTHORIZED"
+    if status == 403:
+        return "FORBIDDEN"
+    if status == 404:
+        return "NOT_FOUND"
+    if status == 429:
+        return "RATE_LIMITED"
+    if status >= 500:
+        return "SERVER_ERROR"
+    return "HTTP_ERROR" if status else "HUGGING_FACE_ERROR"
+
+
+def emit_provider_error(err: Exception, *, repo_id: str, revision: str) -> None:
+    status = provider_status(err)
+    payload = {
+        "provider": "Hugging Face",
+        "http_status": status,
+        "error_code": hugging_face_error_code(err, status),
+        "message": provider_message(err),
+        "repo_id": repo_id,
+        "revision": revision,
+    }
+    print(json.dumps(payload, sort_keys=True), file=sys.stderr)
+
+
+def run() -> None:
     resource_id = require_env("INGESTION_SERVICE_MODEL_RESOURCE_ID")
     repo_id = require_env("INGESTION_SERVICE_HUGGINGFACE_REPO_ID")
     revision = optional_env("INGESTION_SERVICE_HUGGINGFACE_REVISION", "main")
@@ -117,6 +160,28 @@ def main() -> None:
         }
         storage.write_json_bytes(manifest_uri, json.dumps(manifest, sort_keys=True).encode("utf-8"), storage_config)
         print(json.dumps(manifest, sort_keys=True))
+
+
+def main() -> None:
+    repo_id = os.environ.get("INGESTION_SERVICE_HUGGINGFACE_REPO_ID", "").strip()
+    revision = os.environ.get("INGESTION_SERVICE_HUGGINGFACE_REVISION", "main").strip() or "main"
+    try:
+        run()
+    except Exception as err:
+        module = err.__class__.__module__
+        if module.startswith("huggingface_hub"):
+            emit_provider_error(err, repo_id=repo_id, revision=revision)
+        else:
+            payload = {
+                "provider": "Hugging Face",
+                "http_status": 0,
+                "error_code": "ONBOARDING_FAILED",
+                "message": provider_message(err),
+                "repo_id": repo_id,
+                "revision": revision,
+            }
+            print(json.dumps(payload, sort_keys=True), file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

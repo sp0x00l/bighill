@@ -33,11 +33,13 @@ var _ = Describe("HTTPError", func() {
 
 		Expect(err.Error()).To(Equal("bad payload"))
 		Expect(errors.Is(err, cause)).To(BeTrue())
+		Expect(err.StatusCode()).To(Equal(http.StatusBadRequest))
 	})
 
 	It("uses standard messages for uncustomized errors", func() {
 		Expect(serviceRest.ErrUnauthorized().Error()).To(Equal(http.StatusText(http.StatusUnauthorized)))
 		Expect(serviceRest.ErrInternalServer().Error()).To(Equal(http.StatusText(http.StatusInternalServerError)))
 		Expect(serviceRest.ErrNotFound().Error()).To(Equal(http.StatusText(http.StatusNotFound)))
+		Expect(serviceRest.ErrServiceUnavailable().Error()).To(Equal(http.StatusText(http.StatusServiceUnavailable)))
 	})
 })

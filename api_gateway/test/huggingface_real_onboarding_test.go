@@ -2,8 +2,12 @@ package test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	profilepb "lib/data_contracts_lib/profile"
+	env "lib/shared_lib/env"
+	msgConn "lib/shared_lib/messaging"
 	"net/http"
 	"os"
 	"strings"
@@ -21,7 +25,7 @@ const (
 	realHuggingFaceRevisionEnv    = "BIGHILL_E2E_HUGGINGFACE_REVISION"
 	realHuggingFaceBaseModelEnv   = "BIGHILL_E2E_HUGGINGFACE_BASE_MODEL"
 	realHuggingFaceTimeoutEnv     = "BIGHILL_E2E_HUGGINGFACE_TIMEOUT_SECONDS"
-	defaultRealHuggingFaceRepoID  = "meta-llama/Llama-3-8B"
+	defaultRealHuggingFaceRepoID  = "meta-llama/Meta-Llama-3-8B"
 	defaultRealHuggingFaceTimeout = 90 * time.Minute
 )
 
@@ -38,14 +42,32 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 		baseModel := envOrDefault(realHuggingFaceBaseModelEnv, repoID)
 		timeout := durationEnvOrDefault(realHuggingFaceTimeoutEnv, defaultRealHuggingFaceTimeout)
 		modelName := "hf-real-e2e-" + sanitizeModelName(repoID) + "-" + uuid.NewString()[:8]
+		clientNonce := "hf-real-" + uuid.NewString()
+
+		profileTopic := env.WithDefaultString("PROFILE_SERVICE_KAFKA_PUBLISHER_TOPIC", "profile")
+		profileSubscriber, startProfileSubscriber, stopProfileSubscriber := newKafkaAssertsSubscriber(context.Background(), topicList(profileTopic))
+		defer stopProfileSubscriber()
+		profileCreatedEvents := newKafkaEventCollector(msgConn.MsgTypeUserCreated, func() *profilepb.UserCreatedEvent {
+			return &profilepb.UserCreatedEvent{}
+		})
+		profileUpdatedEvents := newKafkaEventCollector(msgConn.MsgTypeUserUpdated, func() *profilepb.UserUpdatedEvent {
+			return &profilepb.UserUpdatedEvent{}
+		})
+		msgConn.AddListener(profileSubscriber, profileCreatedEvents)
+		msgConn.AddListener(profileSubscriber, profileUpdatedEvents)
+		startProfileSubscriber()
 
 		user := createVerifiedProfileAndLogin()
+		profileCreatedEvents.waitFor(user.ID, 30*time.Second, nil)
 		replaceHuggingFaceToken(user, token)
+		profileUpdatedEvents.waitFor(user.ID, 30*time.Second, func(event *profilepb.UserUpdatedEvent) bool {
+			return strings.TrimSpace(event.GetHuggingfaceTokenCiphertext()) != ""
+		})
 
 		status, body := doJSONWithTimeout(http.MethodPost, "/v1/private/models/onboard/huggingface", map[string]any{
 			"repo_id":       repoID,
 			"revision":      revision,
-			"client_nonce":  "hf-real-" + uuid.NewString(),
+			"client_nonce":  clientNonce,
 			"model_name":    modelName,
 			"model_version": "1",
 			"base_model":    baseModel,

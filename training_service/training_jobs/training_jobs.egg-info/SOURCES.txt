@@ -1,0 +1,16 @@
+README.md
+pyproject.toml
+training_jobs/__init__.py
+training_jobs/config.py
+training_jobs/evaluate.py
+training_jobs/manifest.py
+training_jobs/model_onboard.py
+training_jobs/process.py
+training_jobs/promotion_report.py
+training_jobs/storage.py
+training_jobs/train.py
+training_jobs.egg-info/PKG-INFO
+training_jobs.egg-info/SOURCES.txt
+training_jobs.egg-info/dependency_links.txt
+training_jobs.egg-info/requires.txt
+training_jobs.egg-info/top_level.txt
