@@ -163,6 +163,9 @@ var _ = Describe("Model type conversions", func() {
 		Entry("standard draft", "standard", model.Standard, "draft", model.Draft),
 		Entry("community published", "community", model.Community, "published", model.Published),
 		Entry("standard blacklisted", "standard", model.Standard, "blacklisted", model.Blacklisted),
+		Entry("db standard draft", "STANDARD", model.Standard, "DRAFT", model.Draft),
+		Entry("db community published", "COMMUNITY", model.Community, "PUBLISHED", model.Published),
+		Entry("db standard blacklisted", "STANDARD", model.Standard, "BLACKLISTED", model.Blacklisted),
 	)
 
 	It("rejects unknown origin and status values", func() {
@@ -176,9 +179,14 @@ var _ = Describe("Model type conversions", func() {
 	It("renders known origin, status, and filter values", func() {
 		Expect(model.Standard.String()).To(Equal("standard"))
 		Expect(model.Community.String()).To(Equal("community"))
+		Expect(model.Standard.DBString()).To(Equal("STANDARD"))
+		Expect(model.Community.DBString()).To(Equal("COMMUNITY"))
 		Expect(model.Draft.String()).To(Equal("draft"))
 		Expect(model.Published.String()).To(Equal("published"))
 		Expect(model.Blacklisted.String()).To(Equal("blacklisted"))
+		Expect(model.Draft.DBString()).To(Equal("DRAFT"))
+		Expect(model.Published.DBString()).To(Equal("PUBLISHED"))
+		Expect(model.Blacklisted.DBString()).To(Equal("BLACKLISTED"))
 		Expect(model.FilterByCategory.String()).To(Equal("category"))
 		Expect(model.FilterByInvalid.String()).To(Equal("invalid"))
 	})

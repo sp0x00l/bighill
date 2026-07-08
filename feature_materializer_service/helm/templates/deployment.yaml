@@ -74,6 +74,10 @@ spec:
               value: {{ .Values.env.temporalNamespace | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_TEMPORAL_TASK_QUEUE
               value: {{ .Values.env.temporalTaskQueue | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS
+              value: {{ .Values.env.temporalConnectTimeoutSeconds | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS
+              value: {{ .Values.env.temporalConnectRetryIntervalSeconds | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME
               value: {{ .Values.env.artifactBucketName | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_REGION

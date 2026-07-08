@@ -19,8 +19,7 @@ install()
     cd "$PROJECT_ROOT/pdf_extractor_lib"
     rm -f go.mod go.sum
 
-    go mod init pdf_extractor_lib
-    go mod edit -replace lib/pdf_extractor_lib=../pdf_extractor_lib
+    go mod init lib/pdf_extractor_lib
     go mod edit -replace lib/shared_lib=../shared_lib
 
     go install -mod=mod github.com/onsi/ginkgo/v2/ginkgo@latest
@@ -31,4 +30,3 @@ install()
 }
 
 install
-

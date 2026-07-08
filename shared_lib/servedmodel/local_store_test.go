@@ -61,6 +61,24 @@ var _ = Describe("Store", func() {
 		Expect(record.Status.ServingLoadStatus).To(Equal("LOADED"))
 	})
 
+	It("deletes one served model record without clearing the store", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
+		store, err := servedmodel.NewStore(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(store.UpsertSpec("served-model-one", "default", servedmodel.Spec{ModelID: "model-one"})).To(Succeed())
+		Expect(store.UpsertSpec("served-model-two", "default", servedmodel.Spec{ModelID: "model-two"})).To(Succeed())
+
+		Expect(store.Delete("served-model-one")).To(Succeed())
+
+		_, ok, err := store.Read("served-model-one")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+		record, ok, err := store.Read("served-model-two")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(record.Spec.ModelID).To(Equal("model-two"))
+	})
+
 	It("rejects status writes for stale generations", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
 		store, err := servedmodel.NewStore(path)

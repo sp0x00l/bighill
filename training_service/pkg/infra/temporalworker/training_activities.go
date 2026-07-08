@@ -11,6 +11,8 @@ import (
 	"training_service/pkg/domain"
 	"training_service/pkg/domain/model"
 
+	sharedDomain "lib/shared_lib/domain"
+
 	log "github.com/sirupsen/logrus"
 )
 
@@ -188,6 +190,10 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 		trainingProfile.PreferenceDatasetURI = strings.TrimSpace(request.PreferenceDatasetURI)
 	}
 	if strings.EqualFold(strings.TrimSpace(trainingProfile.Trainer), "dpo") {
+		sourceModelKind := sharedDomain.ToModelKind(request.SourceModelKind)
+		if !sharedDomain.IsKnownModelKind(sourceModelKind) {
+			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("source model kind is required")
+		}
 		if strings.TrimSpace(request.PreferenceDatasetID) == "" {
 			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("preference dataset id is required")
 		}
@@ -197,8 +203,11 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 		if strings.TrimSpace(request.ParentModelVersion) == "" {
 			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("parent model version is required")
 		}
-		if strings.TrimSpace(request.ParentAdapterURI) == "" {
-			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("parent adapter uri is required")
+		if sourceModelKind == sharedDomain.ModelKindFineTuned && strings.TrimSpace(request.ParentAdapterURI) == "" {
+			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("fine-tuned parent adapter uri is required")
+		}
+		if sourceModelKind == sharedDomain.ModelKindBase && strings.TrimSpace(request.ParentAdapterURI) != "" {
+			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("base parent adapter uri must be empty")
 		}
 		if trainingProfile.DPOBeta <= 0 {
 			return model.TrainingJobSpec{}, domain.ErrTrainModel.Extend("dpo beta must be greater than zero")
@@ -359,6 +368,10 @@ func axolotlDPORecipeYAML(spec model.TrainingJobSpec) string {
 
 	profile := spec.TrainingProfile
 	parentAdapterURI := strings.TrimSpace(spec.ParentAdapterURI)
+	parentAdapterConfig := ""
+	if parentAdapterURI != "" {
+		parentAdapterConfig = fmt.Sprintf("lora_model_dir: %s\n", parentAdapterURI)
+	}
 	preferenceDatasetURI := strings.TrimSpace(profile.PreferenceDatasetURI)
 	if preferenceDatasetURI == "" {
 		preferenceDatasetURI = strings.TrimSpace(spec.DatasetURI)
@@ -381,7 +394,7 @@ rl_beta: %.8g
 parent_model_id: %s
 parent_model_version: %s
 preference_dataset_id: %s
-lora_model_dir: %s
+%s
 datasets:
   - path: %s
     type: chat_template.default
@@ -397,7 +410,7 @@ micro_batch_size: %d
 gradient_accumulation_steps: %d
 lora_r: %d
 lora_alpha: %d
-`, spec.BaseModel, spec.ModelName, spec.ModelVersion, profile.Name, profile.DPOBeta, profile.DPOBeta, spec.ParentModelID, spec.ParentModelVersion, spec.PreferenceDatasetID, parentAdapterURI, preferenceDatasetURI, spec.ModelURI, profile.Adapter, quantization, profile.SequenceLength, profile.LearningRate, profile.Epochs, profile.MicroBatchSize, profile.GradientAccumulationSteps, profile.LoRAR, profile.LoRAAlpha)
+`, spec.BaseModel, spec.ModelName, spec.ModelVersion, profile.Name, profile.DPOBeta, profile.DPOBeta, spec.ParentModelID, spec.ParentModelVersion, spec.PreferenceDatasetID, parentAdapterConfig, preferenceDatasetURI, spec.ModelURI, profile.Adapter, quantization, profile.SequenceLength, profile.LearningRate, profile.Epochs, profile.MicroBatchSize, profile.GradientAccumulationSteps, profile.LoRAR, profile.LoRAAlpha)
 }
 
 func deterministicSubmissionID(prefix, trainingRunID, hash string) string {

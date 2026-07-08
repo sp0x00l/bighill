@@ -26,12 +26,14 @@ var _ = Describe("DatasetDAO", func() {
 		ctx       context.Context
 		datasetID uuid.UUID
 		userID    uuid.UUID
+		orgID     uuid.UUID
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		datasetID = uuid.New()
 		userID = uuid.New()
+		orgID = uuid.New()
 	})
 
 	It("maps domain datasets to database arguments", func() {
@@ -60,19 +62,22 @@ var _ = Describe("DatasetDAO", func() {
 		Expect(args["id"]).To(Equal(pgtype.UUID{Bytes: datasetID, Valid: true}))
 		Expect(args["user_id"]).To(Equal(pgtype.UUID{Bytes: userID, Valid: true}))
 		Expect(args["title"]).To(Equal(pgtype.Text{String: "Movies", Valid: true}))
+		Expect(args["origin"]).To(Equal(pgtype.Text{String: "STANDARD", Valid: true}))
+		Expect(args["status"]).To(Equal(pgtype.Text{String: "DRAFT", Valid: true}))
 		Expect(args["table_format"]).To(Equal(pgtype.Text{String: "PARQUET", Valid: true}))
 		Expect(args["processing_profile"]).To(Equal(pgtype.Text{String: "TEXT_RAG_PROCESSING_PROFILE", Valid: true}))
 		Expect(args["raw_snapshot_id"]).To(Equal(pgtype.UUID{Bytes: rawSnapshotID, Valid: true}))
 	})
 
 	It("maps database rows to domain datasets", func() {
-		dao := validDatasetDAO(datasetID, userID)
+		dao := validDatasetDAO(datasetID, userID, orgID)
 
 		dataset, err := fromDAO(ctx, dao)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dataset.ID).To(Equal(datasetID))
 		Expect(dataset.UserID).To(Equal(userID))
+		Expect(dataset.OrgID).To(Equal(orgID))
 		Expect(dataset.Title).To(Equal("Movies"))
 		Expect(dataset.TableFormat).To(Equal(model.Parquet))
 		Expect(dataset.CatalogProvider).To(Equal(model.LocalCatalog))
@@ -81,7 +86,7 @@ var _ = Describe("DatasetDAO", func() {
 	})
 
 	It("maps scanned database rows to dataset DAOs", func() {
-		dao := validDatasetDAO(datasetID, userID)
+		dao := validDatasetDAO(datasetID, userID, orgID)
 
 		got, err := toDatasetDAO(&datasetRowStub{dao: dao})
 
@@ -99,7 +104,7 @@ var _ = Describe("DatasetDAO", func() {
 	})
 
 	It("rejects invalid database enum values", func() {
-		dao := validDatasetDAO(datasetID, userID)
+		dao := validDatasetDAO(datasetID, userID, orgID)
 		dao.Status = pgtype.Text{String: "not-a-status", Valid: true}
 
 		_, err := fromDAO(ctx, dao)
@@ -258,16 +263,16 @@ func (u unserializableConnectorConfig) GetStorageType() model.StorageType {
 	return model.Postgres
 }
 
-func validDatasetDAO(datasetID, userID uuid.UUID) *DatasetDAO {
+func validDatasetDAO(datasetID, userID, orgID uuid.UUID) *DatasetDAO {
 	return &DatasetDAO{
 		ID:                  pgtype.UUID{Bytes: datasetID, Valid: true},
 		UserID:              pgtype.UUID{Bytes: userID, Valid: true},
-		OrgID:               pgtype.UUID{Bytes: userID, Valid: true},
+		OrgID:               pgtype.UUID{Bytes: orgID, Valid: true},
 		Title:               pgtype.Text{String: "Movies", Valid: true},
 		Description:         pgtype.Text{String: "Movie rows", Valid: true},
-		Origin:              pgtype.Text{String: model.Standard.String(), Valid: true},
+		Origin:              pgtype.Text{String: model.Standard.DBString(), Valid: true},
 		Location:            pgtype.Text{String: "s3://bucket/raw/movies.parquet", Valid: true},
-		Status:              pgtype.Text{String: model.Draft.String(), Valid: true},
+		Status:              pgtype.Text{String: model.Draft.DBString(), Valid: true},
 		Category:            pgtype.Text{String: "rag", Valid: true},
 		TableNamespace:      pgtype.Text{String: "features", Valid: true},
 		TableName:           pgtype.Text{String: "movies", Valid: true},

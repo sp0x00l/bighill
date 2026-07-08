@@ -153,8 +153,18 @@ var _ = Describe("Model registry integration", Ordered, func() {
 	})
 
 	It("rejects writes for users that have not been projected into the service database", func() {
-		_, err := modelsUse.RegisterModel(ctx, validIntegrationModel(), uuid.New())
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		modelRecord := validIntegrationModel()
+		Expect(modelRecord.ModelKind).To(Equal(model.ModelKindFineTuned))
+		var projected bool
+		Expect(database.Pool.QueryRow(ctxutil.WithSystemContext(ctx), `
+			SELECT EXISTS (
+				SELECT 1 FROM `+database.Name+`.tenants WHERE id = $1
+			)
+		`, modelRecord.UserID).Scan(&projected)).To(Succeed())
+		Expect(projected).To(BeFalse())
+
+		_, err := modelsUse.RegisterModel(ctx, modelRecord, uuid.New())
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue(), "err: %v", err)
 		Expect(outboxMessageCount(ctx, database, uuid.Nil)).To(Equal(0))
 	})
 
@@ -243,6 +253,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		champion.ModelVersion = 1
 		champion.Status = model.ModelStatusReady
 		champion.ServingLoadStatus = model.ModelLoadStatusLoaded
+		champion.ServingProtocol = model.ServingProtocolOpenAIChatCompletions
 		champion.MetricsMetadata = integrationMetricsMetadata(0.95, 0.95, 0.95)
 		_, err := modelsUse.RegisterModel(ctx, champion, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
@@ -420,6 +431,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			ModelID:           registeredModel.ModelID,
 			ServingTarget:     "vllm",
 			ServingModel:      "movie-ranker-v1",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 			ServingLoadStatus: model.ModelLoadStatusLoaded,
 		}, statusID)
 		Expect(err).NotTo(HaveOccurred())
@@ -431,6 +443,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			ModelID:           registeredModel.ModelID,
 			ServingTarget:     "vllm",
 			ServingModel:      "movie-ranker-v1",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 			ServingLoadStatus: model.ModelLoadStatusLoaded,
 		}, statusID)
 		Expect(err).NotTo(HaveOccurred())

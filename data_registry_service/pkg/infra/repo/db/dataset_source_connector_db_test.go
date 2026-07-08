@@ -24,6 +24,7 @@ var _ = Describe("DatasetDB", func() {
 	var (
 		ctx     context.Context
 		userID  uuid.UUID
+		orgID   uuid.UUID
 		pool    *repositoryPoolStub
 		repo    *datasetDB
 		dataset *model.Dataset
@@ -31,10 +32,11 @@ var _ = Describe("DatasetDB", func() {
 
 	BeforeEach(func() {
 		userID = uuid.New()
-		ctx = ctxutil.WithActorOrg(context.Background(), userID, userID)
+		orgID = uuid.New()
+		ctx = ctxutil.WithActorOrg(context.Background(), userID, orgID)
 		pool = &repositoryPoolStub{}
 		repo = NewDatasetDB(coreDB.NewDatabase(pool, "test_schema"))
-		dataset = validDatasetDomain(uuid.New(), userID)
+		dataset = validDatasetDomain(uuid.New(), userID, orgID)
 	})
 
 	It("creates a dataset with the supplied transaction", func() {
@@ -42,8 +44,8 @@ var _ = Describe("DatasetDB", func() {
 			dataset.ID.String(),
 			userID.String(),
 			dataset.OrgID.String(),
-			model.Standard.String(),
-			model.Draft.String(),
+			model.Standard.DBString(),
+			model.Draft.DBString(),
 			model.DatasetProcessingPending.String(),
 		)}
 		idempotencyKey := uuid.New()
@@ -80,7 +82,7 @@ var _ = Describe("DatasetDB", func() {
 
 	It("reads datasets using the tenant-scoped filters", func() {
 		pool.poolRows = []pgx.Row{intScanRow(1, nil)}
-		pool.queryRows = []pgx.Rows{newRepositoryRowsStub(&datasetRowStub{dao: validDatasetDAO(dataset.ID, userID)})}
+		pool.queryRows = []pgx.Rows{newRepositoryRowsStub(&datasetRowStub{dao: validDatasetDAO(dataset.ID, userID, orgID)})}
 
 		got, count, err := repo.Read(ctx, userID, *core.NewPagination(1, 10), []model.Filter{
 			model.CategoryFilter{Values: []string{"rag"}},
@@ -94,7 +96,7 @@ var _ = Describe("DatasetDB", func() {
 		Expect(pool.lastQuery).To(ContainSubstring("org_id = @org_id"))
 		Expect(pool.lastQuery).To(ContainSubstring("category IN (@value_0)"))
 		args := pool.lastArgs[0].(pgx.NamedArgs)
-		Expect(args["org_id"]).To(Equal(userID))
+		Expect(args["org_id"]).To(Equal(orgID))
 		Expect(args["value_0"]).To(Equal("rag"))
 	})
 
@@ -120,7 +122,7 @@ var _ = Describe("DatasetDB", func() {
 	})
 
 	It("reads a dataset by id with user scoping", func() {
-		pool.poolRows = []pgx.Row{&datasetRowStub{dao: validDatasetDAO(dataset.ID, userID)}}
+		pool.poolRows = []pgx.Row{&datasetRowStub{dao: validDatasetDAO(dataset.ID, userID, orgID)}}
 
 		got, err := repo.ReadByID(ctx, dataset.ID, userID)
 
@@ -129,7 +131,7 @@ var _ = Describe("DatasetDB", func() {
 		Expect(pool.lastQuery).To(ContainSubstring("id = @id AND org_id = @org_id"))
 		args := pool.lastArgs[0].(pgx.NamedArgs)
 		Expect(args["id"]).To(Equal(dataset.ID))
-		Expect(args["org_id"]).To(Equal(userID))
+		Expect(args["org_id"]).To(Equal(orgID))
 	})
 
 	It("returns resource-not-found when reading a missing dataset by id", func() {
@@ -142,7 +144,7 @@ var _ = Describe("DatasetDB", func() {
 	})
 
 	It("replaces a dataset with the supplied transaction", func() {
-		updatedDAO := validDatasetDAO(dataset.ID, userID)
+		updatedDAO := validDatasetDAO(dataset.ID, userID, orgID)
 		updatedDAO.Title = pgtype.Text{String: "Updated", Valid: true}
 		pool.txRows = []pgx.Row{&datasetRowStub{dao: updatedDAO}}
 
@@ -183,7 +185,7 @@ var _ = Describe("DatasetDB", func() {
 	})
 
 	It("updates processing state only when the state advances", func() {
-		updatedDAO := validDatasetDAO(dataset.ID, userID)
+		updatedDAO := validDatasetDAO(dataset.ID, userID, orgID)
 		updatedDAO.ProcessingState = pgtype.Text{String: model.DatasetProcessingFeatureMaterialized.String(), Valid: true}
 		pool.txRows = []pgx.Row{&datasetRowStub{dao: updatedDAO}}
 
@@ -196,7 +198,7 @@ var _ = Describe("DatasetDB", func() {
 	})
 
 	It("returns the current dataset when a processing state update is unchanged", func() {
-		currentDAO := validDatasetDAO(dataset.ID, userID)
+		currentDAO := validDatasetDAO(dataset.ID, userID, orgID)
 		currentDAO.ProcessingState = pgtype.Text{String: model.DatasetProcessingEmbeddingsMaterialized.String(), Valid: true}
 		pool.txRows = []pgx.Row{errorRowStub{err: pgx.ErrNoRows}, &datasetRowStub{dao: currentDAO}}
 
@@ -211,10 +213,10 @@ var _ = Describe("DatasetDB", func() {
 
 	It("records materialization metadata with the supplied transaction", func() {
 		rawSnapshotID := uuid.New()
-		materialized := validDatasetDomain(dataset.ID, userID)
+		materialized := validDatasetDomain(dataset.ID, userID, orgID)
 		materialized.Location = "s3://bucket/raw/movies.parquet"
 		materialized.RawSnapshotID = rawSnapshotID
-		updatedDAO := validDatasetDAO(dataset.ID, userID)
+		updatedDAO := validDatasetDAO(dataset.ID, userID, orgID)
 		updatedDAO.Location = pgtype.Text{String: materialized.Location, Valid: true}
 		updatedDAO.RawSnapshotID = pgtype.UUID{Bytes: rawSnapshotID, Valid: true}
 		pool.txRows = []pgx.Row{&datasetRowStub{dao: updatedDAO}}
@@ -228,8 +230,8 @@ var _ = Describe("DatasetDB", func() {
 	})
 
 	It("keeps materialization table fields unset when no table metadata is present", func() {
-		args := (&Dataset{}).toDAO(validDatasetDomain(dataset.ID, userID))
-		materialized := validDatasetDomain(dataset.ID, userID)
+		args := (&Dataset{}).toDAO(validDatasetDomain(dataset.ID, userID, orgID))
+		materialized := validDatasetDomain(dataset.ID, userID, orgID)
 		materialized.Location = ""
 		materialized.TableNamespace = ""
 		materialized.TableName = ""
@@ -250,10 +252,12 @@ var _ = Describe("DatasetDB", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pool.execCalled).To(BeTrue())
-		Expect(pool.lastQuery).To(ContainSubstring("status = 'published'"))
+		Expect(pool.lastQuery).To(ContainSubstring("status = @published_status::dataset_status_enum"))
 		args := pool.lastArgs[0].(pgx.NamedArgs)
 		Expect(args["id"]).To(Equal(dataset.ID))
 		Expect(args["user_id"]).To(Equal(userID))
+		Expect(args["published_status"]).To(Equal(model.Published.DBString()))
+		Expect(args["draft_status"]).To(Equal(model.Draft.DBString()))
 	})
 
 	It("returns resource-not-found when publishing a non-draft or missing dataset", func() {
@@ -265,7 +269,7 @@ var _ = Describe("DatasetDB", func() {
 	})
 
 	It("surfaces row iteration errors when scanning dataset rows", func() {
-		rows := newRepositoryRowsStub(&datasetRowStub{dao: validDatasetDAO(dataset.ID, userID)})
+		rows := newRepositoryRowsStub(&datasetRowStub{dao: validDatasetDAO(dataset.ID, userID, orgID)})
 		rows.err = errors.New("cursor failed")
 
 		got, err := repo.scanRows(ctx, rows)
@@ -279,6 +283,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	var (
 		ctx       context.Context
 		userID    uuid.UUID
+		orgID     uuid.UUID
 		pool      *repositoryPoolStub
 		repo      *sourceConnectorDB
 		connector *model.SourceConnector
@@ -286,10 +291,11 @@ var _ = Describe("SourceConnectorDB", func() {
 
 	BeforeEach(func() {
 		userID = uuid.New()
-		ctx = ctxutil.WithActorOrg(context.Background(), userID, userID)
+		orgID = uuid.New()
+		ctx = ctxutil.WithActorOrg(context.Background(), userID, orgID)
 		pool = &repositoryPoolStub{}
 		repo = NewSourceConnectorDB(coreDB.NewDatabase(pool, "test_schema"))
-		connector = validSourceConnectorDomain(uuid.New(), userID)
+		connector = validSourceConnectorDomain(uuid.New(), userID, orgID)
 	})
 
 	It("creates a source connector with tenant-scoped arguments", func() {
@@ -324,7 +330,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	})
 
 	It("reads source connectors for a user", func() {
-		dao := validSourceConnectorDAO(connector.ID, userID, connector.CatalogID)
+		dao := validSourceConnectorDAO(connector.ID, userID, orgID, connector.CatalogID)
 		pool.queryRows = []pgx.Rows{newRepositoryRowsStub(&sourceConnectorRowStub{dao: dao})}
 
 		got, err := repo.ReadByUserID(ctx, userID)
@@ -335,7 +341,7 @@ var _ = Describe("SourceConnectorDB", func() {
 		Expect(got[0].UserID).To(Equal(userID))
 		Expect(pool.lastQuery).To(ContainSubstring("WHERE org_id = @org_id"))
 		args := pool.lastArgs[0].(pgx.NamedArgs)
-		Expect(args["org_id"]).To(Equal(userID))
+		Expect(args["org_id"]).To(Equal(orgID))
 	})
 
 	It("returns resource-not-found when a user has no source connectors", func() {
@@ -348,7 +354,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	})
 
 	It("surfaces connector row iteration errors", func() {
-		rows := newRepositoryRowsStub(&sourceConnectorRowStub{dao: validSourceConnectorDAO(connector.ID, userID, connector.CatalogID)})
+		rows := newRepositoryRowsStub(&sourceConnectorRowStub{dao: validSourceConnectorDAO(connector.ID, userID, orgID, connector.CatalogID)})
 		rows.err = errors.New("cursor failed")
 		pool.queryRows = []pgx.Rows{rows}
 
@@ -359,7 +365,7 @@ var _ = Describe("SourceConnectorDB", func() {
 	})
 
 	It("reads a source connector by id", func() {
-		pool.poolRows = []pgx.Row{&sourceConnectorRowStub{dao: validSourceConnectorDAO(connector.ID, userID, connector.CatalogID)}}
+		pool.poolRows = []pgx.Row{&sourceConnectorRowStub{dao: validSourceConnectorDAO(connector.ID, userID, orgID, connector.CatalogID)}}
 
 		got, err := repo.ReadByID(ctx, connector.ID, userID)
 
@@ -729,11 +735,11 @@ func (unsupportedDatasetFilter) GetFilterAndFillArguments(string, map[string]any
 	return ""
 }
 
-func validDatasetDomain(datasetID, userID uuid.UUID) *model.Dataset {
+func validDatasetDomain(datasetID, userID, orgID uuid.UUID) *model.Dataset {
 	return &model.Dataset{
 		ID:                datasetID,
 		UserID:            userID,
-		OrgID:             userID,
+		OrgID:             orgID,
 		Title:             "Movies",
 		Description:       "Movie rows",
 		Origin:            model.Standard,
@@ -752,11 +758,11 @@ func validDatasetDomain(datasetID, userID uuid.UUID) *model.Dataset {
 	}
 }
 
-func validSourceConnectorDomain(connectorID, userID uuid.UUID) *model.SourceConnector {
+func validSourceConnectorDomain(connectorID, userID, orgID uuid.UUID) *model.SourceConnector {
 	return &model.SourceConnector{
 		ID:        connectorID,
 		UserID:    userID,
-		OrgID:     userID,
+		OrgID:     orgID,
 		CatalogID: uuid.New(),
 		Config: &model.PostgresDBConnCfg{
 			Hostname:           "localhost",
@@ -769,11 +775,11 @@ func validSourceConnectorDomain(connectorID, userID uuid.UUID) *model.SourceConn
 	}
 }
 
-func validSourceConnectorDAO(connectorID, userID, catalogID uuid.UUID) SourceConnectorDAO {
+func validSourceConnectorDAO(connectorID, userID, orgID, catalogID uuid.UUID) SourceConnectorDAO {
 	return SourceConnectorDAO{
 		ID:          pgtype.UUID{Bytes: connectorID, Valid: true},
 		UserID:      pgtype.UUID{Bytes: userID, Valid: true},
-		OrgID:       pgtype.UUID{Bytes: userID, Valid: true},
+		OrgID:       pgtype.UUID{Bytes: orgID, Valid: true},
 		CatalogID:   pgtype.UUID{Bytes: catalogID, Valid: true},
 		StorageType: pgtype.Text{String: model.Postgres.String(), Valid: true},
 		Config:      []byte(`{"Hostname":"localhost","Port":5432,"DatabaseName":"mlops","Username":"postgres","Password":"password","AuthenticationType":1}`),

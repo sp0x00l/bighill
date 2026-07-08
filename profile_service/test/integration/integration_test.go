@@ -1045,7 +1045,13 @@ func purgeTopic(ctx context.Context, brokers, topic string) error {
 }
 
 func purgeProfileDatabase(ctx context.Context, database *dbConn.Database) error {
-	for _, table := range []string{"oauth_identities", "profiles"} {
+	if _, err := database.Pool.Exec(ctx, "UPDATE "+database.Name+".profiles SET default_org_id = NULL"); err != nil {
+		return err
+	}
+	if _, err := database.Pool.Exec(ctx, "UPDATE "+database.Name+".organizations SET created_by_user_id = NULL"); err != nil {
+		return err
+	}
+	for _, table := range []string{"outbox_messages", "organization_memberships", "oauth_identities", "organizations", "profiles"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}

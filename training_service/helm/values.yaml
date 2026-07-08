@@ -33,6 +33,8 @@ env:
   temporalAddress: "temporal:7233"
   temporalNamespace: "default"
   temporalTaskQueue: "training-service"
+  temporalConnectTimeoutSeconds: "60"
+  temporalConnectRetryIntervalSeconds: "1"
   trainingTriggerEnabled: "false"
   kafkaBroker: "kafka:9092"
   kafkaBaseGroupId: "training"

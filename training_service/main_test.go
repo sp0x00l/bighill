@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -9,6 +10,8 @@ import (
 
 	env "lib/shared_lib/env"
 	"training_service/pkg/infra/executor"
+
+	temporalclient "go.temporal.io/sdk/client"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -56,6 +59,8 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(os.Unsetenv("TRAINING_SERVICE_TEMPORAL_NAMESPACE")).To(Succeed())
 		Expect(os.Unsetenv("TEMPORAL_NAMESPACE")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_TEMPORAL_TASK_QUEUE")).To(Succeed())
+		Expect(os.Unsetenv("TRAINING_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("TRAINING_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_API_HTTP_PORT")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_HTTP_CLIENT_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_TRAINING_TRIGGER_ENABLED")).To(Succeed())
@@ -115,6 +120,8 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(cfg.Temporal.Address).To(Equal("localhost:7233"))
 		Expect(cfg.Temporal.Namespace).To(Equal("default"))
 		Expect(cfg.Temporal.TaskQueue).To(Equal("training-service"))
+		Expect(cfg.Temporal.ConnectTimeout).To(Equal(60 * time.Second))
+		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(time.Second))
 		Expect(cfg.HTTPPort).To(Equal(8085))
 		Expect(cfg.HTTPClientTimeout).To(Equal(10 * time.Second))
 		Expect(cfg.TrainingTriggerEnabled).To(BeFalse())
@@ -169,12 +176,16 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(os.Setenv("TRAINING_SERVICE_TEMPORAL_ADDRESS", "temporal:7233")).To(Succeed())
 		Expect(os.Setenv("TRAINING_SERVICE_TEMPORAL_NAMESPACE", "mlops")).To(Succeed())
 		Expect(os.Setenv("TRAINING_SERVICE_TEMPORAL_TASK_QUEUE", "gpu-training")).To(Succeed())
+		Expect(os.Setenv("TRAINING_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS", "90")).To(Succeed())
+		Expect(os.Setenv("TRAINING_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS", "3")).To(Succeed())
 
 		cfg := readTrainingConfig()
 
 		Expect(cfg.Temporal.Address).To(Equal("temporal:7233"))
 		Expect(cfg.Temporal.Namespace).To(Equal("mlops"))
 		Expect(cfg.Temporal.TaskQueue).To(Equal("gpu-training"))
+		Expect(cfg.Temporal.ConnectTimeout).To(Equal(90 * time.Second))
+		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(3 * time.Second))
 	})
 
 	It("allows the training trigger to be enabled explicitly", func() {
@@ -183,6 +194,47 @@ var _ = Describe("readTrainingConfig", func() {
 		cfg := readTrainingConfig()
 
 		Expect(cfg.TrainingTriggerEnabled).To(BeTrue())
+	})
+})
+
+var _ = Describe("dialTemporalClientWith", func() {
+	It("retries Temporal dial failures until the server is reachable", func() {
+		attempts := 0
+
+		temporalClient, err := dialTemporalClientWith(context.Background(), temporalConfig{
+			Address:              "localhost:7233",
+			Namespace:            "default",
+			ConnectTimeout:       time.Second,
+			ConnectRetryInterval: time.Millisecond,
+		}, func(temporalclient.Options) (temporalclient.Client, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, errors.New("not ready")
+			}
+			return nil, nil
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(temporalClient).To(BeNil())
+		Expect(attempts).To(Equal(3))
+	})
+
+	It("returns a bounded error when Temporal never becomes reachable", func() {
+		attempts := 0
+
+		temporalClient, err := dialTemporalClientWith(context.Background(), temporalConfig{
+			Address:              "localhost:7233",
+			Namespace:            "default",
+			ConnectTimeout:       5 * time.Millisecond,
+			ConnectRetryInterval: time.Millisecond,
+		}, func(temporalclient.Options) (temporalclient.Client, error) {
+			attempts++
+			return nil, errors.New("not ready")
+		})
+
+		Expect(temporalClient).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("connect to Temporal at localhost:7233 namespace default")))
+		Expect(attempts).To(BeNumerically(">=", 1))
 	})
 })
 

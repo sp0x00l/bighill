@@ -130,7 +130,7 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 		"org_id":      pgtype.UUID{Bytes: dataset.OrgID, Valid: dataset.OrgID != uuid.Nil},
 		"title":       pgtype.Text{String: dataset.Title, Valid: true},
 		"description": pgtype.Text{String: dataset.Description, Valid: dataset.Description != ""},
-		"origin":      pgtype.Text{String: dataset.Origin.String(), Valid: true},
+		"origin":      pgtype.Text{String: dataset.Origin.DBString(), Valid: true},
 		"location":    pgtype.Text{String: dataset.Location, Valid: dataset.Location != ""},
 		"source_type": pgtype.Text{String: dataset.SourceType.String(), Valid: dataset.SourceConnectorID != uuid.Nil},
 		"source_connector_id": pgtype.UUID{
@@ -140,7 +140,7 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 		"source_query":      pgtype.Text{String: dataset.SourceQuery, Valid: true},
 		"source_database":   pgtype.Text{String: dataset.SourceDatabase, Valid: true},
 		"source_collection": pgtype.Text{String: dataset.SourceCollection, Valid: true},
-		"status":            pgtype.Text{String: dataset.Status.String(), Valid: true},
+		"status":            pgtype.Text{String: dataset.Status.DBString(), Valid: true},
 		"category":          pgtype.Text{String: dataset.Category, Valid: dataset.Category != ""},
 		"idempotency_key":   pgtype.UUID{Bytes: d.IdempotencyKey.Bytes, Valid: true},
 		"table_namespace":   pgtype.Text{String: dataset.TableNamespace, Valid: true},

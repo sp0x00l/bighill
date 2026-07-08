@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net"
@@ -26,6 +27,7 @@ import (
 	sharedmessaging "lib/shared_lib/messaging"
 	shareduow "lib/shared_lib/uow"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -105,6 +107,8 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			ModelRegistry: "model_registry",
 			DataRegistry:  "data_registry",
 		}
+		Expect(purgeTopic(ctx, brokers, topics.ModelRegistry)).To(Succeed())
+		Expect(purgeTopic(ctx, brokers, topics.DataRegistry)).To(Succeed())
 		runCtx, runCancel := context.WithCancel(ctx)
 		defer runCancel()
 
@@ -112,7 +116,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			Brokers:         brokers,
 			GroupID:         "inference-integration-service-" + suffix,
 			DlqURL:          "http://localhost:4566/inference-dev-env-queue/",
-			AutoOffsetReset: "latest",
+			AutoOffsetReset: "earliest",
 		}, runCancel)
 		defer func() {
 			_ = serviceMessenger.Close(runCtx)
@@ -121,7 +125,6 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		publisher, err := sharedmessaging.NewPublisher(brokers)
 		Expect(err).NotTo(HaveOccurred())
-		defer publisher.Close()
 
 		modelUpdatedSubscriber := inferencemessaging.NewModelUpdatedSubscriber(serviceSubscriber, modelsUse, topics)
 		go func() {
@@ -167,6 +170,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			MetricsMetadata:   `{"eval_loss":0.12}`,
 			Status:            "READY",
 		})).To(Succeed())
+		publisher.Close()
 
 		Eventually(func(g Gomega) {
 			record, err := models.ReadByID(ctxutil.WithActorOrg(ctx, userID, orgID), orgID, modelID)
@@ -186,6 +190,8 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			ModelRegistry: "model_registry",
 			DataRegistry:  "data_registry",
 		}
+		Expect(purgeTopic(ctx, brokers, topics.ModelRegistry)).To(Succeed())
+		Expect(purgeTopic(ctx, brokers, topics.DataRegistry)).To(Succeed())
 		runCtx, runCancel := context.WithCancel(ctx)
 		defer runCancel()
 
@@ -193,7 +199,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			Brokers:         brokers,
 			GroupID:         "inference-integration-dataset-service-" + suffix,
 			DlqURL:          "http://localhost:4566/inference-dev-env-queue/",
-			AutoOffsetReset: "latest",
+			AutoOffsetReset: "earliest",
 		}, runCancel)
 		defer func() {
 			_ = serviceMessenger.Close(runCtx)
@@ -202,7 +208,6 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		publisher, err := sharedmessaging.NewPublisher(brokers)
 		Expect(err).NotTo(HaveOccurred())
-		defer publisher.Close()
 
 		inferenceSubscriber := inferencemessaging.NewModelUpdatedSubscriber(serviceSubscriber, modelsUse, topics)
 		go func() {
@@ -269,7 +274,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			CollectionName:           "movies",
 			EmbeddingDimensions:      384,
 			EmbeddingCount:           12,
-			ProcessingProfile:        "RAG",
+			ProcessingProfile:        model.ProcessingProfileTextRAG.String(),
 			EmbeddingStrategyVersion: "rag-v1",
 			EmbeddingChunkerName:     "go-token-window",
 			EmbeddingChunkerVersion:  "v1",
@@ -278,6 +283,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			EmbeddingProvider:        "ollama",
 			EmbeddingModel:           "bge-small-en-v1.5",
 		})).To(Succeed())
+		publisher.Close()
 
 		Eventually(func(g Gomega) {
 			record, err := datasets.ReadDataset(ctxutil.WithActorOrg(ctx, userID, orgID), orgID, datasetID)
@@ -379,10 +385,26 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			OrgID:                    orgID,
 			DatasetVersion:           1,
 			ProcessingState:          model.DatasetProcessingEmbeddingsMaterialized,
+			StorageLocation:          "s3://local-dev-bucket/features/rerank.parquet",
+			TableNamespace:           "features",
+			TableName:                "rerank_contexts",
+			TableFormat:              "PARQUET",
+			CatalogProvider:          "LOCAL",
+			ProcessingProfile:        model.ProcessingProfileTextRAG.String(),
+			SchemaVersion:            1,
+			SchemaMetadata:           `{"columns":[{"name":"text"}]}`,
 			EmbeddingSnapshotID:      embeddingSnapshotID,
+			VectorStore:              "pgvector",
+			CollectionName:           "rerank_contexts",
 			EmbeddingDimensions:      384,
 			EmbeddingCount:           10,
 			EmbeddingStrategyVersion: "rag-v1",
+			EmbeddingChunkerName:     "go-token-window",
+			EmbeddingChunkerVersion:  "v1",
+			EmbeddingChunkSize:       384,
+			EmbeddingChunkOverlap:    64,
+			EmbeddingProvider:        "ollama",
+			EmbeddingModel:           "bge-small-en-v1.5",
 		}, uuid.New())
 		Expect(err).NotTo(HaveOccurred())
 
@@ -515,6 +537,92 @@ func upsertInferenceTenant(ctx context.Context, database *dbconn.Database, userI
 		ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, deleted = false
 	`, userID, userID.String()+"@example.test")
 	return err
+}
+
+func purgeTopic(ctx context.Context, brokers string, topic string) error {
+	log.Trace("purgeTopic")
+
+	Expect(sharedmessaging.CreateTopic(ctx, brokers, topic)).To(Succeed())
+
+	admin, err := kafka.NewAdminClient(&kafka.ConfigMap{
+		"bootstrap.servers": brokers,
+	})
+	if err != nil {
+		return err
+	}
+	defer admin.Close()
+
+	md, err := admin.GetMetadata(&topic, false, 10000)
+	if err != nil {
+		return err
+	}
+	tmd, ok := md.Topics[topic]
+	if !ok || tmd.Error.Code() != kafka.ErrNoError {
+		return nil
+	}
+
+	partitions := make([]kafka.TopicPartition, 0, len(tmd.Partitions))
+	for _, partition := range tmd.Partitions {
+		partitions = append(partitions, kafka.TopicPartition{
+			Topic:     &topic,
+			Partition: partition.ID,
+			Offset:    kafka.OffsetEnd,
+		})
+	}
+	if len(partitions) == 0 {
+		return nil
+	}
+
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := deleteTopicRecords(ctx, admin, partitions); err != nil {
+			if isRetriableTopicPurgeError(err) && attempt < 4 {
+				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	return nil
+}
+
+func deleteTopicRecords(ctx context.Context, admin *kafka.AdminClient, partitions []kafka.TopicPartition) error {
+	log.Trace("deleteTopicRecords")
+
+	res, err := admin.DeleteRecords(
+		ctx,
+		partitions,
+		kafka.SetAdminOperationTimeout(30*time.Second),
+	)
+	if err != nil {
+		if !isKafkaErrorCode(err, -186) {
+			return err
+		}
+		return nil
+	}
+
+	for _, result := range res.DeleteRecordsResults {
+		if result.TopicPartition.Error != nil {
+			if !isKafkaErrorCode(result.TopicPartition.Error, -186) {
+				return result.TopicPartition.Error
+			}
+		}
+	}
+	return nil
+}
+
+func isRetriableTopicPurgeError(err error) bool {
+	log.Trace("isRetriableTopicPurgeError")
+
+	return isKafkaErrorCode(err, kafka.ErrNotLeaderForPartition) ||
+		isKafkaErrorCode(err, kafka.ErrLeaderNotAvailable)
+}
+
+func isKafkaErrorCode(err error, code kafka.ErrorCode) bool {
+	log.Trace("isKafkaErrorCode")
+
+	var kafkaErr kafka.Error
+	return errors.As(err, &kafkaErr) && kafkaErr.Code() == code
 }
 
 func testPostgresConnectionString(dbName string) string {

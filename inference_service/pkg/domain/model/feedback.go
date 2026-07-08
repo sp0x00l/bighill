@@ -41,23 +41,26 @@ type PreferenceDatasetExportRequest struct {
 }
 
 type PreferenceDataset struct {
-	PreferenceDatasetID uuid.UUID
-	RequestID           uuid.UUID
-	UserID              uuid.UUID
-	OrgID               uuid.UUID
-	DatasetID           uuid.UUID
-	ModelID             uuid.UUID
-	ParentAdapterURI    string
-	ParentBaseModel     string
-	ParentModelVersion  int
-	OutputURI           string
-	EvaluationOutputURI string
-	Format              string
-	EligibilityPolicy   string
-	MinExamples         int
-	Limit               int
-	Examples            []PreferenceExample
-	Exported            bool
+	PreferenceDatasetID    uuid.UUID
+	RequestID              uuid.UUID
+	UserID                 uuid.UUID
+	OrgID                  uuid.UUID
+	DatasetID              uuid.UUID
+	ModelID                uuid.UUID
+	ParentModelKind        ModelKind
+	ParentArtifactURI      string
+	ParentArtifactChecksum string
+	ParentAdapterURI       string
+	ParentBaseModel        string
+	ParentModelVersion     int
+	OutputURI              string
+	EvaluationOutputURI    string
+	Format                 string
+	EligibilityPolicy      string
+	MinExamples            int
+	Limit                  int
+	Examples               []PreferenceExample
+	Exported               bool
 }
 
 func (d PreferenceDataset) ExampleCount() int {

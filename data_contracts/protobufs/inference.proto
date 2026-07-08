@@ -91,9 +91,12 @@ message PreferenceDatasetReadyEvent {
   string format = 8;
   int32 min_examples = 9;
   int32 limit = 10;
-  string parent_adapter_uri = 11;
-  string parent_base_model = 12;
-  int32 parent_model_version = 13;
-  string evaluation_output_uri = 14;
-  string org_id = 15;
+  string parent_model_kind = 11;
+  string parent_artifact_uri = 12;
+  string parent_artifact_checksum = 13;
+  string parent_adapter_uri = 14;
+  string parent_base_model = 15;
+  int32 parent_model_version = 16;
+  string evaluation_output_uri = 17;
+  string org_id = 18;
 }

@@ -348,13 +348,16 @@ var _ = Describe("InferenceUsecase", func() {
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
-			RequestID:          requestID,
-			UserID:             userID,
-			DatasetID:          datasetID,
-			ModelID:            modelID,
-			ParentAdapterURI:   "s3://models/parent",
-			ParentBaseModel:    "mistral-7b",
-			ParentModelVersion: 7,
+			RequestID:              requestID,
+			UserID:                 userID,
+			DatasetID:              datasetID,
+			ModelID:                modelID,
+			ParentModelKind:        model.ModelKindFineTuned,
+			ParentArtifactURI:      "s3://models/parent-artifact",
+			ParentArtifactChecksum: "sha256:parent",
+			ParentAdapterURI:       "s3://models/parent",
+			ParentBaseModel:        "mistral-7b",
+			ParentModelVersion:     7,
 			Examples: []model.PreferenceExample{{
 				PreferenceExampleID: uuid.New(),
 				RequestID:           requestID,
@@ -399,13 +402,16 @@ var _ = Describe("InferenceUsecase", func() {
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
-			RequestID:          requestID,
-			UserID:             userID,
-			DatasetID:          datasetID,
-			ModelID:            modelID,
-			ParentAdapterURI:   "s3://models/parent",
-			ParentBaseModel:    "mistral-7b",
-			ParentModelVersion: 7,
+			RequestID:              requestID,
+			UserID:                 userID,
+			DatasetID:              datasetID,
+			ModelID:                modelID,
+			ParentModelKind:        model.ModelKindFineTuned,
+			ParentArtifactURI:      "s3://models/parent-artifact",
+			ParentArtifactChecksum: "sha256:parent",
+			ParentAdapterURI:       "s3://models/parent",
+			ParentBaseModel:        "mistral-7b",
+			ParentModelVersion:     7,
 			Examples: []model.PreferenceExample{{
 				PreferenceExampleID: uuid.New(),
 				RequestID:           requestID,
@@ -453,6 +459,9 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(event.PreferenceDatasetId).To(Equal(feedbackRepository.recordedSnapshot.PreferenceDatasetID.String()))
 		Expect(event.UserId).To(Equal(userID.String()))
 		Expect(event.OutputUri).To(Equal(feedbackRepository.recordedSnapshot.OutputURI))
+		Expect(event.ParentModelKind).To(Equal("FINE_TUNED"))
+		Expect(event.ParentArtifactUri).To(Equal("s3://models/parent-artifact"))
+		Expect(event.ParentArtifactChecksum).To(Equal("sha256:parent"))
 		Expect(event.ParentAdapterUri).To(Equal("s3://models/parent"))
 	})
 
@@ -493,13 +502,16 @@ var _ = Describe("InferenceUsecase", func() {
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
-			RequestID:          requestID,
-			UserID:             userID,
-			DatasetID:          datasetID,
-			ModelID:            modelID,
-			ParentAdapterURI:   "s3://models/parent",
-			ParentBaseModel:    "mistral-7b",
-			ParentModelVersion: 7,
+			RequestID:              requestID,
+			UserID:                 userID,
+			DatasetID:              datasetID,
+			ModelID:                modelID,
+			ParentModelKind:        model.ModelKindFineTuned,
+			ParentArtifactURI:      "s3://models/parent-artifact",
+			ParentArtifactChecksum: "sha256:parent",
+			ParentAdapterURI:       "s3://models/parent",
+			ParentBaseModel:        "mistral-7b",
+			ParentModelVersion:     7,
 			Examples: []model.PreferenceExample{{
 				PreferenceExampleID: uuid.New(),
 				RequestID:           requestID,

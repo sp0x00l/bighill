@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	env "lib/shared_lib/env"
+
+	temporalclient "go.temporal.io/sdk/client"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -48,12 +53,67 @@ var _ = Describe("readMaterializerConfig", func() {
 		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER", "tei")).To(Succeed())
 		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL", "http://tei.local")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_PROFILE_SUBSCRIBER_TOPIC")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS")).To(Succeed())
 	})
 
 	It("uses the profile service topic for tenant projections by default", func() {
 		cfg := readMaterializerConfig()
 
 		Expect(cfg.ProfileTopic).To(Equal("profile"))
+		Expect(cfg.Temporal.ConnectTimeout).To(Equal(60 * time.Second))
+		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(time.Second))
+	})
+
+	It("allows service-specific Temporal connection retry overrides", func() {
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS", "90")).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS", "3")).To(Succeed())
+
+		cfg := readMaterializerConfig()
+
+		Expect(cfg.Temporal.ConnectTimeout).To(Equal(90 * time.Second))
+		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(3 * time.Second))
+	})
+})
+
+var _ = Describe("dialTemporalClientWith", func() {
+	It("retries Temporal dial failures until the server is reachable", func() {
+		attempts := 0
+
+		temporalClient, err := dialTemporalClientWith(context.Background(), temporalConfig{
+			Address:              "localhost:7233",
+			Namespace:            "default",
+			ConnectTimeout:       time.Second,
+			ConnectRetryInterval: time.Millisecond,
+		}, func(temporalclient.Options) (temporalclient.Client, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, errors.New("not ready")
+			}
+			return nil, nil
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(temporalClient).To(BeNil())
+		Expect(attempts).To(Equal(3))
+	})
+
+	It("returns a bounded error when Temporal never becomes reachable", func() {
+		attempts := 0
+
+		temporalClient, err := dialTemporalClientWith(context.Background(), temporalConfig{
+			Address:              "localhost:7233",
+			Namespace:            "default",
+			ConnectTimeout:       5 * time.Millisecond,
+			ConnectRetryInterval: time.Millisecond,
+		}, func(temporalclient.Options) (temporalclient.Client, error) {
+			attempts++
+			return nil, errors.New("not ready")
+		})
+
+		Expect(temporalClient).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("connect to Temporal at localhost:7233 namespace default")))
+		Expect(attempts).To(BeNumerically(">=", 1))
 	})
 })
 

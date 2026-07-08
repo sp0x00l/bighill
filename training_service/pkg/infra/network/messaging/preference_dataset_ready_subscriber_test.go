@@ -71,21 +71,24 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 		listener := trainingmessaging.NewPreferenceDatasetReadyEventListener(starter, profileCatalog, "dpo-default@v1", "dpo-eval@v1")
 
 		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
-			PreferenceDatasetId: preferenceDatasetID.String(),
-			UserId:              userID.String(),
-			OrgId:               orgID.String(),
-			DatasetId:           datasetID.String(),
-			ModelId:             modelID.String(),
-			SourceRequestId:     sourceRequestID.String(),
-			OutputUri:           "s3://local-dev-bucket/preferences/dpo.jsonl",
-			EvaluationOutputUri: "s3://local-dev-bucket/preferences/dpo-eval.jsonl",
-			ExampleCount:        12,
-			Format:              "DPO_JSONL",
-			MinExamples:         10,
-			Limit:               1000,
-			ParentAdapterUri:    "s3://models/parent-adapter",
-			ParentBaseModel:     "mistral-7b",
-			ParentModelVersion:  7,
+			PreferenceDatasetId:    preferenceDatasetID.String(),
+			UserId:                 userID.String(),
+			OrgId:                  orgID.String(),
+			DatasetId:              datasetID.String(),
+			ModelId:                modelID.String(),
+			SourceRequestId:        sourceRequestID.String(),
+			OutputUri:              "s3://local-dev-bucket/preferences/dpo.jsonl",
+			EvaluationOutputUri:    "s3://local-dev-bucket/preferences/dpo-eval.jsonl",
+			ExampleCount:           12,
+			Format:                 "DPO_JSONL",
+			MinExamples:            10,
+			Limit:                  1000,
+			ParentModelKind:        "FINE_TUNED",
+			ParentArtifactUri:      "s3://models/parent-artifact",
+			ParentArtifactChecksum: "sha256:parent",
+			ParentAdapterUri:       "s3://models/parent-adapter",
+			ParentBaseModel:        "mistral-7b",
+			ParentModelVersion:     7,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -103,7 +106,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 		Expect(starter.request.ParentModelVersion).To(Equal("7"))
 		Expect(starter.request.ParentAdapterURI).To(Equal("s3://models/parent-adapter"))
 		Expect(starter.request.SourceModelID).To(Equal(modelID.String()))
-		Expect(starter.request.SourceArtifactURI).To(Equal("s3://models/parent-adapter"))
+		Expect(starter.request.SourceArtifactURI).To(Equal("s3://models/parent-artifact"))
 		Expect(starter.request.SourceModelKind).To(Equal("FINE_TUNED"))
 		Expect(starter.request.ModelVersion).To(Equal("8"))
 		Expect(starter.request.BaseModel).To(Equal("mistral-7b"))
@@ -130,12 +133,86 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 			Format:              "DPO_JSONL",
 			MinExamples:         10,
 			Limit:               1000,
+			ParentModelKind:     "FINE_TUNED",
+			ParentArtifactUri:   "s3://models/parent-artifact",
 			ParentAdapterUri:    "s3://models/parent-adapter",
 			ParentBaseModel:     "mistral-7b",
 			ParentModelVersion:  7,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
+		Expect(starter.calls).To(Equal(0))
+	})
+
+	It("starts DPO training from a base model without a parent adapter", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
+		modelID := uuid.New()
+		preferenceDatasetID := uuid.New()
+		sourceRequestID := uuid.New()
+		starter := &recordingTrainingWorkflowStarter{}
+		listener := trainingmessaging.NewPreferenceDatasetReadyEventListener(starter, trainingProfileCatalog(), "dpo-default@v1", "dpo-eval@v1")
+
+		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
+			PreferenceDatasetId:    preferenceDatasetID.String(),
+			UserId:                 userID.String(),
+			OrgId:                  orgID.String(),
+			DatasetId:              datasetID.String(),
+			ModelId:                modelID.String(),
+			SourceRequestId:        sourceRequestID.String(),
+			OutputUri:              "s3://local-dev-bucket/preferences/dpo.jsonl",
+			EvaluationOutputUri:    "s3://local-dev-bucket/preferences/dpo-eval.jsonl",
+			ExampleCount:           12,
+			Format:                 "DPO_JSONL",
+			MinExamples:            10,
+			Limit:                  1000,
+			ParentModelKind:        "BASE",
+			ParentArtifactUri:      "s3://models/base-artifact",
+			ParentArtifactChecksum: "sha256:base",
+			ParentBaseModel:        "llama3.1:8b",
+			ParentModelVersion:     1,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(starter.calls).To(Equal(1))
+		Expect(starter.request.ParentModelID).To(Equal(modelID.String()))
+		Expect(starter.request.ParentModelVersion).To(Equal("1"))
+		Expect(starter.request.ParentAdapterURI).To(Equal(""))
+		Expect(starter.request.SourceModelID).To(Equal(modelID.String()))
+		Expect(starter.request.SourceArtifactURI).To(Equal("s3://models/base-artifact"))
+		Expect(starter.request.SourceModelKind).To(Equal("BASE"))
+		Expect(starter.request.ModelVersion).To(Equal("2"))
+		Expect(starter.request.BaseModel).To(Equal("llama3.1:8b"))
+	})
+
+	It("rejects a fine-tuned parent without an adapter instead of treating it as a base model", func() {
+		datasetID := uuid.New()
+		starter := &recordingTrainingWorkflowStarter{}
+		listener := trainingmessaging.NewPreferenceDatasetReadyEventListener(starter, trainingProfileCatalog(), "dpo-default@v1", "dpo-eval@v1")
+
+		err := listener.Handle(context.Background(), datasetID, &inferencepb.PreferenceDatasetReadyEvent{
+			PreferenceDatasetId: uuid.NewString(),
+			UserId:              uuid.NewString(),
+			OrgId:               uuid.NewString(),
+			DatasetId:           datasetID.String(),
+			ModelId:             uuid.NewString(),
+			SourceRequestId:     uuid.NewString(),
+			OutputUri:           "s3://local-dev-bucket/preferences/dpo.jsonl",
+			EvaluationOutputUri: "s3://local-dev-bucket/preferences/dpo-eval.jsonl",
+			ExampleCount:        12,
+			Format:              "DPO_JSONL",
+			MinExamples:         10,
+			Limit:               1000,
+			ParentModelKind:     "FINE_TUNED",
+			ParentArtifactUri:   "s3://models/parent-artifact",
+			ParentBaseModel:     "mistral-7b",
+			ParentModelVersion:  7,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(shared.IsNonRetryable(err)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("fine-tuned parent adapter uri is required")))
 		Expect(starter.calls).To(Equal(0))
 	})
 
@@ -156,7 +233,8 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 			Format:              "DPO_JSONL",
 			MinExamples:         10,
 			Limit:               1000,
-			ParentBaseModel:     "mistral-7b",
+			ParentModelKind:     "BASE",
+			ParentArtifactUri:   "s3://models/base-artifact",
 			ParentModelVersion:  7,
 		})
 
@@ -184,6 +262,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 			Format:              "DPO_JSONL",
 			MinExamples:         10,
 			Limit:               1000,
+			ParentModelKind:     "FINE_TUNED",
 			ParentAdapterUri:    "s3://models/parent-adapter",
 			ParentBaseModel:     "mistral-7b",
 			ParentModelVersion:  7,

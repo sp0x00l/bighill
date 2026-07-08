@@ -1,6 +1,6 @@
-CREATE TYPE origin_enum AS ENUM ('standard', 'community');
+CREATE TYPE dataset_origin_enum AS ENUM ('STANDARD', 'COMMUNITY');
 CREATE TYPE storage_type_enum AS ENUM ('S3', 'AZURE_STORAGE', 'GCS', 'POSTGRES', 'MYSQL', 'ORACLE', 'MONGO', 'CLICKHOUSE');
-CREATE TYPE status_enum AS ENUM ('draft', 'published', 'blacklisted');
+CREATE TYPE dataset_status_enum AS ENUM ('DRAFT', 'PUBLISHED', 'BLACKLISTED');
 CREATE TYPE table_format_enum AS ENUM ('PARQUET', 'ICEBERG');
 CREATE TYPE catalog_provider_enum AS ENUM ('LOCAL', 'POLARIS');
 CREATE TYPE processing_profile_enum AS ENUM ('GENERIC_PARQUET_PROCESSING_PROFILE', 'TEXT_RAG_PROCESSING_PROFILE', 'INSTRUCTION_TUNING_PROCESSING_PROFILE');
@@ -39,14 +39,14 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
     org_id uuid NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT,
-    origin origin_enum NOT NULL DEFAULT 'standard',
+    origin dataset_origin_enum NOT NULL DEFAULT 'STANDARD',
     location VARCHAR(255),
     source_type storage_type_enum,
     source_connector_id uuid,
     source_query TEXT NOT NULL DEFAULT '',
     source_database TEXT NOT NULL DEFAULT '',
     source_collection TEXT NOT NULL DEFAULT '',
-    status status_enum NOT NULL DEFAULT 'draft',
+    status dataset_status_enum NOT NULL DEFAULT 'DRAFT',
     processing_state dataset_processing_state_enum NOT NULL DEFAULT 'PENDING',
     category VARCHAR(255),
     table_namespace VARCHAR(255) NOT NULL DEFAULT 'default',

@@ -2,6 +2,7 @@
 
 BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
+. $BIGHILL_ROOT/database/scripts/config.sh $1
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export INFERENCE_SERVICE_PREFERENCE_DATASET_BUCKET_REGION=local-dev

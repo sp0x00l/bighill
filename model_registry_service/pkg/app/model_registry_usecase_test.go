@@ -170,6 +170,8 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		registeredModel := validModel()
 		registeredModel.UserID = uuid.Nil
 		registeredModel.OrgID = uuid.Nil
+		registeredModel.DatasetID = uuid.Nil
+		registeredModel.ModelKind = model.ModelKindBase
 
 		result, err := uc.RegisterModel(context.Background(), registeredModel, uuid.New())
 
@@ -506,6 +508,9 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal(model.ModelStatusFailed))
+		Expect(repo.createdModel.ModelKind).To(Equal(model.ModelKindFineTuned))
+		Expect(repo.createdModel.Source).To(Equal(model.ModelSourceTraining))
+		Expect(repo.createdModel.ServingLoadStatus).To(Equal(model.ModelLoadStatusNotLoaded))
 		Expect(repo.createdModel.FailureReason).To(Equal("training failed"))
 	})
 

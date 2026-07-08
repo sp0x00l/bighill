@@ -37,7 +37,7 @@ var _ = Describe("session context hooks", func() {
 		Expect(recorder.args[0]).To(Equal([]any{userID.String(), orgID.String(), ""}))
 	})
 
-	It("upserts the tenant projection for tenant-scoped service databases", func() {
+	It("sets tenant context without mutating tenant projections for tenant-scoped service databases", func() {
 		recorder := &sessionContextExecRecorder{}
 		userID := uuid.New()
 		orgID := uuid.New()
@@ -46,7 +46,8 @@ var _ = Describe("session context hooks", func() {
 		err := applyConnectionSessionContext(ctx, recorder, "bighill_data_registry_db")
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(recorder.sqls).To(HaveLen(2))
-		Expect(recorder.sqls[1]).To(ContainSubstring("INSERT INTO bighill_data_registry_db.tenants"))
+		Expect(recorder.sqls).To(HaveLen(1))
+		Expect(recorder.sqls[0]).To(ContainSubstring("set_config('app.current_user_id'"))
+		Expect(recorder.args[0]).To(Equal([]any{userID.String(), orgID.String(), ""}))
 	})
 })

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 type FeatureMaterializerServer struct {
 	featurepb.UnimplementedFeatureMaterializerServiceServer
 	searchUsecase usecase.EmbeddingSearchUsecase
+	mu            sync.Mutex
 	grpcServer    *grpc.Server
 	ready         atomic.Bool
 }
@@ -56,7 +58,7 @@ func (s *FeatureMaterializerServer) Connect(port int) error {
 func (s *FeatureMaterializerServer) Serve(lis net.Listener) error {
 	log.Trace("FeatureMaterializerServer Serve")
 
-	s.grpcServer = rpcLib.NewServer(
+	grpcServer := rpcLib.NewServer(
 		grpc.ChainUnaryInterceptor(rpcLib.MetricsUnaryServerInterceptor()),
 		grpc.ChainStreamInterceptor(rpcLib.MetricsStreamServerInterceptor()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
@@ -68,11 +70,15 @@ func (s *FeatureMaterializerServer) Serve(lis net.Listener) error {
 			Timeout: 20 * time.Second,
 		}),
 	)
-	featurepb.RegisterFeatureMaterializerServiceServer(s.grpcServer, s)
+	featurepb.RegisterFeatureMaterializerServiceServer(grpcServer, s)
+
+	s.mu.Lock()
+	s.grpcServer = grpcServer
+	s.mu.Unlock()
 
 	s.ready.Store(true)
 	defer s.ready.Store(false)
-	if err := s.grpcServer.Serve(lis); err != nil {
+	if err := grpcServer.Serve(lis); err != nil {
 		if errors.Is(err, grpc.ErrServerStopped) {
 			return nil
 		}
@@ -85,30 +91,36 @@ func (s *FeatureMaterializerServer) Serve(lis net.Listener) error {
 func (s *FeatureMaterializerServer) Close() {
 	log.Trace("FeatureMaterializerServer Close")
 
-	if s.grpcServer == nil {
+	s.mu.Lock()
+	grpcServer := s.grpcServer
+	s.mu.Unlock()
+	if grpcServer == nil {
 		return
 	}
 	s.ready.Store(false)
-	s.grpcServer.Stop()
+	grpcServer.Stop()
 }
 
 func (s *FeatureMaterializerServer) Shutdown(ctx context.Context) error {
 	log.Trace("FeatureMaterializerServer Shutdown")
 
-	if s.grpcServer == nil {
+	s.mu.Lock()
+	grpcServer := s.grpcServer
+	s.mu.Unlock()
+	if grpcServer == nil {
 		return nil
 	}
 	s.ready.Store(false)
 	done := make(chan struct{})
 	go func() {
-		s.grpcServer.GracefulStop()
+		grpcServer.GracefulStop()
 		close(done)
 	}()
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		s.grpcServer.Stop()
+		grpcServer.Stop()
 		return ctx.Err()
 	}
 }

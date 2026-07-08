@@ -108,9 +108,11 @@ type icebergConfig struct {
 }
 
 type temporalConfig struct {
-	Address   string
-	Namespace string
-	TaskQueue string
+	Address              string
+	Namespace            string
+	TaskQueue            string
+	ConnectTimeout       time.Duration
+	ConnectRetryInterval time.Duration
 }
 
 type healthConfig struct {
@@ -130,6 +132,8 @@ type healthConfig struct {
 func init() {
 	logs.Init()
 }
+
+type temporalDialFunc func(client.Options) (client.Client, error)
 
 func main() {
 	ctx := context.Background()
@@ -172,10 +176,7 @@ func main() {
 	}
 	outboxRelay := messagingConn.NewOutboxRelay(relayOutbox, relayPublisher, cfg.OutboxRelay)
 
-	temporalClient, err := client.Dial(client.Options{
-		HostPort:  cfg.Temporal.Address,
-		Namespace: cfg.Temporal.Namespace,
-	})
+	temporalClient, err := dialTemporalClient(cancelCtx, cfg.Temporal)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to connect to Temporal")
 	}
@@ -350,6 +351,48 @@ func main() {
 	log.Trace(fmt.Sprintf("stopped the %s service", serviceName))
 }
 
+func dialTemporalClient(ctx context.Context, cfg temporalConfig) (client.Client, error) {
+	log.Trace("dialTemporalClient")
+
+	return dialTemporalClientWith(ctx, cfg, client.Dial)
+}
+
+func dialTemporalClientWith(ctx context.Context, cfg temporalConfig, dial temporalDialFunc) (client.Client, error) {
+	log.Trace("dialTemporalClientWith")
+
+	timeout := cfg.ConnectTimeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	interval := cfg.ConnectRetryInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	options := client.Options{
+		HostPort:  cfg.Address,
+		Namespace: cfg.Namespace,
+	}
+	var lastErr error
+	for {
+		temporalClient, err := dial(options)
+		if err == nil {
+			return temporalClient, nil
+		}
+		lastErr = err
+		log.WithContext(ctx).WithError(err).WithFields(log.Fields{
+			"temporal_address":   cfg.Address,
+			"temporal_namespace": cfg.Namespace,
+		}).Warn("Temporal not ready; retrying")
+		select {
+		case <-dialCtx.Done():
+			return nil, fmt.Errorf("connect to Temporal at %s namespace %s: %w: %v", cfg.Address, cfg.Namespace, dialCtx.Err(), lastErr)
+		case <-time.After(interval):
+		}
+	}
+}
+
 func readMaterializerConfig() materializerConfig {
 	env.RequireServiceEnvironment()
 
@@ -435,9 +478,11 @@ func readMaterializerConfig() materializerConfig {
 			S3PathStyle:       env.WithDefaultBool("FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_PATH_STYLE", true),
 		},
 		Temporal: temporalConfig{
-			Address:   env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
-			Namespace: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
-			TaskQueue: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_TASK_QUEUE", usecase.DefaultMaterializeWorkflowTaskQueue),
+			Address:              env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
+			Namespace:            env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
+			TaskQueue:            env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_TASK_QUEUE", usecase.DefaultMaterializeWorkflowTaskQueue),
+			ConnectTimeout:       secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS", "60"),
+			ConnectRetryInterval: secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS", "1"),
 		},
 		GRPCPort:             env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_API_GRPC_PORT", "7072"),
 		DatasetUploadedTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_INGESTION_SUBSCRIBER_TOPIC", "ingestion"),

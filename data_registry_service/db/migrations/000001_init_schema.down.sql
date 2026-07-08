@@ -25,9 +25,9 @@ DROP TABLE IF EXISTS bighill_data_registry_db.connectors;
 DROP TABLE IF EXISTS bighill_data_registry_db.tenants;
 
 DROP TYPE IF EXISTS dataset_processing_state_enum;
-DROP TYPE IF EXISTS origin_enum;
+DROP TYPE IF EXISTS dataset_origin_enum;
 DROP TYPE IF EXISTS storage_type_enum;
-DROP TYPE IF EXISTS status_enum;
+DROP TYPE IF EXISTS dataset_status_enum;
 DROP TYPE IF EXISTS table_format_enum;
 DROP TYPE IF EXISTS catalog_provider_enum;
 DROP TYPE IF EXISTS processing_profile_enum;

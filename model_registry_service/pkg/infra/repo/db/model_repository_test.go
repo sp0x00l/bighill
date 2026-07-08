@@ -335,8 +335,14 @@ var _ = Describe("ModelRepository", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(modelRecord.ModelID).To(Equal(modelID))
 			Expect(poolMock.QueryRowCalledCount).To(Equal(1))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH tenant_projection AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.tenants"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("INSERT INTO test_db.models"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM tenant_projection"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("RETURNING model_id::text"))
+
+			tenantArgs := namedArgs(poolMock.QueryArgs[0])
+			Expect(tenantArgs).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: registered.UserID, Valid: true}))
 
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
@@ -359,6 +365,18 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("promotion_decision", registered.PromotionDecision))
 			Expect(args).To(HaveKeyWithValue("promotion_reason", registered.PromotionReason))
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
+		})
+
+		It("rejects non-base models when the tenant projection is missing", func() {
+			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
+
+			modelRecord, err := repository.Create(ctx, tx, registered, idempotencyKey)
+
+			Expect(modelRecord).To(BeNil())
+			Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("tenant projection is not ready"))
+			Expect(poolMock.QueryRowCalledCount).To(Equal(1))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.tenants"))
 		})
 
 		It("returns the model-exists domain error for idempotency conflicts", func() {

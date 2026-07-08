@@ -144,6 +144,19 @@ func (s *Store) Read(name string) (Record, bool, error) {
 	return out, ok, err
 }
 
+func (s *Store) Delete(name string) error {
+	log.Trace("servedmodel Store Delete")
+
+	return s.withDB(func(db *database) error {
+		if _, ok := db.Items[name]; !ok {
+			return ErrNotFound
+		}
+		delete(db.Items, name)
+		db.ResourceVersion++
+		return nil
+	})
+}
+
 func (s *Store) List(namespace string) ([]Record, string, error) {
 	log.Trace("servedmodel Store List")
 

@@ -36,25 +36,40 @@ func NewModelRepository(db *coreDB.Database) *ModelRepository {
 func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error) {
 	log.Trace("ModelRepository Create")
 
-	query := `INSERT INTO ` + r.Name + `.models (
+	query := `WITH tenant_projection AS (
+		SELECT NULL::uuid AS user_id
+		WHERE @model_kind::model_kind_enum = 'BASE'::model_kind_enum
+		UNION ALL
+		SELECT id AS user_id
+		FROM ` + r.Name + `.tenants
+		WHERE id = @user_id AND deleted = false AND @model_kind::model_kind_enum <> 'BASE'::model_kind_enum
+	)
+	INSERT INTO ` + r.Name + `.models (
 		model_id, user_id, org_id, idempotency_key, training_run_id, dataset_id, model_kind, source, source_uri, source_metadata,
 		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_protocol, serving_load_status,
 		metrics_metadata, promotion_report_uri, promotion_deltas, promotion_decision, promotion_reason, status, failure_reason
-	) VALUES (
-		@model_id, @user_id, @org_id, @idempotency_key, @training_run_id, @dataset_id, @model_kind::model_kind_enum, @source::model_source_enum, @source_uri, @source_metadata::jsonb,
+	)
+		SELECT
+		@model_id,
+		tenant_projection.user_id,
+		CASE WHEN @model_kind::model_kind_enum = 'BASE'::model_kind_enum THEN NULL::uuid ELSE @org_id::uuid END,
+		@idempotency_key, @training_run_id, @dataset_id, @model_kind::model_kind_enum, @source::model_source_enum, @source_uri, @source_metadata::jsonb,
 		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @serving_target, @serving_model, NULLIF(@serving_protocol, '')::serving_protocol_enum, @serving_load_status::model_load_status_enum,
 		@metrics_metadata::jsonb, @promotion_report_uri, @promotion_deltas::jsonb, NULLIF(@promotion_decision, '')::promotion_decision_enum, @promotion_reason, @status::model_status_enum, @failure_reason
-	)
+	FROM tenant_projection
 	RETURNING ` + modelColumns()
 
 	modelRecord, err := scanModel(tx.QueryRow(ctx, query, modelArgs(registeredModel, idempotencyKey)))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, domain.ErrModelExists
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: tenant projection is not ready", domain.ErrValidationFailed)
 		}
 		if coreDB.IsForeignKeyViolation(err) {
 			return nil, fmt.Errorf("%w: tenant projection is not ready", domain.ErrValidationFailed)

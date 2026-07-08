@@ -109,7 +109,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			"rating": -1,
 			"feedback_label": "REJECTED"
 		}]`, exampleID.String(), feedbackID.String(), requestID.String(), userID.String(), orgID.String(), datasetID.String(), modelID.String())
-		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), orgID.String(), modelID.String(), "s3://models/parent", "mistral-7b", 7, rawExamples}}}
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), orgID.String(), modelID.String(), "FINE_TUNED", "s3://models/parent-artifact", "sha256:parent", "s3://models/parent", "mistral-7b", 7, rawExamples}}}
 
 		dataset, err := repository.ReadPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
 			RequestID: requestID,
@@ -125,6 +125,9 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		Expect(dataset.OrgID).To(Equal(orgID))
 		Expect(dataset.DatasetID).To(Equal(datasetID))
 		Expect(dataset.ModelID).To(Equal(modelID))
+		Expect(dataset.ParentModelKind).To(Equal(model.ModelKindFineTuned))
+		Expect(dataset.ParentArtifactURI).To(Equal("s3://models/parent-artifact"))
+		Expect(dataset.ParentArtifactChecksum).To(Equal("sha256:parent"))
 		Expect(dataset.ParentAdapterURI).To(Equal("s3://models/parent"))
 		Expect(dataset.ParentBaseModel).To(Equal("mistral-7b"))
 		Expect(dataset.ParentModelVersion).To(Equal(7))
@@ -140,6 +143,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		Expect(pool.lastQuery).To(ContainSubstring("DISTINCT ON"))
 		Expect(pool.lastQuery).To(ContainSubstring("preference_example_id, feedback_id, request_id, user_id, org_id, dataset_id, model_id"))
 		Expect(pool.lastQuery).To(ContainSubstring("p.preference_example_id DESC"))
+		Expect(pool.lastQuery).NotTo(ContainSubstring("m.adapter_uri <> ''"))
 		args := namedArgs(pool.lastArgs)
 		Expect(args).To(SatisfyAll(
 			HaveKeyWithValue("request_id", pgtype.UUID{Bytes: requestID, Valid: true}),
@@ -147,6 +151,67 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}),
 			HaveKeyWithValue("limit", 100),
 		))
+	})
+
+	It("allows preference exports from a base model without a parent adapter", func() {
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		exampleID := uuid.New()
+		feedbackID := uuid.New()
+		rawExamples := fmt.Sprintf(`[{
+			"preference_example_id": %q,
+			"feedback_id": %q,
+			"request_id": %q,
+			"user_id": %q,
+			"org_id": %q,
+			"dataset_id": %q,
+			"model_id": %q,
+			"split": "TRAIN",
+			"prompt_text": "Prompt",
+			"accepted_answer": "Correct answer",
+			"rejected_answer": "Wrong answer",
+			"rating": -1,
+			"feedback_label": "REJECTED"
+		}]`, exampleID.String(), feedbackID.String(), requestID.String(), userID.String(), orgID.String(), datasetID.String(), modelID.String())
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), orgID.String(), modelID.String(), "BASE", "s3://models/base-artifact", "sha256:base", "", "llama3.1:8b", 1, rawExamples}}}
+
+		dataset, err := repository.ReadPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
+			RequestID: requestID,
+			UserID:    userID,
+			OrgID:     orgID,
+			DatasetID: datasetID,
+			ModelID:   modelID,
+			OutputURI: "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
+			Limit:     100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.ParentModelKind).To(Equal(model.ModelKindBase))
+		Expect(dataset.ParentArtifactURI).To(Equal("s3://models/base-artifact"))
+		Expect(dataset.ParentArtifactChecksum).To(Equal("sha256:base"))
+		Expect(dataset.ParentAdapterURI).To(Equal(""))
+		Expect(dataset.ParentBaseModel).To(Equal("llama3.1:8b"))
+		Expect(dataset.ParentModelVersion).To(Equal(1))
+		Expect(dataset.Examples).To(HaveLen(1))
+	})
+
+	It("rejects a fine-tuned preference parent without an adapter", func() {
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), orgID.String(), modelID.String(), "FINE_TUNED", "s3://models/parent-artifact", "sha256:parent", "", "mistral-7b", 7, "[]"}}}
+
+		dataset, err := repository.ReadPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
+			RequestID: requestID,
+			UserID:    userID,
+			OrgID:     orgID,
+			DatasetID: datasetID,
+			ModelID:   modelID,
+			OutputURI: "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
+			Limit:     100,
+		})
+
+		Expect(dataset).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("fine-tuned preference dataset parent adapter uri is required")))
 	})
 
 	It("records preference dataset snapshots in the supplied transaction", func() {

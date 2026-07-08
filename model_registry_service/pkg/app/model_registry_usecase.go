@@ -212,6 +212,9 @@ func (u *modelRegistryUsecase) RecordModelTrainingFailed(ctx context.Context, fa
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	failedModel.Status = model.ModelStatusFailed
+	failedModel.ModelKind = model.ModelKindFineTuned
+	failedModel.Source = model.ModelSourceTraining
+	failedModel.ServingLoadStatus = model.ModelLoadStatusNotLoaded
 	ctx = contextForModel(ctx, failedModel)
 	out, err = u.createModel(ctx, failedModel, idempotencyKey)
 	if err != nil {

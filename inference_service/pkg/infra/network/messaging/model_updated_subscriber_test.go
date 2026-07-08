@@ -282,6 +282,28 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		Expect(sharedmessaging.IsNonRetryable(err)).To(BeTrue())
 	})
 
+	It("returns non-retryable errors for invalid dataset processing profiles", func() {
+		datasetID := uuid.New()
+		uc := &recordingInferenceUsecase{}
+		listener := inferencemessaging.NewDatasetUpdatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), datasetID, &datasetpb.DatasetUpdatedEvent{
+			DatasetId:         datasetID.String(),
+			UserId:            uuid.NewString(),
+			OrgId:             uuid.NewString(),
+			DatasetVersion:    5,
+			ProcessingState:   "EMBEDDINGS_MATERIALIZED",
+			ProcessingProfile: "RAG",
+			SchemaVersion:     2,
+			SchemaMetadata:    `{"columns":[]}`,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("invalid processing profile"))
+		Expect(sharedmessaging.IsNonRetryable(err)).To(BeTrue())
+		Expect(uc.dataset).To(BeNil())
+	})
+
 	It("returns non-retryable errors for invalid dataset payloads", func() {
 		datasetID := uuid.New()
 		listener := inferencemessaging.NewDatasetUpdatedEventListener(&recordingInferenceUsecase{})

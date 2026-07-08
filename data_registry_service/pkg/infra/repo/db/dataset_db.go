@@ -110,14 +110,14 @@ func (db *datasetDB) Replace(ctx context.Context, tx pgx.Tx, dataset *model.Data
 	datasetDAO := datasetModel.toDAO(dataset)
 
 	var sqlStatement = `UPDATE ` + db.Name + `.datasets SET title = @title, 
-		description = @description, origin = @origin, location = @location,
+		description = @description, origin = @origin::dataset_origin_enum, location = @location,
 		source_type = @source_type::storage_type_enum, source_connector_id = @source_connector_id,
 		source_query = @source_query, source_database = @source_database, source_collection = @source_collection,
 		category = @category,
 		table_namespace = @table_namespace, table_name = @table_name, table_format = @table_format,
 		catalog_provider = @catalog_provider, processing_profile = @processing_profile, schema_version = @schema_version, schema_metadata = @schema_metadata::jsonb,
 		dataset_version = dataset_version + 1
-		WHERE id = @id AND org_id = @org_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
+		WHERE id = @id AND org_id = @org_id AND status != '` + model.Blacklisted.DBString() + `'::dataset_status_enum AND deleted = false
 		RETURNING id, user_id, org_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
@@ -157,13 +157,13 @@ func (db *datasetDB) Delete(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID,
 func (db *datasetDB) UpdateProcessingState(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, bool, error) {
 	log.Trace("DatasetDB UpdateProcessingState")
 
-	requestedRank := processingStateRankSQL("@processing_state")
-	currentRank := processingStateRankSQL("processing_state")
+	requestedState := "@processing_state::dataset_processing_state_enum"
+	currentState := "processing_state"
 	query := `UPDATE ` + db.Name + `.datasets
 		SET processing_state = @processing_state::dataset_processing_state_enum,
 			dataset_version = dataset_version + 1
-		WHERE id = @id AND org_id = @org_id AND status != '` + model.Blacklisted.String() + `' AND deleted = false
-			AND ` + requestedRank + ` > ` + currentRank + `
+		WHERE id = @id AND org_id = @org_id AND status != '` + model.Blacklisted.DBString() + `'::dataset_status_enum AND deleted = false
+			AND ` + requestedState + ` > ` + currentState + `
 		RETURNING id, user_id, org_id, title, description, origin, location, source_type, source_connector_id, source_query, source_database, source_collection, status, category,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
@@ -209,64 +209,87 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 	applyMaterializationOptionalFields(datasetDAO, materialized)
 	datasetDAO["processing_state"] = pgtype.Text{String: state.String(), Valid: true}
 
-	requestedRank := processingStateRankSQL("@processing_state")
-	currentRank := processingStateRankSQL("d.processing_state")
+	requestedState := "@processing_state::dataset_processing_state_enum"
+	currentState := "d.processing_state"
+	metadataUpdateAllowed := `(` + requestedState + ` >= ` + currentState + `)`
+	locationValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@location, ''), d.location) ELSE d.location END`
+	tableNamespaceValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@table_namespace, ''), d.table_namespace) ELSE d.table_namespace END`
+	tableNameValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@table_name, ''), d.table_name) ELSE d.table_name END`
+	tableFormatValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@table_format, '')::table_format_enum, d.table_format) ELSE d.table_format END`
+	catalogProviderValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@catalog_provider, '')::catalog_provider_enum, d.catalog_provider) ELSE d.catalog_provider END`
+	processingProfileValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@processing_profile, '')::processing_profile_enum, d.processing_profile) ELSE d.processing_profile END`
+	schemaVersionValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN CASE WHEN @schema_version > 0 THEN @schema_version ELSE d.schema_version END ELSE d.schema_version END`
+	schemaMetadataValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@schema_metadata, '')::jsonb, d.schema_metadata) ELSE d.schema_metadata END`
+	rawSnapshotIDValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(@raw_snapshot_id, d.raw_snapshot_id) ELSE d.raw_snapshot_id END`
+	featureSnapshotIDValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(@feature_snapshot_id, d.feature_snapshot_id) ELSE d.feature_snapshot_id END`
+	embeddingSnapshotIDValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(@embedding_snapshot_id, d.embedding_snapshot_id) ELSE d.embedding_snapshot_id END`
+	vectorStoreValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@vector_store, ''), d.vector_store) ELSE d.vector_store END`
+	collectionNameValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@collection_name, ''), d.collection_name) ELSE d.collection_name END`
+	embeddingDimensionsValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN CASE WHEN @embedding_dimensions > 0 THEN @embedding_dimensions ELSE d.embedding_dimensions END ELSE d.embedding_dimensions END`
+	embeddingCountValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END ELSE d.embedding_count END`
+	embeddingStrategyVersionValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@embedding_strategy_version, ''), d.embedding_strategy_version) ELSE d.embedding_strategy_version END`
+	embeddingChunkerNameValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@embedding_chunker_name, ''), d.embedding_chunker_name) ELSE d.embedding_chunker_name END`
+	embeddingChunkerVersionValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@embedding_chunker_version, ''), d.embedding_chunker_version) ELSE d.embedding_chunker_version END`
+	embeddingChunkSizeValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN CASE WHEN @embedding_chunk_size > 0 THEN @embedding_chunk_size ELSE d.embedding_chunk_size END ELSE d.embedding_chunk_size END`
+	embeddingChunkOverlapValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN CASE WHEN @embedding_chunk_overlap > 0 THEN @embedding_chunk_overlap ELSE d.embedding_chunk_overlap END ELSE d.embedding_chunk_overlap END`
+	embeddingProviderValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider) ELSE d.embedding_provider END`
+	embeddingModelValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@embedding_model, ''), d.embedding_model) ELSE d.embedding_model END`
 	query := `UPDATE ` + db.Name + `.datasets d
-		SET location = COALESCE(NULLIF(@location, ''), d.location),
-			table_namespace = COALESCE(NULLIF(@table_namespace, ''), d.table_namespace),
-			table_name = COALESCE(NULLIF(@table_name, ''), d.table_name),
-			table_format = COALESCE(NULLIF(@table_format, '')::table_format_enum, d.table_format),
-			catalog_provider = COALESCE(NULLIF(@catalog_provider, '')::catalog_provider_enum, d.catalog_provider),
-			processing_profile = COALESCE(NULLIF(@processing_profile, '')::processing_profile_enum, d.processing_profile),
-			schema_version = CASE WHEN @schema_version > 0 THEN @schema_version ELSE d.schema_version END,
-			schema_metadata = COALESCE(NULLIF(@schema_metadata, '')::jsonb, d.schema_metadata),
+		SET location = ` + locationValue + `,
+			table_namespace = ` + tableNamespaceValue + `,
+			table_name = ` + tableNameValue + `,
+			table_format = ` + tableFormatValue + `,
+			catalog_provider = ` + catalogProviderValue + `,
+			processing_profile = ` + processingProfileValue + `,
+			schema_version = ` + schemaVersionValue + `,
+			schema_metadata = ` + schemaMetadataValue + `,
 			processing_state = CASE
-				WHEN ` + requestedRank + ` > ` + currentRank + ` THEN @processing_state::dataset_processing_state_enum
+				WHEN ` + requestedState + ` > ` + currentState + ` THEN @processing_state::dataset_processing_state_enum
 				ELSE d.processing_state
 			END,
 			dataset_version = d.dataset_version + 1,
-			raw_snapshot_id = COALESCE(@raw_snapshot_id, d.raw_snapshot_id),
-			feature_snapshot_id = COALESCE(@feature_snapshot_id, d.feature_snapshot_id),
-			embedding_snapshot_id = COALESCE(@embedding_snapshot_id, d.embedding_snapshot_id),
-			vector_store = COALESCE(NULLIF(@vector_store, ''), d.vector_store),
-			collection_name = COALESCE(NULLIF(@collection_name, ''), d.collection_name),
-			embedding_dimensions = CASE WHEN @embedding_dimensions > 0 THEN @embedding_dimensions ELSE d.embedding_dimensions END,
-			embedding_count = CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END,
-			embedding_strategy_version = COALESCE(NULLIF(@embedding_strategy_version, ''), d.embedding_strategy_version),
-			embedding_chunker_name = COALESCE(NULLIF(@embedding_chunker_name, ''), d.embedding_chunker_name),
-			embedding_chunker_version = COALESCE(NULLIF(@embedding_chunker_version, ''), d.embedding_chunker_version),
-			embedding_chunk_size = CASE WHEN @embedding_chunk_size > 0 THEN @embedding_chunk_size ELSE d.embedding_chunk_size END,
-			embedding_chunk_overlap = CASE WHEN @embedding_chunk_overlap > 0 THEN @embedding_chunk_overlap ELSE d.embedding_chunk_overlap END,
-			embedding_provider = COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider),
-			embedding_model = COALESCE(NULLIF(@embedding_model, ''), d.embedding_model)
+			raw_snapshot_id = ` + rawSnapshotIDValue + `,
+			feature_snapshot_id = ` + featureSnapshotIDValue + `,
+			embedding_snapshot_id = ` + embeddingSnapshotIDValue + `,
+			vector_store = ` + vectorStoreValue + `,
+			collection_name = ` + collectionNameValue + `,
+			embedding_dimensions = ` + embeddingDimensionsValue + `,
+			embedding_count = ` + embeddingCountValue + `,
+			embedding_strategy_version = ` + embeddingStrategyVersionValue + `,
+			embedding_chunker_name = ` + embeddingChunkerNameValue + `,
+			embedding_chunker_version = ` + embeddingChunkerVersionValue + `,
+			embedding_chunk_size = ` + embeddingChunkSizeValue + `,
+			embedding_chunk_overlap = ` + embeddingChunkOverlapValue + `,
+			embedding_provider = ` + embeddingProviderValue + `,
+			embedding_model = ` + embeddingModelValue + `
 		WHERE d.id = @id
 			AND d.org_id = @org_id
-			AND d.status != '` + model.Blacklisted.String() + `'
+			AND d.status != '` + model.Blacklisted.DBString() + `'::dataset_status_enum
 			AND d.deleted = false
 			AND (
-				` + requestedRank + ` > ` + currentRank + `
-				OR d.location IS DISTINCT FROM COALESCE(NULLIF(@location, ''), d.location)
-				OR d.table_namespace IS DISTINCT FROM COALESCE(NULLIF(@table_namespace, ''), d.table_namespace)
-				OR d.table_name IS DISTINCT FROM COALESCE(NULLIF(@table_name, ''), d.table_name)
-				OR d.table_format IS DISTINCT FROM COALESCE(NULLIF(@table_format, '')::table_format_enum, d.table_format)
-				OR d.catalog_provider IS DISTINCT FROM COALESCE(NULLIF(@catalog_provider, '')::catalog_provider_enum, d.catalog_provider)
-				OR d.processing_profile IS DISTINCT FROM COALESCE(NULLIF(@processing_profile, '')::processing_profile_enum, d.processing_profile)
-				OR d.schema_version IS DISTINCT FROM CASE WHEN @schema_version > 0 THEN @schema_version ELSE d.schema_version END
-				OR d.schema_metadata IS DISTINCT FROM COALESCE(NULLIF(@schema_metadata, '')::jsonb, d.schema_metadata)
-				OR d.raw_snapshot_id IS DISTINCT FROM COALESCE(@raw_snapshot_id, d.raw_snapshot_id)
-				OR d.feature_snapshot_id IS DISTINCT FROM COALESCE(@feature_snapshot_id, d.feature_snapshot_id)
-				OR d.embedding_snapshot_id IS DISTINCT FROM COALESCE(@embedding_snapshot_id, d.embedding_snapshot_id)
-				OR d.vector_store IS DISTINCT FROM COALESCE(NULLIF(@vector_store, ''), d.vector_store)
-				OR d.collection_name IS DISTINCT FROM COALESCE(NULLIF(@collection_name, ''), d.collection_name)
-				OR d.embedding_dimensions IS DISTINCT FROM CASE WHEN @embedding_dimensions > 0 THEN @embedding_dimensions ELSE d.embedding_dimensions END
-				OR d.embedding_count IS DISTINCT FROM CASE WHEN @embedding_count > 0 THEN @embedding_count ELSE d.embedding_count END
-				OR d.embedding_strategy_version IS DISTINCT FROM COALESCE(NULLIF(@embedding_strategy_version, ''), d.embedding_strategy_version)
-				OR d.embedding_chunker_name IS DISTINCT FROM COALESCE(NULLIF(@embedding_chunker_name, ''), d.embedding_chunker_name)
-				OR d.embedding_chunker_version IS DISTINCT FROM COALESCE(NULLIF(@embedding_chunker_version, ''), d.embedding_chunker_version)
-				OR d.embedding_chunk_size IS DISTINCT FROM CASE WHEN @embedding_chunk_size > 0 THEN @embedding_chunk_size ELSE d.embedding_chunk_size END
-				OR d.embedding_chunk_overlap IS DISTINCT FROM CASE WHEN @embedding_chunk_overlap > 0 THEN @embedding_chunk_overlap ELSE d.embedding_chunk_overlap END
-				OR d.embedding_provider IS DISTINCT FROM COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider)
-				OR d.embedding_model IS DISTINCT FROM COALESCE(NULLIF(@embedding_model, ''), d.embedding_model)
+				` + requestedState + ` > ` + currentState + `
+				OR d.location IS DISTINCT FROM ` + locationValue + `
+				OR d.table_namespace IS DISTINCT FROM ` + tableNamespaceValue + `
+				OR d.table_name IS DISTINCT FROM ` + tableNameValue + `
+				OR d.table_format IS DISTINCT FROM ` + tableFormatValue + `
+				OR d.catalog_provider IS DISTINCT FROM ` + catalogProviderValue + `
+				OR d.processing_profile IS DISTINCT FROM ` + processingProfileValue + `
+				OR d.schema_version IS DISTINCT FROM ` + schemaVersionValue + `
+				OR d.schema_metadata IS DISTINCT FROM ` + schemaMetadataValue + `
+				OR d.raw_snapshot_id IS DISTINCT FROM ` + rawSnapshotIDValue + `
+				OR d.feature_snapshot_id IS DISTINCT FROM ` + featureSnapshotIDValue + `
+				OR d.embedding_snapshot_id IS DISTINCT FROM ` + embeddingSnapshotIDValue + `
+				OR d.vector_store IS DISTINCT FROM ` + vectorStoreValue + `
+				OR d.collection_name IS DISTINCT FROM ` + collectionNameValue + `
+				OR d.embedding_dimensions IS DISTINCT FROM ` + embeddingDimensionsValue + `
+				OR d.embedding_count IS DISTINCT FROM ` + embeddingCountValue + `
+				OR d.embedding_strategy_version IS DISTINCT FROM ` + embeddingStrategyVersionValue + `
+				OR d.embedding_chunker_name IS DISTINCT FROM ` + embeddingChunkerNameValue + `
+				OR d.embedding_chunker_version IS DISTINCT FROM ` + embeddingChunkerVersionValue + `
+				OR d.embedding_chunk_size IS DISTINCT FROM ` + embeddingChunkSizeValue + `
+				OR d.embedding_chunk_overlap IS DISTINCT FROM ` + embeddingChunkOverlapValue + `
+				OR d.embedding_provider IS DISTINCT FROM ` + embeddingProviderValue + `
+				OR d.embedding_model IS DISTINCT FROM ` + embeddingModelValue + `
 			)
 		RETURNING d.id, d.user_id, d.org_id, d.title, d.description, d.origin, d.location, d.source_type, d.source_connector_id, d.source_query, d.source_database, d.source_collection, d.status, d.category,
 			d.table_namespace, d.table_name, d.table_format, d.catalog_provider, d.processing_profile, d.schema_version, d.schema_metadata::text, d.processing_state::text,
@@ -314,7 +337,7 @@ func hasTableMaterializationMetadata(dataset *model.Dataset) bool {
 func (db *datasetDB) readMaterializationDatasetTx(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, userID uuid.UUID) (*model.Dataset, error) {
 	log.Trace("DatasetDB readMaterializationDatasetTx")
 
-	whereClause := "id = @id AND org_id = @org_id AND status != '" + model.Blacklisted.String() + "' AND deleted = false"
+	whereClause := "id = @id AND org_id = @org_id AND status != '" + model.Blacklisted.DBString() + "'::dataset_status_enum AND deleted = false"
 	query := db.getSelectSQL(whereClause)
 	return fromDatasetRow(ctx, tx.QueryRow(ctx, query, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": datasetID})))
 }
@@ -322,9 +345,13 @@ func (db *datasetDB) readMaterializationDatasetTx(ctx context.Context, tx pgx.Tx
 func (db *datasetDB) UpdatePublishedState(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, userID uuid.UUID) error {
 	log.Trace("DatasetDB UpdatePublishedState")
 
-	sqlStatement := fmt.Sprintf(`UPDATE %s.datasets SET status = '%s', published_at = LOCALTIMESTAMP 
-	WHERE id = @id AND org_id = @org_id AND status = '%s' AND deleted = false;`, db.Name, model.Published.String(), model.Draft.String())
-	cmdTag, err := tx.Exec(ctx, sqlStatement, db.scopedArgs(ctx, userID, pgx.NamedArgs{"id": datasetID}))
+	sqlStatement := fmt.Sprintf(`UPDATE %s.datasets SET status = @published_status::dataset_status_enum, published_at = LOCALTIMESTAMP 
+	WHERE id = @id AND org_id = @org_id AND status = @draft_status::dataset_status_enum AND deleted = false;`, db.Name)
+	cmdTag, err := tx.Exec(ctx, sqlStatement, db.scopedArgs(ctx, userID, pgx.NamedArgs{
+		"id":               datasetID,
+		"published_status": model.Published.DBString(),
+		"draft_status":     model.Draft.DBString(),
+	}))
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Errorf("database error. Failed to update dataset published status for dataset ID: %s", datasetID.String())
 		wrappedErr := fmt.Errorf("database error. Failed to update dataset published status: %w", err)
@@ -470,17 +497,4 @@ func (db *datasetDB) scanRows(ctx context.Context, rows pgx.Rows) ([]*model.Data
 	}
 
 	return datasets, nil
-}
-
-func processingStateRankSQL(expression string) string {
-	log.Trace("processingStateRankSQL")
-
-	return `(CASE ` + expression + `::text
-		WHEN 'PENDING' THEN 0
-		WHEN 'RAW_MATERIALIZED' THEN 1
-		WHEN 'FEATURE_MATERIALIZED' THEN 2
-		WHEN 'EMBEDDINGS_MATERIALIZED' THEN 3
-		WHEN 'FAILED' THEN 4
-		ELSE -1
-	END)`
 }

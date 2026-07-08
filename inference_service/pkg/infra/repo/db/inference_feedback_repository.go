@@ -96,6 +96,7 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 	datasetID := ""
 	userID := ""
 	modelID := ""
+	parentModelKindValue := ""
 	query := `WITH request_scope AS (
 		SELECT
 			req.request_id,
@@ -103,6 +104,9 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 			req.org_id,
 			req.dataset_id,
 			req.model_id,
+			m.model_kind,
+			m.artifact_location,
+			m.artifact_checksum,
 			m.adapter_uri,
 			m.base_model,
 			m.model_version
@@ -114,7 +118,6 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 		  AND (@dataset_id::uuid IS NULL OR req.dataset_id = @dataset_id)
 		  AND (@model_id::uuid IS NULL OR req.model_id = @model_id)
 		  AND req.model_id IS NOT NULL
-		  AND m.adapter_uri <> ''
 	), eligible_examples AS (
 		SELECT DISTINCT ON (p.prompt_text, p.accepted_answer, p.rejected_answer)
 			p.preference_example_id::text,
@@ -151,6 +154,9 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 		s.user_id::text,
 		s.org_id::text,
 		s.model_id::text,
+		s.model_kind::text,
+		s.artifact_location,
+		s.artifact_checksum,
 		s.adapter_uri,
 		s.base_model,
 		s.model_version,
@@ -174,15 +180,27 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 			), '[]'::jsonb)::text
 	FROM request_scope s`
 	row := r.Pool.QueryRow(ctx, query, preferenceDatasetArgs(request))
+	parentArtifactURI := ""
+	parentArtifactChecksum := ""
 	parentAdapterURI := ""
 	parentBaseModel := ""
 	parentModelVersion := 0
 	orgID := ""
-	if err := row.Scan(&datasetID, &userID, &orgID, &modelID, &parentAdapterURI, &parentBaseModel, &parentModelVersion, &raw); err != nil {
+	if err := row.Scan(&datasetID, &userID, &orgID, &modelID, &parentModelKindValue, &parentArtifactURI, &parentArtifactChecksum, &parentAdapterURI, &parentBaseModel, &parentModelVersion, &raw); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, domain.ErrValidationFailed.Extend("preference dataset request does not match an inference request with a model")
 		}
 		return nil, fmt.Errorf("read preference dataset: %w", err)
+	}
+	parentModelKind := model.ToModelKind(parentModelKindValue)
+	if !model.IsKnownModelKind(parentModelKind) {
+		return nil, domain.ErrValidationFailed.Extend("preference dataset parent model kind is required")
+	}
+	if strings.TrimSpace(parentArtifactURI) == "" {
+		return nil, domain.ErrValidationFailed.Extend("preference dataset parent artifact uri is required")
+	}
+	if parentModelKind == model.ModelKindFineTuned && strings.TrimSpace(parentAdapterURI) == "" {
+		return nil, domain.ErrValidationFailed.Extend("fine-tuned preference dataset parent adapter uri is required")
 	}
 	examples, err := decodePreferenceExamples(raw)
 	if err != nil {
@@ -190,20 +208,23 @@ func (r *InferenceFeedbackRepository) ReadPreferenceDataset(ctx context.Context,
 	}
 	examples = ensurePreferenceTrainingSplit(examples)
 	return &model.PreferenceDataset{
-		RequestID:          request.RequestID,
-		UserID:             uuid.MustParse(userID),
-		OrgID:              uuid.MustParse(orgID),
-		DatasetID:          uuid.MustParse(datasetID),
-		ModelID:            uuid.MustParse(modelID),
-		ParentAdapterURI:   parentAdapterURI,
-		ParentBaseModel:    parentBaseModel,
-		ParentModelVersion: parentModelVersion,
-		OutputURI:          request.OutputURI,
-		Format:             "DPO_JSONL",
-		EligibilityPolicy:  "complete_rejected_pairs_by_source_model_v1",
-		MinExamples:        request.MinExamples,
-		Limit:              request.Limit,
-		Examples:           examples,
+		RequestID:              request.RequestID,
+		UserID:                 uuid.MustParse(userID),
+		OrgID:                  uuid.MustParse(orgID),
+		DatasetID:              uuid.MustParse(datasetID),
+		ModelID:                uuid.MustParse(modelID),
+		ParentModelKind:        parentModelKind,
+		ParentArtifactURI:      parentArtifactURI,
+		ParentArtifactChecksum: parentArtifactChecksum,
+		ParentAdapterURI:       parentAdapterURI,
+		ParentBaseModel:        parentBaseModel,
+		ParentModelVersion:     parentModelVersion,
+		OutputURI:              request.OutputURI,
+		Format:                 "DPO_JSONL",
+		EligibilityPolicy:      "complete_rejected_pairs_by_source_model_v1",
+		MinExamples:            request.MinExamples,
+		Limit:                  request.Limit,
+		Examples:               examples,
 	}, nil
 }
 

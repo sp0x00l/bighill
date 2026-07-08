@@ -41,6 +41,7 @@ func TestIngestionIntegration(t *testing.T) {
 
 type testAuthenticator struct {
 	userID uuid.UUID
+	orgID  uuid.UUID
 }
 
 type memoryMultipartFile struct {
@@ -52,7 +53,7 @@ func (f memoryMultipartFile) Close() error {
 }
 
 func (a testAuthenticator) Authenticate(context.Context, *http.Request) (resthandler.AuthResult, error) {
-	return resthandler.AuthResult{UserID: a.userID, ExpUnix: time.Now().Add(time.Hour).Unix()}, nil
+	return resthandler.AuthResult{UserID: a.userID, OrgID: a.orgID, ExpUnix: time.Now().Add(time.Hour).Unix()}, nil
 }
 
 var _ = Describe("Ingestion integration", Ordered, func() {
@@ -170,12 +171,14 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 	It("uploads a file to local object storage and records a Kafka dataset_file_uploaded event", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		Expect(upsertIngestionTenant(ctx, database, userID)).To(Succeed())
-		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID))).To(Succeed())
+		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID, orgID))).To(Succeed())
 
 		upload := &model.DataFile{
 			DatasetID:         datasetID,
 			UserID:            userID,
+			OrgID:             orgID,
 			File:              memoryMultipartFile{Reader: bytes.NewReader([]byte("title,release_year\nMetropolis,1927\n"))},
 			Extension:         "csv",
 			ContentType:       "text/csv",
@@ -192,6 +195,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 		Expect(envelope.MsgType).To(Equal(messaging.MsgTypeDatasetFileUploaded))
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.UserId).To(Equal(userID.String()))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 		Expect(event.ContentType).To(Equal("text/csv"))
 		Expect(event.FileExtension).To(Equal("csv"))
 		Expect(event.StorageLocation).To(HavePrefix("s3://local-dev-bucket/raw/" + userID.String() + "/" + datasetID.String() + "/"))
@@ -205,9 +209,10 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 	It("does not upload or publish when the dataset is blacklisted", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		Expect(upsertIngestionTenant(ctx, database, userID)).To(Succeed())
-		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID))).To(Succeed())
-		Expect(datasets.BlacklistDataset(ctx, datasetID, userID)).To(Succeed())
+		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID, orgID))).To(Succeed())
+		Expect(datasets.BlacklistDataset(ctxutil.WithActorOrg(ctx, userID, orgID), datasetID, userID)).To(Succeed())
 
 		detector := resthandler.NewDetector(map[string]resthandler.FormatValidatorFunc{
 			resthandler.FileTypeCSV:      resthandler.IsCSV,
@@ -219,7 +224,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 			resthandler.FileTypeText:     resthandler.IsText,
 		})
 		uploadDTOAdapter := ingestionadapter.NewUploadDTOAdapter(serializers.NewJSONSerializer())
-		handler := resthandler.NewDataUploadHandlers(uploader, datasets, uploadDTOAdapter, detector, testAuthenticator{userID: userID}, 1024*1024)
+		handler := resthandler.NewDataUploadHandlers(uploader, datasets, uploadDTOAdapter, detector, testAuthenticator{userID: userID, orgID: orgID}, 1024*1024)
 
 		req := uploadRequest(datasetID, "movies.csv", []byte("title,release_year\nMetropolis,1927\n"))
 		response, err := handler.UploadDataFile(ctx, req)
@@ -234,13 +239,15 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 	It("promotes a large presigned parquet upload and records a Kafka dataset_file_uploaded event", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
 		Expect(upsertIngestionTenant(ctx, database, userID)).To(Succeed())
-		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID))).To(Succeed())
+		Expect(datasets.AddDataset(ctx, validIngestionDataset(datasetID, userID, orgID))).To(Succeed())
 
 		parquet := largeParquetObject(6*1000*1000 + 8)
 		initiated, err := uploader.InitiateUploadSession(ctx, model.InitiateUploadSessionRequest{
 			DatasetID:           datasetID,
 			UserID:              userID,
+			OrgID:               orgID,
 			ClientNonce:         "large-parquet-" + datasetID.String(),
 			FileName:            "large report.parquet",
 			DeclaredFormat:      resthandler.FileTypeParquet,
@@ -261,6 +268,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 		completed, err := uploader.CompleteUploadSession(ctx, model.CompleteUploadSessionRequest{
 			UploadID: initiated.UploadID,
 			UserID:   userID,
+			OrgID:    orgID,
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(completed.Status).To(Equal(model.UploadSessionPromoted))
@@ -269,6 +277,7 @@ var _ = Describe("Ingestion integration", Ordered, func() {
 
 		envelope, event := consumeDatasetUploadedEvent(ctx, brokers, topic, datasetID)
 		Expect(envelope.ResourceKey).To(Equal(datasetID))
+		Expect(event.OrgId).To(Equal(orgID.String()))
 		Expect(event.FileExtension).To(Equal(resthandler.FileTypeParquet))
 		Expect(event.ContentType).To(Equal("application/vnd.apache.parquet"))
 		Expect(event.StorageLocation).To(Equal(completed.StorageLocation))
@@ -300,10 +309,11 @@ func uploadRequest(datasetID uuid.UUID, filename string, content []byte) *http.R
 	return mux.SetURLVars(req, map[string]string{"id": datasetID.String()})
 }
 
-func validIngestionDataset(datasetID, userID uuid.UUID) *model.Dataset {
+func validIngestionDataset(datasetID, userID, orgID uuid.UUID) *model.Dataset {
 	return &model.Dataset{
 		DatasetID:         datasetID,
 		UserID:            userID,
+		OrgID:             orgID,
 		TableNamespace:    "features",
 		TableName:         "movies",
 		TableFormat:       "PARQUET",

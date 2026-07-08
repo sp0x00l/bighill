@@ -14,7 +14,6 @@ import (
 )
 
 const resetSessionContextTimeout = 5 * time.Second
-const profileDatabaseName = "bighill_profile_db"
 
 type sessionContextExecutor interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -59,16 +58,7 @@ func applyConnectionSessionContext(ctx context.Context, conn sessionContextExecu
 	}
 	if tenantID, ok := ctxutil.TenantID(ctx); ok {
 		tenantIDText := tenantID.String()
-		if err := setConnectionSessionContext(ctx, conn, tenantIDText, orgIDText, ""); err != nil {
-			return err
-		}
-		if dbName == profileDatabaseName {
-			return nil
-		}
-		if err := ensureTenantProjection(ctx, conn, dbName, tenantIDText); err != nil {
-			return err
-		}
-		return nil
+		return setConnectionSessionContext(ctx, conn, tenantIDText, orgIDText, "")
 	}
 	if orgIDText != "" {
 		return setConnectionSessionContext(ctx, conn, "", orgIDText, "")
@@ -88,19 +78,6 @@ func setConnectionSessionContext(ctx context.Context, conn sessionContextExecuto
 		systemContext,
 	); err != nil {
 		return fmt.Errorf("set database session context: %w", err)
-	}
-	return nil
-}
-
-func ensureTenantProjection(ctx context.Context, conn sessionContextExecutor, dbName string, tenantID string) error {
-	if !isSafeDatabaseName(dbName) {
-		return fmt.Errorf("ensure tenant projection: invalid database/schema name %q", dbName)
-	}
-	if _, err := conn.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s.tenants (id) VALUES ($1::uuid) ON CONFLICT (id) DO NOTHING`, dbName),
-		tenantID,
-	); err != nil {
-		return fmt.Errorf("ensure tenant projection: %w", err)
 	}
 	return nil
 }

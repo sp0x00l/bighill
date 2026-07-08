@@ -2,11 +2,13 @@ package localserving
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	localstore "lib/shared_lib/servedmodel"
+	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
 	"github.com/google/uuid"
@@ -111,5 +113,70 @@ var _ = Describe("Local serving adapter", func() {
 		_, err = observer.ProcessSnapshot(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(recorder.statuses).To(HaveLen(1))
+	})
+
+	It("removes stale local served model records when the registry model no longer exists", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
+		adapter, err := NewAdapter("default", path)
+		Expect(err).NotTo(HaveOccurred())
+		modelID := uuid.New()
+		Expect(adapter.EnsureServedModel(context.Background(), &model.Model{
+			ModelID:      modelID,
+			ModelKind:    model.ModelKindBase,
+			Name:         "llama",
+			ModelVersion: 1,
+			BaseModel:    "meta-llama/Llama",
+		})).To(Succeed())
+		name := ServedModelName(modelID, 1)
+		Expect(adapter.store.UpdateStatus(name, localstore.Status{
+			ServingLoadStatus:  model.ModelLoadStatusLoaded.String(),
+			ServingTarget:      "http://runtime",
+			ServingModel:       "llama",
+			ServingProtocol:    model.ServingProtocolOllamaGenerate.String(),
+			ObservedGeneration: 1,
+		})).To(Succeed())
+		recorder := &statusRecorderStub{err: domain.ErrModelNotFound}
+		observer, err := NewStatusObserver(adapter, recorder, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = observer.ProcessSnapshot(context.Background())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recorder.statuses).To(HaveLen(1))
+		_, ok, err := adapter.store.Read(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+	})
+
+	It("keeps local served model records for non-not-found recorder errors", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
+		adapter, err := NewAdapter("default", path)
+		Expect(err).NotTo(HaveOccurred())
+		modelID := uuid.New()
+		Expect(adapter.EnsureServedModel(context.Background(), &model.Model{
+			ModelID:      modelID,
+			ModelKind:    model.ModelKindBase,
+			Name:         "llama",
+			ModelVersion: 1,
+			BaseModel:    "meta-llama/Llama",
+		})).To(Succeed())
+		name := ServedModelName(modelID, 1)
+		Expect(adapter.store.UpdateStatus(name, localstore.Status{
+			ServingLoadStatus:  model.ModelLoadStatusLoaded.String(),
+			ServingTarget:      "http://runtime",
+			ServingModel:       "llama",
+			ServingProtocol:    model.ServingProtocolOllamaGenerate.String(),
+			ObservedGeneration: 1,
+		})).To(Succeed())
+		recorder := &statusRecorderStub{err: errors.New("database unavailable")}
+		observer, err := NewStatusObserver(adapter, recorder, time.Second)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = observer.ProcessSnapshot(context.Background())
+
+		Expect(err).NotTo(HaveOccurred())
+		_, ok, err := adapter.store.Read(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
 	})
 })

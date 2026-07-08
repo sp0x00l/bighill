@@ -19,11 +19,15 @@ func (s OriginType) String() string {
 	return [...]string{"standard", "community"}[s]
 }
 
+func (s OriginType) DBString() string {
+	return [...]string{"STANDARD", "COMMUNITY"}[s]
+}
+
 func ToOriginType(s string) (OriginType, error) {
-	switch s {
-	case "standard":
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "STANDARD":
 		return Standard, nil
-	case "community":
+	case "COMMUNITY":
 		return Community, nil
 	default:
 		return 0, errors.New("invalid OriginType")
@@ -42,13 +46,17 @@ func (s StatusType) String() string {
 	return [...]string{"draft", "published", "blacklisted"}[s]
 }
 
+func (s StatusType) DBString() string {
+	return [...]string{"DRAFT", "PUBLISHED", "BLACKLISTED"}[s]
+}
+
 func ToStatusType(s string) (StatusType, error) {
-	switch s {
-	case "draft":
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "DRAFT":
 		return Draft, nil
-	case "published":
+	case "PUBLISHED":
 		return Published, nil
-	case "blacklisted":
+	case "BLACKLISTED":
 		return Blacklisted, nil
 	default:
 		return 0, errors.New("invalid StatusType")

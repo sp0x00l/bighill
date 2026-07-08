@@ -77,7 +77,9 @@ func (u *DatasetUsecase) DatasetForUpload(ctx context.Context, datasetID, userID
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	if _, ok := ctxutil.OrgID(ctx); !ok {
+		return nil, domain.ErrValidationFailed.Extend("org id is required")
+	}
 	return u.datasetsRepository.ReadForUpload(ctx, datasetID, userID)
 }
 
@@ -90,7 +92,9 @@ func (u *DatasetUsecase) BlacklistDataset(ctx context.Context, datasetID, userID
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	if _, ok := ctxutil.OrgID(ctx); !ok {
+		return domain.ErrValidationFailed.Extend("org id is required")
+	}
 	return u.datasetsRepository.BlacklistDataset(ctx, datasetID, userID)
 }
 
@@ -103,6 +107,8 @@ func (u *DatasetUsecase) DeleteDataset(ctx context.Context, datasetID, userID uu
 	)
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	ctx = ctxutil.WithTenantID(ctx, userID)
+	if _, ok := ctxutil.OrgID(ctx); !ok {
+		return domain.ErrValidationFailed.Extend("org id is required")
+	}
 	return u.datasetsRepository.DeleteDataset(ctx, datasetID, userID)
 }

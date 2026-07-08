@@ -1,8 +1,6 @@
-module pdf_extractor_lib
+module lib/pdf_extractor_lib
 
 go 1.26.4
-
-replace lib/pdf_extractor_lib => ../pdf_extractor_lib
 
 replace lib/shared_lib => ../shared_lib
 
@@ -10,7 +8,6 @@ require (
 	github.com/onsi/ginkgo/v2 v2.32.0
 	github.com/onsi/gomega v1.42.1
 	github.com/sirupsen/logrus v1.9.4
-	lib/pdf_extractor_lib v0.0.0-00010101000000-000000000000
 )
 
 require (

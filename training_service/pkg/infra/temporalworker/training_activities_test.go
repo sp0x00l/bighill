@@ -236,6 +236,7 @@ var _ = Describe("TrainingActivities", func() {
 			ParentModelID:        uuid.NewString(),
 			ParentModelVersion:   "7",
 			ParentAdapterURI:     "s3://models/parent-adapter",
+			SourceModelKind:      "FINE_TUNED",
 			ModelName:            "dpo-parent-model",
 			ModelVersion:         "8",
 			BaseModel:            "mistral-7b",
@@ -258,6 +259,72 @@ var _ = Describe("TrainingActivities", func() {
 		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("\t"))
 		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("sample_packing:"))
 		expectValidYAML(executor.trainingSpec.RecipeYAML)
+	})
+
+	It("builds a DPO recipe from a base model without a parent adapter", func() {
+		executor := &recordingTrainingExecutor{artifact: &model.TrainedModelArtifact{
+			TrainingRunID:     "training-run-dpo-base",
+			ModelURI:          "s3://models/training-run-dpo-base",
+			ModelName:         "dpo-base-model",
+			ModelVersion:      "2",
+			BaseModel:         "llama3.1:8b",
+			ArtifactFormat:    "HF_PEFT_ADAPTER",
+			ArtifactChecksum:  "sha256:dpo-base",
+			ArtifactSizeBytes: 128,
+		}}
+		activities := temporalworker.NewTrainingActivities(nil, temporalworker.WithExecutor(executor), temporalworker.WithModelURIPrefix("s3://models"))
+
+		_, err := activities.RunTrainingJob(context.Background(), model.PreparedTrainingDataset{
+			TrainingRunID: "training-run-dpo-base",
+			DatasetURI:    "s3://local-dev-bucket/preferences/snapshot.jsonl",
+		}, model.TrainingRunRequest{
+			TrainingRunID:        "training-run-dpo-base",
+			DatasetID:            uuid.NewString(),
+			DatasetVersion:       "1",
+			PreferenceDatasetID:  uuid.NewString(),
+			PreferenceDatasetURI: "s3://local-dev-bucket/preferences/snapshot.jsonl",
+			ParentModelID:        uuid.NewString(),
+			ParentModelVersion:   "1",
+			SourceModelKind:      "BASE",
+			ModelName:            "dpo-base-model",
+			ModelVersion:         "2",
+			BaseModel:            "llama3.1:8b",
+			TrainingProfile:      dpoTrainingProfile(),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(executor.trainingSpec.ParentAdapterURI).To(Equal(""))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("trainer: dpo"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("base_model: llama3.1:8b"))
+		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("lora_model_dir:"))
+		expectValidYAML(executor.trainingSpec.RecipeYAML)
+	})
+
+	It("rejects a DPO fine-tuned parent without an adapter", func() {
+		executor := &recordingTrainingExecutor{}
+		activities := temporalworker.NewTrainingActivities(nil, temporalworker.WithExecutor(executor), temporalworker.WithModelURIPrefix("s3://models"))
+
+		artifact, err := activities.RunTrainingJob(context.Background(), model.PreparedTrainingDataset{
+			TrainingRunID: "training-run-dpo-invalid",
+			DatasetURI:    "s3://local-dev-bucket/preferences/snapshot.jsonl",
+		}, model.TrainingRunRequest{
+			TrainingRunID:        "training-run-dpo-invalid",
+			DatasetID:            uuid.NewString(),
+			DatasetVersion:       "8",
+			PreferenceDatasetID:  uuid.NewString(),
+			PreferenceDatasetURI: "s3://local-dev-bucket/preferences/snapshot.jsonl",
+			ParentModelID:        uuid.NewString(),
+			ParentModelVersion:   "7",
+			SourceModelKind:      "FINE_TUNED",
+			ModelName:            "dpo-parent-model",
+			ModelVersion:         "8",
+			BaseModel:            "mistral-7b",
+			TrainingProfile:      dpoTrainingProfile(),
+		})
+
+		Expect(artifact).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("fine-tuned parent adapter uri is required")))
+		Expect(executor.trainingSpec.TrainingRunID).To(BeEmpty())
 	})
 
 	It("builds an evaluation job spec and delegates execution", func() {

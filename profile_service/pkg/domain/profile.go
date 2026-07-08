@@ -3,8 +3,6 @@ package domain
 import (
 	"time"
 
-	"lib/shared_lib/authz"
-
 	"github.com/google/uuid"
 )
 
@@ -21,35 +19,6 @@ type ProfileAccount struct {
 	EmailVerifyExpiresAt       time.Time
 }
 
-const (
-	OrgMemberRoleConsumer     = authz.RoleConsumer
-	OrgMemberRoleMLResearcher = authz.RoleMLResearcher
-	OrgMemberRoleOrgAdmin     = authz.RoleOrgAdmin
-
-	OrgMemberStatusActive   = "active"
-	OrgMemberStatusInvited  = "invited"
-	OrgMemberStatusDisabled = "disabled"
-)
-
-type Organization struct {
-	ID              uuid.UUID
-	DisplayName     string
-	CreatedByUserID uuid.UUID
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
-
-type OrganizationMembership struct {
-	OrgID           uuid.UUID
-	UserID          uuid.UUID
-	Email           string
-	Role            string
-	Status          string
-	CreatedByUserID uuid.UUID
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
-
 type Profile struct {
 	ProfileAccount
 	FirstName    string
@@ -61,20 +30,4 @@ type Profile struct {
 	State        string
 	PostalCode   string
 	Country      string
-}
-
-type OAuthIdentity struct {
-	Provider      string
-	Subject       string
-	Email         string
-	EmailVerified bool
-	FirstName     string
-	LastName      string
-}
-
-type OAuthState struct {
-	State         string
-	Provider      string
-	RedirectURI   string
-	CodeChallenge string
 }

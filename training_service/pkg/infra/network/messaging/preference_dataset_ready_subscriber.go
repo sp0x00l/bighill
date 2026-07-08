@@ -148,9 +148,20 @@ func buildDPOTrainingRunRequest(resourceKey uuid.UUID, payload *inferencepb.Pref
 	if payload.GetMinExamples() > 0 && payload.GetExampleCount() < payload.GetMinExamples() {
 		return model.TrainingRunRequest{}, nil
 	}
+	parentModelKind := sharedDomain.ToModelKind(payload.GetParentModelKind())
+	if !sharedDomain.IsKnownModelKind(parentModelKind) {
+		return model.TrainingRunRequest{}, fmt.Errorf("parent model kind is required")
+	}
 	parentAdapterURI := strings.TrimSpace(payload.GetParentAdapterUri())
-	if parentAdapterURI == "" {
-		return model.TrainingRunRequest{}, fmt.Errorf("%w: parent adapter uri is required", errPreferenceDatasetParentNotReady)
+	if parentModelKind == sharedDomain.ModelKindFineTuned && parentAdapterURI == "" {
+		return model.TrainingRunRequest{}, fmt.Errorf("fine-tuned parent adapter uri is required")
+	}
+	if parentModelKind == sharedDomain.ModelKindBase && parentAdapterURI != "" {
+		return model.TrainingRunRequest{}, fmt.Errorf("base parent adapter uri must be empty")
+	}
+	parentArtifactURI := strings.TrimSpace(payload.GetParentArtifactUri())
+	if parentArtifactURI == "" {
+		return model.TrainingRunRequest{}, fmt.Errorf("parent artifact uri is required")
 	}
 	parentModelVersion := payload.GetParentModelVersion()
 	if parentModelVersion <= 0 {
@@ -192,8 +203,8 @@ func buildDPOTrainingRunRequest(resourceKey uuid.UUID, payload *inferencepb.Pref
 		ParentModelVersion:   fmt.Sprintf("%d", parentModelVersion),
 		ParentAdapterURI:     parentAdapterURI,
 		SourceModelID:        modelID.String(),
-		SourceArtifactURI:    parentAdapterURI,
-		SourceModelKind:      sharedDomain.ModelKindFineTuned.String(),
+		SourceArtifactURI:    parentArtifactURI,
+		SourceModelKind:      parentModelKind.String(),
 		ModelName:            "dpo-" + modelID.String(),
 		ModelVersion:         modelVersion,
 		BaseModel:            parentBaseModel,

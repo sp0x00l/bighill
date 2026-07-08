@@ -94,6 +94,8 @@ var _ = Describe("Data registry integration", Ordered, func() {
 	It("persists dataset metadata through Postgres", func() {
 		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, userID, orgID)
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		dataset := &model.Dataset{
 			ID:              datasetID,
@@ -110,9 +112,10 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			SchemaMetadata:  `{"columns":["title","release_year"]}`,
 		}
 
-		Expect(datasets.CreateDataset(ctx, dataset, uuid.New())).To(Succeed())
+		Expect(datasets.CreateDataset(tenantCtx, dataset, uuid.New())).To(Succeed())
+		datasetID = dataset.ID
 
-		read, err := datasets.ReadDatasetForUser(ctx, datasetID, userID)
+		read, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(read.Title).To(Equal("Movie features"))
 		Expect(read.TableNamespace).To(Equal("features"))
@@ -120,14 +123,14 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(read.TableFormat).To(Equal(model.Parquet))
 		Expect(read.ProcessingState).To(Equal(model.DatasetProcessingPending))
 
-		rawReady, err := datasets.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
+		rawReady, err := datasets.AdvanceDatasetProcessingState(tenantCtx, datasetID, userID, model.DatasetProcessingRawMaterialized)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rawReady.ProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
 		Expect(rawReady.DatasetVersion).To(BeNumerically(">=", 2))
 
 		rawSnapshotID := uuid.New()
 		featureSnapshotID := uuid.New()
-		materialized, err := datasets.RecordDatasetMaterialization(ctx, &model.Dataset{
+		materialized, err := datasets.RecordDatasetMaterialization(tenantCtx, &model.Dataset{
 			ID:                datasetID,
 			UserID:            userID,
 			Location:          "s3://local-dev-bucket/lakehouse/features/data.parquet",
@@ -146,8 +149,18 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(materialized.RawSnapshotID).To(Equal(rawSnapshotID))
 		Expect(materialized.FeatureSnapshotID).To(Equal(featureSnapshotID))
 
+		lateRawReplay, err := datasets.RecordDatasetMaterialization(tenantCtx, &model.Dataset{
+			ID:            datasetID,
+			UserID:        userID,
+			Location:      "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			RawSnapshotID: rawSnapshotID,
+		}, model.DatasetProcessingRawMaterialized)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(lateRawReplay.ProcessingState).To(Equal(model.DatasetProcessingFeatureMaterialized))
+		Expect(lateRawReplay.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/data.parquet"))
+
 		embeddingSnapshotID := uuid.New()
-		embedded, err := datasets.RecordDatasetMaterialization(ctx, &model.Dataset{
+		embedded, err := datasets.RecordDatasetMaterialization(tenantCtx, &model.Dataset{
 			ID:                  datasetID,
 			UserID:              userID,
 			FeatureSnapshotID:   featureSnapshotID,
@@ -170,38 +183,42 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(outboxCount).To(Equal(3))
 
-		lateRaw, err := datasets.AdvanceDatasetProcessingState(ctx, datasetID, userID, model.DatasetProcessingRawMaterialized)
+		lateRaw, err := datasets.AdvanceDatasetProcessingState(tenantCtx, datasetID, userID, model.DatasetProcessingRawMaterialized)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(lateRaw.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 
-		Expect(datasets.PublishDataset(ctx, datasetID, userID)).To(Succeed())
+		Expect(datasets.PublishDataset(tenantCtx, datasetID, userID)).To(Succeed())
 
-		published, err := datasets.ReadDatasetForUser(ctx, datasetID, userID)
+		published, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(published.Status).To(Equal(model.Published))
 
-		Expect(datasets.DeleteDataset(ctx, datasetID, userID)).To(Succeed())
-		_, err = datasets.ReadDatasetForUser(ctx, datasetID, userID)
+		Expect(datasets.DeleteDataset(tenantCtx, datasetID, userID)).To(Succeed())
+		_, err = datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 	})
 
 	It("reports duplicate idempotency keys and missing datasets with domain errors", func() {
 		idempotencyKey := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, userID, orgID)
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
-		first := &model.Dataset{ID: uuid.New(), UserID: userID, Title: "duplicate-a"}
-		second := &model.Dataset{ID: uuid.New(), UserID: userID, Title: "duplicate-b"}
+		first := &model.Dataset{ID: uuid.New(), UserID: userID, Title: "duplicate-a", SchemaMetadata: "{}"}
+		second := &model.Dataset{ID: uuid.New(), UserID: userID, Title: "duplicate-b", SchemaMetadata: "{}"}
 
-		Expect(datasets.CreateDataset(ctx, first, idempotencyKey)).To(Succeed())
-		err := datasets.CreateDataset(ctx, second, idempotencyKey)
+		Expect(datasets.CreateDataset(tenantCtx, first, idempotencyKey)).To(Succeed())
+		err := datasets.CreateDataset(tenantCtx, second, idempotencyKey)
 		Expect(errors.Is(err, domainErrors.ErrResourceAlreadyExists)).To(BeTrue())
 
-		_, err = datasets.ReadDatasetForUser(ctx, uuid.New(), userID)
+		_, err = datasets.ReadDatasetForUser(tenantCtx, uuid.New(), userID)
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 	})
 
 	It("persists source connectors through Postgres", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, userID, orgID)
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		connector := &model.SourceConnector{
 			UserID: userID,
@@ -215,25 +232,27 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			},
 		}
 
-		Expect(connectors.CreateSourceConnector(ctx, connector, uuid.New())).To(Succeed())
+		Expect(connectors.CreateSourceConnector(tenantCtx, connector, uuid.New())).To(Succeed())
 		Expect(connector.ID).NotTo(Equal(uuid.Nil))
 		Expect(connector.CatalogID).To(Equal(connector.ID))
 
-		read, err := connectors.ReadSourceConnector(ctx, connector.ID, userID)
+		read, err := connectors.ReadSourceConnector(tenantCtx, connector.ID, userID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(read.Config.GetStorageType()).To(Equal(model.ClickHouse))
 		cfg, ok := read.Config.(*model.ClickHouseConnCfg)
 		Expect(ok).To(BeTrue())
 		Expect(cfg.DatabaseName).To(Equal("mlops"))
 
-		Expect(connectors.DeleteSourceConnector(ctx, connector.ID, userID)).To(Succeed())
-		_, err = connectors.ReadSourceConnector(ctx, connector.ID, userID)
+		Expect(connectors.DeleteSourceConnector(tenantCtx, connector.ID, userID)).To(Succeed())
+		_, err = connectors.ReadSourceConnector(tenantCtx, connector.ID, userID)
 		Expect(errors.Is(err, domainErrors.ErrResourceNotFound)).To(BeTrue())
 	})
 
 	It("serves dataset REST entry points through the actual Postgres repository", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
 		otherUserID := uuid.New()
+		otherOrgID := uuid.New()
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		Expect(upsertDataRegistryTenant(ctx, database, otherUserID)).To(Succeed())
 		handlers := newIntegrationHandlers(datasets, connectors)
@@ -242,7 +261,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			"title":"REST movies",
 			"category":"movies",
 			"processingProfile":"TEXT_RAG_PROCESSING_PROFILE"
-		}`, userID, uuid.New())
+		}`, userID, orgID, uuid.New())
 		createRes, err := handlers.CreateDataset(ctx, createReq)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(createRes.StatusCode()).To(Equal(http.StatusCreated))
@@ -252,7 +271,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		createdID := uuid.MustParse(created.ID)
 		Expect(created.UserID).To(Equal(userID.String()))
 
-		readReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/"+createdID.String(), `{}`, userID, uuid.Nil)
+		readReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/"+createdID.String(), `{}`, userID, orgID, uuid.Nil)
 		readReq = mux.SetURLVars(readReq, map[string]string{"datasetId": createdID.String()})
 		readRes, err := handlers.ReadDatasetByID(ctx, readReq)
 		Expect(err).NotTo(HaveOccurred())
@@ -263,7 +282,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(read.ID).To(Equal(createdID.String()))
 		Expect(read.Title).To(Equal("REST movies"))
 
-		listReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry?filter=category:in:movies", `{}`, userID, uuid.Nil)
+		listReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry?filter=category:in:movies", `{}`, userID, orgID, uuid.Nil)
 		listRes, err := handlers.ReadDatasets(ctx, listReq)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(listRes.StatusCode()).To(Equal(http.StatusOK))
@@ -273,26 +292,26 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			"title":"REST movies updated",
 			"category":"movies",
 			"processingProfile":"TEXT_RAG_PROCESSING_PROFILE"
-		}`, userID, uuid.Nil)
+		}`, userID, orgID, uuid.Nil)
 		replaceReq = mux.SetURLVars(replaceReq, map[string]string{"datasetId": createdID.String()})
 		replaceRes, err := handlers.ReplaceDataset(ctx, replaceReq)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(replaceRes.StatusCode()).To(Equal(http.StatusOK))
 		Expect(string(replaceRes.Payload())).To(ContainSubstring("REST movies updated"))
 
-		publishReq := newIntegrationJSONRequest(http.MethodPatch, "/v1/data/registry/"+createdID.String()+"/publish", `{}`, userID, uuid.Nil)
+		publishReq := newIntegrationJSONRequest(http.MethodPatch, "/v1/data/registry/"+createdID.String()+"/publish", `{}`, userID, orgID, uuid.Nil)
 		publishReq = mux.SetURLVars(publishReq, map[string]string{"datasetId": createdID.String()})
 		publishRes, err := handlers.PublishDataset(ctx, publishReq)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(publishRes.StatusCode()).To(Equal(http.StatusOK))
 
-		crossTenantReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/"+createdID.String(), `{}`, otherUserID, uuid.Nil)
+		crossTenantReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/"+createdID.String(), `{}`, otherUserID, otherOrgID, uuid.Nil)
 		crossTenantReq = mux.SetURLVars(crossTenantReq, map[string]string{"datasetId": createdID.String()})
 		_, err = handlers.ReadDatasetByID(ctx, crossTenantReq)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(Equal("Dataset not found"))
 
-		deleteReq := newIntegrationJSONRequest(http.MethodDelete, "/v1/data/registry/"+createdID.String(), `{}`, userID, uuid.Nil)
+		deleteReq := newIntegrationJSONRequest(http.MethodDelete, "/v1/data/registry/"+createdID.String(), `{}`, userID, orgID, uuid.Nil)
 		deleteReq = mux.SetURLVars(deleteReq, map[string]string{"datasetId": createdID.String()})
 		deleteRes, err := handlers.DeleteDataset(ctx, deleteReq)
 		Expect(err).NotTo(HaveOccurred())
@@ -305,7 +324,9 @@ var _ = Describe("Data registry integration", Ordered, func() {
 
 	It("serves source connector REST entry points through the actual Postgres repository", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
 		otherUserID := uuid.New()
+		otherOrgID := uuid.New()
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		Expect(upsertDataRegistryTenant(ctx, database, otherUserID)).To(Succeed())
 		handlers := newIntegrationHandlers(datasets, connectors)
@@ -319,7 +340,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 				"password":"password",
 				"authenticationType":"MASTER"
 			}
-		}`, userID, uuid.New())
+		}`, userID, orgID, uuid.New())
 		createReq = mux.SetURLVars(createReq, map[string]string{"type": "POSTGRES"})
 		createRes, err := handlers.CreateSourceConnector(ctx, createReq)
 		Expect(err).NotTo(HaveOccurred())
@@ -329,14 +350,14 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(json.Unmarshal(createRes.Payload(), &created)).To(Succeed())
 		connectorID := uuid.MustParse(created.ID)
 
-		readReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, userID, uuid.Nil)
+		readReq := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, userID, orgID, uuid.Nil)
 		readReq = mux.SetURLVars(readReq, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
 		readRes, err := handlers.ReadSourceConnector(ctx, readReq)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readRes.StatusCode()).To(Equal(http.StatusOK))
 		Expect(string(readRes.Payload())).To(ContainSubstring(`"databaseName":"mlops"`))
 
-		crossTenantRead := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, otherUserID, uuid.Nil)
+		crossTenantRead := newIntegrationJSONRequest(http.MethodGet, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, otherUserID, otherOrgID, uuid.Nil)
 		crossTenantRead = mux.SetURLVars(crossTenantRead, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
 		_, err = handlers.ReadSourceConnector(ctx, crossTenantRead)
 		Expect(err).To(HaveOccurred())
@@ -351,14 +372,14 @@ var _ = Describe("Data registry integration", Ordered, func() {
 				"password":"password",
 				"authenticationType":"MASTER"
 			}
-		}`, userID, uuid.Nil)
+		}`, userID, orgID, uuid.Nil)
 		replaceReq = mux.SetURLVars(replaceReq, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
 		replaceRes, err := handlers.ReplaceSourceConnector(ctx, replaceReq)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(replaceRes.StatusCode()).To(Equal(http.StatusOK))
 		Expect(string(replaceRes.Payload())).To(ContainSubstring(`"databaseName":"mlops_updated"`))
 
-		deleteReq := newIntegrationJSONRequest(http.MethodDelete, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, userID, uuid.Nil)
+		deleteReq := newIntegrationJSONRequest(http.MethodDelete, "/v1/data/registry/connector/POSTGRES/"+connectorID.String(), `{}`, userID, orgID, uuid.Nil)
 		deleteReq = mux.SetURLVars(deleteReq, map[string]string{"type": "POSTGRES", "connectorId": connectorID.String()})
 		deleteRes, err := handlers.DeleteSourceConnector(ctx, deleteReq)
 		Expect(err).NotTo(HaveOccurred())
@@ -372,6 +393,9 @@ var _ = Describe("Data registry integration", Ordered, func() {
 	It("serves source-connector gRPC entry points through the actual Postgres repository", func() {
 		userID := uuid.New()
 		otherUserID := uuid.New()
+		orgID := uuid.New()
+		otherOrgID := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, userID, orgID)
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		Expect(upsertDataRegistryTenant(ctx, database, otherUserID)).To(Succeed())
 		connector := &model.SourceConnector{
@@ -385,13 +409,14 @@ var _ = Describe("Data registry integration", Ordered, func() {
 				AuthenticationType: model.Master,
 			},
 		}
-		Expect(connectors.CreateSourceConnector(ctx, connector, uuid.New())).To(Succeed())
+		Expect(connectors.CreateSourceConnector(tenantCtx, connector, uuid.New())).To(Succeed())
 
 		server := registrygrpc.NewDataRegistryGrpcServer(datasets, connectors)
 		res, err := server.ReadSourceConnector(ctx, &dataregistrypb.ReadSourceConnectorRequest{
 			ConnectorId: connector.ID.String(),
 			UserId:      userID.String(),
 			SourceType:  model.Postgres.String(),
+			OrgId:       orgID.String(),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res.GetConnector().GetId()).To(Equal(connector.ID.String()))
@@ -402,6 +427,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			ConnectorId: connector.ID.String(),
 			UserId:      otherUserID.String(),
 			SourceType:  model.Postgres.String(),
+			OrgId:       otherOrgID.String(),
 		})
 		Expect(status.Code(err)).To(Equal(codes.NotFound))
 
@@ -409,6 +435,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			ConnectorId: connector.ID.String(),
 			UserId:      userID.String(),
 			SourceType:  model.MySQL.String(),
+			OrgId:       orgID.String(),
 		})
 		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 	})
@@ -416,12 +443,14 @@ var _ = Describe("Data registry integration", Ordered, func() {
 	It("serves dataset table gRPC entry points through the actual Postgres repository", func() {
 		userID := uuid.New()
 		otherUserID := uuid.New()
+		orgID := uuid.New()
+		otherOrgID := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, userID, orgID)
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
 		Expect(upsertDataRegistryTenant(ctx, database, otherUserID)).To(Succeed())
 
-		datasetID := uuid.New()
-		Expect(datasets.CreateDataset(ctx, &model.Dataset{
-			ID:              datasetID,
+		dataset := &model.Dataset{
+			ID:              uuid.New(),
 			UserID:          userID,
 			Title:           "table-grpc",
 			Location:        "s3://warehouse/raw/table-grpc.parquet",
@@ -431,16 +460,19 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			CatalogProvider: model.LocalCatalog,
 			SchemaVersion:   1,
 			SchemaMetadata:  `{"columns":["title"]}`,
-		}, uuid.New())).To(Succeed())
+		}
+		Expect(datasets.CreateDataset(tenantCtx, dataset, uuid.New())).To(Succeed())
+		datasetID := dataset.ID
 
 		server := registrygrpc.NewDataRegistryGrpcServer(datasets, connectors)
 		_, err := server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 			DatasetId: datasetID.String(),
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 		})
 		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 
-		_, err = datasets.RecordDatasetMaterialization(ctx, &model.Dataset{
+		_, err = datasets.RecordDatasetMaterialization(tenantCtx, &model.Dataset{
 			ID:              datasetID,
 			UserID:          userID,
 			Location:        "s3://warehouse/features/table-grpc.parquet",
@@ -456,6 +488,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		res, err := server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 			DatasetId: datasetID.String(),
 			UserId:    userID.String(),
+			OrgId:     orgID.String(),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res.GetDatasetId()).To(Equal(datasetID.String()))
@@ -470,42 +503,53 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		_, err = server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
 			DatasetId: datasetID.String(),
 			UserId:    otherUserID.String(),
+			OrgId:     otherOrgID.String(),
 		})
 		Expect(status.Code(err)).To(Equal(codes.NotFound))
 	})
 
 	It("returns no rows rather than failing when a requested page is beyond the dataset count", func() {
 		userID := uuid.New()
+		orgID := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, userID, orgID)
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
-		Expect(datasets.CreateDataset(ctx, &model.Dataset{
-			ID:     uuid.New(),
-			UserID: userID,
-			Title:  "pagination-check",
+		Expect(datasets.CreateDataset(tenantCtx, &model.Dataset{
+			ID:             uuid.New(),
+			UserID:         userID,
+			Title:          "pagination-check",
+			SchemaMetadata: "{}",
 		}, uuid.New())).To(Succeed())
 
-		got, total, err := datasets.ReadDatasetsForUser(ctx, userID, transport.Pagination{Limit: 10, Page: 99}, nil)
+		got, total, err := datasets.ReadDatasetsForUser(tenantCtx, userID, transport.Pagination{Limit: 10, Page: 99}, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(total).To(BeNumerically(">", 0))
 		Expect(got).To(BeNil())
 	})
 
-	It("creates tenant projections on demand and rejects missing user ids", func() {
+	It("rejects writes for users that have not been projected into the service database", func() {
 		newTenant := uuid.New()
-		err := datasets.CreateDataset(ctx, &model.Dataset{
-			ID:     uuid.New(),
-			UserID: newTenant,
-			Title:  "on-demand-tenant",
+		newOrg := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, newTenant, newOrg)
+		err := datasets.CreateDataset(tenantCtx, &model.Dataset{
+			ID:             uuid.New(),
+			UserID:         newTenant,
+			Title:          "unprojected-tenant",
+			SchemaMetadata: "{}",
 		}, uuid.New())
-		Expect(err).NotTo(HaveOccurred())
+		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("tenant projection is not ready"))
 		var tenantCount int
 		Expect(database.Pool.QueryRow(ctxutil.WithSystemContext(ctx),
 			"SELECT COUNT(*) FROM "+database.Name+".tenants WHERE id = $1",
 			newTenant,
 		).Scan(&tenantCount)).To(Succeed())
-		Expect(tenantCount).To(Equal(1))
+		Expect(tenantCount).To(Equal(0))
 
-		err = connectors.CreateSourceConnector(ctx, &model.SourceConnector{
-			UserID: uuid.New(),
+		connectorUser := uuid.New()
+		connectorOrg := uuid.New()
+		connectorCtx := ctxutil.WithActorOrg(ctx, connectorUser, connectorOrg)
+		err = connectors.CreateSourceConnector(connectorCtx, &model.SourceConnector{
+			UserID: connectorUser,
 			Config: &model.PostgresDBConnCfg{
 				Hostname:           "127.0.0.1",
 				Port:               5432,
@@ -515,24 +559,23 @@ var _ = Describe("Data registry integration", Ordered, func() {
 				AuthenticationType: model.Master,
 			},
 		}, uuid.New())
-		Expect(err).NotTo(HaveOccurred())
-
-		err = datasets.CreateDataset(ctx, &model.Dataset{
-			ID:    uuid.New(),
-			Title: "missing-user-id",
-		}, uuid.New())
 		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("tenant projection is not ready"))
 	})
 
 	It("updates dataset processing state from Kafka materialization events", func() {
-		datasetID := uuid.New()
 		userID := uuid.New()
+		orgID := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, userID, orgID)
 		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
-		Expect(datasets.CreateDataset(ctx, &model.Dataset{
-			ID:     datasetID,
-			UserID: userID,
-			Title:  "kafka-materialization",
-		}, uuid.New())).To(Succeed())
+		dataset := &model.Dataset{
+			ID:             uuid.New(),
+			UserID:         userID,
+			Title:          "kafka-materialization",
+			SchemaMetadata: "{}",
+		}
+		Expect(datasets.CreateDataset(tenantCtx, dataset, uuid.New())).To(Succeed())
+		datasetID := dataset.ID
 
 		runCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -576,6 +619,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			RawSnapshotId:     uuid.NewString(),
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
 			TableNamespace:    "raw",
 			TableName:         "kafka_materialization_raw",
@@ -587,7 +631,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			dataset, err := datasets.ReadDatasetForUser(ctx, datasetID, userID)
+			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/raw/data.parquet"))
 			g.Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
@@ -601,6 +645,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			RawSnapshotId:     uuid.NewString(),
 			DatasetId:         datasetID.String(),
 			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			StorageLocation:   "s3://local-dev-bucket/lakehouse/features/data.parquet",
 			TableNamespace:    "features",
 			TableName:         "kafka_materialization",
@@ -612,7 +657,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			dataset, err := datasets.ReadDatasetForUser(ctx, datasetID, userID)
+			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/data.parquet"))
 			g.Expect(dataset.TableName).To(Equal("kafka_materialization"))
@@ -628,6 +673,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			FeatureSnapshotId:   uuid.NewString(),
 			DatasetId:           datasetID.String(),
 			UserId:              userID.String(),
+			OrgId:               orgID.String(),
 			VectorStore:         "pgvector",
 			CollectionName:      "kafka_materialization",
 			EmbeddingDimensions: 384,
@@ -636,7 +682,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(publisherMessenger.Close(runCtx)).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			dataset, err := datasets.ReadDatasetForUser(ctx, datasetID, userID)
+			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/data.parquet"))
 			g.Expect(dataset.TableName).To(Equal("kafka_materialization"))
@@ -659,13 +705,16 @@ func newIntegrationHandlers(datasets usecase.DatasetUsecase, connectors usecase.
 	)
 }
 
-func newIntegrationJSONRequest(method, path, body string, userID, requestID uuid.UUID) *http.Request {
+func newIntegrationJSONRequest(method, path, body string, userID, orgID, requestID uuid.UUID) *http.Request {
 	log.Trace("newIntegrationJSONRequest")
 
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	if userID != uuid.Nil {
 		req.Header.Set("X-User-ID", userID.String())
+	}
+	if orgID != uuid.Nil {
+		req.Header.Set("X-Org-ID", orgID.String())
 	}
 	if requestID != uuid.Nil {
 		req.Header.Set("X-Request-ID", requestID.String())

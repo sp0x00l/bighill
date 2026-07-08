@@ -93,6 +93,8 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		Expect(result.Matches).To(HaveLen(1))
 		Expect(receivedStrategy.EmbeddingProvider).To(Equal(activeSnapshot.EmbeddingProvider))
 		Expect(receivedStrategy.EmbeddingModel).To(Equal(activeSnapshot.EmbeddingModel))
+		Expect(receivedStrategy.ExtractorName).To(Equal(activeSnapshot.ExtractorName))
+		Expect(receivedStrategy.CleanerName).To(Equal(activeSnapshot.CleanerName))
 		Expect(repo.topK).To(Equal(7))
 		Expect(repo.queryVector).To(HaveLen(2))
 		Expect(repo.queryVector[0]).To(BeNumerically("~", 0.6, 0.0001))
@@ -132,6 +134,26 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		Expect(factoryCalled).To(BeFalse())
 		Expect(repo.queryVector).To(BeNil())
 	})
+
+	It("rejects active snapshots with incomplete strategy metadata", func() {
+		activeSnapshot := validSearchEmbeddingSnapshot(uuid.New())
+		activeSnapshot.CleanerName = ""
+		repo := &embeddingSearchRepoStub{activeSnapshot: activeSnapshot}
+		factoryCalled := false
+		uc := usecase.NewEmbeddingSearchUsecase(repo, func(model.EmbeddingStrategy) (usecase.QueryEmbeddingProvider, error) {
+			factoryCalled = true
+			return queryEmbeddingProviderStub{}, nil
+		})
+
+		ctx := ctxutil.WithActorOrg(context.Background(), activeSnapshot.UserID, activeSnapshot.OrgID)
+		result, err := uc.SearchEmbeddings(ctx, activeSnapshot.UserID, activeSnapshot.DatasetID, "query", 5)
+
+		Expect(result).To(BeNil())
+		Expect(errors.Is(err, domain.ErrEmbeddingSearch)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("cleaner_name is required"))
+		Expect(factoryCalled).To(BeFalse())
+		Expect(repo.queryVector).To(BeNil())
+	})
 })
 
 func validSearchEmbeddingSnapshot(datasetID uuid.UUID) *model.EmbeddingSnapshot {
@@ -145,6 +167,10 @@ func validSearchEmbeddingSnapshot(datasetID uuid.UUID) *model.EmbeddingSnapshot 
 		CollectionName:      "movies",
 		EmbeddingDimensions: 2,
 		StrategyVersion:     "rag-v1",
+		ExtractorName:       model.DefaultExtractorName,
+		ExtractorVersion:    model.DefaultExtractorVersion,
+		CleanerName:         model.DefaultCleanerName,
+		CleanerVersion:      model.DefaultCleanerVersion,
 		ChunkerName:         "go-token-window",
 		ChunkerVersion:      "v1",
 		ChunkSize:           384,

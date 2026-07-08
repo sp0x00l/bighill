@@ -6,6 +6,7 @@ import (
 
 	usecase "ingestion_service/pkg/app"
 	"ingestion_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -97,7 +98,7 @@ var _ = Describe("DatasetUsecase", func() {
 		expected := &model.Dataset{DatasetID: datasetID, UserID: userID}
 		repo.readForUploadDataset = expected
 
-		got, err := uc.DatasetForUpload(ctx, datasetID, userID)
+		got, err := uc.DatasetForUpload(ctxutil.WithActorOrg(ctx, userID, orgID), datasetID, userID)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(expected))
@@ -105,15 +106,37 @@ var _ = Describe("DatasetUsecase", func() {
 		Expect(repo.readForUploadUserID).To(Equal(userID))
 	})
 
+	It("rejects dataset upload reads without org context", func() {
+		got, err := uc.DatasetForUpload(ctx, datasetID, userID)
+
+		Expect(got).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("org id is required")))
+		Expect(repo.readForUploadDatasetID).To(Equal(uuid.Nil))
+	})
+
 	It("blacklists a dataset through the repository", func() {
-		Expect(uc.BlacklistDataset(ctx, datasetID, userID)).To(Succeed())
+		Expect(uc.BlacklistDataset(ctxutil.WithActorOrg(ctx, userID, orgID), datasetID, userID)).To(Succeed())
 		Expect(repo.blacklistDatasetID).To(Equal(datasetID))
 		Expect(repo.blacklistUserID).To(Equal(userID))
 	})
 
+	It("rejects dataset blacklist without org context", func() {
+		err := uc.BlacklistDataset(ctx, datasetID, userID)
+
+		Expect(err).To(MatchError(ContainSubstring("org id is required")))
+		Expect(repo.blacklistDatasetID).To(Equal(uuid.Nil))
+	})
+
 	It("deletes a dataset through the repository", func() {
-		Expect(uc.DeleteDataset(ctx, datasetID, userID)).To(Succeed())
+		Expect(uc.DeleteDataset(ctxutil.WithActorOrg(ctx, userID, orgID), datasetID, userID)).To(Succeed())
 		Expect(repo.deleteDatasetID).To(Equal(datasetID))
 		Expect(repo.deleteUserID).To(Equal(userID))
+	})
+
+	It("rejects dataset delete without org context", func() {
+		err := uc.DeleteDataset(ctx, datasetID, userID)
+
+		Expect(err).To(MatchError(ContainSubstring("org id is required")))
+		Expect(repo.deleteDatasetID).To(Equal(uuid.Nil))
 	})
 })

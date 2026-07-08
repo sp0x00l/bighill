@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,7 @@ type DataRegistryServer struct {
 	dataregistrypb.UnimplementedDataRegistryServiceServer
 	datasetUsecase usecase.DatasetUsecase
 	sourceUsecase  usecase.SourceUsecase
+	mu             sync.Mutex
 	grpcServer     *grpc.Server
 	ready          atomic.Bool
 }
@@ -63,7 +65,7 @@ func (s *DataRegistryServer) Connect(port int) error {
 func (s *DataRegistryServer) Serve(lis net.Listener) error {
 	log.Trace("DataRegistryServer Serve")
 
-	s.grpcServer = rpcLib.NewServer(
+	grpcServer := rpcLib.NewServer(
 		grpc.ChainUnaryInterceptor(rpcLib.MetricsUnaryServerInterceptor()),
 		grpc.ChainStreamInterceptor(rpcLib.MetricsStreamServerInterceptor()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
@@ -75,11 +77,15 @@ func (s *DataRegistryServer) Serve(lis net.Listener) error {
 			Timeout: 20 * time.Second,
 		}),
 	)
-	dataregistrypb.RegisterDataRegistryServiceServer(s.grpcServer, s)
+	dataregistrypb.RegisterDataRegistryServiceServer(grpcServer, s)
+
+	s.mu.Lock()
+	s.grpcServer = grpcServer
+	s.mu.Unlock()
 
 	s.ready.Store(true)
 	defer s.ready.Store(false)
-	if err := s.grpcServer.Serve(lis); err != nil {
+	if err := grpcServer.Serve(lis); err != nil {
 		if errors.Is(err, grpc.ErrServerStopped) {
 			return nil
 		}
@@ -92,30 +98,36 @@ func (s *DataRegistryServer) Serve(lis net.Listener) error {
 func (s *DataRegistryServer) Close() {
 	log.Trace("DataRegistryServer Close")
 
-	if s.grpcServer == nil {
+	s.mu.Lock()
+	grpcServer := s.grpcServer
+	s.mu.Unlock()
+	if grpcServer == nil {
 		return
 	}
 	s.ready.Store(false)
-	s.grpcServer.Stop()
+	grpcServer.Stop()
 }
 
 func (s *DataRegistryServer) Shutdown(ctx context.Context) error {
 	log.Trace("DataRegistryServer Shutdown")
 
-	if s.grpcServer == nil {
+	s.mu.Lock()
+	grpcServer := s.grpcServer
+	s.mu.Unlock()
+	if grpcServer == nil {
 		return nil
 	}
 	s.ready.Store(false)
 	done := make(chan struct{})
 	go func() {
-		s.grpcServer.GracefulStop()
+		grpcServer.GracefulStop()
 		close(done)
 	}()
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		s.grpcServer.Stop()
+		grpcServer.Stop()
 		return ctx.Err()
 	}
 }

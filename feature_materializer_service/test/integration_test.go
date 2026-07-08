@@ -18,6 +18,7 @@ import (
 	featuremessaging "feature_materializer_service/pkg/infra/network/messaging"
 	repo "feature_materializer_service/pkg/infra/repo/db"
 	featuretemporal "feature_materializer_service/pkg/infra/temporalworker"
+	featurepb "lib/data_contracts_lib/feature_materializer"
 	ingestionpb "lib/data_contracts_lib/ingestion"
 	corebucket "lib/shared_lib/bucket"
 	"lib/shared_lib/ctxutil"
@@ -67,7 +68,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		snapshotUOW = shareduow.New(database.Pool, shareduow.WithTransactionalOutbox(orderedOutbox))
 		rawUsecase = usecase.NewRawSnapshotUsecase(snapshots, snapshotUOW, featuremessaging.NewSnapshotEventBuilder(featuremessaging.MaterializationTopics{
 			FeatureMaterializer: "feature_materializer",
-		}), nil)
+		}), integrationRawSnapshotWriter{})
 	})
 
 	BeforeEach(func() {
@@ -99,20 +100,9 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		rawSnapshot, err := rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, idempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rawSnapshot.RawSnapshotID).NotTo(Equal(uuid.Nil))
-		Expect(rawSnapshot.Status).To(Equal(model.SnapshotStatusPending))
+		Expect(rawSnapshot.Status).To(Equal(model.SnapshotStatusReady))
 
 		replayedRaw, err := rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, idempotencyKey)
-		Expect(err).To(HaveOccurred())
-		Expect(replayedRaw).To(BeNil())
-		Expect(domain.IsServiceError(err, domain.ErrRawSnapshotInProgress)).To(BeTrue(), err.Error())
-
-		rawSnapshot.SchemaVersion = 1
-		rawSnapshot.SchemaMetadata = "{}"
-		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
-			return snapshots.MarkRawReady(ctx, tx, rawSnapshot)
-		})).To(Succeed())
-
-		replayedRaw, err = rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, idempotencyKey)
 		Expect(err).To(HaveOccurred())
 		Expect(replayedRaw.RawSnapshotID).To(Equal(rawSnapshot.RawSnapshotID))
 		_, ok := domain.IsRawSnapshotAlreadyMaterialized(err)
@@ -299,6 +289,10 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 			g.Expect(embeddingCount).To(Equal(int64(2)))
 			g.Expect(outboxSentCount(ctx, database, datasetID)).To(Equal(3))
 		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
+
+		featureReadyEvent, err := readFeatureSnapshotReadyEvent(ctx, database, datasetID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(featureReadyEvent.GetStorageLocation()).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
 	})
 })
 
@@ -318,7 +312,7 @@ func validIntegrationDatasetFile() *model.DatasetFile {
 }
 
 func integrationEmbeddingStrategy() model.EmbeddingStrategy {
-	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+	return model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
 		StrategyVersion:     "rag-v1",
 		ChunkerName:         "go-token-window",
 		ChunkerVersion:      "v1",
@@ -332,6 +326,23 @@ func integrationEmbeddingStrategy() model.EmbeddingStrategy {
 
 type integrationEmbeddingProvider struct {
 	dimensions int
+}
+
+type integrationRawSnapshotWriter struct{}
+
+func (integrationRawSnapshotWriter) WriteRawSnapshot(_ context.Context, datasetFile *model.DatasetFile, rawSnapshot *model.RawSnapshot) (*model.RawSnapshot, error) {
+	rawSnapshot.StorageLocation = fmt.Sprintf("s3://local-dev-bucket/lakehouse/raw/%s/%s/data.parquet", datasetFile.DatasetID, rawSnapshot.RawSnapshotID)
+	rawSnapshot.ContentType = datasetFile.ContentType
+	rawSnapshot.FileExtension = datasetFile.FileExtension
+	rawSnapshot.TableNamespace = datasetFile.TableNamespace
+	rawSnapshot.TableName = datasetFile.TableName
+	rawSnapshot.TableFormat = datasetFile.TableFormat
+	rawSnapshot.CatalogProvider = datasetFile.CatalogProvider
+	rawSnapshot.ProcessingProfile = datasetFile.ProcessingProfile
+	rawSnapshot.SchemaVersion = 1
+	rawSnapshot.SchemaMetadata = "{}"
+	rawSnapshot.Status = model.SnapshotStatusReady
+	return rawSnapshot, nil
 }
 
 func (p integrationEmbeddingProvider) Dimensions() int {
@@ -392,6 +403,30 @@ func outboxSentCount(ctx context.Context, database *dbconn.Database, datasetID u
 	`, datasetID).Scan(&count)
 	Expect(err).NotTo(HaveOccurred())
 	return count
+}
+
+func readFeatureSnapshotReadyEvent(ctx context.Context, database *dbconn.Database, datasetID uuid.UUID) (*featurepb.FeatureSnapshotReadyEvent, error) {
+	var payload []byte
+	err := database.Pool.QueryRow(ctx, `
+		SELECT payload
+		FROM `+database.Name+`.outbox_messages
+		WHERE resource_key = $1 AND event_type = 'feature_snapshot_ready'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, datasetID).Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var envelope sharedmessaging.Message
+	if err := envelope.Deserialize(ctx, payload); err != nil {
+		return nil, err
+	}
+	event := &featurepb.FeatureSnapshotReadyEvent{}
+	if err := envelope.DeserializePayload(event); err != nil {
+		return nil, err
+	}
+	return event, nil
 }
 
 func testPostgresConnectionString(dbName string) string {

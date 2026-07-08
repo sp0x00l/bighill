@@ -318,6 +318,10 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	processingProfile, err := model.ToProcessingProfile(strings.TrimSpace(payload.GetProcessingProfile()))
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 	rawSnapshotID, err := msgConn.ParseOptionalUUID("raw_snapshot_id", payload.GetRawSnapshotId())
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -342,7 +346,7 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 		TableName:                strings.TrimSpace(payload.GetTableName()),
 		TableFormat:              strings.TrimSpace(payload.GetTableFormat()),
 		CatalogProvider:          strings.TrimSpace(payload.GetCatalogProvider()),
-		ProcessingProfile:        strings.TrimSpace(payload.GetProcessingProfile()),
+		ProcessingProfile:        processingProfile.String(),
 		SchemaVersion:            int(payload.GetSchemaVersion()),
 		SchemaMetadata:           strings.TrimSpace(payload.GetSchemaMetadata()),
 		RawSnapshotID:            rawSnapshotID,

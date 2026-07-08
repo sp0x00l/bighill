@@ -35,6 +35,8 @@ env:
   temporalAddress: "temporal:7233"
   temporalNamespace: "default"
   temporalTaskQueue: "feature-materializer-service"
+  temporalConnectTimeoutSeconds: "60"
+  temporalConnectRetryIntervalSeconds: "1"
   artifactBucketName: "local-dev-bucket"
   artifactBucketRegion: "eu-west-1"
   artifactUploadPartSizeMb: "10"

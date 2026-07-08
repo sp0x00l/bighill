@@ -52,7 +52,7 @@ Parameters:
     Default: "8086"
   ModelRegistryServiceHttpDomain:
     Type: String
-    Default: host.docker.internal
+    Default: model-registry.internal.bighill.example
     Description: The model registry service host name
   ModelRegistryServiceHttpPort:
     Type: String

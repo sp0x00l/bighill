@@ -2,9 +2,11 @@ package localserving
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
 	localstore "lib/shared_lib/servedmodel"
@@ -177,6 +179,15 @@ func (o *StatusObserver) processRecord(ctx context.Context, record localstore.Re
 		return
 	}
 	if _, err := o.recorder.RecordModelServingStatus(ctx, status, key); err != nil {
+		if errors.Is(err, domain.ErrModelNotFound) {
+			if deleteErr := o.adapter.store.Delete(record.Name); deleteErr != nil && !errors.Is(deleteErr, localstore.ErrNotFound) {
+				log.WithContext(ctx).WithError(deleteErr).WithField("served_model", record.Name).Error("stale local served model cleanup failed")
+				return
+			}
+			delete(o.seen, record.Name)
+			log.WithContext(ctx).WithField("served_model", record.Name).Warn("removed stale local served model status for missing model")
+			return
+		}
 		log.WithContext(ctx).WithError(err).WithField("served_model", record.Name).Error("local served model status recording failed")
 		return
 	}

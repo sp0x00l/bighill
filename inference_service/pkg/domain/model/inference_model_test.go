@@ -82,6 +82,23 @@ var _ = Describe("DatasetProcessingState", func() {
 	})
 })
 
+var _ = Describe("ProcessingProfile", func() {
+	It("converts known processing profiles", func() {
+		profile, err := model.ToProcessingProfile("TEXT_RAG_PROCESSING_PROFILE")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(profile).To(Equal(model.ProcessingProfileTextRAG))
+		Expect(model.ProcessingProfileGenericParquet.String()).To(Equal("GENERIC_PARQUET_PROCESSING_PROFILE"))
+		Expect(model.ProcessingProfileInstructionTuning.String()).To(Equal("INSTRUCTION_TUNING_PROCESSING_PROFILE"))
+	})
+
+	It("rejects unknown processing profiles", func() {
+		_, err := model.ToProcessingProfile("RAG")
+
+		Expect(err).To(HaveOccurred())
+	})
+})
+
 var _ = Describe("InferenceDataset", func() {
 	It("reports RAG readiness only for active embedding metadata", func() {
 		dataset := &model.InferenceDataset{
