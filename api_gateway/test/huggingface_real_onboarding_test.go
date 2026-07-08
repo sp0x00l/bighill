@@ -3,9 +3,12 @@ package test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
+	featurepb "lib/data_contracts_lib/feature_materializer"
 	inferencepb "lib/data_contracts_lib/inference"
 	profilepb "lib/data_contracts_lib/profile"
 	env "lib/shared_lib/env"
@@ -32,10 +35,13 @@ const (
 	defaultRealHuggingFaceRepoID     = "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF"
 	defaultRealHuggingFaceFile       = "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"
 	defaultRealHuggingFaceTimeout    = 90 * time.Minute
+	techniqueRAGPaperPath            = "data/papers/techniquerag-2505.11988v1.pdf"
+	techniqueRAGPaperSHA256          = "2d123f7850c99302b030b2809fd76a1fc689964f0cca8c608a21cfd1115bff42"
+	techniqueRAGPaperPageCount       = 14
 )
 
 var _ = Describe("Hugging Face real model onboarding", func() {
-	It("validates the user's Hugging Face login, downloads, provisions, and invokes a real GGUF model when explicitly enabled", func() {
+	It("downloads and provisions a real GGUF model, then grounds RAG over a pinned TechniqueRAG paper", func() {
 		if !strings.EqualFold(strings.TrimSpace(os.Getenv(realHuggingFaceE2EFlag)), "true") {
 			Skip("set BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true to run the real Hugging Face download e2e")
 		}
@@ -63,6 +69,20 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 		msgConn.AddListener(profileSubscriber, profileCreatedEvents)
 		msgConn.AddListener(profileSubscriber, profileUpdatedEvents)
 		startProfileSubscriber()
+
+		dataTopic := env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry")
+		featureTopic := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer")
+		materializationSubscriber, startMaterializationSubscriber, stopMaterializationSubscriber := newKafkaAssertsSubscriber(context.Background(), topicList(dataTopic+","+featureTopic))
+		defer stopMaterializationSubscriber()
+		datasetUpdatedEvents := newKafkaEventCollector(msgConn.MsgTypeDatasetUpdated, func() *dataregistrypb.DatasetUpdatedEvent {
+			return &dataregistrypb.DatasetUpdatedEvent{}
+		})
+		embeddingSnapshotReadyEvents := newKafkaEventCollector(msgConn.MsgTypeEmbeddingSnapshotReady, func() *featurepb.EmbeddingSnapshotReadyEvent {
+			return &featurepb.EmbeddingSnapshotReadyEvent{}
+		})
+		msgConn.AddListener(materializationSubscriber, datasetUpdatedEvents)
+		msgConn.AddListener(materializationSubscriber, embeddingSnapshotReadyEvents)
+		startMaterializationSubscriber()
 
 		user := createVerifiedProfileAndLogin()
 		profileCreatedEvents.waitFor(user.ID, 30*time.Second, nil)
@@ -104,9 +124,9 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 		commit := stringField(completed, "hf_commit_sha")
 		Expect(commit).To(MatchRegexp(`^[0-9a-f]{40}$`), "expected a real Hugging Face commit sha, got %q", commit)
 
-		datasetID := createRAGInferenceDataset(user)
-		uploadRAGInferenceDocument(user, datasetID)
-		waitForRAGDatasetMaterialized(user, datasetID)
+		datasetID := createTechniqueRAGPaperDataset(user)
+		uploadTechniqueRAGPaper(user, datasetID)
+		materialized := waitForTechniqueRAGPaperMaterialized(user, datasetID, datasetUpdatedEvents, embeddingSnapshotReadyEvents)
 
 		loadedModel := waitForRealHuggingFaceModelLoaded(user, modelID, modelName, stringField(completed, "checksum"))
 		servingModel := stringField(loadedModel, "serving_model")
@@ -128,13 +148,13 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 				OrgId:     user.OrgID.String(),
 				DatasetId: datasetID,
 				ModelId:   modelID,
-				QueryText: "Which phrase proves the real Hugging Face GGUF model can serve RAG?",
-				TopK:      3,
+				QueryText: "Using the TechniqueRAG paper, what problem is addressed by reranking noisy candidates for adversarial technique annotation?",
+				TopK:      5,
 			})
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(strings.TrimSpace(response.GetAnswer())).NotTo(BeEmpty())
-			g.Expect(response.GetAnswer()).NotTo(MatchRegexp(`(<\|eot_id\|>|<\|im_end\|>|<end_of_turn>|<\|end\|>)`))
-			expectRAGVerificationContext(g, response)
+			expectNoChatSpecialTokenLeakage(g, response)
+			expectTechniqueRAGPaperContext(g, response, materialized)
 		}, 10*time.Minute, 5*time.Second).Should(Succeed())
 
 		Expect(response.GetDatasetId()).To(Equal(datasetID))
@@ -143,6 +163,123 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 		Expect(response.GetGenerationModel()).To(Equal(servingModel))
 	})
 })
+
+type techniqueRAGMaterialization struct {
+	datasetID           string
+	embeddingSnapshotID string
+	embeddingCount      int64
+}
+
+func createTechniqueRAGPaperDataset(user profileTestUser) string {
+	createPayload := map[string]any{
+		"title":             "TechniqueRAG Paper Corpus",
+		"description":       "Pinned arXiv TechniqueRAG paper uploaded through the gateway and materialized by the RAG feature pipeline",
+		"category":          "cyber-threat-intelligence",
+		"tableNamespace":    "features",
+		"tableName":         "techniquerag_paper_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8],
+		"tableFormat":       "PARQUET",
+		"catalogProvider":   "LOCAL",
+		"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
+	}
+
+	status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
+	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+	created := decodeObject(body)
+	return stringField(created, "id")
+}
+
+func uploadTechniqueRAGPaper(user profileTestUser, datasetID string) {
+	pdf := readTechniqueRAGPaperFixture()
+	Eventually(func(g Gomega) {
+		status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "techniquerag-2505.11988v1.pdf", pdf, user.Token, uuid.New())
+		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+	}, 30*time.Second, 1*time.Second).Should(Succeed())
+}
+
+func readTechniqueRAGPaperFixture() []byte {
+	pdf, err := os.ReadFile(techniqueRAGPaperPath)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(pdf).NotTo(BeEmpty())
+	actual := fmt.Sprintf("%x", sha256.Sum256(pdf))
+	Expect(actual).To(Equal(techniqueRAGPaperSHA256), "TechniqueRAG fixture checksum changed")
+	return pdf
+}
+
+func waitForTechniqueRAGPaperMaterialized(
+	user profileTestUser,
+	datasetID string,
+	datasetUpdatedEvents *kafkaEventCollector[*dataregistrypb.DatasetUpdatedEvent],
+	embeddingSnapshotReadyEvents *kafkaEventCollector[*featurepb.EmbeddingSnapshotReadyEvent],
+) techniqueRAGMaterialization {
+	datasetUUID, err := uuid.Parse(datasetID)
+	Expect(err).NotTo(HaveOccurred())
+
+	embeddingEvent := embeddingSnapshotReadyEvents.waitFor(datasetUUID, 5*time.Minute, func(event *featurepb.EmbeddingSnapshotReadyEvent) bool {
+		return event.GetDatasetId() == datasetID &&
+			strings.TrimSpace(event.GetEmbeddingSnapshotId()) != "" &&
+			event.GetEmbeddingCount() > 0
+	})
+	datasetEvent := datasetUpdatedEvents.waitFor(datasetUUID, 5*time.Minute, func(event *dataregistrypb.DatasetUpdatedEvent) bool {
+		return event.GetDatasetId() == datasetID &&
+			event.GetProcessingState() == "EMBEDDINGS_MATERIALIZED" &&
+			strings.TrimSpace(event.GetEmbeddingSnapshotId()) == embeddingEvent.GetEmbeddingSnapshotId()
+	})
+
+	Eventually(func(g Gomega) {
+		status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
+		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+
+		read := decodeObject(body)
+		g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
+		g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
+		g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
+		g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
+		g.Expect(read["processingProfile"]).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
+		metadata := schemaMetadataObject(g, read)
+		g.Expect(metadata["source_format"]).To(Equal("pdf"))
+		g.Expect(metadata["source_page_count"]).To(BeNumerically("==", techniqueRAGPaperPageCount))
+		g.Expect(metadata["extractor_name"]).To(Equal("poppler-cpp-pdf-extractor"))
+		g.Expect(metadata["extractor_version"]).To(Equal("v1"))
+		g.Expect(metadata["rows"]).To(BeNumerically(">=", 1))
+		expectSchemaField(g, metadata, "source_text")
+	}, 2*time.Minute, 1*time.Second).Should(Succeed())
+
+	return techniqueRAGMaterialization{
+		datasetID:           datasetID,
+		embeddingSnapshotID: datasetEvent.GetEmbeddingSnapshotId(),
+		embeddingCount:      embeddingEvent.GetEmbeddingCount(),
+	}
+}
+
+func expectTechniqueRAGPaperContext(g Gomega, response *inferencepb.GenerateResponse, materialized techniqueRAGMaterialization) {
+	g.Expect(response.GetDatasetId()).To(Equal(materialized.datasetID))
+	g.Expect(response.GetContexts()).NotTo(BeEmpty())
+	g.Expect(int64(len(response.GetContexts()))).To(BeNumerically("<=", materialized.embeddingCount))
+	for _, retrieved := range response.GetContexts() {
+		g.Expect(retrieved.GetEmbeddingSnapshotId()).To(Equal(materialized.embeddingSnapshotID))
+		g.Expect(strings.TrimSpace(retrieved.GetEmbeddingRecordId())).NotTo(BeEmpty())
+		g.Expect(strings.TrimSpace(retrieved.GetSourceText())).NotTo(BeEmpty())
+	}
+
+	contextText := strings.ToLower(ragResponseContextText(response))
+	g.Expect(compactPaperText(contextText)).To(ContainSubstring("techniquerag"))
+	g.Expect(contextText).To(ContainSubstring("adversarial technique"))
+	g.Expect(contextText).To(ContainSubstring("re-ranker"))
+	g.Expect(contextText).To(ContainSubstring("candidate set"))
+	g.Expect(contextText).To(ContainSubstring("data scarcity"))
+}
+
+func compactPaperText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(value)), "")
+}
+
+func expectNoChatSpecialTokenLeakage(g Gomega, response *inferencepb.GenerateResponse) {
+	leakedToken := MatchRegexp(`(<\|eot_id\|>|<\|im_end\|>|<end_of_turn>|<\|end\|>)`)
+	g.Expect(response.GetAnswer()).NotTo(leakedToken)
+	for _, retrieved := range response.GetContexts() {
+		g.Expect(retrieved.GetSourceText()).NotTo(leakedToken)
+	}
+}
 
 func waitForRealHuggingFaceModelLoaded(user profileTestUser, modelID string, modelName string, checksum string) map[string]any {
 	var loaded map[string]any
