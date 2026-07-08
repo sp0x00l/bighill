@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -281,6 +280,15 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 	}
 	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
 	now := time.Now().UTC()
+	artifactFormat := normalizeModelToken(request.ArtifactFormat)
+	if artifactFormat == "" {
+		artifactFormat = "HF_MODEL"
+	}
+	artifactType := normalizeModelToken(request.ArtifactType)
+	if artifactType == "" {
+		artifactType = "BASE_MODEL"
+	}
+	fileName := huggingFaceArtifactFileName(request.HuggingFaceFile, artifactFormat)
 	reservedSession := &model.UploadSession{
 		ResourceType:        model.UploadResourceModelArtifact,
 		ResourceID:          request.ResourceID,
@@ -288,11 +296,11 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		UserID:              request.UserID,
 		OrgID:               request.OrgID,
 		ClientNonce:         strings.TrimSpace(request.ClientNonce),
-		FileName:            "huggingface-snapshot",
-		DeclaredFormat:      "hf_model",
+		FileName:            fileName,
+		DeclaredFormat:      artifactFormat,
 		DeclaredContentType: "application/octet-stream",
 		Status:              model.UploadSessionPending,
-		ArtifactType:        "BASE_MODEL",
+		ArtifactType:        artifactType,
 		ModelName:           strings.TrimSpace(request.ModelName),
 		ModelVersion:        strings.TrimSpace(request.ModelVersion),
 		BaseModel:           strings.TrimSpace(request.BaseModel),
@@ -337,7 +345,7 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		UserID:              request.UserID,
 		OrgID:               request.OrgID,
 		ClientNonce:         strings.TrimSpace(request.ClientNonce),
-		FileName:            "huggingface-snapshot",
+		FileName:            huggingFaceArtifactFileName(request.HuggingFaceFile, downloaded.ArtifactFormat),
 		StorageLocation:     strings.TrimSpace(downloaded.StorageLocation),
 		DeclaredFormat:      normalizeModelToken(downloaded.ArtifactFormat),
 		DeclaredContentType: "application/octet-stream",
@@ -639,34 +647,43 @@ func (u *dataUploadUseCase) stagedObjectChecksum(ctx context.Context, session *m
 func validateModelArtifactContents(reader io.ReadSeeker, session *model.UploadSession, objectSize int64) error {
 	log.Trace("validateModelArtifactContents")
 
-	format := normalizeModelToken(session.DeclaredFormat)
-	fileName := strings.ToLower(session.FileName)
 	switch {
-	case format == "GGUF" || strings.HasSuffix(fileName, ".gguf"):
-		return validateGGUF(reader)
-	case format == "SAFETENSORS" || strings.HasSuffix(fileName, ".safetensors"):
+	case isDirectGGUFModelArtifact(session):
+		return domain.ErrValidationFailed.Extend("GGUF model artifacts must be onboarded through the Hugging Face exact-file path so the full file metadata is validated")
+	case normalizeModelToken(session.DeclaredFormat) == "SAFETENSORS" || strings.HasSuffix(strings.ToLower(session.FileName), ".safetensors"):
 		return domain.ErrValidationFailed.Extend("safetensors model artifacts must be uploaded as an archive with model metadata")
-	case format == "ZIP" || strings.HasSuffix(fileName, ".zip") || format == "HF_MODEL" || format == "HF_PEFT_ADAPTER":
+	case normalizeModelToken(session.DeclaredFormat) == "ZIP" || strings.HasSuffix(strings.ToLower(session.FileName), ".zip") ||
+		normalizeModelToken(session.DeclaredFormat) == "HF_MODEL" || normalizeModelToken(session.DeclaredFormat) == "HF_PEFT_ADAPTER":
 		return validateModelZipArchive(reader, session, objectSize)
 	default:
 		return domain.ErrValidationFailed.Extend("uploaded model artifact format is not positively validated")
 	}
 }
 
-func validateGGUF(reader io.ReadSeeker) error {
-	log.Trace("validateGGUF")
+func isDirectGGUFModelArtifact(session *model.UploadSession) bool {
+	log.Trace("isDirectGGUFModelArtifact")
 
-	if _, err := reader.Seek(0, io.SeekStart); err != nil {
-		return err
+	if session == nil {
+		return false
 	}
-	magic := make([]byte, 4)
-	if _, err := io.ReadFull(reader, magic); err != nil {
-		return domain.ErrValidationFailed.Extend("uploaded GGUF model is too small")
+	format := normalizeModelToken(session.DeclaredFormat)
+	return format == "GGUF" || format == "GGUF_MODEL" || format == "GGUF_LORA_ADAPTER" ||
+		strings.HasSuffix(strings.ToLower(session.FileName), ".gguf")
+}
+
+func huggingFaceArtifactFileName(huggingFaceFile string, artifactFormat string) string {
+	log.Trace("huggingFaceArtifactFileName")
+
+	fileName := safeFileName(filepath.Base(strings.TrimSpace(huggingFaceFile)), artifactFormat)
+	if fileName != "" && fileName != "." {
+		return fileName
 	}
-	if !bytes.Equal(magic, []byte("GGUF")) {
-		return domain.ErrValidationFailed.Extend("uploaded model is not a valid GGUF file")
+	switch normalizeModelToken(artifactFormat) {
+	case "GGUF", "GGUF_MODEL", "GGUF_LORA_ADAPTER":
+		return "huggingface-model.gguf"
+	default:
+		return "huggingface-snapshot"
 	}
-	return nil
 }
 
 func validateModelZipArchive(reader io.ReadSeeker, session *model.UploadSession, objectSize int64) error {
@@ -783,6 +800,9 @@ func validateStagedObject(session *model.UploadSession, info *model.ObjectInfo, 
 	}
 	if session.DeclaredSizeBytes > 0 && info.Size > session.DeclaredSizeBytes {
 		return domain.ErrValidationFailed.Extend("uploaded object exceeds declared size")
+	}
+	if session.ResourceType == model.UploadResourceModelArtifact && isDirectGGUFModelArtifact(session) {
+		return domain.ErrValidationFailed.Extend("GGUF model artifacts must be onboarded through the Hugging Face exact-file path so the full file metadata is validated")
 	}
 	if strings.TrimSpace(info.ContentType) != "" && strings.TrimSpace(session.DeclaredContentType) != "" &&
 		!strings.EqualFold(strings.TrimSpace(info.ContentType), strings.TrimSpace(session.DeclaredContentType)) {

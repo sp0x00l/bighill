@@ -28,8 +28,11 @@ COPY --from=builder /etc/group /etc/group
 COPY --from=builder /etc/passwd /etc/passwd
 
 WORKDIR /usr/local/src
+COPY ./shared_py /usr/local/src/shared_py
 COPY ./scripts/docker/services/model-serving-service-entrypoint.sh .
-RUN apk update && apk add --no-cache bash curl && rm -rf /var/cache/apk/*
+RUN apk update && apk add --no-cache bash curl python3 py3-pip && \
+    python3 -m pip install --break-system-packages /usr/local/src/shared_py && \
+    rm -rf /var/cache/apk/*
 
 USER model_serving_service_server_user
 

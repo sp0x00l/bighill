@@ -39,6 +39,17 @@ export MODEL_SERVING_SERVICE_VLLM_GPU_RESOURCE=nvidia.com/gpu
 export MODEL_SERVING_SERVICE_VLLM_GPU=1
 export MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS=5000
 export MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT=http://localhost:11434
+export MODEL_SERVING_SERVICE_LOCAL_ARTIFACT_CACHE_DIR=$BIGHILL_ROOT/tmp/model_serving_artifacts
+if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
+    export MODEL_SERVING_SERVICE_GGUF_INSPECTOR_COMMAND="sh $BIGHILL_ROOT/model_serving_service/scripts/gguf-inspector.sh"
+else
+    export MODEL_SERVING_SERVICE_GGUF_INSPECTOR_COMMAND="python3 -m bighill_model_artifacts.gguf"
+fi
+export MODEL_SERVING_SERVICE_LOCAL_OLLAMA_CREATE_TIMEOUT_SECONDS=1200
+
+if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
+    export BIGHILL_LOCAL_S3_STORAGE_DIR=$BIGHILL_ROOT/tmp/local_s3_storage
+fi
 
 # The following are variables set at build time, intended to be used at runtime.
 # IMPORTANT: This IDs the K8s deployment instance and is used in the templates.

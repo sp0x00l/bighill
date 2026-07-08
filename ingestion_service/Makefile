@@ -22,7 +22,7 @@ test-hf:
 		elif command -v python >/dev/null 2>&1; then HF_PYTHON="$$(command -v python)"; \
 		else echo "python 3.11+ with training_jobs runtime dependencies is required; run make install-dev"; exit 1; fi; \
 	fi; \
-	"$$HF_PYTHON" -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ is required"; import huggingface_hub' || { echo "Hugging Face e2e Python dependencies are missing for $$HF_PYTHON; run make install-dev or set BIGHILL_E2E_HUGGINGFACE_PYTHON"; exit 1; }; \
+	"$$HF_PYTHON" -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ is required"; import huggingface_hub; import bighill_model_artifacts.gguf' || { echo "Hugging Face e2e Python dependencies are missing for $$HF_PYTHON; run make install-dev or set BIGHILL_E2E_HUGGINGFACE_PYTHON"; exit 1; }; \
 	echo "Using Hugging Face onboarding Python: $$HF_PYTHON"; \
 	"$$HF_PYTHON" scripts/check-huggingface-e2e.py
 

@@ -17,10 +17,12 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git build-essential curl && \
     rm -rf /var/lib/apt/lists/*
 
+COPY ./shared_py /opt/bighill/shared_py
 COPY ./training_service/training_jobs/pyproject.toml ./pyproject.toml
 COPY ./training_service/training_jobs/training_jobs ./training_jobs
 
 RUN pip install --upgrade pip && \
+    pip install /opt/bighill/shared_py && \
     pip install ".[runtime]" && \
     if [ "$INSTALL_AXOLOTL" = "true" ]; then pip install axolotl; fi
 

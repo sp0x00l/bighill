@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import os
+import hashlib
 import tempfile
 import types
 import unittest
@@ -77,43 +79,86 @@ class ModelOnboardTests(unittest.TestCase):
             manifest_path = local_s3 / "bucket" / "models" / "huggingface" / payload["resource_id"] / "manifest.json"
             self.assertTrue(manifest_path.is_file())
 
-    def test_main_uses_local_fixture_when_present(self) -> None:
+    def test_main_downloads_exact_gguf_file_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             local_s3 = root / "local_s3"
-            fixture = root / "fixtures" / "bighill" / "rag-e2e-huggingface-base"
-            fixture.mkdir(parents=True)
-            (fixture / "config.json").write_text("{}", encoding="utf-8")
-            (fixture / "model.safetensors").write_bytes(b"weights")
+            gguf_bytes = b"real gguf bytes"
+            gguf_sha = hashlib.sha256(gguf_bytes).hexdigest()
+
+            def fake_file_download(*, repo_id: str, revision: str, token: str, filename: str, local_dir: Path) -> str:
+                self.assertEqual(repo_id, "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF")
+                self.assertEqual(revision, "main")
+                self.assertEqual(token, "hf_test")
+                self.assertEqual(filename, "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf")
+                target = local_dir / filename
+                target.parent.mkdir(parents=True)
+                target.write_bytes(gguf_bytes)
+                return str(target)
 
             with EnvPatch(
                 {
                     "BIGHILL_LOCAL_S3_STORAGE_DIR": str(local_s3),
                     "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
-                    "INGESTION_SERVICE_HUGGINGFACE_LOCAL_FIXTURE_ROOT": str(root / "fixtures"),
-                    "INGESTION_SERVICE_MODEL_RESOURCE_ID": "22222222-2222-2222-2222-222222222222",
-                    "INGESTION_SERVICE_MODEL_NAME": "rag-e2e-huggingface-base",
+                    "INGESTION_SERVICE_MODEL_RESOURCE_ID": "44444444-4444-4444-4444-444444444444",
+                    "INGESTION_SERVICE_MODEL_NAME": "llama-gguf",
                     "INGESTION_SERVICE_MODEL_VERSION": "1",
-                    "INGESTION_SERVICE_MODEL_BASE_MODEL": "bighill/rag-e2e-huggingface-base",
+                    "INGESTION_SERVICE_MODEL_BASE_MODEL": "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
                     "INGESTION_SERVICE_MODEL_ARTIFACT_TYPE": "BASE_MODEL",
-                    "INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT": "HF_MODEL",
-                    "INGESTION_SERVICE_HUGGINGFACE_REPO_ID": "bighill/rag-e2e-huggingface-base",
+                    "INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT": "",
+                    "INGESTION_SERVICE_HUGGINGFACE_REPO_ID": "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
                     "INGESTION_SERVICE_HUGGINGFACE_REVISION": "main",
+                    "INGESTION_SERVICE_HUGGINGFACE_FILE": "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
                     "INGESTION_SERVICE_HUGGINGFACE_TOKEN": "hf_test",
                     "INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI": "s3://bucket/models/huggingface",
                 }
-            ), mock.patch.object(model_onboard, "resolve_commit_sha") as resolve_commit, mock.patch.object(
-                model_onboard, "snapshot_download"
-            ) as download, mock.patch.object(model_onboard, "validate_login") as validate_login, mock.patch("builtins.print") as printed:
+            ), mock.patch.object(model_onboard, "validate_login", return_value="test-user"), mock.patch.object(
+                model_onboard, "resolve_commit_sha", return_value="resolvedabc123"
+            ), mock.patch.object(
+                model_onboard, "resolve_file_sha256", return_value=gguf_sha
+            ), mock.patch.object(
+                model_onboard, "file_download", side_effect=fake_file_download
+            ), mock.patch.object(model_onboard, "validate_gguf_file") as validate_gguf, mock.patch("builtins.print") as printed:
                 model_onboard.main()
 
-            validate_login.assert_not_called()
-            resolve_commit.assert_not_called()
-            download.assert_not_called()
             payload = json.loads(printed.call_args.args[0])
-            self.assertEqual(payload["hf_repo_id"], "bighill/rag-e2e-huggingface-base")
-            self.assertEqual(payload["hf_commit_sha"], "local-main")
-            self.assertTrue((local_s3 / "bucket" / "models" / "huggingface" / payload["resource_id"] / "snapshot" / "config.json").is_file())
+            self.assertEqual(payload["artifact_type"], "BASE_MODEL")
+            self.assertEqual(payload["artifact_format"], "GGUF_MODEL")
+            self.assertEqual(payload["hf_file"], "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf")
+            self.assertEqual(payload["storage_location"], "s3://bucket/models/huggingface/44444444-4444-4444-4444-444444444444/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf")
+            self.assertTrue((local_s3 / "bucket" / "models" / "huggingface" / payload["resource_id"] / "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf").is_file())
+            validate_gguf.assert_called_once()
+
+    def test_main_rejects_exact_gguf_file_with_explicit_non_gguf_format(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            with EnvPatch(
+                {
+                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(root / "local_s3"),
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
+                    "INGESTION_SERVICE_MODEL_RESOURCE_ID": "55555555-5555-5555-5555-555555555555",
+                    "INGESTION_SERVICE_MODEL_NAME": "llama-gguf",
+                    "INGESTION_SERVICE_MODEL_VERSION": "1",
+                    "INGESTION_SERVICE_MODEL_BASE_MODEL": "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
+                    "INGESTION_SERVICE_MODEL_ARTIFACT_TYPE": "BASE_MODEL",
+                    "INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT": "HF_MODEL",
+                    "INGESTION_SERVICE_HUGGINGFACE_REPO_ID": "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
+                    "INGESTION_SERVICE_HUGGINGFACE_REVISION": "main",
+                    "INGESTION_SERVICE_HUGGINGFACE_FILE": "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+                    "INGESTION_SERVICE_HUGGINGFACE_TOKEN": "hf_test",
+                    "INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI": "s3://bucket/models/huggingface",
+                }
+            ), mock.patch.object(model_onboard, "validate_login") as validate_login, mock.patch.object(
+                model_onboard, "file_download"
+            ) as download, mock.patch("sys.stderr", io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as raised:
+                    model_onboard.main()
+
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("GGUF Hugging Face files must use GGUF_MODEL or GGUF_LORA_ADAPTER", stderr.getvalue())
+            validate_login.assert_not_called()
+            download.assert_not_called()
 
     def test_validate_snapshot_rejects_missing_weights(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -167,10 +212,13 @@ class ModelOnboardTests(unittest.TestCase):
                 model_onboard, "resolve_commit_sha"
             ) as resolve_commit, mock.patch.object(
                 model_onboard, "snapshot_download"
-            ) as download:
-                with self.assertRaisesRegex(RuntimeError, "bad Hugging Face token"):
+            ) as download, mock.patch("sys.stderr", io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as raised:
                     model_onboard.main()
 
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("bad Hugging Face token", stderr.getvalue())
+            self.assertIn("ONBOARDING_FAILED", stderr.getvalue())
             validate_login.assert_called_once_with(token="hf_bad")
             resolve_commit.assert_not_called()
             download.assert_not_called()

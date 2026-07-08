@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -118,6 +119,49 @@ var _ = Describe("http server", func() {
 				Expect(err).ShouldNot(HaveOccurred())
 				Expect(errJson.Message).To(ContainSubstring("test-get error"))
 			})
+		})
+
+		It("applies a configured write timeout", func() {
+			slowPort := freeTCPPort()
+			slowServer := transport.NewHttpServer(
+				tracer,
+				[]transport.Route{
+					{
+						Handler: func(ctx context.Context, r *http.Request) (int, []byte, error) {
+							time.Sleep(150 * time.Millisecond)
+							return http.StatusOK, []byte("slow reply"), nil
+						},
+						Path:   "/slow",
+						Method: http.MethodGet,
+					},
+				},
+				slowPort,
+				"slow-test",
+				transport.WithServerTimeouts(time.Second, 25*time.Millisecond, time.Second),
+			)
+			go func() {
+				defer GinkgoRecover()
+				err := slowServer.Connect()
+				if err != nil && !errors.Is(err, http.ErrServerClosed) {
+					Fail(fmt.Sprintf("slow server connect failed: %v", err))
+				}
+			}()
+			defer slowServer.Close()
+
+			Eventually(func() error {
+				conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", slowPort), 50*time.Millisecond)
+				if err != nil {
+					return err
+				}
+				return conn.Close()
+			}).Should(Succeed())
+
+			client := &http.Client{Timeout: time.Second}
+			response, err := client.Get(fmt.Sprintf("http://localhost:%d/slow", slowPort))
+			if response != nil && response.Body != nil {
+				response.Body.Close()
+			}
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })

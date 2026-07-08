@@ -263,6 +263,7 @@ func recordToObject(record localstore.Record) *unstructured.Unstructured {
 			"adapterURI":       record.Spec.AdapterURI,
 			"servingTarget":    record.Spec.ServingTarget,
 			"servingModel":     record.Spec.ServingModel,
+			"servingProtocol":  record.Spec.ServingProtocol,
 		},
 	}}
 	obj.SetName(record.Name)
@@ -273,6 +274,7 @@ func recordToObject(record localstore.Record) *unstructured.Unstructured {
 			"servingLoadStatus":  record.Status.ServingLoadStatus,
 			"servingTarget":      record.Status.ServingTarget,
 			"servingModel":       record.Status.ServingModel,
+			"servingProtocol":    record.Status.ServingProtocol,
 			"failureReason":      record.Status.FailureReason,
 			"observedGeneration": record.Status.ObservedGeneration,
 			"readyReplicas":      int64(record.Status.ReadyReplicas),

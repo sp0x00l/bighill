@@ -40,6 +40,10 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_LOCAL_ARTIFACT_CACHE_DIR")).To(Succeed())
+		Expect(os.Unsetenv("BIGHILL_LOCAL_S3_STORAGE_DIR")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_GGUF_INSPECTOR_COMMAND")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_CREATE_TIMEOUT_SECONDS")).To(Succeed())
 	})
 
 	It("uses operator defaults", func() {
@@ -62,6 +66,10 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(cfg.Runtime.RequestTimeout.String()).To(Equal("5s"))
 		Expect(cfg.Runtime.Port).To(Equal(int32(8000)))
 		Expect(cfg.Runtime.LocalOllamaEndpoint).To(Equal("http://localhost:11434"))
+		Expect(cfg.Runtime.LocalArtifactCache).To(ContainSubstring("model_serving_artifacts"))
+		Expect(cfg.Runtime.LocalS3StorageDir).To(BeEmpty())
+		Expect(cfg.Runtime.GGUFInspector).To(Equal("python3 -m bighill_model_artifacts.gguf"))
+		Expect(cfg.Runtime.OllamaCreateTimeout.String()).To(Equal("20m0s"))
 	})
 
 	It("reads explicit runtime config", func() {
@@ -79,6 +87,10 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED", "true")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS", "2500")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT", "http://ollama.local")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_LOCAL_ARTIFACT_CACHE_DIR", "/tmp/model-artifacts")).To(Succeed())
+		Expect(os.Setenv("BIGHILL_LOCAL_S3_STORAGE_DIR", "/tmp/local-s3")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_GGUF_INSPECTOR_COMMAND", "python3 -m bighill_model_artifacts.gguf")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_CREATE_TIMEOUT_SECONDS", "42")).To(Succeed())
 
 		cfg := readModelServingConfig()
 
@@ -95,6 +107,10 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(cfg.Runtime.MultiTenant).To(BeTrue())
 		Expect(cfg.Runtime.RequestTimeout.String()).To(Equal("2.5s"))
 		Expect(cfg.Runtime.LocalOllamaEndpoint).To(Equal("http://ollama.local"))
+		Expect(cfg.Runtime.LocalArtifactCache).To(Equal("/tmp/model-artifacts"))
+		Expect(cfg.Runtime.LocalS3StorageDir).To(Equal("/tmp/local-s3"))
+		Expect(cfg.Runtime.GGUFInspector).To(Equal("python3 -m bighill_model_artifacts.gguf"))
+		Expect(cfg.Runtime.OllamaCreateTimeout.String()).To(Equal("42s"))
 	})
 
 	It("uses the local backend without reading kubeconfig", func() {

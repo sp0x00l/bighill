@@ -15,10 +15,10 @@ Parameters:
     Default: debug
   BighillApiFunctionTimeout:
     Type: Number
-    Default: 30
+    Default: 1200
   BighillApiHttpClientTimeoutSeconds:
     Type: Number
-    Default: 10
+    Default: 1200
     Description: Timeout in seconds for HTTP requests from API Gateway to backend services
   BigHillApiCodeUri:
     Type: String

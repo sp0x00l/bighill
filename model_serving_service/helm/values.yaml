@@ -45,6 +45,10 @@ env:
   vllmGpu: "1"
   vllmRequestTimeoutMs: "5000"
   localOllamaEndpoint: "http://localhost:11434"
+  localArtifactCacheDir: "/tmp/bighill/model_serving_artifacts"
+  localS3StorageDir: ""
+  ggufInspectorCommand: "python3 -m bighill_model_artifacts.gguf"
+  localOllamaCreateTimeoutSeconds: "1200"
 resources:
   requests:
     memory: "128Mi"

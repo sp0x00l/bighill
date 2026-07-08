@@ -60,6 +60,21 @@ def upload_directory(source_dir: Path, destination_uri: str, config: StorageConf
     return artifact_info(destination_uri, config)
 
 
+def upload_file(source_file: Path, destination_uri: str, config: StorageConfig) -> ArtifactInfo:
+    source_file = source_file.resolve()
+    if not source_file.is_file():
+        raise FileNotFoundError(f"artifact file does not exist: {source_file}")
+    checksum, size = file_digest(source_file)
+    if is_remote_s3(destination_uri, config):
+        bucket, key = parse_s3_uri(destination_uri)
+        s3_client(config).upload_file(str(source_file), bucket, key)
+        return ArtifactInfo(uri=destination_uri, checksum=checksum, size_bytes=size)
+    destination = uri_to_local_path(destination_uri, config)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_file, destination)
+    return ArtifactInfo(uri=destination_uri, checksum=checksum, size_bytes=size)
+
+
 def write_json_bytes(destination_uri: str, payload: bytes, config: StorageConfig) -> None:
     if is_remote_s3(destination_uri, config):
         parsed = parse_s3_uri(destination_uri)

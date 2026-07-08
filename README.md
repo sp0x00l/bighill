@@ -95,10 +95,17 @@ Ollama endpoint as `serving_target`, and the tag as `serving_model`. `inference_
 Ollama's `/api/generate` endpoint. In this path, Ollama is the local model runtime, not the platform
 serving orchestrator.
 
-The local backend verifies only base/shared tags. It does not convert or load
-fine-tuned `HF_PEFT_ADAPTER` artifacts into Ollama; that requires HF-PEFT to GGUF conversion plus
-`ollama create`. Ollama-style embeddings are supported through `/api/embed`, but the local default is
-the TEI-compatible embedding endpoint.
+The local backend has two honest serving paths. For existing base/shared models it verifies that the
+requested Ollama tag exists and records `serving_protocol=OLLAMA_GENERATE`. For exact GGUF artifacts
+(`GGUF_MODEL` or `GGUF_LORA_ADAPTER`) it validates the GGUF metadata, uploads the artifact through
+Ollama's blob API, creates a deterministic tag through `/api/create`, and records
+`serving_protocol=OPENAI_CHAT_COMPLETIONS` only after `/api/tags` and `/api/show` confirm the model is
+loaded with a chat template and stop parameters. The create path lets Ollama infer the template from
+GGUF metadata first; local serving falls back to explicit templates only for recognized chat formats
+where inference does not produce a usable tag. Raw `HF_PEFT_ADAPTER` directories are not
+local-compatible serving artifacts; local serving rejects them unless they have already been converted
+to a validated `GGUF_LORA_ADAPTER`. Ollama-style embeddings are supported through `/api/embed`, but
+the local default is the TEI-compatible embedding endpoint.
 
 Staging and prod use the Kubernetes-backed serving path. `model_serving_service` reconciles
 `ServedModel` resources into vLLM Deployment/Service resources and records
@@ -126,9 +133,33 @@ The hard limitation is the serving protocol and runtime implementation boundary:
   those protocol/runtime implementations;
 - adding a new wire protocol does require a DB enum update, Go enum update, provisioning
   implementation, inference adapter registration, and tests;
-- the local service-script backend does not yet load fine-tuned `HF_PEFT_ADAPTER` artifacts into
-  Ollama. It only verifies base/shared model tags. Fine-tuned local serving needs HF-PEFT to GGUF
-  conversion plus `ollama create`.
+- the local service-script backend loads exact GGUF artifacts into Ollama through blob-backed
+  `/api/create`; raw `HF_PEFT_ADAPTER` artifacts are rejected unless represented as validated
+  `GGUF_LORA_ADAPTER` artifacts.
+
+**Instruct-vs-base and chat templates (a correctness trap when onboarding GGUF).** When a GGUF
+model is provisioned into local Ollama for `OPENAI_CHAT_COMPLETIONS`, the runtime must have a usable
+chat template for that created tag. BigHill enforces this as a provisioning precondition: full GGUF
+chat models must contain `tokenizer.chat_template`, the runtime refuses `LOADED` unless `/api/show`
+returns a non-empty Ollama-compatible template and stop parameters for the served tag, and raw
+Hugging Face/Jinja templates are rejected if they show up in the created Ollama model. Hugging
+Face/Jinja chat templates are a metadata precondition, not a Modelfile payload. Local serving lets
+Ollama infer the chat template first and falls back only for recognized formats: Llama 3,
+ChatML/Qwen-style, Mistral/Mixtral Instruct, Gemma, Phi, and Llama 2 chat. Unsupported templates
+fail closed. Two failure modes are specifically blocked because they otherwise return HTTP 200 with a
+non-empty answer:
+
+- **Base (non-Instruct) model.** A base completion model (e.g. `Meta-Llama-3-8B`, as opposed to
+  `Meta-Llama-3-8B-Instruct`) will happily emit tokens through the chat endpoint, but it does not
+  follow instructions — it continues text. RAG answers are semantically wrong.
+- **No `TEMPLATE` in the Modelfile.** A bare `FROM <gguf>` Modelfile with no `TEMPLATE`/stop
+  parameters serves the weights without the family's chat formatting, so prompts are assembled
+  incorrectly even for an Instruct model.
+
+Either case produces *garbage that passes* if the guard lives only in a generation assertion. The
+guard therefore lives in provisioning, not in the e2e output text. When onboarding GGUF for chat
+inference, use the **Instruct** build of the model family. Model-family agnostic does **not** mean
+template-agnostic — the chat template is part of correct provisioning, not an optional extra.
 
 ---
 

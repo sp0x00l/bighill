@@ -38,14 +38,17 @@ type InitiateModelUploadDTO struct {
 }
 
 type OnboardHuggingFaceModelDTO struct {
-	ResourceID   string `json:"resource_id"   validate:"omitempty,uuid"`
-	DatasetID    string `json:"dataset_id"    validate:"omitempty,uuid"`
-	RepoID       string `json:"repo_id"       validate:"required"`
-	Revision     string `json:"revision"`
-	ClientNonce  string `json:"client_nonce"  validate:"required"`
-	ModelName    string `json:"model_name"    validate:"required"`
-	ModelVersion string `json:"model_version" validate:"required,model_version"`
-	BaseModel    string `json:"base_model"    validate:"required"`
+	ResourceID     string `json:"resource_id"   validate:"omitempty,uuid"`
+	DatasetID      string `json:"dataset_id"    validate:"omitempty,uuid"`
+	RepoID         string `json:"repo_id"       validate:"required"`
+	Revision       string `json:"revision"`
+	HFFile         string `json:"hf_file"`
+	ClientNonce    string `json:"client_nonce"  validate:"required"`
+	ModelName      string `json:"model_name"    validate:"required"`
+	ModelVersion   string `json:"model_version" validate:"required,model_version"`
+	BaseModel      string `json:"base_model"    validate:"required"`
+	ArtifactType   string `json:"artifact_type"   validate:"omitempty,model_artifact_type"`
+	ArtifactFormat string `json:"artifact_format" validate:"omitempty,model_artifact_format"`
 }
 
 type UploadDTOAdapter struct {
@@ -193,17 +196,18 @@ func (a *UploadDTOAdapter) FromOnboardHuggingFaceModelDTO(ctx context.Context, b
 		revision = "main"
 	}
 	return &model.OnboardHuggingFaceModelRequest{
-		ResourceID:     resourceID,
-		DatasetID:      datasetID,
-		UserID:         userID,
-		ClientNonce:    dto.ClientNonce,
-		RepoID:         dto.RepoID,
-		Revision:       revision,
-		ArtifactType:   "BASE_MODEL",
-		ArtifactFormat: "HF_MODEL",
-		ModelName:      dto.ModelName,
-		ModelVersion:   modelVersion,
-		BaseModel:      dto.BaseModel,
+		ResourceID:      resourceID,
+		DatasetID:       datasetID,
+		UserID:          userID,
+		ClientNonce:     dto.ClientNonce,
+		RepoID:          dto.RepoID,
+		Revision:        revision,
+		HuggingFaceFile: strings.TrimSpace(dto.HFFile),
+		ArtifactType:    modelArtifactTokenOrDefault(dto.ArtifactType, "BASE_MODEL"),
+		ArtifactFormat:  modelArtifactTokenOrDefault(dto.ArtifactFormat, "HF_MODEL"),
+		ModelName:       dto.ModelName,
+		ModelVersion:    modelVersion,
+		BaseModel:       dto.BaseModel,
 	}, nil
 }
 
@@ -242,9 +246,19 @@ func normalizeModelArtifactToken(value string) string {
 	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(value), "-", "_"))
 }
 
+func modelArtifactTokenOrDefault(value string, fallback string) string {
+	log.Trace("modelArtifactTokenOrDefault")
+
+	normalized := normalizeModelArtifactToken(value)
+	if normalized == "" {
+		return fallback
+	}
+	return normalized
+}
+
 func isSupportedModelArtifactType(value string) bool {
 	switch normalizeModelArtifactToken(value) {
-	case "BASE_MODEL", "LORA_ADAPTER", "MERGED_MODEL", "GGUF":
+	case "BASE_MODEL", "LORA_ADAPTER", "MERGED_MODEL":
 		return true
 	default:
 		return false
@@ -253,7 +267,7 @@ func isSupportedModelArtifactType(value string) bool {
 
 func isSupportedModelArtifactFormat(value string) bool {
 	switch normalizeModelArtifactToken(value) {
-	case "HF_MODEL", "HF_PEFT_ADAPTER", "SAFETENSORS", "GGUF", "ZIP":
+	case "HF_MODEL", "HF_PEFT_ADAPTER", "SAFETENSORS", "GGUF", "GGUF_MODEL", "GGUF_LORA_ADAPTER", "ZIP":
 		return true
 	default:
 		return false

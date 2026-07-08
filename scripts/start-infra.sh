@@ -229,16 +229,18 @@ check_ollama_health() {
     local RETRIES="${2:-30}"
     local DELAY="${3:-1}"
 
-    until curl -fsS "http://localhost:${OLLAMA_PORT}/api/tags" >/dev/null 2>&1; do
+    until curl -fsS "http://localhost:${OLLAMA_PORT}/api/tags" >/dev/null 2>&1 &&
+        curl -fsS "http://localhost:${OLLAMA_PORT}/api/version" >/dev/null 2>&1; do
         RETRIES=$((RETRIES - 1))
         if [ "$RETRIES" -le 0 ]; then
-            echo "Timeout waiting for Ollama-compatible generation endpoint health on port ${OLLAMA_PORT}"
+            echo "Timeout waiting for real Ollama generation endpoint health on port ${OLLAMA_PORT}"
+            echo "Start Ollama with: brew services start ollama"
             return 1
         fi
-        echo "Waiting for Ollama-compatible generation endpoint health on port ${OLLAMA_PORT}... (${RETRIES} retries left)"
+        echo "Waiting for real Ollama generation endpoint health on port ${OLLAMA_PORT}... (${RETRIES} retries left)"
         sleep "$DELAY"
     done
-    echo "Ollama-compatible generation endpoint health is available on port ${OLLAMA_PORT}"
+    echo "Real Ollama generation endpoint health is available on port ${OLLAMA_PORT}"
 }
 
 local_start_tei() {

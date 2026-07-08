@@ -3,6 +3,7 @@ package rest
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"lib/shared_lib/transport"
 
@@ -38,7 +39,26 @@ type Service struct {
 	server *transport.HttpServer
 }
 
-func NewService(routes []Route, port int, name string) *Service {
+type ServiceOption func(*serviceOptions)
+
+type serviceOptions struct {
+	transportOptions []transport.HttpServerOption
+}
+
+func WithHTTPTimeouts(readTimeout, writeTimeout, idleTimeout time.Duration) ServiceOption {
+	return func(opts *serviceOptions) {
+		opts.transportOptions = append(opts.transportOptions, transport.WithServerTimeouts(readTimeout, writeTimeout, idleTimeout))
+	}
+}
+
+func NewService(routes []Route, port int, name string, options ...ServiceOption) *Service {
+	serviceOptions := serviceOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&serviceOptions)
+		}
+	}
+
 	transportRoutes := make([]transport.Route, 0, len(routes))
 	for _, route := range routes {
 		handler := route.Handler
@@ -62,7 +82,7 @@ func NewService(routes []Route, port int, name string) *Service {
 			},
 		})
 	}
-	return &Service{server: transport.NewHttpServer(otel.Tracer(name), transportRoutes, port, name)}
+	return &Service{server: transport.NewHttpServer(otel.Tracer(name), transportRoutes, port, name, serviceOptions.transportOptions...)}
 }
 
 func (s *Service) Connect() error {

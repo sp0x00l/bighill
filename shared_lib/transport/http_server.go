@@ -30,8 +30,45 @@ type HttpServer struct {
 	ready      atomic.Bool
 }
 
-func NewHttpServer(tracer trace.Tracer, routes []Route, httpPort int, name string) *HttpServer {
+type HttpServerOption func(*httpServerOptions)
+
+type httpServerOptions struct {
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+	idleTimeout  time.Duration
+}
+
+func defaultHTTPServerOptions() httpServerOptions {
+	return httpServerOptions{
+		readTimeout:  30 * time.Second,
+		writeTimeout: 30 * time.Second,
+		idleTimeout:  120 * time.Second,
+	}
+}
+
+func WithServerTimeouts(readTimeout, writeTimeout, idleTimeout time.Duration) HttpServerOption {
+	return func(opts *httpServerOptions) {
+		if readTimeout > 0 {
+			opts.readTimeout = readTimeout
+		}
+		if writeTimeout > 0 {
+			opts.writeTimeout = writeTimeout
+		}
+		if idleTimeout > 0 {
+			opts.idleTimeout = idleTimeout
+		}
+	}
+}
+
+func NewHttpServer(tracer trace.Tracer, routes []Route, httpPort int, name string, options ...HttpServerOption) *HttpServer {
 	log.Trace(name, "NewHttpServer")
+
+	serverOptions := defaultHTTPServerOptions()
+	for _, option := range options {
+		if option != nil {
+			option(&serverOptions)
+		}
+	}
 
 	s := &HttpServer{
 		tracer: tracer,
@@ -45,9 +82,9 @@ func NewHttpServer(tracer trace.Tracer, routes []Route, httpPort int, name strin
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", httpPort),
 		Handler:      wrappedHandler,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		ReadTimeout:  serverOptions.readTimeout,
+		WriteTimeout: serverOptions.writeTimeout,
+		IdleTimeout:  serverOptions.idleTimeout,
 	}
 
 	return s

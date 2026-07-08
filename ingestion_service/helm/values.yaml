@@ -11,6 +11,10 @@ service:
   type: ClusterIP
   httpPort: 8086
   healthPort: 5056
+http:
+  readTimeoutSeconds: "30"
+  writeTimeoutSeconds: "1200"
+  idleTimeoutSeconds: "120"
 lifecycle:
   terminationGracePeriodSeconds: 45
   readinessTimeoutSeconds: "30"
@@ -50,7 +54,7 @@ env:
   huggingFaceDownloadCommand: "python -m training_jobs.model_onboard"
   huggingFaceDownloadWorkingDirectory: ""
   huggingFaceOutputUri: "s3://local-dev-bucket/models/huggingface"
-  huggingFaceDownloadTimeoutSeconds: "1800"
+  huggingFaceDownloadTimeoutSeconds: "1200"
   huggingFaceJobNamespace: "default"
   huggingFaceJobImage: "training-jobs:0.0.1"
   huggingFaceJobImagePullPolicy: "IfNotPresent"
@@ -66,6 +70,7 @@ env:
   huggingFaceJobEnvBaseModel: "INGESTION_SERVICE_MODEL_BASE_MODEL"
   huggingFaceJobEnvArtifactType: "INGESTION_SERVICE_MODEL_ARTIFACT_TYPE"
   huggingFaceJobEnvArtifactFormat: "INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT"
+  huggingFaceJobEnvFileName: "INGESTION_SERVICE_HUGGINGFACE_FILE"
   huggingFaceJobEnvRepoId: "INGESTION_SERVICE_HUGGINGFACE_REPO_ID"
   huggingFaceJobEnvRevision: "INGESTION_SERVICE_HUGGINGFACE_REVISION"
   huggingFaceJobEnvToken: "INGESTION_SERVICE_HUGGINGFACE_TOKEN"

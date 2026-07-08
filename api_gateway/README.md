@@ -27,7 +27,7 @@ Run the root infra and services first, then start the gateway through the existi
 
 ## Real Hugging Face E2E
 
-The default API e2e suite uses deterministic local fixtures for Hugging Face onboarding. To prove the live integration, create `.env.huggingface-e2e` at the repo root and run the opt-in spec with:
+The Hugging Face onboarding path uses the real Hugging Face downloader. To prove the live integration, create `.env.huggingface-e2e` at the repo root and run the opt-in spec with:
 
 ```sh
 make test-api-w-hf
@@ -37,12 +37,14 @@ The local `.env.huggingface-e2e` file is ignored by git and should contain the H
 
 ```sh
 export BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true
-export BIGHILL_E2E_HUGGINGFACE_REPO_ID=meta-llama/Meta-Llama-3-8B
+export BIGHILL_E2E_HUGGINGFACE_REPO_ID=QuantFactory/Meta-Llama-3-8B-Instruct-GGUF
 export BIGHILL_E2E_HUGGINGFACE_REVISION=main
-export BIGHILL_E2E_HUGGINGFACE_BASE_MODEL=meta-llama/Meta-Llama-3-8B
-export BIGHILL_E2E_HUGGINGFACE_TIMEOUT_SECONDS=5400
+export BIGHILL_E2E_HUGGINGFACE_FILE=Meta-Llama-3-8B-Instruct.Q4_K_M.gguf
+export BIGHILL_E2E_HUGGINGFACE_BASE_MODEL=QuantFactory/Meta-Llama-3-8B-Instruct-GGUF
+export BIGHILL_E2E_HUGGINGFACE_ARTIFACT_FORMAT=GGUF_MODEL
+export BIGHILL_E2E_HUGGINGFACE_TIMEOUT_SECONDS=1200
 ```
 
-Do not use the root `make test` or `make test-api` target for this specific check; those targets intentionally override `INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_COMMAND` to the API test stub. Use `make test-api-w-hf`, which loads `.env.huggingface-e2e`, resolves a Python 3.11+ interpreter with `huggingface_hub`, constructs the real `training_jobs.model_onboard` command, maps `BIGHILL_E2E_HUGGINGFACE_TIMEOUT_SECONDS` into the ingestion download timeout, and rebuilds the service binaries before starting the stack. Set `BIGHILL_E2E_HUGGINGFACE_PYTHON` only if you need to point at a non-default Python runtime. Set `BIGHILL_E2E_START_MODE=run` only when you deliberately want to reuse prebuilt service binaries. The token must have access to the gated `meta-llama/Meta-Llama-3-8B` repository.
+Use `make test-api-w-hf`, which loads `.env.huggingface-e2e`, resolves a Python 3.11+ interpreter with `huggingface_hub` and the shared Python artifact validators, constructs the real `training_jobs.model_onboard` command, maps `BIGHILL_E2E_HUGGINGFACE_TIMEOUT_SECONDS` into the ingestion download timeout, and rebuilds the service binaries before starting the stack. Set `BIGHILL_E2E_HUGGINGFACE_PYTHON` only if you need to point at a non-default Python runtime. Set `BIGHILL_E2E_START_MODE=run` only when you deliberately want to reuse prebuilt service binaries. The token must have access to the configured Hugging Face repository and file.
 
-The spec writes the token through the profile API, invokes `/v1/private/models/onboard/huggingface`, and fails unless the response contains a real 40-character Hugging Face commit SHA. Fixture commits use `local-*`; the API test stub uses `api-e2e-*`.
+The spec writes the token through the profile API, invokes `/v1/private/models/onboard/huggingface`, and fails unless the response contains a real 40-character Hugging Face commit SHA.

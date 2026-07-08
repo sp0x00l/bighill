@@ -58,6 +58,10 @@ type runtimeConfig struct {
 	GPU                 string
 	RequestTimeout      time.Duration
 	LocalOllamaEndpoint string
+	LocalArtifactCache  string
+	LocalS3StorageDir   string
+	GGUFInspector       string
+	OllamaCreateTimeout time.Duration
 }
 
 type healthConfig struct {
@@ -140,6 +144,10 @@ func readModelServingConfig() modelServingConfig {
 			GPU:                 env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_GPU", "1"),
 			RequestTimeout:      time.Duration(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS", "5000")) * time.Millisecond,
 			LocalOllamaEndpoint: env.WithDefaultString("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT", "http://localhost:11434"),
+			LocalArtifactCache:  env.WithDefaultString("MODEL_SERVING_SERVICE_LOCAL_ARTIFACT_CACHE_DIR", filepath.Join(os.TempDir(), "bighill", "model_serving_artifacts")),
+			LocalS3StorageDir:   env.WithDefaultString("BIGHILL_LOCAL_S3_STORAGE_DIR", ""),
+			GGUFInspector:       env.WithDefaultString("MODEL_SERVING_SERVICE_GGUF_INSPECTOR_COMMAND", "python3 -m bighill_model_artifacts.gguf"),
+			OllamaCreateTimeout: secondsFromEnv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_CREATE_TIMEOUT_SECONDS", "1200"),
 		},
 		Health: healthConfig{
 			CpuThresholdPercentage:     env.WithDefaultInt("MODEL_SERVING_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
@@ -171,7 +179,12 @@ func newServingBackend(cfg modelServingConfig) (servingk8s.ServedModelRepository
 		if err != nil {
 			return nil, nil, err
 		}
-		return store, localserving.NewRuntime(cfg.Namespace, cfg.Runtime.Port, cfg.Runtime.LocalOllamaEndpoint), nil
+		return store, localserving.NewRuntime(cfg.Namespace, cfg.Runtime.Port, cfg.Runtime.LocalOllamaEndpoint,
+			localserving.WithArtifactCache(cfg.Runtime.LocalArtifactCache),
+			localserving.WithLocalS3Dir(cfg.Runtime.LocalS3StorageDir),
+			localserving.WithGGUFInspectorCommand(cfg.Runtime.GGUFInspector),
+			localserving.WithCreateTimeout(cfg.Runtime.OllamaCreateTimeout),
+		), nil
 	case "kubernetes":
 		client, err := servingk8s.NewDynamicClient()
 		if err != nil {

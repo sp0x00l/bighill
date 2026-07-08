@@ -40,6 +40,7 @@ type HuggingFaceJobEnvKeys struct {
 	BaseModel      string
 	ArtifactType   string
 	ArtifactFormat string
+	FileName       string
 	RepoID         string
 	Revision       string
 	Token          string
@@ -147,6 +148,7 @@ func (k HuggingFaceJobEnvKeys) trimmed() HuggingFaceJobEnvKeys {
 		BaseModel:      strings.TrimSpace(k.BaseModel),
 		ArtifactType:   strings.TrimSpace(k.ArtifactType),
 		ArtifactFormat: strings.TrimSpace(k.ArtifactFormat),
+		FileName:       strings.TrimSpace(k.FileName),
 		RepoID:         strings.TrimSpace(k.RepoID),
 		Revision:       strings.TrimSpace(k.Revision),
 		Token:          strings.TrimSpace(k.Token),
@@ -176,6 +178,7 @@ func (k HuggingFaceJobEnvKeys) envValues(request model.OnboardHuggingFaceModelRe
 		keys.BaseModel:      strings.TrimSpace(request.BaseModel),
 		keys.ArtifactType:   strings.TrimSpace(request.ArtifactType),
 		keys.ArtifactFormat: strings.TrimSpace(request.ArtifactFormat),
+		keys.FileName:       strings.TrimSpace(request.HuggingFaceFile),
 		keys.RepoID:         strings.TrimSpace(request.RepoID),
 		keys.Revision:       strings.TrimSpace(request.Revision),
 		keys.Token:          strings.TrimSpace(token),

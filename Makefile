@@ -105,11 +105,22 @@ test-api-w-hf:
 	@set -e; \
 	if [ ! -f "$(CURDIR)/.env.huggingface-e2e" ]; then echo ".env.huggingface-e2e is required for test-api-w-hf"; exit 1; fi; \
 	set -a; . "$(CURDIR)/.env.huggingface-e2e"; set +a; \
-	if [ "$${BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD:-}" != "true" ]; then echo "BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true is required in .env.huggingface-e2e"; exit 1; fi; \
-	: "$${BIGHILL_E2E_HUGGINGFACE_TOKEN:?BIGHILL_E2E_HUGGINGFACE_TOKEN is required in .env.huggingface-e2e}"; \
-	: "$${BIGHILL_E2E_HUGGINGFACE_REPO_ID:?BIGHILL_E2E_HUGGINGFACE_REPO_ID is required in .env.huggingface-e2e}"; \
-	$(MAKE) -C "$(CURDIR)/ingestion_service" test-hf ENV=$(ENV); \
-	HF_E2E_START_MODE="$${BIGHILL_E2E_START_MODE:-build}"; \
+		if [ "$${BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD:-}" != "true" ]; then echo "BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true is required in .env.huggingface-e2e"; exit 1; fi; \
+		: "$${BIGHILL_E2E_HUGGINGFACE_TOKEN:?BIGHILL_E2E_HUGGINGFACE_TOKEN is required in .env.huggingface-e2e}"; \
+		: "$${BIGHILL_E2E_HUGGINGFACE_REPO_ID:?BIGHILL_E2E_HUGGINGFACE_REPO_ID is required in .env.huggingface-e2e}"; \
+		HF_PYTHON="$${BIGHILL_E2E_HUGGINGFACE_PYTHON:-}"; \
+		if [ -z "$$HF_PYTHON" ]; then \
+			PYENV_ROOT="$${PYENV_ROOT:-$$HOME/.pyenv}"; \
+			if [ -x "$$PYENV_ROOT/versions/3.11.9/bin/python" ]; then HF_PYTHON="$$PYENV_ROOT/versions/3.11.9/bin/python"; \
+			elif command -v python3.11 >/dev/null 2>&1; then HF_PYTHON="$$(command -v python3.11)"; \
+			elif command -v python3 >/dev/null 2>&1; then HF_PYTHON="$$(command -v python3)"; \
+			else echo "python 3.11+ with Hugging Face and GGUF dependencies is required; run make install-dev"; exit 1; fi; \
+		fi; \
+		"$$HF_PYTHON" -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ is required"; import huggingface_hub; import bighill_model_artifacts.gguf' || { echo "Hugging Face e2e Python dependencies are missing for $$HF_PYTHON; run make install-dev or set BIGHILL_E2E_HUGGINGFACE_PYTHON"; exit 1; }; \
+		export BIGHILL_E2E_HUGGINGFACE_PYTHON="$$HF_PYTHON"; \
+		export BIGHILL_MODEL_ARTIFACTS_PYTHON="$$HF_PYTHON"; \
+		$(MAKE) -C "$(CURDIR)/ingestion_service" test-hf ENV=$(ENV); \
+		HF_E2E_START_MODE="$${BIGHILL_E2E_START_MODE:-build}"; \
 	cleanup() { cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; cd "$(CURDIR)" && scripts/stop-servers.sh || true; cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; }; \
 	trap cleanup EXIT; \
 	cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; \

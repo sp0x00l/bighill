@@ -72,6 +72,28 @@ var _ = Describe("UploadDTOAdapter", func() {
 		Expect(request.ArtifactFormat).To(Equal("HF_MODEL"))
 	})
 
+	It("maps Hugging Face exact-file GGUF onboarding DTOs", func() {
+		userID := uuid.New()
+
+		request, err := adapter.FromOnboardHuggingFaceModelDTO(context.Background(), []byte(`{
+			"repo_id":"QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
+			"revision":"main",
+			"hf_file":"Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+			"client_nonce":"hf-gguf-1",
+			"model_name":"llama-gguf",
+			"model_version":"1",
+			"base_model":"QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
+			"artifact_type":"BASE_MODEL",
+			"artifact_format":"GGUF_MODEL"
+		}`), userID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(request.UserID).To(Equal(userID))
+		Expect(request.HuggingFaceFile).To(Equal("Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"))
+		Expect(request.ArtifactType).To(Equal("BASE_MODEL"))
+		Expect(request.ArtifactFormat).To(Equal("GGUF_MODEL"))
+	})
+
 	It("maps data upload DTOs through the supplied format resolver", func() {
 		userID := uuid.New()
 		datasetID := uuid.New()

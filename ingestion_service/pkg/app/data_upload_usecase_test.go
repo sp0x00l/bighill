@@ -189,12 +189,24 @@ func (s *stubSecretDecryptor) Decrypt(_ context.Context, ciphertext string) (str
 func (s *stubModelDownloader) DownloadHuggingFaceModel(_ context.Context, request model.OnboardHuggingFaceModelRequest) (*model.OnboardedModelArtifact, error) {
 	s.received = request
 	if s.result == nil {
+		artifactType := request.ArtifactType
+		if artifactType == "" {
+			artifactType = "BASE_MODEL"
+		}
+		artifactFormat := request.ArtifactFormat
+		if artifactFormat == "" {
+			artifactFormat = "HF_MODEL"
+		}
+		locationSuffix := "/snapshot"
+		if request.HuggingFaceFile != "" {
+			locationSuffix = "/" + request.HuggingFaceFile
+		}
 		s.result = &model.OnboardedModelArtifact{
 			ResourceID:        request.ResourceID,
-			StorageLocation:   "s3://local-dev-bucket/models/huggingface/" + request.ResourceID.String() + "/snapshot",
+			StorageLocation:   "s3://local-dev-bucket/models/huggingface/" + request.ResourceID.String() + locationSuffix,
 			ManifestLocation:  "s3://local-dev-bucket/models/huggingface/" + request.ResourceID.String() + "/manifest.json",
-			ArtifactType:      "BASE_MODEL",
-			ArtifactFormat:    "HF_MODEL",
+			ArtifactType:      artifactType,
+			ArtifactFormat:    artifactFormat,
 			ArtifactSizeBytes: 12,
 			ArtifactChecksum:  "sha256:test",
 			ModelName:         request.ModelName,
@@ -611,6 +623,43 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(event.SourceMetadata).To(ContainSubstring(session.UploadID.String()))
 	})
 
+	It("records a Hugging Face exact GGUF file through the promoted model path", func() {
+		sessions := &stubUploadSessionRepository{}
+		unitOfWork := &stubUploadSessionUnitOfWork{}
+		downloader := &stubModelDownloader{}
+		tenants := &stubTenantRepository{tenant: &sharedDomain.Tenant{HuggingFaceTokenCiphertext: "ciphertext-1"}}
+		decryptor := &stubSecretDecryptor{token: "hf-token"}
+		uc := usecase.NewDataUploadUseCase(&stubBlobRepository{},
+			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(unitOfWork, uploadEventBuilder()),
+			usecase.WithUploadTenantsRepository(tenants),
+			usecase.WithHuggingFaceTokenDecryptor(decryptor),
+			usecase.WithModelArtifactDownloader(downloader),
+		)
+
+		session, err := uc.OnboardHuggingFaceModel(context.Background(), model.OnboardHuggingFaceModelRequest{
+			UserID:          uuid.New(),
+			OrgID:           uuid.New(),
+			ClientNonce:     "hf-gguf-1",
+			RepoID:          "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
+			Revision:        "main",
+			HuggingFaceFile: "Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
+			ArtifactType:    "BASE_MODEL",
+			ArtifactFormat:  "GGUF_MODEL",
+			ModelName:       "llama-gguf",
+			ModelVersion:    "1",
+			BaseModel:       "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(session.FileName).To(Equal("Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"))
+		Expect(session.ArtifactType).To(Equal("BASE_MODEL"))
+		Expect(session.DeclaredFormat).To(Equal("GGUF_MODEL"))
+		Expect(session.StorageLocation).To(ContainSubstring("Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"))
+		Expect(downloader.received.HuggingFaceFile).To(Equal("Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"))
+		Expect(unitOfWork.messages).To(HaveLen(1))
+	})
+
 	It("keeps Hugging Face onboarding retryable when recording the promoted artifact fails", func() {
 		expectedErr := errors.New("outbox unavailable")
 		sessions := &stubUploadSessionRepository{recordErr: expectedErr}
@@ -666,6 +715,40 @@ var _ = Describe("DataUploadUseCase", func() {
 		_, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: uuid.New(), UserID: uuid.New(), OrgID: uuid.New()})
 
 		Expect(err).To(MatchError(domain.ErrValidationFailed.Extend("uploaded file format does not match the declared format")))
+		Expect(sessions.rejected).To(BeTrue())
+		Expect(repo.deleted).To(BeTrue())
+	})
+
+	It("rejects direct GGUF uploads instead of validating only the magic bytes", func() {
+		repo := &stubBlobRepository{prefix: []byte("GGUFfake")}
+		sessions := &stubUploadSessionRepository{readSession: &model.UploadSession{
+			UploadID:            uuid.New(),
+			ResourceType:        model.UploadResourceModelArtifact,
+			ResourceID:          uuid.New(),
+			UserID:              uuid.New(),
+			OrgID:               uuid.New(),
+			StagingKey:          "staging/model.gguf",
+			FinalKey:            "models/model.gguf",
+			FileName:            "model.gguf",
+			DeclaredFormat:      "GGUF_MODEL",
+			DeclaredContentType: "application/octet-stream",
+			DeclaredSizeBytes:   8,
+			Status:              model.UploadSessionPending,
+			ArtifactType:        "BASE_MODEL",
+			ModelName:           "model",
+			ModelVersion:        "1",
+			BaseModel:           "base",
+			ExpiresAt:           time.Now().Add(time.Minute),
+		}}
+		uc := usecase.NewDataUploadUseCase(repo,
+			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
+			usecase.WithUploadPolicy(1024, time.Minute, 512),
+		)
+
+		_, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: sessions.readSession.UploadID, UserID: sessions.readSession.UserID, OrgID: sessions.readSession.OrgID})
+
+		Expect(err).To(MatchError(ContainSubstring("GGUF model artifacts must be onboarded through the Hugging Face exact-file path")))
 		Expect(sessions.rejected).To(BeTrue())
 		Expect(repo.deleted).To(BeTrue())
 	})

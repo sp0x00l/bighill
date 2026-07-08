@@ -24,8 +24,18 @@ It is the serving-plane controller for model load status. It does not decide pro
 
 ## Local Development
 
-Local and CI default to the local backend so tests do not require Kubernetes or vLLM. Staging/prod should use `MODEL_SERVING_SERVICE_SERVING_BACKEND=kubernetes` with the `ServedModel` CRD installed.
+Local and CI default to the local backend so tests do not require Kubernetes or vLLM. Staging/prod should use `MODEL_SERVING_SERVICE_BACKEND=kubernetes` with the `ServedModel` CRD installed.
 
 The serving contract is model-family agnostic. Llama, Mistral, Qwen, DeepSeek, Gemma, and similar open model families are represented by the model record's `base_model` / `serving_model` data. They do not require new protocol enum values when they run on an existing runtime.
 
-Local-dev currently verifies shared/base models by checking that the requested Ollama tag exists through `/api/tags`, then records `serving_protocol=OLLAMA_GENERATE`. Inference dispatches through that recorded protocol and calls the local Ollama `/api/generate` endpoint. Local-dev does not load fine-tuned `HF_PEFT_ADAPTER` artifacts into Ollama. Fine-tuned local serving requires a real HF-PEFT to GGUF adapter conversion step plus `ollama create` with a Modelfile; until that exists, non-base local served models fail closed instead of silently serving the base tag.
+Local-dev verifies shared/base tags through Ollama `/api/tags` and records `serving_protocol=OLLAMA_GENERATE` for those existing tags. Exact GGUF chat artifacts are different: local serving validates metadata, requires `tokenizer.chat_template`, uploads blobs through Ollama `/api/blobs`, creates a deterministic tag through `/api/create`, and records `serving_protocol=OPENAI_CHAT_COMPLETIONS` only after the created tag exposes a usable chat definition.
+
+The GGUF chat-template path is deliberately fail-closed:
+
+- The first create request lets Ollama infer the Modelfile template from GGUF metadata.
+- The created tag is accepted only when `/api/show` returns an Ollama-compatible template and stop parameters.
+- Raw Hugging Face/Jinja templates are rejected if they appear in `/api/show`; they are metadata, not an Ollama template payload.
+- If Ollama inference does not produce a usable chat definition, local serving deletes that attempted tag and falls back only for recognized chat formats: Llama 3, ChatML/Qwen-style, Mistral/Mixtral Instruct, Gemma, Phi, and Llama 2 chat.
+- Stop tokens discovered from GGUF tokenizer metadata are unioned with family defaults before create.
+
+Raw `HF_PEFT_ADAPTER` directories are not local-compatible serving artifacts; they must be represented as validated `GGUF_LORA_ADAPTER` artifacts for local adapter serving.

@@ -43,6 +43,9 @@ var Version string
 type ingestionConfig struct {
 	ServiceName                   string
 	HTTPPort                      int
+	HTTPReadTimeout               time.Duration
+	HTTPWriteTimeout              time.Duration
+	HTTPIdleTimeout               time.Duration
 	DirectUploadMaxFileSizeBytes  int64
 	UploadSessionMaxFileSizeBytes int64
 	UploadSessionTTL              time.Duration
@@ -235,7 +238,12 @@ func main() {
 
 	log.Infof("%s API HTTP port: %d", serviceName, cfg.HTTPPort)
 
-	restService := rest.NewService(routes, cfg.HTTPPort, serviceName)
+	restService := rest.NewService(
+		routes,
+		cfg.HTTPPort,
+		serviceName,
+		rest.WithHTTPTimeouts(cfg.HTTPReadTimeout, cfg.HTTPWriteTimeout, cfg.HTTPIdleTimeout),
+	)
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck().WithDatabaseCheck().WithMessageBrokerCheck()
 
@@ -356,6 +364,9 @@ func readIngestionConfig() ingestionConfig {
 	return ingestionConfig{
 		ServiceName:                   env.WithDefaultString("INGESTION_SERVICE_NAME", "ingestion-service"),
 		HTTPPort:                      env.WithDefaultInt("INGESTION_SERVICE_API_HTTP_PORT", "8086"),
+		HTTPReadTimeout:               secondsFromEnv("INGESTION_SERVICE_HTTP_READ_TIMEOUT_SECONDS", "30"),
+		HTTPWriteTimeout:              secondsFromEnv("INGESTION_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS", "1200"),
+		HTTPIdleTimeout:               secondsFromEnv("INGESTION_SERVICE_HTTP_IDLE_TIMEOUT_SECONDS", "120"),
 		DirectUploadMaxFileSizeBytes:  directMaxFileSizeMB * 1000 * 1000,
 		UploadSessionMaxFileSizeBytes: maxFileSizeMB * 1000 * 1000,
 		UploadSessionTTL:              time.Duration(env.WithDefaultInt("INGESTION_SERVICE_UPLOAD_SESSION_TTL_SECONDS", "900")) * time.Second,
@@ -396,7 +407,7 @@ func readIngestionConfig() ingestionConfig {
 		),
 		HuggingFaceDownloadWorkingDir: env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_WORKING_DIRECTORY", ""),
 		HuggingFaceOutputURI:          env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI", defaultHuggingFaceOutputURI),
-		HuggingFaceDownloadTimeout:    time.Duration(env.WithDefaultInt("INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_TIMEOUT_SECONDS", "1800")) * time.Second,
+		HuggingFaceDownloadTimeout:    time.Duration(env.WithDefaultInt("INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_TIMEOUT_SECONDS", "1200")) * time.Second,
 		HuggingFaceJobEnvKeys:         huggingFaceJobEnvKeysFromEnv(),
 		HuggingFaceJobNamespace:       env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_NAMESPACE", "default"),
 		HuggingFaceJobImage:           env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_IMAGE", "training-jobs:0.0.1"),
@@ -433,6 +444,15 @@ func validateIngestionConfig(cfg ingestionConfig) error {
 
 	if cfg.DirectUploadMaxFileSizeBytes <= 0 {
 		return fmt.Errorf("INGESTION_SERVICE_DIRECT_UPLOAD_MAX_SIZE_MB must be greater than zero")
+	}
+	if cfg.HTTPReadTimeout <= 0 {
+		return fmt.Errorf("INGESTION_SERVICE_HTTP_READ_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.HTTPWriteTimeout <= 0 {
+		return fmt.Errorf("INGESTION_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.HTTPIdleTimeout <= 0 {
+		return fmt.Errorf("INGESTION_SERVICE_HTTP_IDLE_TIMEOUT_SECONDS must be greater than zero")
 	}
 	if cfg.UploadSessionMaxFileSizeBytes <= 0 {
 		return fmt.Errorf("INGESTION_SERVICE_FILE_MAX_SIZE_MB must be greater than zero")
@@ -504,6 +524,7 @@ func validateHuggingFaceJobEnvKeys(keys download.HuggingFaceJobEnvKeys) error {
 		"INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_BASE_MODEL":      keys.BaseModel,
 		"INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_ARTIFACT_TYPE":   keys.ArtifactType,
 		"INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_ARTIFACT_FORMAT": keys.ArtifactFormat,
+		"INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_FILE_NAME":       keys.FileName,
 		"INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_REPO_ID":         keys.RepoID,
 		"INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_REVISION":        keys.Revision,
 		"INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_TOKEN":           keys.Token,
@@ -527,6 +548,7 @@ func huggingFaceJobEnvKeysFromEnv() download.HuggingFaceJobEnvKeys {
 		BaseModel:      env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_BASE_MODEL", "INGESTION_SERVICE_MODEL_BASE_MODEL"),
 		ArtifactType:   env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_ARTIFACT_TYPE", "INGESTION_SERVICE_MODEL_ARTIFACT_TYPE"),
 		ArtifactFormat: env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_ARTIFACT_FORMAT", "INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT"),
+		FileName:       env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_FILE_NAME", "INGESTION_SERVICE_HUGGINGFACE_FILE"),
 		RepoID:         env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_REPO_ID", "INGESTION_SERVICE_HUGGINGFACE_REPO_ID"),
 		Revision:       env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_REVISION", "INGESTION_SERVICE_HUGGINGFACE_REVISION"),
 		Token:          env.WithDefaultString("INGESTION_SERVICE_HUGGINGFACE_JOB_ENV_TOKEN", "INGESTION_SERVICE_HUGGINGFACE_TOKEN"),

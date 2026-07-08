@@ -110,6 +110,7 @@ type OnboardHuggingFaceModelRequest struct {
 	ClientNonce      string
 	RepoID           string
 	Revision         string
+	HuggingFaceFile  string
 	ModelName        string
 	ModelVersion     string
 	BaseModel        string
