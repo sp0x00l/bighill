@@ -1,0 +1,226 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tenant-service.fullname" . }}
+  labels:
+    app: {{ include "tenant-service.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "tenant-service.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "tenant-service.fullname" . }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds | default 45 }}
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default "tenant-service" }}
+      {{- end }}
+      containers:
+        - name: {{ include "tenant-service.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: {{ .Values.env.environment | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.env.otelExporterEndpoint | quote }}
+            - name: REDIS_ADDRESS
+              value: {{ .Values.env.redisAddress | quote }}
+            - name: TENANT_SERVICE_NAME
+              value: {{ .Values.env.serviceName | quote }}
+            - name: TENANT_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
+            - name: TENANT_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.readinessTimeoutSeconds | quote }}
+            - name: TENANT_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.drainTimeoutSeconds | quote }}
+            - name: TENANT_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS
+              value: {{ .Values.lifecycle.closeTimeoutSeconds | quote }}
+            - name: TENANT_SERVICE_HTTP_PORT
+              value: {{ .Values.service.httpPort | quote }}
+            - name: TENANT_SERVICE_REDIS_ADDRESS
+              value: {{ .Values.env.redisAddress | quote }}
+            - name: TENANT_SERVICE_REDIS_USERNAME
+              value: {{ .Values.env.redisUsername | quote }}
+            - name: TENANT_SERVICE_REDIS_PASSWORD
+              value: {{ .Values.env.redisPassword | quote }}
+            - name: TENANT_SERVICE_AUTH_EXPIRATION_MINUTES
+              value: {{ .Values.env.authExpirationMinutes | quote }}
+            - name: TENANT_SERVICE_EMAIL_VALIDATION_TTL_MINUTES
+              value: {{ .Values.env.emailValidationTtlMinutes | quote }}
+            - name: TENANT_SERVICE_OAUTH_STATE_TTL_MINUTES
+              value: {{ .Values.env.oauthStateTtlMinutes | quote }}
+            - name: TENANT_SERVICE_USE_STAGING_TEST_EMAIL_TOKEN
+              value: {{ .Values.env.useStagingTestEmailToken | quote }}
+            - name: TENANT_SERVICE_HUGGINGFACE_TOKEN_ENCRYPTION_KEY
+              value: {{ .Values.env.huggingFaceTokenEncryptionKey | quote }}
+            - name: TENANT_SERVICE_OAUTH_GOOGLE_CLIENT_ID
+{{- if .Values.env.oauthCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.oauthCredentialsSecret.name }}
+                  key: {{ .Values.env.oauthCredentialsSecret.googleClientIdKey }}
+{{- else }}
+              value: ""
+{{- end }}
+            - name: TENANT_SERVICE_OAUTH_GOOGLE_CLIENT_SECRET
+{{- if .Values.env.oauthCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.oauthCredentialsSecret.name }}
+                  key: {{ .Values.env.oauthCredentialsSecret.googleClientSecretKey }}
+{{- else }}
+              value: ""
+{{- end }}
+            - name: TENANT_SERVICE_OAUTH_DISCORD_CLIENT_ID
+{{- if .Values.env.oauthCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.oauthCredentialsSecret.name }}
+                  key: {{ .Values.env.oauthCredentialsSecret.discordClientIdKey }}
+{{- else }}
+              value: ""
+{{- end }}
+            - name: TENANT_SERVICE_OAUTH_DISCORD_CLIENT_SECRET
+{{- if .Values.env.oauthCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.oauthCredentialsSecret.name }}
+                  key: {{ .Values.env.oauthCredentialsSecret.discordClientSecretKey }}
+{{- else }}
+              value: ""
+{{- end }}
+            - name: TENANT_SERVICE_DB_NAME
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.nameKey }}
+{{- else }}
+              value: {{ .Values.env.dbName | quote }}
+{{- end }}
+            - name: TENANT_SERVICE_DB_USER
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.userKey }}
+{{- else }}
+              value: {{ .Values.env.dbUser | quote }}
+{{- end }}
+            - name: TENANT_SERVICE_DB_PASSWORD
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.passwordKey }}
+{{- else }}
+              value: {{ .Values.env.dbPassword | quote }}
+{{- end }}
+            - name: TENANT_SERVICE_DB_MAX_CONNECTIONS
+              value: {{ .Values.env.dbMaxConnections | quote }}
+            - name: SHARED_LIB_DB_STATEMENT_TIMEOUT_MS
+              value: {{ .Values.env.sharedLibDbStatementTimeoutMs | quote }}
+            - name: SHARED_LIB_DB_LOCK_TIMEOUT_MS
+              value: {{ .Values.env.sharedLibDbLockTimeoutMs | quote }}
+            - name: SHARED_LIB_DB_IDLE_IN_TX_TIMEOUT_MS
+              value: {{ .Values.env.sharedLibDbIdleInTxTimeoutMs | quote }}
+            - name: PGHOST
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.hostKey }}
+{{- else }}
+              value: {{ .Values.env.pgHost | quote }}
+{{- end }}
+            - name: PGPORT
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.portKey }}
+{{- else }}
+              value: {{ .Values.env.pgPort | quote }}
+{{- end }}
+            - name: PGSSLMODE
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.sslmodeKey }}
+{{- else }}
+              value: {{ .Values.env.pgSslMode | quote }}
+{{- end }}
+            - name: KAFKA_BROKER
+              value: {{ .Values.env.kafkaBroker | quote }}
+            - name: TENANT_SERVICE_KAFKA_GROUP_ID
+              value: {{ .Values.env.kafkaGroupId | quote }}
+            - name: TENANT_SERVICE_KAFKA_PUBLISHER_TOPIC
+              value: {{ .Values.env.kafkaPublisherTopic | quote }}
+            - name: TENANT_SERVICE_DLQ
+              value: {{ .Values.env.dlq | quote }}
+            - name: TENANT_SERVICE_OUTBOX
+              value: {{ .Values.env.outbox | quote }}
+            - name: TENANT_SERVICE_OUTBOX_RELAY_POLL_MS
+              value: {{ .Values.env.outboxRelayPollMs | quote }}
+            - name: TENANT_SERVICE_OUTBOX_RELAY_BATCH_SIZE
+              value: {{ .Values.env.outboxRelayBatchSize | quote }}
+            - name: TENANT_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
+              value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: TENANT_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckCpuThreshold | quote }}
+            - name: TENANT_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
+            - name: TENANT_SERVICE_HEALTHCHECK_PORT
+              value: {{ .Values.service.healthPort | quote }}
+            - name: TENANT_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
+            - name: TENANT_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
+            - name: TENANT_SERVICE_HEALTHCHECK_KAFKA_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckKafkaLatencyThreshold | quote }}
+            {{- if .Values.env.authKmsKeyId }}
+            - name: AUTH_KMS_KEY_ID
+              value: {{ .Values.env.authKmsKeyId | quote }}
+            {{- end }}
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory | quote }}
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | quote }}
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3

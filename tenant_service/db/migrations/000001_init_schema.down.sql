@@ -1,0 +1,12 @@
+DROP TRIGGER IF EXISTS trg_oauth_identities_set_updated_at ON bighill_tenant_db.oauth_identities;
+DROP TRIGGER IF EXISTS trg_organization_memberships_set_updated_at ON bighill_tenant_db.organization_memberships;
+DROP TRIGGER IF EXISTS trg_organizations_set_updated_at ON bighill_tenant_db.organizations;
+DROP TRIGGER IF EXISTS trg_profiles_set_updated_at ON bighill_tenant_db.profiles;
+ALTER TABLE IF EXISTS bighill_tenant_db.profiles DROP CONSTRAINT IF EXISTS profiles_default_org_fk;
+DROP TABLE IF EXISTS bighill_tenant_db.oauth_identities;
+DROP TABLE IF EXISTS bighill_tenant_db.organization_memberships;
+DROP TABLE IF EXISTS bighill_tenant_db.organizations;
+DROP TABLE IF EXISTS bighill_tenant_db.profiles;
+DROP TYPE IF EXISTS org_member_status_enum;
+DROP TYPE IF EXISTS org_member_role_enum;
+DROP FUNCTION IF EXISTS updated_at_column();
