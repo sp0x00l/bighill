@@ -12,13 +12,38 @@ import (
 	"training_service/pkg/domain"
 	"training_service/pkg/domain/model"
 
+	sharedDomain "lib/shared_lib/domain"
+
+	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
+const modelStatusReady = "READY"
+
+type modelDTO struct {
+	ID                string `json:"id"            validate:"required,uuid"`
+	UserID            string `json:"user_id"       validate:"required,uuid"`
+	OrgID             string `json:"org_id"        validate:"required,uuid"`
+	ModelKind         string `json:"model_kind"    validate:"required"`
+	Name              string `json:"name"          validate:"required"`
+	ModelVersion      int    `json:"model_version" validate:"gt=0"`
+	BaseModel         string `json:"base_model"`
+	ArtifactLocation  string `json:"artifact_location" validate:"required"`
+	ArtifactChecksum  string `json:"artifact_checksum"`
+	AdapterURI        string `json:"adapter_uri"`
+	ServingLoadStatus string `json:"serving_load_status"`
+	Status            string `json:"status" validate:"required"`
+}
+
 type ModelResolver struct {
 	baseURL string
 	client  *http.Client
+	adapter *modelDTOAdapter
+}
+
+type modelDTOAdapter struct {
+	validator *validator.Validate
 }
 
 func NewModelResolver(baseURL string, client *http.Client) *ModelResolver {
@@ -27,6 +52,7 @@ func NewModelResolver(baseURL string, client *http.Client) *ModelResolver {
 	return &ModelResolver{
 		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		client:  client,
+		adapter: newModelDTOAdapter(),
 	}
 }
 
@@ -55,6 +81,40 @@ func (r *ModelResolver) ResolveTrainableModel(ctx context.Context, userID uuid.U
 	if err := json.NewDecoder(resp.Body).Decode(&dto); err != nil {
 		return model.SourceModelRef{}, fmt.Errorf("%w: decode model resolver response: %w", domain.ErrDependencyFailed, err)
 	}
+	return r.adapter.FromDTO(ctx, dto, modelID, orgID)
+}
+
+func newModelDTOAdapter() *modelDTOAdapter {
+	log.Trace("newModelDTOAdapter")
+
+	return &modelDTOAdapter{validator: validator.New()}
+}
+
+func (a *modelDTOAdapter) FromDTO(ctx context.Context, dto modelDTO, modelID uuid.UUID, orgID uuid.UUID) (model.SourceModelRef, error) {
+	log.Trace("modelDTOAdapter FromDTO")
+
+	if err := a.validator.Struct(dto); err != nil {
+		log.WithContext(ctx).WithError(err).Error("modelDTO validation failed")
+		return model.SourceModelRef{}, domain.ErrValidationFailed.Extend(err.Error())
+	}
+
+	if strings.TrimSpace(dto.ID) != modelID.String() {
+		return model.SourceModelRef{}, domain.ErrValidationFailed.Extend("model resolver returned a different model")
+	}
+	if strings.TrimSpace(dto.OrgID) != orgID.String() {
+		return model.SourceModelRef{}, domain.ErrValidationFailed.Extend("source model does not belong to active org")
+	}
+	if strings.TrimSpace(dto.Status) != modelStatusReady {
+		return model.SourceModelRef{}, domain.ErrValidationFailed.Extend("source model is not ready")
+	}
+	kind := sharedDomain.ToModelKind(dto.ModelKind)
+	if !sharedDomain.IsKnownModelKind(kind) {
+		return model.SourceModelRef{}, domain.ErrValidationFailed.Extend("source model is not trainable")
+	}
+	if kind == sharedDomain.ModelKindFineTuned && strings.TrimSpace(dto.AdapterURI) == "" {
+		return model.SourceModelRef{}, domain.ErrValidationFailed.Extend("fine tuned source model adapter uri is required")
+	}
+
 	return model.SourceModelRef{
 		ModelID:           dto.ID,
 		UserID:            dto.UserID,
@@ -69,19 +129,4 @@ func (r *ModelResolver) ResolveTrainableModel(ctx context.Context, userID uuid.U
 		ServingLoadStatus: dto.ServingLoadStatus,
 		Status:            dto.Status,
 	}, nil
-}
-
-type modelDTO struct {
-	ID                string `json:"id"`
-	UserID            string `json:"user_id"`
-	OrgID             string `json:"org_id"`
-	ModelKind         string `json:"model_kind"`
-	Name              string `json:"name"`
-	ModelVersion      int    `json:"model_version"`
-	BaseModel         string `json:"base_model"`
-	ArtifactLocation  string `json:"artifact_location"`
-	ArtifactChecksum  string `json:"artifact_checksum"`
-	AdapterURI        string `json:"adapter_uri"`
-	ServingLoadStatus string `json:"serving_load_status"`
-	Status            string `json:"status"`
 }

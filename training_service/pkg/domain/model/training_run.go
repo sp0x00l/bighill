@@ -1,6 +1,10 @@
 package model
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/google/uuid"
+)
 
 type TrainingRunStatus int
 
@@ -81,9 +85,9 @@ type TrainingProfile struct {
 }
 
 type StartTrainingRunCommand struct {
-	IdempotencyKey    string
-	DatasetID         string
-	SourceModelID     string
+	IdempotencyKey    uuid.UUID
+	DatasetID         uuid.UUID
+	SourceModelID     uuid.UUID
 	TrainingProfile   string
 	EvaluationProfile string
 }
@@ -125,6 +129,12 @@ type SourceModelRef struct {
 	Status            string
 }
 
+type ObjectInfo struct {
+	Location  string
+	SizeBytes int64
+	Checksum  string
+}
+
 type PreparedTrainingDataset struct {
 	TrainingRunID     string
 	OrgID             string
@@ -133,41 +143,41 @@ type PreparedTrainingDataset struct {
 }
 
 type TrainedModelArtifact struct {
-	TrainingRunID     string `json:"training_run_id"`
-	ModelURI          string `json:"model_uri"`
-	ModelName         string `json:"model_name"`
-	ModelVersion      string `json:"model_version"`
-	BaseModel         string `json:"base_model"`
-	ArtifactFormat    string `json:"artifact_format"`
-	ArtifactChecksum  string `json:"artifact_checksum"`
-	ArtifactSizeBytes int64  `json:"artifact_size_bytes"`
-	AdapterURI        string `json:"adapter_uri"`
-	ServingTarget     string `json:"serving_target"`
-	ServingModel      string `json:"serving_model"`
-	ServingLoadStatus string `json:"serving_load_status"`
-	RecipeHash        string `json:"recipe_hash"`
+	TrainingRunID     string
+	ModelURI          string
+	ModelName         string
+	ModelVersion      string
+	BaseModel         string
+	ArtifactFormat    string
+	ArtifactChecksum  string
+	ArtifactSizeBytes int64
+	AdapterURI        string
+	ServingTarget     string
+	ServingModel      string
+	ServingLoadStatus string
+	RecipeHash        string
 }
 
 type EvaluationReport struct {
-	TrainingRunID        string             `json:"training_run_id"`
-	ReportURI            string             `json:"report_uri"`
-	Passed               bool               `json:"passed"`
-	Metrics              map[string]float64 `json:"metrics,omitempty"`
-	Thresholds           map[string]float64 `json:"thresholds,omitempty"`
-	EvaluatorName        string             `json:"evaluator_name,omitempty"`
-	EvaluatorVersion     string             `json:"evaluator_version,omitempty"`
-	MetricSuite          string             `json:"metric_suite,omitempty"`
-	EvalDatasetURI       string             `json:"eval_dataset_uri,omitempty"`
-	EvalDatasetMode      string             `json:"eval_dataset_mode,omitempty"`
-	JudgeProvider        string             `json:"judge_provider,omitempty"`
-	JudgeModel           string             `json:"judge_model,omitempty"`
-	JudgeTemplateVersion string             `json:"judge_template_version,omitempty"`
-	DeepchecksPassed     bool               `json:"deepchecks_passed,omitempty"`
-	DeepchecksReportURI  string             `json:"deepchecks_report_uri,omitempty"`
-	EvidentlyPassed      bool               `json:"evidently_passed,omitempty"`
-	EvidentlyReportURI   string             `json:"evidently_report_uri,omitempty"`
-	ScoreRowsURI         string             `json:"score_rows_uri,omitempty"`
-	FailureReason        string             `json:"failure_reason,omitempty"`
+	TrainingRunID        string
+	ReportURI            string
+	Passed               bool
+	Metrics              map[string]float64
+	Thresholds           map[string]float64
+	EvaluatorName        string
+	EvaluatorVersion     string
+	MetricSuite          string
+	EvalDatasetURI       string
+	EvalDatasetMode      string
+	JudgeProvider        string
+	JudgeModel           string
+	JudgeTemplateVersion string
+	DeepchecksPassed     bool
+	DeepchecksReportURI  string
+	EvidentlyPassed      bool
+	EvidentlyReportURI   string
+	ScoreRowsURI         string
+	FailureReason        string
 }
 
 type TrainingJobSpec struct {
@@ -229,17 +239,17 @@ type PromotionReportJobSpec struct {
 }
 
 type PromotionReport struct {
-	UserID              string             `json:"user_id"`
-	OrgID               string             `json:"org_id"`
-	ModelID             string             `json:"model_id"`
-	TrainingRunID       string             `json:"training_run_id"`
-	PromotionReportURI  string             `json:"promotion_report_uri"`
-	DeepchecksPassed    bool               `json:"deepchecks_passed,omitempty"`
-	DeepchecksReportURI string             `json:"deepchecks_report_uri,omitempty"`
-	EvidentlyPassed     bool               `json:"evidently_passed,omitempty"`
-	EvidentlyReportURI  string             `json:"evidently_report_uri,omitempty"`
-	Deltas              map[string]float64 `json:"deltas,omitempty"`
-	FailureReason       string             `json:"failure_reason,omitempty"`
+	UserID              string
+	OrgID               string
+	ModelID             string
+	TrainingRunID       string
+	PromotionReportURI  string
+	DeepchecksPassed    bool
+	DeepchecksReportURI string
+	EvidentlyPassed     bool
+	EvidentlyReportURI  string
+	Deltas              map[string]float64
+	FailureReason       string
 }
 
 type TrainingRunResult struct {

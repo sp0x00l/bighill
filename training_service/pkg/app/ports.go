@@ -14,6 +14,11 @@ type TrainingExecutor interface {
 	RunPromotionReport(ctx context.Context, spec model.PromotionReportJobSpec) (*model.PromotionReport, error)
 }
 
+type ManifestReader interface {
+	Read(ctx context.Context, location string) ([]byte, error)
+	Stat(ctx context.Context, location string) (model.ObjectInfo, error)
+}
+
 type TrainingWorkflowStarter interface {
 	StartTrainingWorkflow(ctx context.Context, request model.TrainingRunRequest) error
 }

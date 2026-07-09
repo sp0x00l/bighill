@@ -79,6 +79,52 @@ var _ = Describe("DatasetResolver", func() {
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 
+	It("rejects resolver responses that are not trainable materialized parquet datasets", func() {
+		datasetID := uuid.New()
+		orgID := uuid.New()
+		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, `{
+				"id":"`+datasetID.String()+`",
+				"userId":"`+uuid.NewString()+`",
+				"orgId":"`+orgID.String()+`",
+				"storageLocation":"s3://lakehouse/raw/movies.parquet",
+				"tableName":"movies",
+				"tableFormat":"PARQUET",
+				"processingState":"RAW_MATERIALIZED",
+				"datasetVersion":4,
+				"featureSnapshotId":"`+uuid.NewString()+`"
+			}`), nil
+		})}
+
+		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), orgID, datasetID)
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("dataset is not materialized"))
+	})
+
+	It("rejects dataset resolver responses from another org", func() {
+		datasetID := uuid.New()
+		orgID := uuid.New()
+		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, `{
+				"id":"`+datasetID.String()+`",
+				"userId":"`+uuid.NewString()+`",
+				"orgId":"`+uuid.NewString()+`",
+				"storageLocation":"s3://lakehouse/features/movies.parquet",
+				"tableName":"movies",
+				"tableFormat":"PARQUET",
+				"processingState":"FEATURE_MATERIALIZED",
+				"datasetVersion":4,
+				"featureSnapshotId":"`+uuid.NewString()+`"
+			}`), nil
+		})}
+
+		_, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), uuid.New(), orgID, datasetID)
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("active org"))
+	})
+
 	It("maps dataset resolver outages to dependency errors", func() {
 		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return jsonResponse(http.StatusInternalServerError, `{"message":"downstream failed"}`), nil
@@ -143,6 +189,54 @@ var _ = Describe("ModelResolver", func() {
 		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), uuid.New(), uuid.New())
 
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+	})
+
+	It("rejects source models that are not ready", func() {
+		modelID := uuid.New()
+		orgID := uuid.New()
+		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, `{
+				"id":"`+modelID.String()+`",
+				"user_id":"`+uuid.NewString()+`",
+				"org_id":"`+orgID.String()+`",
+				"model_kind":"BASE",
+				"name":"llama-3",
+				"model_version":1,
+				"base_model":"llama-3",
+				"artifact_location":"s3://models/base",
+				"artifact_checksum":"sha256:base",
+				"status":"PENDING"
+			}`), nil
+		})}
+
+		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), orgID, modelID)
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("source model is not ready"))
+	})
+
+	It("rejects fine-tuned source models without an adapter uri", func() {
+		modelID := uuid.New()
+		orgID := uuid.New()
+		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, `{
+				"id":"`+modelID.String()+`",
+				"user_id":"`+uuid.NewString()+`",
+				"org_id":"`+orgID.String()+`",
+				"model_kind":"FINE_TUNED",
+				"name":"ranker",
+				"model_version":2,
+				"base_model":"llama-3",
+				"artifact_location":"s3://models/ranker",
+				"artifact_checksum":"sha256:ranker",
+				"status":"READY"
+			}`), nil
+		})}
+
+		_, err := NewModelResolver("http://model-registry", httpClient).ResolveTrainableModel(context.Background(), uuid.New(), orgID, modelID)
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("adapter uri"))
 	})
 
 	It("maps model resolver outages to dependency errors", func() {

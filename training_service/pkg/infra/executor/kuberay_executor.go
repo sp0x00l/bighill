@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"training_service/pkg/app"
 	"training_service/pkg/domain"
 	"training_service/pkg/domain/model"
 
@@ -26,6 +27,100 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+const (
+	kubeRayAPIGroup                   = "ray.io"
+	kubeRayAPIVersion                 = "v1"
+	kubeRayRayJobResource             = "rayjobs"
+	kubeRayRayJobAPIVersion           = "ray.io/v1"
+	kubeRayRayJobKind                 = "RayJob"
+	kubeRayObjectAPIVersion           = "apiVersion"
+	kubeRayObjectKind                 = "kind"
+	kubeRayObjectMetadata             = "metadata"
+	kubeRayObjectSpec                 = "spec"
+	kubeRayObjectStatus               = "status"
+	kubeRayMetadataName               = "name"
+	kubeRayMetadataNamespace          = "namespace"
+	kubeRayMetadataLabels             = "labels"
+	kubeRayLabelAppName               = "app.kubernetes.io/name"
+	kubeRayLabelManagedBy             = "app.kubernetes.io/managed-by"
+	kubeRayLabelSubmissionID          = "bighill.io/submission-id"
+	kubeRayLabelTrainingJob           = "training-job"
+	kubeRayManagedByTrainingService   = "training-service"
+	kubeRaySpecEntrypoint             = "entrypoint"
+	kubeRaySpecRuntimeEnvYAML         = "runtimeEnvYAML"
+	kubeRaySpecShutdownAfterJob       = "shutdownAfterJobFinishes"
+	kubeRaySpecRayCluster             = "rayClusterSpec"
+	kubeRaySpecTTLSeconds             = "ttlSecondsAfterFinished"
+	kubeRaySpecRayVersion             = "rayVersion"
+	kubeRaySpecHeadGroup              = "headGroupSpec"
+	kubeRaySpecWorkerGroups           = "workerGroupSpecs"
+	kubeRaySpecRayStartParams         = "rayStartParams"
+	kubeRaySpecTemplate               = "template"
+	kubeRaySpecGroupName              = "groupName"
+	kubeRaySpecReplicas               = "replicas"
+	kubeRaySpecMinReplicas            = "minReplicas"
+	kubeRaySpecMaxReplicas            = "maxReplicas"
+	kubeRayWorkerGroupName            = "gpu-workers"
+	kubeRayHeadContainerName          = "ray-head"
+	kubeRayWorkerContainerName        = "ray-worker"
+	kubeRayPodContainers              = "containers"
+	kubeRayPodServiceAccountName      = "serviceAccountName"
+	kubeRayPodNodeSelector            = "nodeSelector"
+	kubeRayPodTolerations             = "tolerations"
+	kubeRayContainerName              = "name"
+	kubeRayContainerImage             = "image"
+	kubeRayContainerImagePullPolicy   = "imagePullPolicy"
+	kubeRayContainerResources         = "resources"
+	kubeRayResourcesLimits            = "limits"
+	kubeRayResourcesRequests          = "requests"
+	kubeRayResourceCPU                = "cpu"
+	kubeRayResourceMemory             = "memory"
+	kubeRayNodeSelectorWorkload       = "workload"
+	kubeRayNodeSelectorWorkloadGPU    = "gpu"
+	kubeRayTolerationKey              = "key"
+	kubeRayTolerationOperator         = "operator"
+	kubeRayTolerationOperatorEqual    = "Equal"
+	kubeRayTolerationValue            = "value"
+	kubeRayTolerationValueTrue        = "true"
+	kubeRayTolerationEffect           = "effect"
+	kubeRayTolerationEffectNoSchedule = "NoSchedule"
+	kubeRayGPUResourceName            = "nvidia.com/gpu"
+	kubeRayStatusJobStatus            = "jobStatus"
+	kubeRayStatusJobDeploymentStatus  = "jobDeploymentStatus"
+	kubeRayStatusMessage              = "message"
+	kubeRayStatusReason               = "reason"
+	defaultKubeRayJobName             = "training-job"
+	maxKubeRayNameLength              = 63
+	kubeRayDeleteTimeout              = 30 * time.Second
+)
+
+type kubeRayJobStatusValue string
+
+const (
+	kubeRayJobStatusSucceeded kubeRayJobStatusValue = "SUCCEEDED"
+	kubeRayJobStatusSuccess   kubeRayJobStatusValue = "SUCCESS"
+	kubeRayJobStatusCompleted kubeRayJobStatusValue = "COMPLETED"
+	kubeRayJobStatusComplete  kubeRayJobStatusValue = "COMPLETE"
+	kubeRayJobStatusFailed    kubeRayJobStatusValue = "FAILED"
+	kubeRayJobStatusFail      kubeRayJobStatusValue = "FAIL"
+	kubeRayJobStatusStopped   kubeRayJobStatusValue = "STOPPED"
+)
+
+type kubeRayJobStatus struct {
+	Status  kubeRayJobStatusValue
+	Message string
+}
+
+type kubeRayTerminal int
+
+const (
+	kubeRayTerminalRunning kubeRayTerminal = iota
+	kubeRayTerminalSucceeded
+	kubeRayTerminalFailed
+)
+
+var rayJobGVR = schema.GroupVersionResource{Group: kubeRayAPIGroup, Version: kubeRayAPIVersion, Resource: kubeRayRayJobResource}
 
 type KubeRayExecutorConfig struct {
 	Namespace               string
@@ -62,12 +157,10 @@ type KubeRayExecutor struct {
 	promotionEntrypoint     string
 	pollInterval            time.Duration
 	client                  dynamic.Interface
-	manifestReader          ManifestReader
+	manifestReader          app.ManifestReader
 }
 
-var rayJobGVR = schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayjobs"}
-
-func NewKubeRayExecutor(config KubeRayExecutorConfig, manifestReader ManifestReader) (*KubeRayExecutor, error) {
+func NewKubeRayExecutor(config KubeRayExecutorConfig, manifestReader app.ManifestReader) (*KubeRayExecutor, error) {
 	log.Trace("NewKubeRayExecutor")
 
 	client, err := newKubeRayDynamicClient()
@@ -77,57 +170,27 @@ func NewKubeRayExecutor(config KubeRayExecutorConfig, manifestReader ManifestRea
 	return NewKubeRayExecutorWithClient(config, manifestReader, client)
 }
 
-func NewKubeRayExecutorWithClient(config KubeRayExecutorConfig, manifestReader ManifestReader, client dynamic.Interface) (*KubeRayExecutor, error) {
+func NewKubeRayExecutorWithClient(config KubeRayExecutorConfig, manifestReader app.ManifestReader, client dynamic.Interface) (*KubeRayExecutor, error) {
 	log.Trace("NewKubeRayExecutorWithClient")
 
-	if strings.TrimSpace(config.Namespace) == "" {
-		return nil, domain.ErrValidationFailed.Extend("kuberay namespace is required")
-	}
-	if strings.TrimSpace(config.RayVersion) == "" {
-		return nil, domain.ErrValidationFailed.Extend("kuberay ray version is required")
-	}
-	if strings.TrimSpace(config.Image) == "" {
-		return nil, domain.ErrValidationFailed.Extend("kuberay job image is required")
-	}
-	if strings.TrimSpace(config.TrainingEntrypoint) == "" {
-		return nil, domain.ErrValidationFailed.Extend("kuberay training entrypoint is required")
-	}
-	if strings.TrimSpace(config.EvaluationEntrypoint) == "" {
-		return nil, domain.ErrValidationFailed.Extend("kuberay evaluation entrypoint is required")
-	}
-	if strings.TrimSpace(config.PromotionEntrypoint) == "" {
-		return nil, domain.ErrValidationFailed.Extend("kuberay promotion entrypoint is required")
-	}
-	if config.PollInterval <= 0 {
-		return nil, domain.ErrValidationFailed.Extend("kuberay poll interval is required")
-	}
-	if config.WorkerReplicas <= 0 {
-		return nil, domain.ErrValidationFailed.Extend("kuberay worker replicas must be greater than zero")
-	}
-	if strings.TrimSpace(config.CPU) == "" || strings.TrimSpace(config.Memory) == "" {
-		return nil, domain.ErrValidationFailed.Extend("kuberay cpu and memory are required")
-	}
 	if manifestReader == nil {
-		return nil, domain.ErrValidationFailed.Extend("artifact manifest reader is required")
-	}
-	if client == nil {
-		return nil, domain.ErrValidationFailed.Extend("kuberay client is required")
+		panic("kuberay executor manifest reader is nil")
 	}
 	return &KubeRayExecutor{
-		namespace:               strings.TrimSpace(config.Namespace),
-		rayVersion:              strings.TrimSpace(config.RayVersion),
-		image:                   strings.TrimSpace(config.Image),
-		imagePullPolicy:         withDefaultString(config.ImagePullPolicy, "IfNotPresent"),
-		serviceAccountName:      strings.TrimSpace(config.ServiceAccountName),
+		namespace:               config.Namespace,
+		rayVersion:              config.RayVersion,
+		image:                   config.Image,
+		imagePullPolicy:         config.ImagePullPolicy,
+		serviceAccountName:      config.ServiceAccountName,
 		ttlSecondsAfterFinished: config.TTLSecondsAfterFinished,
 		workerReplicas:          config.WorkerReplicas,
-		cpu:                     strings.TrimSpace(config.CPU),
-		memory:                  strings.TrimSpace(config.Memory),
-		gpuResource:             strings.TrimSpace(config.GPUResource),
-		gpu:                     strings.TrimSpace(config.GPU),
-		trainingEntrypoint:      strings.TrimSpace(config.TrainingEntrypoint),
-		evaluationEntrypoint:    strings.TrimSpace(config.EvaluationEntrypoint),
-		promotionEntrypoint:     strings.TrimSpace(config.PromotionEntrypoint),
+		cpu:                     config.CPU,
+		memory:                  config.Memory,
+		gpuResource:             config.GPUResource,
+		gpu:                     config.GPU,
+		trainingEntrypoint:      config.TrainingEntrypoint,
+		evaluationEntrypoint:    config.EvaluationEntrypoint,
+		promotionEntrypoint:     config.PromotionEntrypoint,
 		pollInterval:            config.PollInterval,
 		client:                  client,
 		manifestReader:          manifestReader,
@@ -202,7 +265,7 @@ func waitForKubeRayJob[T any](ctx context.Context, executor *KubeRayExecutor, fa
 		case kubeRayTerminalSucceeded:
 			return readResult(ctx)
 		case kubeRayTerminalFailed:
-			return nil, failureError.Extend("kuberay job " + strings.ToLower(status.Status) + ": " + status.Message)
+			return nil, failureError.Extend("kuberay job " + strings.ToLower(string(status.Status)) + ": " + status.Message)
 		default:
 			recordKubeRayHeartbeat(ctx, name)
 			if err := sleepContext(ctx, executor.pollInterval); err != nil {
@@ -246,24 +309,30 @@ func (e *KubeRayExecutor) jobStatus(ctx context.Context, name string) (kubeRayJo
 	if err != nil {
 		return kubeRayJobStatus{}, false, err
 	}
-	status, _, _ := unstructured.NestedString(obj.Object, "status", "jobStatus")
+	status, _, _ := unstructured.NestedString(obj.Object, kubeRayObjectStatus, kubeRayStatusJobStatus)
 	if status == "" {
-		status, _, _ = unstructured.NestedString(obj.Object, "status", "jobDeploymentStatus")
+		status, _, _ = unstructured.NestedString(obj.Object, kubeRayObjectStatus, kubeRayStatusJobDeploymentStatus)
 	}
-	message, _, _ := unstructured.NestedString(obj.Object, "status", "message")
+	message, _, _ := unstructured.NestedString(obj.Object, kubeRayObjectStatus, kubeRayStatusMessage)
 	if message == "" {
-		message, _, _ = unstructured.NestedString(obj.Object, "status", "reason")
+		message, _, _ = unstructured.NestedString(obj.Object, kubeRayObjectStatus, kubeRayStatusReason)
 	}
-	return kubeRayJobStatus{Status: status, Message: message}, true, nil
+	return kubeRayJobStatus{Status: kubeRayJobStatusValueFromString(status), Message: message}, true, nil
 }
 
-func kubeRayTerminalStatus(status string) kubeRayTerminal {
+func kubeRayJobStatusValueFromString(status string) kubeRayJobStatusValue {
+	log.Trace("kubeRayJobStatusValueFromString")
+
+	return kubeRayJobStatusValue(strings.ToUpper(strings.TrimSpace(status)))
+}
+
+func kubeRayTerminalStatus(status kubeRayJobStatusValue) kubeRayTerminal {
 	log.Trace("kubeRayTerminalStatus")
 
-	switch strings.ToUpper(strings.TrimSpace(status)) {
-	case "SUCCEEDED", "SUCCESS", "COMPLETED", "COMPLETE":
+	switch status {
+	case kubeRayJobStatusSucceeded, kubeRayJobStatusSuccess, kubeRayJobStatusCompleted, kubeRayJobStatusComplete:
 		return kubeRayTerminalSucceeded
-	case "FAILED", "FAIL", "STOPPED":
+	case kubeRayJobStatusFailed, kubeRayJobStatusFail, kubeRayJobStatusStopped:
 		return kubeRayTerminalFailed
 	default:
 		return kubeRayTerminalRunning
@@ -274,27 +343,27 @@ func (e *KubeRayExecutor) rayJobObject(name, submissionID, entrypoint string, en
 	log.Trace("KubeRayExecutor rayJobObject")
 
 	spec := map[string]any{
-		"entrypoint":               entrypoint,
-		"runtimeEnvYAML":           runtimeEnvYAML(envVars),
-		"shutdownAfterJobFinishes": true,
-		"rayClusterSpec":           e.rayClusterSpec(),
+		kubeRaySpecEntrypoint:       entrypoint,
+		kubeRaySpecRuntimeEnvYAML:   runtimeEnvYAML(envVars),
+		kubeRaySpecShutdownAfterJob: true,
+		kubeRaySpecRayCluster:       e.rayClusterSpec(),
 	}
 	if e.ttlSecondsAfterFinished > 0 {
-		spec["ttlSecondsAfterFinished"] = int64(e.ttlSecondsAfterFinished)
+		spec[kubeRaySpecTTLSeconds] = int64(e.ttlSecondsAfterFinished)
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "ray.io/v1",
-		"kind":       "RayJob",
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": e.namespace,
-			"labels": map[string]any{
-				"app.kubernetes.io/name":       "training-job",
-				"app.kubernetes.io/managed-by": "training-service",
-				"bighill.io/submission-id":     name,
+		kubeRayObjectAPIVersion: kubeRayRayJobAPIVersion,
+		kubeRayObjectKind:       kubeRayRayJobKind,
+		kubeRayObjectMetadata: map[string]any{
+			kubeRayMetadataName:      name,
+			kubeRayMetadataNamespace: e.namespace,
+			kubeRayMetadataLabels: map[string]any{
+				kubeRayLabelAppName:      kubeRayLabelTrainingJob,
+				kubeRayLabelManagedBy:    kubeRayManagedByTrainingService,
+				kubeRayLabelSubmissionID: name,
 			},
 		},
-		"spec": spec,
+		kubeRayObjectSpec: spec,
 	}}
 }
 
@@ -302,22 +371,22 @@ func (e *KubeRayExecutor) rayClusterSpec() map[string]any {
 	log.Trace("KubeRayExecutor rayClusterSpec")
 
 	return map[string]any{
-		"rayVersion": e.rayVersion,
-		"headGroupSpec": map[string]any{
-			"rayStartParams": map[string]any{},
-			"template": map[string]any{
-				"spec": e.podSpec("ray-head", false),
+		kubeRaySpecRayVersion: e.rayVersion,
+		kubeRaySpecHeadGroup: map[string]any{
+			kubeRaySpecRayStartParams: map[string]any{},
+			kubeRaySpecTemplate: map[string]any{
+				kubeRayObjectSpec: e.podSpec(kubeRayHeadContainerName, false),
 			},
 		},
-		"workerGroupSpecs": []any{
+		kubeRaySpecWorkerGroups: []any{
 			map[string]any{
-				"groupName":      "gpu-workers",
-				"replicas":       int64(e.workerReplicas),
-				"minReplicas":    int64(e.workerReplicas),
-				"maxReplicas":    int64(e.workerReplicas),
-				"rayStartParams": map[string]any{},
-				"template": map[string]any{
-					"spec": e.podSpec("ray-worker", true),
+				kubeRaySpecGroupName:      kubeRayWorkerGroupName,
+				kubeRaySpecReplicas:       int64(e.workerReplicas),
+				kubeRaySpecMinReplicas:    int64(e.workerReplicas),
+				kubeRaySpecMaxReplicas:    int64(e.workerReplicas),
+				kubeRaySpecRayStartParams: map[string]any{},
+				kubeRaySpecTemplate: map[string]any{
+					kubeRayObjectSpec: e.podSpec(kubeRayWorkerContainerName, true),
 				},
 			},
 		},
@@ -328,26 +397,26 @@ func (e *KubeRayExecutor) podSpec(containerName string, includeGPU bool) map[str
 	log.Trace("KubeRayExecutor podSpec")
 
 	spec := map[string]any{
-		"containers": []any{
+		kubeRayPodContainers: []any{
 			map[string]any{
-				"name":            containerName,
-				"image":           e.image,
-				"imagePullPolicy": e.imagePullPolicy,
-				"resources":       e.resources(includeGPU),
+				kubeRayContainerName:            containerName,
+				kubeRayContainerImage:           e.image,
+				kubeRayContainerImagePullPolicy: e.imagePullPolicy,
+				kubeRayContainerResources:       e.resources(includeGPU),
 			},
 		},
 	}
 	if e.serviceAccountName != "" {
-		spec["serviceAccountName"] = e.serviceAccountName
+		spec[kubeRayPodServiceAccountName] = e.serviceAccountName
 	}
 	if includeGPU && e.gpuResource != "" && e.gpu != "" {
-		spec["nodeSelector"] = map[string]any{"workload": "gpu"}
-		spec["tolerations"] = []any{
+		spec[kubeRayPodNodeSelector] = map[string]any{kubeRayNodeSelectorWorkload: kubeRayNodeSelectorWorkloadGPU}
+		spec[kubeRayPodTolerations] = []any{
 			map[string]any{
-				"key":      "nvidia.com/gpu",
-				"operator": "Equal",
-				"value":    "true",
-				"effect":   "NoSchedule",
+				kubeRayTolerationKey:      kubeRayGPUResourceName,
+				kubeRayTolerationOperator: kubeRayTolerationOperatorEqual,
+				kubeRayTolerationValue:    kubeRayTolerationValueTrue,
+				kubeRayTolerationEffect:   kubeRayTolerationEffectNoSchedule,
 			},
 		}
 	}
@@ -357,15 +426,15 @@ func (e *KubeRayExecutor) podSpec(containerName string, includeGPU bool) map[str
 func (e *KubeRayExecutor) resources(includeGPU bool) map[string]any {
 	log.Trace("KubeRayExecutor resources")
 
-	limits := map[string]any{"cpu": e.cpu, "memory": e.memory}
-	requests := map[string]any{"cpu": e.cpu, "memory": e.memory}
+	limits := map[string]any{kubeRayResourceCPU: e.cpu, kubeRayResourceMemory: e.memory}
+	requests := map[string]any{kubeRayResourceCPU: e.cpu, kubeRayResourceMemory: e.memory}
 	if includeGPU && e.gpuResource != "" && e.gpu != "" {
 		limits[e.gpuResource] = e.gpu
 		requests[e.gpuResource] = e.gpu
 	}
 	return map[string]any{
-		"limits":   limits,
-		"requests": requests,
+		kubeRayResourcesLimits:   limits,
+		kubeRayResourcesRequests: requests,
 	}
 }
 
@@ -397,19 +466,6 @@ func recordKubeRayHeartbeat(ctx context.Context, jobName string) {
 	}
 }
 
-type kubeRayJobStatus struct {
-	Status  string
-	Message string
-}
-
-type kubeRayTerminal int
-
-const (
-	kubeRayTerminalRunning kubeRayTerminal = iota
-	kubeRayTerminalSucceeded
-	kubeRayTerminalFailed
-)
-
 func KubeRayJobName(submissionID string) string {
 	log.Trace("KubeRayJobName")
 
@@ -417,7 +473,7 @@ func KubeRayJobName(submissionID string) string {
 	name = invalidKubeNameChars.ReplaceAllString(name, "-")
 	name = strings.Trim(name, "-")
 	if name == "" {
-		name = "training-job"
+		name = defaultKubeRayJobName
 	}
 	if len(name) <= maxKubeRayNameLength {
 		return name
@@ -426,7 +482,7 @@ func KubeRayJobName(submissionID string) string {
 	suffix := hex.EncodeToString(sum[:])[:10]
 	prefix := strings.Trim(name[:maxKubeRayNameLength-len(suffix)-1], "-")
 	if prefix == "" {
-		prefix = "training-job"
+		prefix = defaultKubeRayJobName
 	}
 	return prefix + "-" + suffix
 }
@@ -455,18 +511,4 @@ func newKubeRayDynamicClient() (dynamic.Interface, error) {
 	return client, nil
 }
 
-func withDefaultString(value, fallback string) string {
-	log.Trace("withDefaultString")
-
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return strings.TrimSpace(value)
-}
-
 var invalidKubeNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
-
-const (
-	maxKubeRayNameLength = 63
-	kubeRayDeleteTimeout = 30 * time.Second
-)

@@ -267,7 +267,7 @@ var _ = Describe("TrainingActivities", func() {
 			ModelURI:          "s3://models/training-run-dpo-base",
 			ModelName:         "dpo-base-model",
 			ModelVersion:      "2",
-			BaseModel:         "llama3.1:8b",
+			BaseModel:         "local-test-model:latest",
 			ArtifactFormat:    "HF_PEFT_ADAPTER",
 			ArtifactChecksum:  "sha256:dpo-base",
 			ArtifactSizeBytes: 128,
@@ -288,14 +288,14 @@ var _ = Describe("TrainingActivities", func() {
 			SourceModelKind:      "BASE",
 			ModelName:            "dpo-base-model",
 			ModelVersion:         "2",
-			BaseModel:            "llama3.1:8b",
+			BaseModel:            "local-test-model:latest",
 			TrainingProfile:      dpoTrainingProfile(),
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(executor.trainingSpec.ParentAdapterURI).To(Equal(""))
 		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("trainer: dpo"))
-		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("base_model: llama3.1:8b"))
+		Expect(executor.trainingSpec.RecipeYAML).To(ContainSubstring("base_model: local-test-model:latest"))
 		Expect(executor.trainingSpec.RecipeYAML).NotTo(ContainSubstring("lora_model_dir:"))
 		expectValidYAML(executor.trainingSpec.RecipeYAML)
 	})

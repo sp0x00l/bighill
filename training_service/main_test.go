@@ -9,7 +9,7 @@ import (
 	"time"
 
 	env "lib/shared_lib/env"
-	"training_service/pkg/infra/executor"
+	"training_service/pkg/domain/model"
 
 	temporalclient "go.temporal.io/sdk/client"
 
@@ -23,8 +23,8 @@ func (manifestReaderStub) Read(context.Context, string) ([]byte, error) {
 	return nil, nil
 }
 
-func (manifestReaderStub) Stat(context.Context, string) (executor.ObjectInfo, error) {
-	return executor.ObjectInfo{SizeBytes: 1}, nil
+func (manifestReaderStub) Stat(context.Context, string) (model.ObjectInfo, error) {
+	return model.ObjectInfo{SizeBytes: 1}, nil
 }
 
 func TestTrainingMain(t *testing.T) {

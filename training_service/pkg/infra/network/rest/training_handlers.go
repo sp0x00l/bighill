@@ -7,11 +7,11 @@ import (
 
 	"training_service/pkg/app"
 	"training_service/pkg/domain"
-	"training_service/pkg/infra/network/adapter"
 
 	"lib/shared_lib/ctxutil"
 	"lib/shared_lib/transport"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
 )
@@ -23,10 +23,10 @@ const (
 
 type TrainingHandlers struct {
 	usecase app.TrainingCommandUsecase
-	adapter adapter.TrainingRunDTOAdapter
+	adapter TrainingRunDTOAdapter
 }
 
-func NewTrainingHandlers(usecase app.TrainingCommandUsecase, adapter adapter.TrainingRunDTOAdapter) *TrainingHandlers {
+func NewTrainingHandlers(usecase app.TrainingCommandUsecase, adapter TrainingRunDTOAdapter) *TrainingHandlers {
 	log.Trace("NewTrainingHandlers")
 
 	return &TrainingHandlers{usecase: usecase, adapter: adapter}
@@ -70,11 +70,11 @@ func (h *TrainingHandlers) StartTrainingRun(ctx context.Context, req *http.Reque
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
 	}
-	command, err := h.adapter.FromStartTrainingRunDTO(ctx, body)
+	command, err := h.adapter.FromDTO(ctx, body)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid training run request")
 	}
-	command.IdempotencyKey = idempotencyKey.String()
+	command.IdempotencyKey = idempotencyKey
 	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
 	result, err := h.usecase.StartTrainingRun(ctx, command)
 	if err != nil {
@@ -96,7 +96,10 @@ func (h *TrainingHandlers) StartTrainingRun(ctx context.Context, req *http.Reque
 func (h *TrainingHandlers) ReadTrainingRun(ctx context.Context, req *http.Request) (APIResponse, error) {
 	log.Trace("TrainingHandlers ReadTrainingRun")
 
-	trainingRunID := mux.Vars(req)["trainingRunId"]
+	trainingRunID, err := uuid.Parse(mux.Vars(req)["trainingRunId"])
+	if err != nil || trainingRunID == uuid.Nil {
+		return nil, ErrBadRequest().Wrap(domain.ErrValidationFailed.Extend("training run id is required")).WithMessage("training run id is required")
+	}
 	result, err := h.usecase.ReadTrainingRun(ctx, trainingRunID)
 	if err != nil {
 		if errors.Is(err, domain.ErrValidationFailed) {

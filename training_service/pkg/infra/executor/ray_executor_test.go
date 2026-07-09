@@ -33,7 +33,7 @@ type manifestReaderStub struct {
 	locations     []string
 	statLocations []string
 	payloads      map[string]string
-	stats         map[string]executor.ObjectInfo
+	stats         map[string]model.ObjectInfo
 }
 
 func (r *manifestReaderStub) Read(_ context.Context, location string) ([]byte, error) {
@@ -41,18 +41,24 @@ func (r *manifestReaderStub) Read(_ context.Context, location string) ([]byte, e
 	return []byte(r.payloads[location]), nil
 }
 
-func (r *manifestReaderStub) Stat(_ context.Context, location string) (executor.ObjectInfo, error) {
+func (r *manifestReaderStub) Stat(_ context.Context, location string) (model.ObjectInfo, error) {
 	r.statLocations = append(r.statLocations, location)
 	return r.stats[location], nil
 }
 
 var _ = Describe("RayExecutor", func() {
+	It("panics when constructed without a manifest reader", func() {
+		Expect(func() {
+			_, _ = executor.NewRayExecutorWithClient(rayConfig(), nil, &http.Client{})
+		}).To(Panic())
+	})
+
 	It("submits a deterministic Ray training job and reads the artifact manifest on success", func() {
 		var postBody []byte
 		statusCalls := 0
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://models/run-1/artifact.json": `{"training_run_id":"run-1","model_uri":"s3://models/run-1","model_name":"ranker","model_version":"v1","base_model":"mistral","artifact_format":"HF_PEFT_ADAPTER","artifact_checksum":"sha256:abc","artifact_size_bytes":123,"recipe_hash":"hash"}`,
-		}, stats: map[string]executor.ObjectInfo{
+		}, stats: map[string]model.ObjectInfo{
 			"s3://models/run-1": {Location: "s3://models/run-1", SizeBytes: 123},
 		}}
 		ray, err := executor.NewRayExecutorWithClient(rayConfig(), reader, &http.Client{
@@ -134,7 +140,7 @@ var _ = Describe("RayExecutor", func() {
 	It("reattaches to an already succeeded Ray job without submitting again", func() {
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://models/run-2/artifact.json": `{"training_run_id":"run-2","model_uri":"s3://models/run-2","model_name":"ranker","model_version":"v1","base_model":"mistral","artifact_format":"HF_PEFT_ADAPTER","artifact_checksum":"sha256:def","artifact_size_bytes":456}`,
-		}, stats: map[string]executor.ObjectInfo{
+		}, stats: map[string]model.ObjectInfo{
 			"s3://models/run-2": {Location: "s3://models/run-2", SizeBytes: 456},
 		}}
 		ray, err := executor.NewRayExecutorWithClient(rayConfig(), reader, &http.Client{
@@ -158,7 +164,7 @@ var _ = Describe("RayExecutor", func() {
 	It("rejects artifact manifests whose artifact size does not match storage", func() {
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://models/run-size/artifact.json": `{"training_run_id":"run-size","model_uri":"s3://models/run-size","model_name":"ranker","model_version":"v1","base_model":"mistral","artifact_format":"HF_PEFT_ADAPTER","artifact_checksum":"sha256:def","artifact_size_bytes":456}`,
-		}, stats: map[string]executor.ObjectInfo{
+		}, stats: map[string]model.ObjectInfo{
 			"s3://models/run-size": {Location: "s3://models/run-size", SizeBytes: 455},
 		}}
 		ray, err := executor.NewRayExecutorWithClient(rayConfig(), reader, &http.Client{
@@ -237,7 +243,7 @@ var _ = Describe("RayExecutor", func() {
 	It("runs evaluation jobs and reads the report manifest", func() {
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://evals/run-4.json": `{"training_run_id":"run-4","report_uri":"s3://evals/run-4.json","passed":true}`,
-		}, stats: map[string]executor.ObjectInfo{
+		}, stats: map[string]model.ObjectInfo{
 			"s3://evals/run-4.json": {Location: "s3://evals/run-4.json", SizeBytes: 32},
 		}}
 		ray, err := executor.NewRayExecutorWithClient(rayConfig(), reader, &http.Client{
@@ -269,7 +275,7 @@ var _ = Describe("RayExecutor", func() {
 		statusCalls := 0
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://promotion/model-1.json": `{"user_id":"user-1","org_id":"org-1","model_id":"model-1","training_run_id":"run-1","promotion_report_uri":"s3://promotion/model-1.json","deltas":{"faithfulness":0.1}}`,
-		}, stats: map[string]executor.ObjectInfo{
+		}, stats: map[string]model.ObjectInfo{
 			"s3://promotion/model-1.json": {Location: "s3://promotion/model-1.json", SizeBytes: 128},
 		}}
 		ray, err := executor.NewRayExecutorWithClient(rayConfig(), reader, &http.Client{

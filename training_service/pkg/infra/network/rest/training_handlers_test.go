@@ -11,7 +11,6 @@ import (
 
 	"training_service/pkg/domain"
 	"training_service/pkg/domain/model"
-	"training_service/pkg/infra/network/adapter"
 
 	"lib/shared_lib/ctxutil"
 	serializers "lib/shared_lib/serializer"
@@ -48,14 +47,14 @@ func (s *trainingCommandUsecaseStub) StartTrainingRun(ctx context.Context, comma
 	return s.result, s.err
 }
 
-func (s *trainingCommandUsecaseStub) ReadTrainingRun(_ context.Context, trainingRunID string) (*model.TrainingRunStatusResult, error) {
+func (s *trainingCommandUsecaseStub) ReadTrainingRun(_ context.Context, trainingRunID uuid.UUID) (*model.TrainingRunStatusResult, error) {
 	if s.readErr != nil {
 		return nil, s.readErr
 	}
 	if s.status != nil {
 		return s.status, nil
 	}
-	return &model.TrainingRunStatusResult{TrainingRunID: trainingRunID, Status: "RUNNING"}, nil
+	return &model.TrainingRunStatusResult{TrainingRunID: trainingRunID.String(), Status: "RUNNING"}, nil
 }
 
 var _ = Describe("TrainingHandlers", func() {
@@ -78,7 +77,7 @@ var _ = Describe("TrainingHandlers", func() {
 				Status:        "RUNNING",
 			},
 		}
-		handlers = NewTrainingHandlers(usecase, adapter.NewTrainingRunDTOAdapter(serializers.NewJSONSerializer()))
+		handlers = NewTrainingHandlers(usecase, NewTrainingRunDTOAdapter(serializers.NewJSONSerializer()))
 		userID = uuid.New()
 		orgID = uuid.New()
 		requestID = uuid.New()
@@ -95,10 +94,10 @@ var _ = Describe("TrainingHandlers", func() {
 		Expect(res.StatusCode()).To(Equal(http.StatusAccepted))
 		Expect(usecase.tenant).To(Equal(userID))
 		Expect(usecase.org).To(Equal(orgID))
-		Expect(usecase.command.IdempotencyKey).To(Equal(requestID.String()))
-		Expect(usecase.command.DatasetID).To(Equal(datasetID.String()))
-		Expect(usecase.command.SourceModelID).To(Equal(modelID.String()))
-		var dto adapter.StartTrainingRunResponseDTO
+		Expect(usecase.command.IdempotencyKey).To(Equal(requestID))
+		Expect(usecase.command.DatasetID).To(Equal(datasetID))
+		Expect(usecase.command.SourceModelID).To(Equal(modelID))
+		var dto StartTrainingRunResponseDTO
 		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
 		Expect(dto.TrainingRunID).To(Equal(usecase.result.TrainingRunID))
 	})
@@ -144,7 +143,7 @@ var _ = Describe("TrainingHandlers", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res.StatusCode()).To(Equal(http.StatusOK))
-		var dto adapter.TrainingRunStatusDTO
+		var dto TrainingRunStatusDTO
 		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
 		Expect(dto.TrainingRunID).To(Equal(usecase.status.TrainingRunID))
 		Expect(dto.Status).To(Equal("RUNNING"))
@@ -160,6 +159,17 @@ var _ = Describe("TrainingHandlers", func() {
 		var httpErr *HTTPError
 		Expect(errors.As(err, &httpErr)).To(BeTrue())
 		Expect(httpErr.statusCode).To(Equal(http.StatusNotFound))
+	})
+
+	It("rejects malformed training run ids", func() {
+		req := httptest.NewRequest(http.MethodGet, "/v1/training-runs/not-a-uuid", nil)
+		req = mux.SetURLVars(req, map[string]string{"trainingRunId": "not-a-uuid"})
+
+		_, err := handlers.ReadTrainingRun(context.Background(), req)
+
+		var httpErr *HTTPError
+		Expect(errors.As(err, &httpErr)).To(BeTrue())
+		Expect(httpErr.statusCode).To(Equal(http.StatusBadRequest))
 	})
 })
 

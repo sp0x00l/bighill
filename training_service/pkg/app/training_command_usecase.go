@@ -18,17 +18,12 @@ import (
 )
 
 const (
-	modelStatusReady = "READY"
-
-	tableFormatParquet                = "PARQUET"
-	stateFeatureMaterialized          = "FEATURE_MATERIALIZED"
-	stateEmbeddingsMaterialized       = "EMBEDDINGS_MATERIALIZED"
 	defaultTrainingRunStatusURLPrefix = "/v1/private/training-runs/"
 )
 
 type TrainingCommandUsecase interface {
 	StartTrainingRun(ctx context.Context, command model.StartTrainingRunCommand) (*model.TrainingRunStartResult, error)
-	ReadTrainingRun(ctx context.Context, trainingRunID string) (*model.TrainingRunStatusResult, error)
+	ReadTrainingRun(ctx context.Context, trainingRunID uuid.UUID) (*model.TrainingRunStatusResult, error)
 }
 
 type trainingCommandUsecase struct {
@@ -57,42 +52,21 @@ func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command m
 	ctx, span := usecasetrace.StartSpan(ctx, "training_service/app", "training.start_training_run")
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	userID, ok := ctxutil.TenantID(ctx)
-	if !ok {
-		return nil, domain.ErrValidationFailed.Extend("user id is required")
-	}
-	orgID, ok := ctxutil.OrgID(ctx)
-	if !ok {
-		return nil, domain.ErrValidationFailed.Extend("org id is required")
-	}
-	datasetID, err := uuid.Parse(strings.TrimSpace(command.DatasetID))
-	if err != nil || datasetID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("dataset id is required")
-	}
-	sourceModelID, err := uuid.Parse(strings.TrimSpace(command.SourceModelID))
-	if err != nil || sourceModelID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("source model id is required")
-	}
-	idempotencyKey := strings.TrimSpace(command.IdempotencyKey)
-	if idempotencyKey == "" {
-		return nil, domain.ErrValidationFailed.Extend("idempotency key is required")
-	}
+	userID, _ := ctxutil.TenantID(ctx)
+	orgID, _ := ctxutil.OrgID(ctx)
 	span.SetAttributes(
 		attribute.String("user_id", userID.String()),
 		attribute.String("org_id", orgID.String()),
-		attribute.String("dataset_id", datasetID.String()),
-		attribute.String("source_model_id", sourceModelID.String()),
+		attribute.String("dataset_id", command.DatasetID.String()),
+		attribute.String("source_model_id", command.SourceModelID.String()),
 	)
 
-	datasetRef, err := u.datasetResolver.ResolveMaterializedDataset(ctx, userID, orgID, datasetID)
+	datasetRef, err := u.datasetResolver.ResolveMaterializedDataset(ctx, userID, orgID, command.DatasetID)
 	if err != nil {
 		return nil, err
 	}
-	sourceModel, err := u.modelResolver.ResolveTrainableModel(ctx, userID, orgID, sourceModelID)
+	sourceModel, err := u.modelResolver.ResolveTrainableModel(ctx, userID, orgID, command.SourceModelID)
 	if err != nil {
-		return nil, err
-	}
-	if err := validateResolvedTrainingInputs(datasetRef, sourceModel, orgID); err != nil {
 		return nil, err
 	}
 	trainingProfile, evaluationProfile, err := u.resolveProfiles(ctx, command)
@@ -100,7 +74,7 @@ func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command m
 		return nil, err
 	}
 
-	request := u.trainingRunRequest(idempotencyKey, userID, orgID, datasetRef, sourceModel, trainingProfile, evaluationProfile)
+	request := u.trainingRunRequest(command.IdempotencyKey.String(), userID, orgID, datasetRef, sourceModel, trainingProfile, evaluationProfile)
 	if err := u.starter.StartTrainingWorkflow(ctx, request); err != nil {
 		return nil, fmt.Errorf("%w: start training workflow: %w", domain.ErrTrainModel, err)
 	}
@@ -110,18 +84,14 @@ func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command m
 	}, nil
 }
 
-func (u *trainingCommandUsecase) ReadTrainingRun(ctx context.Context, trainingRunID string) (out *model.TrainingRunStatusResult, err error) {
+func (u *trainingCommandUsecase) ReadTrainingRun(ctx context.Context, trainingRunID uuid.UUID) (out *model.TrainingRunStatusResult, err error) {
 	log.Trace("TrainingCommandUsecase ReadTrainingRun")
 
 	ctx, span := usecasetrace.StartSpan(ctx, "training_service/app", "training.read_training_run")
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
-	parsedTrainingRunID, err := uuid.Parse(strings.TrimSpace(trainingRunID))
-	if err != nil || parsedTrainingRunID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("training run id is required")
-	}
-	span.SetAttributes(attribute.String("training_run_id", parsedTrainingRunID.String()))
-	return u.statusReader.ReadTrainingWorkflowStatus(ctx, parsedTrainingRunID.String())
+	span.SetAttributes(attribute.String("training_run_id", trainingRunID.String()))
+	return u.statusReader.ReadTrainingWorkflowStatus(ctx, trainingRunID.String())
 }
 
 func (u *trainingCommandUsecase) resolveProfiles(ctx context.Context, command model.StartTrainingRunCommand) (model.TrainingProfile, string, error) {
@@ -145,82 +115,38 @@ func (u *trainingCommandUsecase) trainingRunRequest(idempotencyKey string, userI
 		"training",
 		orgID.String(),
 		userID.String(),
-		strings.TrimSpace(datasetRef.DatasetID),
-		strings.TrimSpace(sourceModel.ModelID),
+		datasetRef.DatasetID,
+		sourceModel.ModelID,
 		idempotencyKey,
 	}, ":")))
-	baseModel := strings.TrimSpace(sourceModel.BaseModel)
+	baseModel := sourceModel.BaseModel
 	if baseModel == "" {
-		baseModel = strings.TrimSpace(sourceModel.Name)
+		baseModel = sourceModel.Name
 	}
 	request := model.TrainingRunRequest{
 		TrainingRunID:          trainingRunID.String(),
 		UserID:                 userID.String(),
 		OrgID:                  orgID.String(),
-		DatasetID:              strings.TrimSpace(datasetRef.DatasetID),
-		DatasetVersion:         strings.TrimSpace(datasetRef.DatasetVersion),
-		FeatureSnapshotID:      strings.TrimSpace(datasetRef.FeatureSnapshotID),
-		DatasetURI:             strings.TrimSpace(datasetRef.DatasetURI),
-		SourceModelID:          strings.TrimSpace(sourceModel.ModelID),
-		SourceArtifactURI:      strings.TrimSpace(sourceModel.ArtifactLocation),
-		SourceModelKind:        strings.TrimSpace(sourceModel.ModelKind),
-		SourceArtifactChecksum: strings.TrimSpace(sourceModel.ArtifactChecksum),
-		ModelName:              strings.TrimSpace(datasetRef.TableName),
+		DatasetID:              datasetRef.DatasetID,
+		DatasetVersion:         datasetRef.DatasetVersion,
+		FeatureSnapshotID:      datasetRef.FeatureSnapshotID,
+		DatasetURI:             datasetRef.DatasetURI,
+		SourceModelID:          sourceModel.ModelID,
+		SourceArtifactURI:      sourceModel.ArtifactLocation,
+		SourceModelKind:        sourceModel.ModelKind,
+		SourceArtifactChecksum: sourceModel.ArtifactChecksum,
+		ModelName:              datasetRef.TableName,
 		ModelVersion:           trainingModelVersion(sourceModel),
 		BaseModel:              baseModel,
 		EvaluationProfile:      evaluationProfile,
 		TrainingProfile:        trainingProfile,
 	}
 	if sharedDomain.ToModelKind(sourceModel.ModelKind) == sharedDomain.ModelKindFineTuned {
-		request.ParentModelID = strings.TrimSpace(sourceModel.ModelID)
+		request.ParentModelID = sourceModel.ModelID
 		request.ParentModelVersion = fmt.Sprintf("%d", sourceModel.ModelVersion)
-		request.ParentAdapterURI = strings.TrimSpace(sourceModel.AdapterURI)
+		request.ParentAdapterURI = sourceModel.AdapterURI
 	}
 	return request
-}
-
-func validateResolvedTrainingInputs(datasetRef model.MaterializedDatasetRef, sourceModel model.SourceModelRef, orgID uuid.UUID) error {
-	log.Trace("validateResolvedTrainingInputs")
-
-	if strings.TrimSpace(datasetRef.OrgID) != orgID.String() {
-		return domain.ErrValidationFailed.Extend("dataset does not belong to active org")
-	}
-	if strings.TrimSpace(sourceModel.OrgID) != "" && strings.TrimSpace(sourceModel.OrgID) != orgID.String() {
-		return domain.ErrValidationFailed.Extend("source model does not belong to active org")
-	}
-	state := strings.TrimSpace(datasetRef.ProcessingState)
-	if state != stateFeatureMaterialized && state != stateEmbeddingsMaterialized {
-		return domain.ErrValidationFailed.Extend("dataset is not materialized")
-	}
-	if strings.TrimSpace(datasetRef.TableFormat) != tableFormatParquet {
-		return domain.ErrValidationFailed.Extend("training requires a parquet dataset")
-	}
-	if strings.TrimSpace(datasetRef.FeatureSnapshotID) == "" {
-		return domain.ErrValidationFailed.Extend("feature snapshot id is required")
-	}
-	if strings.TrimSpace(datasetRef.DatasetURI) == "" {
-		return domain.ErrValidationFailed.Extend("dataset uri is required")
-	}
-	if strings.TrimSpace(datasetRef.TableName) == "" {
-		return domain.ErrValidationFailed.Extend("dataset table name is required")
-	}
-	if strings.TrimSpace(sourceModel.Status) != modelStatusReady {
-		return domain.ErrValidationFailed.Extend("source model is not ready")
-	}
-	kind := sharedDomain.ToModelKind(sourceModel.ModelKind)
-	if !sharedDomain.IsKnownModelKind(kind) {
-		return domain.ErrValidationFailed.Extend("source model is not trainable")
-	}
-	if strings.TrimSpace(sourceModel.Name) == "" {
-		return domain.ErrValidationFailed.Extend("source model name is required")
-	}
-	if strings.TrimSpace(sourceModel.ArtifactLocation) == "" {
-		return domain.ErrValidationFailed.Extend("source artifact uri is required")
-	}
-	if kind == sharedDomain.ModelKindFineTuned && strings.TrimSpace(sourceModel.AdapterURI) == "" {
-		return domain.ErrValidationFailed.Extend("fine tuned source model adapter uri is required")
-	}
-	return nil
 }
 
 func trainingModelVersion(sourceModel model.SourceModelRef) string {

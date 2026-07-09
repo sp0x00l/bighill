@@ -1,7 +1,9 @@
-package adapter
+package rest
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"training_service/pkg/domain"
 	"training_service/pkg/domain/model"
@@ -9,8 +11,11 @@ import (
 	serializers "lib/shared_lib/serializer"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
+
+const profileVersionSeparator = "@"
 
 type StartTrainingRunDTO struct {
 	DatasetID         string `json:"dataset_id"         validate:"required,uuid,ne=00000000-0000-0000-0000-000000000000"`
@@ -30,7 +35,7 @@ type TrainingRunStatusDTO struct {
 }
 
 type TrainingRunDTOAdapter interface {
-	FromStartTrainingRunDTO(ctx context.Context, body []byte) (model.StartTrainingRunCommand, error)
+	FromDTO(ctx context.Context, body []byte) (model.StartTrainingRunCommand, error)
 	ToStartTrainingRunDTO(ctx context.Context, result *model.TrainingRunStartResult) ([]byte, error)
 	ToTrainingRunStatusDTO(ctx context.Context, result *model.TrainingRunStatusResult) ([]byte, error)
 }
@@ -49,8 +54,8 @@ func NewTrainingRunDTOAdapter(encoder *serializers.Encoder) *trainingRunDTOAdapt
 	}
 }
 
-func (a *trainingRunDTOAdapter) FromStartTrainingRunDTO(ctx context.Context, body []byte) (model.StartTrainingRunCommand, error) {
-	log.Trace("TrainingRunDTOAdapter FromStartTrainingRunDTO")
+func (a *trainingRunDTOAdapter) FromDTO(ctx context.Context, body []byte) (model.StartTrainingRunCommand, error) {
+	log.Trace("TrainingRunDTOAdapter FromDTO")
 
 	var dto StartTrainingRunDTO
 	if err := a.encoder.DecodeStringToData(string(body), &dto); err != nil {
@@ -60,11 +65,25 @@ func (a *trainingRunDTOAdapter) FromStartTrainingRunDTO(ctx context.Context, bod
 		log.WithContext(ctx).WithError(err).Error("StartTrainingRunDTO validation failed")
 		return model.StartTrainingRunCommand{}, domain.ErrValidationFailed.Extend(err.Error())
 	}
+	datasetID, err := uuid.Parse(dto.DatasetID)
+	if err != nil {
+		return model.StartTrainingRunCommand{}, domain.ErrValidationFailed.Extend("dataset id is required")
+	}
+	sourceModelID, err := uuid.Parse(dto.SourceModelID)
+	if err != nil {
+		return model.StartTrainingRunCommand{}, domain.ErrValidationFailed.Extend("source model id is required")
+	}
+	if err := validatePinnedProfileName("training profile", dto.TrainingProfile); err != nil {
+		return model.StartTrainingRunCommand{}, err
+	}
+	if err := validatePinnedProfileName("evaluation profile", dto.EvaluationProfile); err != nil {
+		return model.StartTrainingRunCommand{}, err
+	}
 	return model.StartTrainingRunCommand{
-		DatasetID:         dto.DatasetID,
-		SourceModelID:     dto.SourceModelID,
-		TrainingProfile:   dto.TrainingProfile,
-		EvaluationProfile: dto.EvaluationProfile,
+		DatasetID:         datasetID,
+		SourceModelID:     sourceModelID,
+		TrainingProfile:   strings.TrimSpace(dto.TrainingProfile),
+		EvaluationProfile: strings.TrimSpace(dto.EvaluationProfile),
 	}, nil
 }
 
@@ -79,6 +98,20 @@ func (a *trainingRunDTOAdapter) ToStartTrainingRunDTO(ctx context.Context, resul
 		return nil, err
 	}
 	return []byte(encoded), nil
+}
+
+func validatePinnedProfileName(kind string, name string) error {
+	log.Trace("validatePinnedProfileName")
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	base, version, ok := strings.Cut(name, profileVersionSeparator)
+	if !ok || strings.TrimSpace(base) == "" || strings.TrimSpace(version) == "" {
+		return domain.ErrValidationFailed.Extend(fmt.Sprintf("%s must be version pinned", kind))
+	}
+	return nil
 }
 
 func (a *trainingRunDTOAdapter) ToTrainingRunStatusDTO(ctx context.Context, result *model.TrainingRunStatusResult) ([]byte, error) {

@@ -12,6 +12,7 @@ import (
 	"training_service/pkg/domain"
 	"training_service/pkg/domain/model"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
@@ -19,11 +20,33 @@ import (
 const (
 	userIDHeader = "X-User-ID"
 	orgIDHeader  = "X-Org-ID"
+
+	tableFormatParquet          = "PARQUET"
+	stateFeatureMaterialized    = "FEATURE_MATERIALIZED"
+	stateEmbeddingsMaterialized = "EMBEDDINGS_MATERIALIZED"
 )
+
+type datasetDTO struct {
+	ID                string `json:"id"                validate:"required,uuid"`
+	UserID            string `json:"userId"            validate:"required,uuid"`
+	OrgID             string `json:"orgId"             validate:"required,uuid"`
+	Location          string `json:"location"`
+	StorageLocation   string `json:"storageLocation"`
+	TableName         string `json:"tableName"         validate:"required"`
+	TableFormat       string `json:"tableFormat"       validate:"required"`
+	ProcessingState   string `json:"processingState"   validate:"required"`
+	DatasetVersion    int    `json:"datasetVersion"    validate:"gt=0"`
+	FeatureSnapshotID string `json:"featureSnapshotId" validate:"required,uuid"`
+}
 
 type DatasetResolver struct {
 	baseURL string
 	client  *http.Client
+	adapter *datasetDTOAdapter
+}
+
+type datasetDTOAdapter struct {
+	validator *validator.Validate
 }
 
 func NewDatasetResolver(baseURL string, client *http.Client) *DatasetResolver {
@@ -32,6 +55,7 @@ func NewDatasetResolver(baseURL string, client *http.Client) *DatasetResolver {
 	return &DatasetResolver{
 		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		client:  client,
+		adapter: newDatasetDTOAdapter(),
 	}
 }
 
@@ -63,30 +87,52 @@ func (r *DatasetResolver) ResolveMaterializedDataset(ctx context.Context, userID
 	if err := json.NewDecoder(resp.Body).Decode(&dto); err != nil {
 		return model.MaterializedDatasetRef{}, fmt.Errorf("%w: decode dataset resolver response: %w", domain.ErrDependencyFailed, err)
 	}
+	return r.adapter.FromDTO(ctx, dto, datasetID, orgID)
+}
+
+func newDatasetDTOAdapter() *datasetDTOAdapter {
+	log.Trace("newDatasetDTOAdapter")
+
+	return &datasetDTOAdapter{validator: validator.New()}
+}
+
+func (a *datasetDTOAdapter) FromDTO(ctx context.Context, dto datasetDTO, datasetID uuid.UUID, orgID uuid.UUID) (model.MaterializedDatasetRef, error) {
+	log.Trace("datasetDTOAdapter FromDTO")
+
+	if err := a.validator.Struct(dto); err != nil {
+		log.WithContext(ctx).WithError(err).Error("datasetDTO validation failed")
+		return model.MaterializedDatasetRef{}, domain.ErrValidationFailed.Extend(err.Error())
+	}
+
+	if strings.TrimSpace(dto.ID) != datasetID.String() {
+		return model.MaterializedDatasetRef{}, domain.ErrValidationFailed.Extend("dataset resolver returned a different dataset")
+	}
+	if strings.TrimSpace(dto.OrgID) != orgID.String() {
+		return model.MaterializedDatasetRef{}, domain.ErrValidationFailed.Extend("dataset does not belong to active org")
+	}
+	state := strings.TrimSpace(dto.ProcessingState)
+	if state != stateFeatureMaterialized && state != stateEmbeddingsMaterialized {
+		return model.MaterializedDatasetRef{}, domain.ErrValidationFailed.Extend("dataset is not materialized")
+	}
+	if strings.TrimSpace(dto.TableFormat) != tableFormatParquet {
+		return model.MaterializedDatasetRef{}, domain.ErrValidationFailed.Extend("training requires a parquet dataset")
+	}
+	datasetURI := firstNonEmpty(dto.StorageLocation, dto.Location)
+	if datasetURI == "" {
+		return model.MaterializedDatasetRef{}, domain.ErrValidationFailed.Extend("dataset uri is required")
+	}
+
 	return model.MaterializedDatasetRef{
 		DatasetID:         dto.ID,
 		UserID:            dto.UserID,
 		OrgID:             dto.OrgID,
 		DatasetVersion:    fmt.Sprintf("%d", dto.DatasetVersion),
 		FeatureSnapshotID: dto.FeatureSnapshotID,
-		DatasetURI:        firstNonEmpty(dto.StorageLocation, dto.Location),
+		DatasetURI:        datasetURI,
 		TableName:         dto.TableName,
 		TableFormat:       dto.TableFormat,
 		ProcessingState:   dto.ProcessingState,
 	}, nil
-}
-
-type datasetDTO struct {
-	ID                string `json:"id"`
-	UserID            string `json:"userId"`
-	OrgID             string `json:"orgId"`
-	Location          string `json:"location"`
-	StorageLocation   string `json:"storageLocation"`
-	TableName         string `json:"tableName"`
-	TableFormat       string `json:"tableFormat"`
-	ProcessingState   string `json:"processingState"`
-	DatasetVersion    int    `json:"datasetVersion"`
-	FeatureSnapshotID string `json:"featureSnapshotId"`
 }
 
 func firstNonEmpty(values ...string) string {

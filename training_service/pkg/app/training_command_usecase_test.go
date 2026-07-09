@@ -94,9 +94,9 @@ var _ = Describe("TrainingCommandUsecase", func() {
 
 	It("resolves inputs and starts a base-model SFT workflow", func() {
 		result, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
-			IdempotencyKey:    uuid.NewString(),
-			DatasetID:         datasetID.String(),
-			SourceModelID:     sourceModelID.String(),
+			IdempotencyKey:    uuid.New(),
+			DatasetID:         datasetID,
+			SourceModelID:     sourceModelID,
 			TrainingProfile:   "sft-default@v1",
 			EvaluationProfile: "ragas-default@v2",
 		})
@@ -130,9 +130,9 @@ var _ = Describe("TrainingCommandUsecase", func() {
 		modelResolver.ref = fineTunedModelRef(sourceModelID)
 
 		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
-			IdempotencyKey: uuid.NewString(),
-			DatasetID:      datasetID.String(),
-			SourceModelID:  sourceModelID.String(),
+			IdempotencyKey: uuid.New(),
+			DatasetID:      datasetID,
+			SourceModelID:  sourceModelID,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -145,53 +145,31 @@ var _ = Describe("TrainingCommandUsecase", func() {
 	})
 
 	It("is idempotent for the same request id", func() {
-		requestID := uuid.NewString()
+		requestID := uuid.New()
 		first, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey: requestID,
-			DatasetID:      datasetID.String(),
-			SourceModelID:  sourceModelID.String(),
+			DatasetID:      datasetID,
+			SourceModelID:  sourceModelID,
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		second, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
 			IdempotencyKey: requestID,
-			DatasetID:      datasetID.String(),
-			SourceModelID:  sourceModelID.String(),
+			DatasetID:      datasetID,
+			SourceModelID:  sourceModelID,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(second.TrainingRunID).To(Equal(first.TrainingRunID))
 	})
 
-	It("rejects missing tenant context", func() {
-		_, err := usecase.StartTrainingRun(context.Background(), model.StartTrainingRunCommand{
-			IdempotencyKey: uuid.NewString(),
-			DatasetID:      datasetID.String(),
-			SourceModelID:  sourceModelID.String(),
-		})
-
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
-		Expect(starter.requests).To(BeEmpty())
-	})
-
-	It("rejects missing org context", func() {
-		_, err := usecase.StartTrainingRun(ctxutil.WithTenantID(context.Background(), userID), model.StartTrainingRunCommand{
-			IdempotencyKey: uuid.NewString(),
-			DatasetID:      datasetID.String(),
-			SourceModelID:  sourceModelID.String(),
-		})
-
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
-		Expect(starter.requests).To(BeEmpty())
-	})
-
-	It("rejects unmaterialized datasets", func() {
-		datasetResolver.ref.ProcessingState = "RAW_MATERIALIZED"
+	It("propagates dataset resolver failures", func() {
+		datasetResolver.err = domain.ErrValidationFailed.Extend("dataset is not materialized")
 
 		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
-			IdempotencyKey: uuid.NewString(),
-			DatasetID:      datasetID.String(),
-			SourceModelID:  sourceModelID.String(),
+			IdempotencyKey: uuid.New(),
+			DatasetID:      datasetID,
+			SourceModelID:  sourceModelID,
 		})
 
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
@@ -202,22 +180,22 @@ var _ = Describe("TrainingCommandUsecase", func() {
 		modelResolver.ref.ServingLoadStatus = modelstatus.ModelLoadStatusNotLoaded.String()
 
 		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
-			IdempotencyKey: uuid.NewString(),
-			DatasetID:      datasetID.String(),
-			SourceModelID:  sourceModelID.String(),
+			IdempotencyKey: uuid.New(),
+			DatasetID:      datasetID,
+			SourceModelID:  sourceModelID,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(starter.requests).To(HaveLen(1))
 	})
 
-	It("rejects source models that are not ready", func() {
-		modelResolver.ref.Status = "PENDING"
+	It("propagates model resolver failures", func() {
+		modelResolver.err = domain.ErrValidationFailed.Extend("source model is not ready")
 
 		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
-			IdempotencyKey: uuid.NewString(),
-			DatasetID:      datasetID.String(),
-			SourceModelID:  sourceModelID.String(),
+			IdempotencyKey: uuid.New(),
+			DatasetID:      datasetID,
+			SourceModelID:  sourceModelID,
 		})
 
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
@@ -226,9 +204,9 @@ var _ = Describe("TrainingCommandUsecase", func() {
 
 	It("rejects unknown profile names", func() {
 		_, err := usecase.StartTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartTrainingRunCommand{
-			IdempotencyKey:    uuid.NewString(),
-			DatasetID:         datasetID.String(),
-			SourceModelID:     sourceModelID.String(),
+			IdempotencyKey:    uuid.New(),
+			DatasetID:         datasetID,
+			SourceModelID:     sourceModelID,
 			TrainingProfile:   "unknown@v1",
 			EvaluationProfile: "ragas-default@v1",
 		})
@@ -241,17 +219,11 @@ var _ = Describe("TrainingCommandUsecase", func() {
 		trainingRunID := uuid.New()
 		starter.status = &model.TrainingRunStatusResult{TrainingRunID: trainingRunID.String(), Status: "RUNNING"}
 
-		result, err := usecase.ReadTrainingRun(context.Background(), trainingRunID.String())
+		result, err := usecase.ReadTrainingRun(context.Background(), trainingRunID)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.TrainingRunID).To(Equal(trainingRunID.String()))
 		Expect(result.Status).To(Equal("RUNNING"))
-	})
-
-	It("rejects malformed training run status identifiers", func() {
-		_, err := usecase.ReadTrainingRun(context.Background(), "not-a-uuid")
-
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 })
 

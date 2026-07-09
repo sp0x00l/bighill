@@ -19,10 +19,18 @@ import (
 )
 
 var _ = Describe("KubeRayExecutor", func() {
+	It("panics when constructed without a manifest reader", func() {
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+
+		Expect(func() {
+			_, _ = executor.NewKubeRayExecutorWithClient(kubeRayConfig(), nil, client)
+		}).To(Panic())
+	})
+
 	It("creates a RayJob CR with the training image bound into head and worker pods", func() {
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://models/run-kube/artifact.json": `{"training_run_id":"run-kube","model_uri":"s3://models/run-kube","model_name":"ranker","model_version":"v1","base_model":"mistral","artifact_format":"HF_PEFT_ADAPTER","artifact_checksum":"sha256:kube","artifact_size_bytes":123}`,
-		}, stats: map[string]executor.ObjectInfo{
+		}, stats: map[string]model.ObjectInfo{
 			"s3://models/run-kube": {Location: "s3://models/run-kube", SizeBytes: 123},
 		}}
 		var created *unstructured.Unstructured
@@ -82,7 +90,7 @@ var _ = Describe("KubeRayExecutor", func() {
 	It("reattaches to an already completed RayJob", func() {
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://evals/run-eval.json": `{"training_run_id":"run-eval","report_uri":"s3://evals/run-eval.json","passed":true}`,
-		}, stats: map[string]executor.ObjectInfo{
+		}, stats: map[string]model.ObjectInfo{
 			"s3://evals/run-eval.json": {Location: "s3://evals/run-eval.json", SizeBytes: 10},
 		}}
 		existing := &unstructured.Unstructured{Object: map[string]any{
@@ -113,7 +121,7 @@ var _ = Describe("KubeRayExecutor", func() {
 	It("treats KubeRay jobDeploymentStatus Complete as success", func() {
 		reader := &manifestReaderStub{payloads: map[string]string{
 			"s3://evals/run-complete.json": `{"training_run_id":"run-complete","report_uri":"s3://evals/run-complete.json","passed":true}`,
-		}, stats: map[string]executor.ObjectInfo{
+		}, stats: map[string]model.ObjectInfo{
 			"s3://evals/run-complete.json": {Location: "s3://evals/run-complete.json", SizeBytes: 10},
 		}}
 		existing := &unstructured.Unstructured{Object: map[string]any{
@@ -145,7 +153,7 @@ var _ = Describe("KubeRayExecutor", func() {
 		reader := &lateManifestReader{
 			location: "s3://models/run-gc/artifact.json",
 			payload:  `{"training_run_id":"run-gc","model_uri":"s3://models/run-gc","model_name":"ranker","model_version":"v1","base_model":"mistral","artifact_format":"HF_PEFT_ADAPTER","artifact_checksum":"sha256:gc","artifact_size_bytes":123}`,
-			stat:     executor.ObjectInfo{Location: "s3://models/run-gc", SizeBytes: 123},
+			stat:     model.ObjectInfo{Location: "s3://models/run-gc", SizeBytes: 123},
 		}
 		createCalls := 0
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
@@ -249,7 +257,7 @@ var _ = Describe("KubeRayExecutor", func() {
 type lateManifestReader struct {
 	location  string
 	payload   string
-	stat      executor.ObjectInfo
+	stat      model.ObjectInfo
 	readCalls int
 }
 
@@ -261,7 +269,7 @@ func (r *lateManifestReader) Read(_ context.Context, location string) ([]byte, e
 	return []byte(r.payload), nil
 }
 
-func (r *lateManifestReader) Stat(_ context.Context, location string) (executor.ObjectInfo, error) {
+func (r *lateManifestReader) Stat(_ context.Context, location string) (model.ObjectInfo, error) {
 	return r.stat, nil
 }
 

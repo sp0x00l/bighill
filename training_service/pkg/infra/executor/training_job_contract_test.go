@@ -64,12 +64,12 @@ var _ = Describe("Training job contract", func() {
 		for _, key := range append(append(append([]string{}, spec.GoTrainingEnvKeys...), spec.GoEvaluationEnvKeys...), spec.GoPromotionEnvKeys...) {
 			expectEnvKeyContract(spec, key)
 		}
-		Expect(jsonFieldNames[model.TrainedModelArtifact]()).To(Equal(spec.TrainingManifestKeys))
-		Expect(jsonFieldNames[model.EvaluationReport]()).To(Equal(spec.EvaluationManifestKeys))
-		Expect(jsonFieldNames[model.PromotionReport]()).To(Equal(spec.PromotionManifestKeys))
-		Expect(jsonFieldTypes[model.TrainedModelArtifact]()).To(Equal(spec.TrainingManifestFieldTypes))
-		Expect(jsonFieldTypes[model.EvaluationReport]()).To(Equal(spec.EvaluationManifestFieldTypes))
-		Expect(jsonFieldTypes[model.PromotionReport]()).To(Equal(spec.PromotionManifestFieldTypes))
+		Expect(jsonFieldNames[trainedModelArtifactDTO]()).To(Equal(spec.TrainingManifestKeys))
+		Expect(jsonFieldNames[evaluationReportDTO]()).To(Equal(spec.EvaluationManifestKeys))
+		Expect(jsonFieldNames[promotionReportDTO]()).To(Equal(spec.PromotionManifestKeys))
+		Expect(jsonFieldTypes[trainedModelArtifactDTO]()).To(Equal(spec.TrainingManifestFieldTypes))
+		Expect(jsonFieldTypes[evaluationReportDTO]()).To(Equal(spec.EvaluationManifestFieldTypes))
+		Expect(jsonFieldTypes[promotionReportDTO]()).To(Equal(spec.PromotionManifestFieldTypes))
 	})
 })
 

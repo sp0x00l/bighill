@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"training_service/pkg/app"
 	"training_service/pkg/domain"
 	"training_service/pkg/domain/model"
 
@@ -27,15 +28,56 @@ import (
 	"go.temporal.io/sdk/activity"
 )
 
-type ManifestReader interface {
-	Read(ctx context.Context, location string) ([]byte, error)
-	Stat(ctx context.Context, location string) (ObjectInfo, error)
+const (
+	rayJobRegistrationAttempts = 3
+	rayStopTimeout             = 30 * time.Second
+)
+
+type rayJobStatusValue string
+
+const (
+	rayJobStatusSucceeded rayJobStatusValue = "SUCCEEDED"
+	rayJobStatusFailed    rayJobStatusValue = "FAILED"
+	rayJobStatusStopped   rayJobStatusValue = "STOPPED"
+)
+
+type rayTerminalStatus int
+
+const (
+	rayTerminalStatusRunning rayTerminalStatus = iota
+	rayTerminalStatusSucceeded
+	rayTerminalStatusFailed
+)
+
+type promotionReportJobRequest struct {
+	UserID                   string `json:"user_id"`
+	OrgID                    string `json:"org_id"`
+	ModelID                  string `json:"model_id"`
+	TrainingRunID            string `json:"training_run_id"`
+	CandidateReportURI       string `json:"candidate_report_uri"`
+	CandidateMetricsMetadata string `json:"candidate_metrics_metadata"`
+	ChampionModelID          string `json:"champion_model_id"`
+	ChampionReportURI        string `json:"champion_report_uri"`
+	ChampionMetricsMetadata  string `json:"champion_metrics_metadata"`
+	PromotionProfile         string `json:"promotion_profile"`
+	ReportURI                string `json:"report_uri"`
+	ReportManifestURI        string `json:"report_manifest_uri"`
 }
 
-type ObjectInfo struct {
-	Location  string
-	SizeBytes int64
-	Checksum  string
+type raySubmitRequest struct {
+	SubmissionID string            `json:"submission_id"`
+	Entrypoint   string            `json:"entrypoint"`
+	RuntimeEnv   rayRuntimeEnv     `json:"runtime_env"`
+	Metadata     map[string]string `json:"metadata"`
+}
+
+type rayRuntimeEnv struct {
+	EnvVars map[string]string `json:"env_vars"`
+}
+
+type rayJobStatusResponse struct {
+	Status  rayJobStatusValue `json:"status"`
+	Message string            `json:"message"`
 }
 
 type RayExecutorConfig struct {
@@ -54,40 +96,22 @@ type RayExecutor struct {
 	promotionEntrypoint  string
 	pollInterval         time.Duration
 	client               *http.Client
-	manifestReader       ManifestReader
+	manifestReader       app.ManifestReader
 }
 
-func NewRayExecutor(config RayExecutorConfig, manifestReader ManifestReader) (*RayExecutor, error) {
+func NewRayExecutor(config RayExecutorConfig, manifestReader app.ManifestReader) (*RayExecutor, error) {
 	log.Trace("NewRayExecutor")
 
 	return NewRayExecutorWithClient(config, manifestReader, nil)
 }
 
-func NewRayExecutorWithClient(config RayExecutorConfig, manifestReader ManifestReader, client *http.Client) (*RayExecutor, error) {
+func NewRayExecutorWithClient(config RayExecutorConfig, manifestReader app.ManifestReader, client *http.Client) (*RayExecutor, error) {
 	log.Trace("NewRayExecutorWithClient")
 
-	rayURL := strings.TrimRight(strings.TrimSpace(config.URL), "/")
-	if rayURL == "" {
-		return nil, domain.ErrValidationFailed.Extend("ray jobs url is required")
-	}
-	if strings.TrimSpace(config.TrainingEntrypoint) == "" {
-		return nil, domain.ErrValidationFailed.Extend("ray training entrypoint is required")
-	}
-	if strings.TrimSpace(config.EvaluationEntrypoint) == "" {
-		return nil, domain.ErrValidationFailed.Extend("ray evaluation entrypoint is required")
-	}
-	if strings.TrimSpace(config.PromotionEntrypoint) == "" {
-		return nil, domain.ErrValidationFailed.Extend("ray promotion entrypoint is required")
-	}
-	if config.RequestTimeout <= 0 {
-		return nil, domain.ErrValidationFailed.Extend("ray request timeout is required")
-	}
-	if config.PollInterval <= 0 {
-		return nil, domain.ErrValidationFailed.Extend("ray poll interval is required")
-	}
 	if manifestReader == nil {
-		return nil, domain.ErrValidationFailed.Extend("artifact manifest reader is required")
+		panic("ray executor manifest reader is nil")
 	}
+	rayURL := strings.TrimRight(config.URL, "/")
 	if client == nil {
 		client = &http.Client{
 			Timeout:   config.RequestTimeout,
@@ -96,9 +120,9 @@ func NewRayExecutorWithClient(config RayExecutorConfig, manifestReader ManifestR
 	}
 	return &RayExecutor{
 		url:                  rayURL,
-		trainingEntrypoint:   strings.TrimSpace(config.TrainingEntrypoint),
-		evaluationEntrypoint: strings.TrimSpace(config.EvaluationEntrypoint),
-		promotionEntrypoint:  strings.TrimSpace(config.PromotionEntrypoint),
+		trainingEntrypoint:   config.TrainingEntrypoint,
+		evaluationEntrypoint: config.EvaluationEntrypoint,
+		promotionEntrypoint:  config.PromotionEntrypoint,
 		pollInterval:         config.PollInterval,
 		client:               client,
 		manifestReader:       manifestReader,
@@ -109,7 +133,7 @@ func (e *RayExecutor) RunTrainingJob(ctx context.Context, spec model.TrainingJob
 	log.Trace("RayExecutor RunTrainingJob")
 
 	return waitForRayJob(ctx, e, domain.ErrTrainModel, spec.SubmissionID, e.trainingEntrypoint, trainingEnv(spec), func(ctx context.Context) (*model.TrainedModelArtifact, error) {
-		return e.readTrainingArtifact(ctx, spec.ArtifactManifestURI, spec.TrainingRunID)
+		return readTrainingArtifact(ctx, e.manifestReader, spec.ArtifactManifestURI, spec.TrainingRunID)
 	})
 }
 
@@ -117,7 +141,7 @@ func (e *RayExecutor) EvaluateModel(ctx context.Context, spec model.EvaluationJo
 	log.Trace("RayExecutor EvaluateModel")
 
 	return waitForRayJob(ctx, e, domain.ErrEvaluateModel, spec.SubmissionID, e.evaluationEntrypoint, evaluationEnv(spec), func(ctx context.Context) (*model.EvaluationReport, error) {
-		return e.readEvaluationReport(ctx, spec.ReportManifestURI, spec.TrainingRunID)
+		return readEvaluationReport(ctx, e.manifestReader, spec.ReportManifestURI, spec.TrainingRunID)
 	})
 }
 
@@ -129,7 +153,7 @@ func (e *RayExecutor) RunPromotionReport(ctx context.Context, spec model.Promoti
 		return nil, err
 	}
 	return waitForRayJob(ctx, e, domain.ErrEvaluateModel, spec.SubmissionID, entrypoint, promotionReportEnv(spec), func(ctx context.Context) (*model.PromotionReport, error) {
-		return e.readPromotionReport(ctx, spec.ReportManifestURI, spec.ModelID, spec.OrgID)
+		return readPromotionReport(ctx, e.manifestReader, spec.ReportManifestURI, spec.ModelID, spec.OrgID)
 	})
 }
 
@@ -175,11 +199,11 @@ func waitForRayJob[T any](ctx context.Context, executor *RayExecutor, failureErr
 			}
 			return nil, failureError.Extend("ray job disappeared after submit")
 		}
-		switch status.Status {
-		case "SUCCEEDED":
+		switch rayJobTerminalStatus(status.Status) {
+		case rayTerminalStatusSucceeded:
 			return readResult(ctx)
-		case "FAILED", "STOPPED":
-			return nil, failureError.Extend("ray job " + strings.ToLower(status.Status) + ": " + status.Message)
+		case rayTerminalStatusFailed:
+			return nil, failureError.Extend("ray job " + strings.ToLower(string(status.Status)) + ": " + status.Message)
 		default:
 			recordRayHeartbeat(ctx, submissionID)
 			if err := sleepContext(ctx, executor.pollInterval); err != nil {
@@ -257,7 +281,27 @@ func (e *RayExecutor) jobStatus(ctx context.Context, submissionID string) (rayJo
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return rayJobStatusResponse{}, false, fmt.Errorf("%w: decode ray job status: %w", domain.ErrTrainModel, err)
 	}
+	parsed.Status = rayJobStatusValueFromString(string(parsed.Status))
 	return parsed, true, nil
+}
+
+func rayJobStatusValueFromString(status string) rayJobStatusValue {
+	log.Trace("rayJobStatusValueFromString")
+
+	return rayJobStatusValue(strings.ToUpper(strings.TrimSpace(status)))
+}
+
+func rayJobTerminalStatus(status rayJobStatusValue) rayTerminalStatus {
+	log.Trace("rayJobTerminalStatus")
+
+	switch status {
+	case rayJobStatusSucceeded:
+		return rayTerminalStatusSucceeded
+	case rayJobStatusFailed, rayJobStatusStopped:
+		return rayTerminalStatusFailed
+	default:
+		return rayTerminalStatusRunning
+	}
 }
 
 func (e *RayExecutor) stop(ctx context.Context, submissionID string) error {
@@ -282,23 +326,18 @@ func (e *RayExecutor) stop(ctx context.Context, submissionID string) error {
 	return nil
 }
 
-func (e *RayExecutor) readTrainingArtifact(ctx context.Context, location string, trainingRunID string) (*model.TrainedModelArtifact, error) {
-	log.Trace("RayExecutor readTrainingArtifact")
-
-	return readTrainingArtifact(ctx, e.manifestReader, location, trainingRunID)
-}
-
-func readTrainingArtifact(ctx context.Context, manifestReader ManifestReader, location string, trainingRunID string) (*model.TrainedModelArtifact, error) {
+func readTrainingArtifact(ctx context.Context, manifestReader app.ManifestReader, location string, trainingRunID string) (*model.TrainedModelArtifact, error) {
 	log.Trace("readTrainingArtifact")
 
 	raw, err := manifestReader.Read(ctx, location)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read training artifact manifest: %w", domain.ErrTrainModel, err)
 	}
-	var artifact model.TrainedModelArtifact
-	if err := json.Unmarshal(raw, &artifact); err != nil {
+	var dto trainedModelArtifactDTO
+	if err := json.Unmarshal(raw, &dto); err != nil {
 		return nil, fmt.Errorf("%w: decode training artifact manifest: %w", domain.ErrTrainModel, err)
 	}
+	artifact := newTrainingManifestDTOAdapter().ToTrainedModelArtifact(ctx, dto)
 	if strings.TrimSpace(artifact.TrainingRunID) != trainingRunID {
 		return nil, domain.ErrTrainModel.Extend("training artifact manifest has mismatched training run id")
 	}
@@ -315,32 +354,21 @@ func readTrainingArtifact(ctx context.Context, manifestReader ManifestReader, lo
 	if info.Checksum != "" && info.Checksum != artifact.ArtifactChecksum {
 		return nil, domain.ErrTrainModel.Extend("training artifact checksum mismatch")
 	}
-	return &artifact, nil
+	return artifact, nil
 }
 
-func (e *RayExecutor) readEvaluationReport(ctx context.Context, location string, trainingRunID string) (*model.EvaluationReport, error) {
-	log.Trace("RayExecutor readEvaluationReport")
-
-	return readEvaluationReport(ctx, e.manifestReader, location, trainingRunID)
-}
-
-func (e *RayExecutor) readPromotionReport(ctx context.Context, location string, modelID string, orgID string) (*model.PromotionReport, error) {
-	log.Trace("RayExecutor readPromotionReport")
-
-	return readPromotionReport(ctx, e.manifestReader, location, modelID, orgID)
-}
-
-func readEvaluationReport(ctx context.Context, manifestReader ManifestReader, location string, trainingRunID string) (*model.EvaluationReport, error) {
+func readEvaluationReport(ctx context.Context, manifestReader app.ManifestReader, location string, trainingRunID string) (*model.EvaluationReport, error) {
 	log.Trace("readEvaluationReport")
 
 	raw, err := manifestReader.Read(ctx, location)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read evaluation report manifest: %w", domain.ErrEvaluateModel, err)
 	}
-	var report model.EvaluationReport
-	if err := json.Unmarshal(raw, &report); err != nil {
+	var dto evaluationReportDTO
+	if err := json.Unmarshal(raw, &dto); err != nil {
 		return nil, fmt.Errorf("%w: decode evaluation report manifest: %w", domain.ErrEvaluateModel, err)
 	}
+	report := newTrainingManifestDTOAdapter().ToEvaluationReport(ctx, dto)
 	if strings.TrimSpace(report.TrainingRunID) != trainingRunID {
 		return nil, domain.ErrEvaluateModel.Extend("evaluation report manifest has mismatched training run id")
 	}
@@ -357,20 +385,21 @@ func readEvaluationReport(ctx context.Context, manifestReader ManifestReader, lo
 	if info.SizeBytes <= 0 {
 		return nil, domain.ErrEvaluateModel.Extend("evaluation report is empty")
 	}
-	return &report, nil
+	return report, nil
 }
 
-func readPromotionReport(ctx context.Context, manifestReader ManifestReader, location string, modelID string, orgID string) (*model.PromotionReport, error) {
+func readPromotionReport(ctx context.Context, manifestReader app.ManifestReader, location string, modelID string, orgID string) (*model.PromotionReport, error) {
 	log.Trace("readPromotionReport")
 
 	raw, err := manifestReader.Read(ctx, location)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read promotion report manifest: %w", domain.ErrEvaluateModel, err)
 	}
-	var report model.PromotionReport
-	if err := json.Unmarshal(raw, &report); err != nil {
+	var dto promotionReportDTO
+	if err := json.Unmarshal(raw, &dto); err != nil {
 		return nil, fmt.Errorf("%w: decode promotion report manifest: %w", domain.ErrEvaluateModel, err)
 	}
+	report := newTrainingManifestDTOAdapter().ToPromotionReport(ctx, dto)
 	if strings.TrimSpace(report.ModelID) != modelID {
 		return nil, domain.ErrEvaluateModel.Extend("promotion report manifest has mismatched model id")
 	}
@@ -387,7 +416,7 @@ func readPromotionReport(ctx context.Context, manifestReader ManifestReader, loc
 	if info.SizeBytes <= 0 {
 		return nil, domain.ErrEvaluateModel.Extend("promotion report is empty")
 	}
-	return &report, nil
+	return report, nil
 }
 
 func trainingEnv(spec model.TrainingJobSpec) map[string]string {
@@ -458,21 +487,6 @@ func promotionReportEntrypoint(entrypoint string, spec model.PromotionReportJobS
 	return strings.TrimSpace(entrypoint) + " --job-spec-b64 " + encoded, nil
 }
 
-type promotionReportJobRequest struct {
-	UserID                   string `json:"user_id"`
-	OrgID                    string `json:"org_id"`
-	ModelID                  string `json:"model_id"`
-	TrainingRunID            string `json:"training_run_id"`
-	CandidateReportURI       string `json:"candidate_report_uri"`
-	CandidateMetricsMetadata string `json:"candidate_metrics_metadata"`
-	ChampionModelID          string `json:"champion_model_id"`
-	ChampionReportURI        string `json:"champion_report_uri"`
-	ChampionMetricsMetadata  string `json:"champion_metrics_metadata"`
-	PromotionProfile         string `json:"promotion_profile"`
-	ReportURI                string `json:"report_uri"`
-	ReportManifestURI        string `json:"report_manifest_uri"`
-}
-
 func sleepContext(ctx context.Context, duration time.Duration) error {
 	log.Trace("sleepContext")
 
@@ -486,22 +500,6 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-type raySubmitRequest struct {
-	SubmissionID string            `json:"submission_id"`
-	Entrypoint   string            `json:"entrypoint"`
-	RuntimeEnv   rayRuntimeEnv     `json:"runtime_env"`
-	Metadata     map[string]string `json:"metadata"`
-}
-
-type rayRuntimeEnv struct {
-	EnvVars map[string]string `json:"env_vars"`
-}
-
-type rayJobStatusResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-}
-
 type ObjectManifestReader struct {
 	region     string
 	downloader s3Downloader
@@ -513,11 +511,6 @@ type s3Downloader interface {
 	HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
-
-const (
-	rayJobRegistrationAttempts = 3
-	rayStopTimeout             = 30 * time.Second
-)
 
 func NewObjectManifestReader(ctx context.Context, region string, client *http.Client) (*ObjectManifestReader, error) {
 	log.Trace("NewObjectManifestReader")
@@ -566,12 +559,12 @@ func (r *ObjectManifestReader) Read(ctx context.Context, location string) ([]byt
 	}
 }
 
-func (r *ObjectManifestReader) Stat(ctx context.Context, location string) (ObjectInfo, error) {
+func (r *ObjectManifestReader) Stat(ctx context.Context, location string) (model.ObjectInfo, error) {
 	log.Trace("ObjectManifestReader Stat")
 
 	parsed, err := url.Parse(strings.TrimSpace(location))
 	if err != nil {
-		return ObjectInfo{}, fmt.Errorf("parse artifact location: %w", err)
+		return model.ObjectInfo{}, fmt.Errorf("parse artifact location: %w", err)
 	}
 	switch parsed.Scheme {
 	case "s3":
@@ -583,7 +576,7 @@ func (r *ObjectManifestReader) Stat(ctx context.Context, location string) (Objec
 	case "":
 		return statPath(filepath.Clean(location), location)
 	default:
-		return ObjectInfo{}, fmt.Errorf("unsupported artifact scheme %q", parsed.Scheme)
+		return model.ObjectInfo{}, fmt.Errorf("unsupported artifact scheme %q", parsed.Scheme)
 	}
 }
 
@@ -607,26 +600,26 @@ func (r *ObjectManifestReader) readS3(ctx context.Context, bucketName, key strin
 	return io.ReadAll(output.Body)
 }
 
-func (r *ObjectManifestReader) statS3(ctx context.Context, bucketName, key, location string) (ObjectInfo, error) {
+func (r *ObjectManifestReader) statS3(ctx context.Context, bucketName, key, location string) (model.ObjectInfo, error) {
 	log.Trace("ObjectManifestReader statS3")
 
 	if r.region == corebucket.LocalDevS3Region {
 		return statPath(filepath.Clean(filepath.Join(corebucket.StorageDir, bucketName, key)), location)
 	}
 	if r.downloader == nil {
-		return ObjectInfo{}, fmt.Errorf("s3 downloader is not configured")
+		return model.ObjectInfo{}, fmt.Errorf("s3 downloader is not configured")
 	}
 	head, err := r.downloader.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(key),
 	})
 	if err == nil {
-		return ObjectInfo{Location: location, SizeBytes: aws.ToInt64(head.ContentLength), Checksum: s3Checksum(head)}, nil
+		return model.ObjectInfo{Location: location, SizeBytes: aws.ToInt64(head.ContentLength), Checksum: s3Checksum(head)}, nil
 	}
 	return r.statS3Prefix(ctx, bucketName, strings.TrimSuffix(key, "/")+"/", location)
 }
 
-func (r *ObjectManifestReader) statS3Prefix(ctx context.Context, bucketName, prefix, location string) (ObjectInfo, error) {
+func (r *ObjectManifestReader) statS3Prefix(ctx context.Context, bucketName, prefix, location string) (model.ObjectInfo, error) {
 	log.Trace("ObjectManifestReader statS3Prefix")
 
 	var total int64
@@ -639,7 +632,7 @@ func (r *ObjectManifestReader) statS3Prefix(ctx context.Context, bucketName, pre
 			ContinuationToken: continuation,
 		})
 		if err != nil {
-			return ObjectInfo{}, fmt.Errorf("list s3 artifact prefix: %w", err)
+			return model.ObjectInfo{}, fmt.Errorf("list s3 artifact prefix: %w", err)
 		}
 		for _, object := range output.Contents {
 			found = true
@@ -651,9 +644,9 @@ func (r *ObjectManifestReader) statS3Prefix(ctx context.Context, bucketName, pre
 		continuation = output.NextContinuationToken
 	}
 	if !found {
-		return ObjectInfo{}, fmt.Errorf("artifact not found at %s", location)
+		return model.ObjectInfo{}, fmt.Errorf("artifact not found at %s", location)
 	}
-	return ObjectInfo{Location: location, SizeBytes: total}, nil
+	return model.ObjectInfo{Location: location, SizeBytes: total}, nil
 }
 
 func (r *ObjectManifestReader) readHTTP(ctx context.Context, location string) ([]byte, error) {
@@ -675,36 +668,36 @@ func (r *ObjectManifestReader) readHTTP(ctx context.Context, location string) ([
 	return io.ReadAll(resp.Body)
 }
 
-func (r *ObjectManifestReader) statHTTP(ctx context.Context, location string) (ObjectInfo, error) {
+func (r *ObjectManifestReader) statHTTP(ctx context.Context, location string) (model.ObjectInfo, error) {
 	log.Trace("ObjectManifestReader statHTTP")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, location, nil)
 	if err != nil {
-		return ObjectInfo{}, err
+		return model.ObjectInfo{}, err
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return ObjectInfo{}, err
+		return model.ObjectInfo{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return ObjectInfo{}, fmt.Errorf("artifact stat failed with status %d", resp.StatusCode)
+		return model.ObjectInfo{}, fmt.Errorf("artifact stat failed with status %d", resp.StatusCode)
 	}
 	if resp.ContentLength <= 0 {
-		return ObjectInfo{}, fmt.Errorf("artifact at %s is empty or missing content length", location)
+		return model.ObjectInfo{}, fmt.Errorf("artifact at %s is empty or missing content length", location)
 	}
-	return ObjectInfo{Location: location, SizeBytes: resp.ContentLength}, nil
+	return model.ObjectInfo{Location: location, SizeBytes: resp.ContentLength}, nil
 }
 
-func statPath(path, location string) (ObjectInfo, error) {
+func statPath(path, location string) (model.ObjectInfo, error) {
 	log.Trace("statPath")
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return ObjectInfo{}, err
+		return model.ObjectInfo{}, err
 	}
 	if !info.IsDir() {
-		return ObjectInfo{Location: location, SizeBytes: info.Size()}, nil
+		return model.ObjectInfo{Location: location, SizeBytes: info.Size()}, nil
 	}
 	var total int64
 	if err := filepath.WalkDir(path, func(next string, entry os.DirEntry, walkErr error) error {
@@ -721,12 +714,12 @@ func statPath(path, location string) (ObjectInfo, error) {
 		total += fileInfo.Size()
 		return nil
 	}); err != nil {
-		return ObjectInfo{}, err
+		return model.ObjectInfo{}, err
 	}
 	if total <= 0 {
-		return ObjectInfo{}, fmt.Errorf("artifact at %s is empty", location)
+		return model.ObjectInfo{}, fmt.Errorf("artifact at %s is empty", location)
 	}
-	return ObjectInfo{Location: location, SizeBytes: total}, nil
+	return model.ObjectInfo{Location: location, SizeBytes: total}, nil
 }
 
 func s3Checksum(output *s3.HeadObjectOutput) string {

@@ -170,7 +170,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 			ParentModelKind:        "BASE",
 			ParentArtifactUri:      "s3://models/base-artifact",
 			ParentArtifactChecksum: "sha256:base",
-			ParentBaseModel:        "llama3.1:8b",
+			ParentBaseModel:        "local-test-model:latest",
 			ParentModelVersion:     1,
 		})
 
@@ -183,7 +183,7 @@ var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 		Expect(starter.request.SourceArtifactURI).To(Equal("s3://models/base-artifact"))
 		Expect(starter.request.SourceModelKind).To(Equal("BASE"))
 		Expect(starter.request.ModelVersion).To(Equal("2"))
-		Expect(starter.request.BaseModel).To(Equal("llama3.1:8b"))
+		Expect(starter.request.BaseModel).To(Equal("local-test-model:latest"))
 	})
 
 	It("rejects a fine-tuned parent without an adapter instead of treating it as a base model", func() {

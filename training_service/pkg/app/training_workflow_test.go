@@ -255,7 +255,7 @@ var _ = Describe("TrainModelWorkflow", func() {
 				"s3://models/training-run-ray/artifact.json": `{"training_run_id":"training-run-ray","model_uri":"s3://models/training-run-ray","model_name":"rag-adapter","model_version":"v1","base_model":"mistral-7b","artifact_format":"HF_PEFT_ADAPTER","artifact_checksum":"sha256:adapter","artifact_size_bytes":512}`,
 				"s3://evaluations/training-run-ray.json":     `{"training_run_id":"training-run-ray","report_uri":"s3://evaluations/training-run-ray.json","passed":true}`,
 			},
-			stats: map[string]executor.ObjectInfo{
+			stats: map[string]model.ObjectInfo{
 				"s3://models/training-run-ray":           {Location: "s3://models/training-run-ray", SizeBytes: 512, Checksum: "sha256:adapter"},
 				"s3://evaluations/training-run-ray.json": {Location: "s3://evaluations/training-run-ray.json", SizeBytes: 64},
 			},
@@ -343,7 +343,7 @@ func (f workflowRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, err
 
 type workflowManifestReader struct {
 	payloads      map[string]string
-	stats         map[string]executor.ObjectInfo
+	stats         map[string]model.ObjectInfo
 	readLocations []string
 	statLocations []string
 }
@@ -353,7 +353,7 @@ func (r *workflowManifestReader) Read(_ context.Context, location string) ([]byt
 	return []byte(r.payloads[location]), nil
 }
 
-func (r *workflowManifestReader) Stat(_ context.Context, location string) (executor.ObjectInfo, error) {
+func (r *workflowManifestReader) Stat(_ context.Context, location string) (model.ObjectInfo, error) {
 	r.statLocations = append(r.statLocations, location)
 	return r.stats[location], nil
 }

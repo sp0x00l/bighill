@@ -1,9 +1,8 @@
-package adapter
+package rest
 
 import (
 	"context"
 	"encoding/json"
-	"testing"
 
 	"training_service/pkg/domain/model"
 
@@ -13,11 +12,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestAdapter(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Training service adapter unit test suite")
-}
 
 var _ = Describe("TrainingRunDTOAdapter", func() {
 	var adapter *trainingRunDTOAdapter
@@ -30,7 +24,7 @@ var _ = Describe("TrainingRunDTOAdapter", func() {
 		datasetID := uuid.New()
 		modelID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("model-registry/base-model"))
 
-		command, err := adapter.FromStartTrainingRunDTO(context.Background(), []byte(`{
+		command, err := adapter.FromDTO(context.Background(), []byte(`{
 			"dataset_id":"`+datasetID.String()+`",
 			"source_model_id":"`+modelID.String()+`",
 			"training_profile":"sft-default@v1",
@@ -38,23 +32,33 @@ var _ = Describe("TrainingRunDTOAdapter", func() {
 		}`))
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(command.DatasetID).To(Equal(datasetID.String()))
-		Expect(command.SourceModelID).To(Equal(modelID.String()))
+		Expect(command.DatasetID).To(Equal(datasetID))
+		Expect(command.SourceModelID).To(Equal(modelID))
 		Expect(command.TrainingProfile).To(Equal("sft-default@v1"))
 		Expect(command.EvaluationProfile).To(Equal("ragas-default@v1"))
 	})
 
 	It("rejects missing and malformed identifiers", func() {
-		_, err := adapter.FromStartTrainingRunDTO(context.Background(), []byte(`{"source_model_id":"`+uuid.NewString()+`"}`))
+		_, err := adapter.FromDTO(context.Background(), []byte(`{"source_model_id":"`+uuid.NewString()+`"}`))
 		Expect(err).To(HaveOccurred())
 
-		_, err = adapter.FromStartTrainingRunDTO(context.Background(), []byte(`{"dataset_id":"not-a-uuid","source_model_id":"`+uuid.NewString()+`"}`))
+		_, err = adapter.FromDTO(context.Background(), []byte(`{"dataset_id":"not-a-uuid","source_model_id":"`+uuid.NewString()+`"}`))
 		Expect(err).To(HaveOccurred())
 
-		_, err = adapter.FromStartTrainingRunDTO(context.Background(), []byte(`{"dataset_id":"`+uuid.NewString()+`","source_model_id":"not-a-uuid"}`))
+		_, err = adapter.FromDTO(context.Background(), []byte(`{"dataset_id":"`+uuid.NewString()+`","source_model_id":"not-a-uuid"}`))
 		Expect(err).To(HaveOccurred())
 
-		_, err = adapter.FromStartTrainingRunDTO(context.Background(), []byte(`{"dataset_id":"`+uuid.Nil.String()+`","source_model_id":"`+uuid.NewString()+`"}`))
+		_, err = adapter.FromDTO(context.Background(), []byte(`{"dataset_id":"`+uuid.Nil.String()+`","source_model_id":"`+uuid.NewString()+`"}`))
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("rejects unpinned explicit profile names", func() {
+		_, err := adapter.FromDTO(context.Background(), []byte(`{
+			"dataset_id":"`+uuid.NewString()+`",
+			"source_model_id":"`+uuid.NewString()+`",
+			"training_profile":"sft-default"
+		}`))
+
 		Expect(err).To(HaveOccurred())
 	})
 

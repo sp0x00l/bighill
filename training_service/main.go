@@ -13,7 +13,6 @@ import (
 	"training_service/pkg/app"
 	"training_service/pkg/domain/model"
 	"training_service/pkg/infra/executor"
-	trainingadapter "training_service/pkg/infra/network/adapter"
 	trainingclient "training_service/pkg/infra/network/client"
 	trainingmessaging "training_service/pkg/infra/network/messaging"
 	trainingrest "training_service/pkg/infra/network/rest"
@@ -167,7 +166,7 @@ func main() {
 	)
 	validateProfileCatalog(cancelCtx, profileCatalog, cfg)
 	trainingCommandUsecase := app.NewTrainingCommandUsecase(workflowStarter, workflowStarter, datasetResolver, modelResolver, profileCatalog)
-	trainingDTOAdapter := trainingadapter.NewTrainingRunDTOAdapter(serializers.NewJSONSerializer())
+	trainingDTOAdapter := trainingrest.NewTrainingRunDTOAdapter(serializers.NewJSONSerializer())
 	restService := trainingrest.NewService(trainingrest.NewTrainingHandlers(trainingCommandUsecase, trainingDTOAdapter).GetRoutes(), cfg.HTTPPort, serviceName)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
@@ -400,7 +399,7 @@ func readTrainingConfig() trainingConfig {
 	}
 }
 
-func newTrainingExecutor(cfg trainingExecutorConfig, manifestReader executor.ManifestReader) (app.TrainingExecutor, error) {
+func newTrainingExecutor(cfg trainingExecutorConfig, manifestReader app.ManifestReader) (app.TrainingExecutor, error) {
 	log.Trace("newTrainingExecutor")
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
