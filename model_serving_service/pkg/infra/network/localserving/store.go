@@ -44,7 +44,7 @@ func (s *Store) Read(ctx context.Context, resourceName string) (*model.ServedMod
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("%w: served model %s not found", domain.ErrModelServe, resourceName)
+		return nil, fmt.Errorf("%w: served model %s", domain.ErrServedModelNotFound, resourceName)
 	}
 	return recordToServedModel(record)
 }

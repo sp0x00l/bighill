@@ -13,7 +13,6 @@ import (
 
 	usecase "tenant_service/pkg/app"
 	"tenant_service/pkg/domain"
-	repo "tenant_service/pkg/infra/repo/db"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -407,7 +406,7 @@ var _ = Describe("OAuth usecase", func() {
 })
 
 var (
-	_ repo.ProfileDB              = (*profileDBStub)(nil)
+	_ usecase.ProfileDB           = (*profileDBStub)(nil)
 	_ auth.AuthProvider           = (*authProviderStub)(nil)
 	_ auth.RevocationStore        = (*authStoreStub)(nil)
 	_ usecase.OAuthProviderClient = (*oauthProviderStub)(nil)

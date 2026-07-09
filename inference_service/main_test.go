@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"inference_service/pkg/domain/model"
 	env "lib/shared_lib/env"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -54,7 +55,7 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_DB_PASSWORD")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC")).To(Succeed())
-		Expect(os.Unsetenv("INFERENCE_SERVICE_PROFILE_SUBSCRIBER_TOPIC")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_TENANT_SUBSCRIBER_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_OUTBOX")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_OUTBOX_RELAY_POLL_MS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS")).To(Succeed())
@@ -63,15 +64,14 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_BASE_GROUP_ID")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS")).To(Succeed())
 		Expect(os.Setenv("INFERENCE_SERVICE_RERANKER_PROVIDER", "tei")).To(Succeed())
 		Expect(os.Setenv("INFERENCE_SERVICE_RERANKER_URL", "http://tei.local")).To(Succeed())
 		Expect(os.Setenv("INFERENCE_SERVICE_RERANKER_MODEL", "bge-reranker")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_RAG_MERGE_STRATEGY", "reranker")).To(Succeed())
 		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", "self_query")).To(Succeed())
-		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_PROTOCOL", "OPENAI_CHAT_COMPLETIONS")).To(Succeed())
-		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_ENDPOINT", "http://ollama.local")).To(Succeed())
-		Expect(os.Setenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_MODEL", "llama3.1:8b")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE")).To(Succeed())
@@ -96,13 +96,15 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.OutboxRelay.BatchSize).To(Equal(int32(100)))
 		Expect(cfg.Topics.ModelRegistry).To(Equal("model_registry"))
 		Expect(cfg.Topics.DataRegistry).To(Equal("data_registry"))
-		Expect(cfg.ProfileTopic).To(Equal("profile"))
+		Expect(cfg.TenantTopic).To(Equal("tenant"))
 		Expect(cfg.FeatureMaterializer.Address).To(Equal("localhost:7072"))
 		Expect(cfg.Reranker.Provider).To(Equal("tei"))
 		Expect(cfg.Reranker.URL).To(Equal("http://tei.local"))
 		Expect(cfg.Reranker.Model).To(Equal("bge-reranker"))
 		Expect(cfg.Reranker.RequestTimeout).To(Equal(30 * time.Second))
 		Expect(cfg.Reranker.CandidateMultiplier).To(Equal(5))
+		Expect(cfg.Generation.MaxOutputTokens).To(Equal(256))
+		Expect(cfg.Generation.RAGMergeStrategy).To(Equal("reranker"))
 		Expect(cfg.PreferenceDataset.ExportEnabled).To(BeFalse())
 		Expect(cfg.PreferenceDataset.URITemplate).To(BeEmpty())
 		Expect(cfg.PreferenceDataset.MinExamples).To(Equal(1))
@@ -113,9 +115,6 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Generation.MaxContextTokens).To(Equal(3000))
 		Expect(cfg.Generation.MaxContextChunks).To(Equal(8))
 		Expect(cfg.QueryTransformer.Provider).To(Equal("self_query"))
-		Expect(cfg.QueryTransformer.UtilityProtocol).To(Equal("OPENAI_CHAT_COMPLETIONS"))
-		Expect(cfg.QueryTransformer.UtilityEndpoint).To(Equal("http://ollama.local"))
-		Expect(cfg.QueryTransformer.UtilityModel).To(Equal("llama3.1:8b"))
 		Expect(cfg.QueryTransformer.RequestTimeout).To(Equal(30 * time.Second))
 		Expect(cfg.GRPCPort).To(Equal(7073))
 		Expect(cfg.Health.HealthCheckPort).To(Equal(5059))
@@ -136,7 +135,7 @@ var _ = Describe("newGenerationAdapters", func() {
 	})
 
 	It("registers supported serving protocols", func() {
-		adapters := newGenerationAdapters(generationConfig{RequestTimeout: time.Second})
+		adapters := newGenerationAdapters(generationConfig{RequestTimeout: time.Second, MaxOutputTokens: 128})
 
 		Expect(adapters).To(HaveKey("OPENAI_CHAT_COMPLETIONS"))
 		Expect(adapters).To(HaveKey("OLLAMA_GENERATE"))
@@ -179,6 +178,13 @@ var _ = Describe("newRerankerAdapter", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("unsupported reranker provider"))
 	})
+
+	It("allows reranking to be disabled", func() {
+		reranker, err := newRerankerAdapter(rerankerConfig{})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reranker).To(BeNil())
+	})
 })
 
 var _ = Describe("runtime ML provider validation", func() {
@@ -192,10 +198,40 @@ var _ = Describe("runtime ML provider validation", func() {
 		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS must be greater than zero")))
 	})
 
+	It("rejects non-positive generation max output tokens", func() {
+		err := validateGenerationConfig(generationConfig{RequestTimeout: time.Second})
+
+		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS must be greater than zero")))
+	})
+
 	It("rejects unknown reranking providers", func() {
 		err := validateRerankerConfig(rerankerConfig{Provider: "unknown"})
 
 		Expect(err).To(MatchError(ContainSubstring("unsupported reranker provider")))
+	})
+
+	It("allows empty reranker config when reranking is not selected", func() {
+		err := validateInferenceConfig(inferenceConfig{
+			Generation: generationConfig{
+				RequestTimeout:   time.Second,
+				MaxOutputTokens:  128,
+				RAGMergeStrategy: model.RAGMergeStrategyScoreNormalized.String(),
+			},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("rejects reranker merge strategy without a reranker provider at startup", func() {
+		err := validateInferenceConfig(inferenceConfig{
+			Generation: generationConfig{
+				RequestTimeout:   time.Second,
+				MaxOutputTokens:  128,
+				RAGMergeStrategy: model.RAGMergeStrategyReranker.String(),
+			},
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_RAG_MERGE_STRATEGY=reranker requires INFERENCE_SERVICE_RERANKER_PROVIDER")))
 	})
 
 	It("rejects unknown query transformation providers", func() {

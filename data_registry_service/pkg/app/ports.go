@@ -19,7 +19,7 @@ type DatasetRepositoryAdapter interface {
 	Delete(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error
 	UpdatePublishedState(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) error
 	UpdateProcessingState(context.Context, pgx.Tx, uuid.UUID, uuid.UUID, model.ProcessingState) (*model.Dataset, bool, error)
-	RecordMaterialization(context.Context, pgx.Tx, *model.Dataset, model.ProcessingState) (*model.Dataset, bool, error)
+	RecordMaterialization(context.Context, pgx.Tx, *model.Dataset, model.ProcessingState, int64) (*model.Dataset, bool, error)
 	Replace(context.Context, pgx.Tx, *model.Dataset) (*model.Dataset, error)
 }
 

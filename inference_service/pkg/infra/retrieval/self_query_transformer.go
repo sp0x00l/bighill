@@ -17,15 +17,15 @@ type QueryGenerator interface {
 }
 
 type SelfQueryTransformer struct {
-	generator     QueryGenerator
+	generators    map[string]QueryGenerator
 	allowedFilter map[string]struct{}
 }
 
-func NewSelfQueryTransformer(generator QueryGenerator) *SelfQueryTransformer {
+func NewSelfQueryTransformer(generators map[string]QueryGenerator) *SelfQueryTransformer {
 	log.Trace("NewSelfQueryTransformer")
 
 	return &SelfQueryTransformer{
-		generator:     generator,
+		generators:    generators,
 		allowedFilter: defaultSelfQueryFilterAllowList(),
 	}
 }
@@ -33,14 +33,23 @@ func NewSelfQueryTransformer(generator QueryGenerator) *SelfQueryTransformer {
 func (t *SelfQueryTransformer) TransformQuery(ctx context.Context, request model.QueryTransformRequest) (*model.QueryTransformResult, error) {
 	log.Trace("SelfQueryTransformer TransformQuery")
 
-	if t == nil || t.generator == nil {
-		return nil, fmt.Errorf("query transformer generator is required")
+	if t == nil || len(t.generators) == 0 {
+		return nil, fmt.Errorf("query transformer generators are required")
+	}
+	if request.Model == nil {
+		return nil, fmt.Errorf("query transformer model is required")
+	}
+	protocol := strings.TrimSpace(request.Model.ServingProtocol.String())
+	generator := t.generators[protocol]
+	if generator == nil {
+		return nil, fmt.Errorf("query transformer serving protocol %q is not supported", protocol)
 	}
 	prompt := selfQueryPrompt(request)
-	raw, err := t.generator.Generate(ctx, model.GenerationRequest{
+	raw, err := generator.Generate(ctx, model.GenerationRequest{
 		RequestID: request.RequestID,
 		Query:     request.QueryText,
 		Prompt:    prompt,
+		Model:     request.Model,
 	})
 	if err != nil {
 		return nil, err

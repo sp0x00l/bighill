@@ -1,16 +1,16 @@
 #! /usr/bin/env sh
 
-echo "Waiting for ${PROFILE_SERVICE_DB_NAME} database"
+echo "Waiting for ${TENANT_SERVICE_DB_NAME} database"
 RETRIES=5
 
-IS_DB_READY="pg_isready -h ${PGHOST} -U ${PROFILE_SERVICE_DB_USER} -d ${PROFILE_SERVICE_DB_NAME}"
+IS_DB_READY="pg_isready -h ${PGHOST} -U ${TENANT_SERVICE_DB_USER} -d ${TENANT_SERVICE_DB_NAME}"
 
 eval $IS_DB_READY > /dev/null 2>&1
 until [ $? -eq 0 ];
 do
     RETRIES=$(( RETRIES - 1 ))
     if [ $RETRIES -eq 0 ] ; then
-        echo "Failed to find database ${PROFILE_SERVICE_DB_NAME}, bye!"
+        echo "Failed to find database ${TENANT_SERVICE_DB_NAME}, bye!"
         exit
     fi
 
@@ -19,4 +19,4 @@ do
     $IS_DB_READY > /dev/null 2>&1
 done
 
-/go/bin/profile_service
+/go/bin/tenant_service

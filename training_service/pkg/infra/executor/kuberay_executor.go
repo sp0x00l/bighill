@@ -98,6 +98,8 @@ const (
 type kubeRayJobStatusValue string
 
 const (
+	kubeRayJobStatusRunning   kubeRayJobStatusValue = "RUNNING"
+	kubeRayJobStatusPending   kubeRayJobStatusValue = "PENDING"
 	kubeRayJobStatusSucceeded kubeRayJobStatusValue = "SUCCEEDED"
 	kubeRayJobStatusSuccess   kubeRayJobStatusValue = "SUCCESS"
 	kubeRayJobStatusCompleted kubeRayJobStatusValue = "COMPLETED"
@@ -174,27 +176,72 @@ func NewKubeRayExecutorWithClient(config KubeRayExecutorConfig, manifestReader a
 	log.Trace("NewKubeRayExecutorWithClient")
 
 	if manifestReader == nil {
-		panic("kuberay executor manifest reader is nil")
+		return nil, domain.ErrValidationFailed.Extend("kuberay executor manifest reader is required")
+	}
+	if client == nil {
+		return nil, domain.ErrValidationFailed.Extend("kuberay dynamic client is required")
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 	return &KubeRayExecutor{
-		namespace:               config.Namespace,
-		rayVersion:              config.RayVersion,
-		image:                   config.Image,
-		imagePullPolicy:         config.ImagePullPolicy,
-		serviceAccountName:      config.ServiceAccountName,
+		namespace:               strings.TrimSpace(config.Namespace),
+		rayVersion:              strings.TrimSpace(config.RayVersion),
+		image:                   strings.TrimSpace(config.Image),
+		imagePullPolicy:         strings.TrimSpace(config.ImagePullPolicy),
+		serviceAccountName:      strings.TrimSpace(config.ServiceAccountName),
 		ttlSecondsAfterFinished: config.TTLSecondsAfterFinished,
 		workerReplicas:          config.WorkerReplicas,
-		cpu:                     config.CPU,
-		memory:                  config.Memory,
-		gpuResource:             config.GPUResource,
-		gpu:                     config.GPU,
-		trainingEntrypoint:      config.TrainingEntrypoint,
-		evaluationEntrypoint:    config.EvaluationEntrypoint,
-		promotionEntrypoint:     config.PromotionEntrypoint,
+		cpu:                     strings.TrimSpace(config.CPU),
+		memory:                  strings.TrimSpace(config.Memory),
+		gpuResource:             strings.TrimSpace(config.GPUResource),
+		gpu:                     strings.TrimSpace(config.GPU),
+		trainingEntrypoint:      strings.TrimSpace(config.TrainingEntrypoint),
+		evaluationEntrypoint:    strings.TrimSpace(config.EvaluationEntrypoint),
+		promotionEntrypoint:     strings.TrimSpace(config.PromotionEntrypoint),
 		pollInterval:            config.PollInterval,
 		client:                  client,
 		manifestReader:          manifestReader,
 	}, nil
+}
+
+func (config KubeRayExecutorConfig) Validate() error {
+	log.Trace("KubeRayExecutorConfig Validate")
+
+	if strings.TrimSpace(config.Namespace) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay namespace is required")
+	}
+	if strings.TrimSpace(config.RayVersion) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay ray version is required")
+	}
+	if strings.TrimSpace(config.Image) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay image is required")
+	}
+	if strings.TrimSpace(config.ImagePullPolicy) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay image pull policy is required")
+	}
+	if config.WorkerReplicas <= 0 {
+		return domain.ErrValidationFailed.Extend("kuberay worker replicas must be greater than zero")
+	}
+	if strings.TrimSpace(config.CPU) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay cpu is required")
+	}
+	if strings.TrimSpace(config.Memory) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay memory is required")
+	}
+	if strings.TrimSpace(config.TrainingEntrypoint) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay training entrypoint is required")
+	}
+	if strings.TrimSpace(config.EvaluationEntrypoint) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay evaluation entrypoint is required")
+	}
+	if strings.TrimSpace(config.PromotionEntrypoint) == "" {
+		return domain.ErrValidationFailed.Extend("kuberay promotion entrypoint is required")
+	}
+	if config.PollInterval <= 0 {
+		return domain.ErrValidationFailed.Extend("kuberay poll interval must be greater than zero")
+	}
+	return nil
 }
 
 func (e *KubeRayExecutor) RunTrainingJob(ctx context.Context, spec model.TrainingJobSpec) (*model.TrainedModelArtifact, error) {
@@ -267,6 +314,9 @@ func waitForKubeRayJob[T any](ctx context.Context, executor *KubeRayExecutor, fa
 		case kubeRayTerminalFailed:
 			return nil, failureError.Extend("kuberay job " + strings.ToLower(string(status.Status)) + ": " + status.Message)
 		default:
+			if status.Status != "" && status.Status != kubeRayJobStatusRunning && status.Status != kubeRayJobStatusPending {
+				log.WithContext(ctx).WithField("ray_job", name).WithField("status", status.Status).Warn("unrecognized kuberay job status; continuing to poll")
+			}
 			recordKubeRayHeartbeat(ctx, name)
 			if err := sleepContext(ctx, executor.pollInterval); err != nil {
 				return nil, err

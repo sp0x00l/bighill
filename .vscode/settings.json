@@ -1,9 +1,9 @@
 {
 	"terminal.integrated.env.osx": {
-        "PROFILE_DB_USER":"bighill_profile_db_user",
-        "PROFILE_DB_NAME":"bighill_profile_db",
-        "PROFILE_DB_PASSWORD":"LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw",
-		"PROFILE_SERVICE_BUILD_VERSION":"0.0.0",
+        "TENANT_DB_USER":"bighill_tenant_db_user",
+        "TENANT_DB_NAME":"bighill_tenant_db",
+        "TENANT_DB_PASSWORD":"LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw",
+		"TENANT_SERVICE_BUILD_VERSION":"0.0.0",
         "KAFKA_BROKER":"kafka:9092",
 	},
     "go.testFlags": [

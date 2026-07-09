@@ -294,6 +294,7 @@ func generateResponseToPB(response *model.GenerateResponse) *inferencepb.Generat
 		contexts[i] = &inferencepb.RetrievedContext{
 			EmbeddingRecordId:   ctx.EmbeddingRecordID.String(),
 			EmbeddingSnapshotId: ctx.EmbeddingSnapshotID.String(),
+			DatasetId:           ctx.DatasetID.String(),
 			ChunkIndex:          int32(ctx.ChunkIndex),
 			SourceText:          ctx.SourceText,
 			Distance:            ctx.Distance,
@@ -303,6 +304,7 @@ func generateResponseToPB(response *model.GenerateResponse) *inferencepb.Generat
 	return &inferencepb.GenerateResponse{
 		OrgId:                 response.OrgID.String(),
 		DatasetId:             response.DatasetID.String(),
+		DatasetIds:            generateResponseDatasetIDs(response.DatasetIDs),
 		ModelId:               response.ModelID.String(),
 		QueryText:             response.QueryText,
 		Answer:                response.Answer,
@@ -311,7 +313,21 @@ func generateResponseToPB(response *model.GenerateResponse) *inferencepb.Generat
 		PromptStrategyVersion: response.PromptStrategyVersion,
 		GenerationProtocol:    response.GenerationProtocol,
 		GenerationModel:       response.GenerationModel,
+		RagMergeStrategy:      response.RAGMergeStrategy.String(),
 	}
+}
+
+func generateResponseDatasetIDs(datasetIDs []uuid.UUID) []string {
+	log.Trace("generateResponseDatasetIDs")
+
+	out := make([]string, 0, len(datasetIDs))
+	for _, datasetID := range datasetIDs {
+		if datasetID == uuid.Nil {
+			continue
+		}
+		out = append(out, datasetID.String())
+	}
+	return out
 }
 
 func inferenceStatusError(err error) error {

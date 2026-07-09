@@ -109,7 +109,10 @@ func NewRayExecutorWithClient(config RayExecutorConfig, manifestReader app.Manif
 	log.Trace("NewRayExecutorWithClient")
 
 	if manifestReader == nil {
-		panic("ray executor manifest reader is nil")
+		return nil, domain.ErrValidationFailed.Extend("ray executor manifest reader is required")
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 	rayURL := strings.TrimRight(config.URL, "/")
 	if client == nil {
@@ -120,13 +123,37 @@ func NewRayExecutorWithClient(config RayExecutorConfig, manifestReader app.Manif
 	}
 	return &RayExecutor{
 		url:                  rayURL,
-		trainingEntrypoint:   config.TrainingEntrypoint,
-		evaluationEntrypoint: config.EvaluationEntrypoint,
-		promotionEntrypoint:  config.PromotionEntrypoint,
+		trainingEntrypoint:   strings.TrimSpace(config.TrainingEntrypoint),
+		evaluationEntrypoint: strings.TrimSpace(config.EvaluationEntrypoint),
+		promotionEntrypoint:  strings.TrimSpace(config.PromotionEntrypoint),
 		pollInterval:         config.PollInterval,
 		client:               client,
 		manifestReader:       manifestReader,
 	}, nil
+}
+
+func (config RayExecutorConfig) Validate() error {
+	log.Trace("RayExecutorConfig Validate")
+
+	if strings.TrimSpace(config.URL) == "" {
+		return domain.ErrValidationFailed.Extend("ray jobs url is required")
+	}
+	if strings.TrimSpace(config.TrainingEntrypoint) == "" {
+		return domain.ErrValidationFailed.Extend("ray training entrypoint is required")
+	}
+	if strings.TrimSpace(config.EvaluationEntrypoint) == "" {
+		return domain.ErrValidationFailed.Extend("ray evaluation entrypoint is required")
+	}
+	if strings.TrimSpace(config.PromotionEntrypoint) == "" {
+		return domain.ErrValidationFailed.Extend("ray promotion entrypoint is required")
+	}
+	if config.RequestTimeout <= 0 {
+		return domain.ErrValidationFailed.Extend("ray request timeout must be greater than zero")
+	}
+	if config.PollInterval <= 0 {
+		return domain.ErrValidationFailed.Extend("ray poll interval must be greater than zero")
+	}
+	return nil
 }
 
 func (e *RayExecutor) RunTrainingJob(ctx context.Context, spec model.TrainingJobSpec) (*model.TrainedModelArtifact, error) {

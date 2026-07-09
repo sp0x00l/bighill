@@ -50,7 +50,7 @@ type materializerConfig struct {
 	GRPCPort             int
 	DatasetUploadedTopic string
 	DataRegistryTopic    string
-	ProfileTopic         string
+	TenantTopic          string
 	PublishTopics        featuremessaging.MaterializationTopics
 	Health               healthConfig
 	Lifecycle            lifecycle.Config
@@ -330,15 +330,15 @@ func main() {
 		featuremessaging.ConfigureSubscriberErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, featuremessaging.NewDatasetUpdatedEventListener(workflowStarter))
 	})
-	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-created", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-updated", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-deleted", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
@@ -487,7 +487,7 @@ func readMaterializerConfig() materializerConfig {
 		GRPCPort:             env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_API_GRPC_PORT", "7072"),
 		DatasetUploadedTopic: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_INGESTION_SUBSCRIBER_TOPIC", "ingestion"),
 		DataRegistryTopic:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
-		ProfileTopic:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
+		TenantTopic:          env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TENANT_SUBSCRIBER_TOPIC", "tenant"),
 		PublishTopics: featuremessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
 		},

@@ -35,7 +35,7 @@ import (
 
 var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 	var (
-		profileDB           db.ProfileDB
+		profileDB           *db.ProfileDatabase
 		profilesUseCase     usecase.ProfilesUseCase
 		httpServer          *transport.HttpServer
 		dtoProfileAdapter   rest.ProfilesDTOAdapter

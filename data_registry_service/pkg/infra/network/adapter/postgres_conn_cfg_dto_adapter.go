@@ -21,7 +21,21 @@ type PostgresDBConnCfgDTO struct {
 	AuthenticationType string `json:"authenticationType"      validate:"required"`
 }
 
+type postgresDBConnCfgDTOAdapter struct {
+	validator *validator.Validate
+}
+
+func NewPostgresDBConnCfgDTOAdapter() *postgresDBConnCfgDTOAdapter {
+	log.Trace("NewPostgresDBConnCfgDTOAdapter")
+
+	return &postgresDBConnCfgDTOAdapter{validator: validator.New()}
+}
+
 func ToPostgresDBConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
+	return NewPostgresDBConnCfgDTOAdapter().ToDTO(ctx, conn, secretizer, serializer)
+}
+
+func (a *postgresDBConnCfgDTOAdapter) ToDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
 	log.Trace("adapter ToPostgresDBConnCfgDTO")
 
 	connCfg, ok := conn.(*model.PostgresDBConnCfg)
@@ -55,6 +69,10 @@ func ToPostgresDBConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, sec
 }
 
 func FromPostgresDBConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
+	return NewPostgresDBConnCfgDTOAdapter().FromDTO(ctx, cfgBytes, deserializer)
+}
+
+func (a *postgresDBConnCfgDTOAdapter) FromDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
 	log.Trace("adapter FromPostgresDBConnCfgDTO")
 
 	var dto PostgresDBConnCfgDTO
@@ -63,7 +81,7 @@ func FromPostgresDBConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}
 
-	if err := validator.New().Struct(dto); err != nil {
+	if err := a.validator.Struct(dto); err != nil {
 		log.WithContext(ctx).WithError(err).Error("failed to validate Postgres DB source connector configuration")
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}

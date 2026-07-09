@@ -87,6 +87,12 @@ The provider contract is the same across environments: model records carry `serv
 `serving_target`, and `serving_model`, and `inference_service` dispatches to the matching generation
 adapter from that recorded state. What changes by environment is how that serving state is produced.
 
+`INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS` is the hard output cap passed to the configured
+self-hosted generation runtime. It must be a positive integer. Staging is configured to `256`, which
+is enough for the current RAG/API e2e responses and keeps non-streaming local-compatible runtimes from
+running until the HTTP timeout. Raise it deliberately, for example to `512`, only for workloads that
+need longer generated answers.
+
 For local and CI service-script runs, `model_serving_service` uses
 `MODEL_SERVING_SERVICE_BACKEND=local`. That backend uses the shared local served-model store instead
 of Kubernetes resources. For base/shared models, it verifies that the requested Ollama tag is present
@@ -176,7 +182,7 @@ sequenceDiagram
     autonumber
     actor U as User / Client
     participant GW as api_gateway
-    participant PR as profile_service
+    participant PR as tenant_service
     participant IN as ingestion_service
     participant DR as data_registry
     participant FM as feature_materializer
@@ -264,7 +270,7 @@ sequenceDiagram
 **Walking the flow:**
 
 1. **Authenticate + select org.** Everything enters through `api_gateway`, which delegates auth to
-   `profile_service`. Tokens carry the active `orgId`, role, and derived permissions. The gateway
+   `tenant_service`. Tokens carry the active `orgId`, role, and derived permissions. The gateway
    injects trusted `X-User-ID` / `X-Org-ID` headers and rejects spoofed inbound identity headers.
 2. **Org RBAC.** Organization membership is managed through `GET /v1/private/orgs/current`,
    `GET /v1/private/orgs/{org_id}/members`, `POST /v1/private/orgs/{org_id}/members`,
@@ -320,7 +326,7 @@ sequenceDiagram
 | `model_registry_service/` | Model records, promotion gating, serving intent + status, outbox |
 | `model_serving_service/` | K8s operator that reconciles serving to vLLM; `localserving` for dev |
 | `inference_service/` | RAG inference, retrieval/rerank/query-rewrite, generation, auditing, feedback |
-| `profile_service/` | Auth (OAuth / password) and user profiles |
+| `tenant_service/` | Auth (OAuth / password) and user profiles |
 | `api_gateway/` | Edge (Lambda auth/api) and end-to-end API tests |
 | `data_contracts/` | Protobuf event and service contracts |
 | `shared_lib/` | Shared plumbing: messaging, outbox, DB, metrics/tracing, auth, object storage, K8s client |

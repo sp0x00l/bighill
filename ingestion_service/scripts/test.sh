@@ -24,7 +24,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/ingestion_service
     . ./scripts/config.sh $1
-    ginkgo -timeout=120s -r -v --output-dir=../test_results/ingestion_service -procs=1 -race
+    ginkgo -timeout=120s -r -v --output-dir=../test_results/ingestion_service -procs=1 -race --label-filter='!real-huggingface'
 
     echo "ingestion service test complete"
     cd $CURRENT_DIR

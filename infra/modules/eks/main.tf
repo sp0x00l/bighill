@@ -195,8 +195,8 @@ output "cluster_certificate_authority_data" {
   value       = module.eks.cluster_certificate_authority_data
 }
 
-# IRSA role for profile-service to access KMS for JWT signing
-data "aws_iam_policy_document" "profile_service_assume_role" {
+# IRSA role for tenant-service to access KMS for JWT signing
+data "aws_iam_policy_document" "tenant_service_assume_role" {
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -209,19 +209,19 @@ data "aws_iam_policy_document" "profile_service_assume_role" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_provider_host}:sub"
-      values   = ["system:serviceaccount:${local.kubernetes_namespace}:profile-service"]
+      values   = ["system:serviceaccount:${local.kubernetes_namespace}:tenant-service"]
     }
   }
 }
 
-resource "aws_iam_role" "profile_service" {
-  name               = "bighill-${var.env_name}-profile-service"
-  assume_role_policy = data.aws_iam_policy_document.profile_service_assume_role.json
+resource "aws_iam_role" "tenant_service" {
+  name               = "bighill-${var.env_name}-tenant-service"
+  assume_role_policy = data.aws_iam_policy_document.tenant_service_assume_role.json
 }
 
-resource "aws_iam_policy" "profile_service_kms" {
-  name        = "bighill-${var.env_name}-profile-service-kms"
-  description = "Allow profile-service to sign JWTs with KMS"
+resource "aws_iam_policy" "tenant_service_kms" {
+  name        = "bighill-${var.env_name}-tenant-service-kms"
+  description = "Allow tenant-service to sign JWTs with KMS"
 
   policy = jsonencode({
     Version = "2012-10-17",
@@ -239,9 +239,9 @@ resource "aws_iam_policy" "profile_service_kms" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "profile_service_kms" {
-  role       = aws_iam_role.profile_service.name
-  policy_arn = aws_iam_policy.profile_service_kms.arn
+resource "aws_iam_role_policy_attachment" "tenant_service_kms" {
+  role       = aws_iam_role.tenant_service.name
+  policy_arn = aws_iam_policy.tenant_service_kms.arn
 }
 
 data "aws_iam_policy_document" "object_store_service_assume_role" {
@@ -315,9 +315,9 @@ output "node_security_group_id" {
   value       = module.eks.node_security_group_id
 }
 
-output "profile_service_role_arn" {
-  description = "IAM role ARN for profile-service IRSA"
-  value       = aws_iam_role.profile_service.arn
+output "tenant_service_role_arn" {
+  description = "IAM role ARN for tenant-service IRSA"
+  value       = aws_iam_role.tenant_service.arn
 }
 
 output "object_store_service_role_arns" {

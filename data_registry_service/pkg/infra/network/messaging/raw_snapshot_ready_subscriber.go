@@ -15,7 +15,7 @@ import (
 )
 
 type RawSnapshotReadyListener interface {
-	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error)
+	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState, eventSeq int64) (*model.Dataset, error)
 }
 
 type rawSnapshotReadyEventListener struct {
@@ -53,7 +53,7 @@ func (l *rawSnapshotReadyEventListener) Handle(ctx context.Context, resourceKey 
 		return msgConn.NonRetryable(err)
 	}
 	ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
-	_, err = l.listener.RecordDatasetMaterialization(ctx, dataset, model.DatasetProcessingRawMaterialized)
+	_, err = l.listener.RecordDatasetMaterialization(ctx, dataset, model.DatasetProcessingRawMaterialized, payload.GetMaterializationEventSeq())
 	return err
 }
 

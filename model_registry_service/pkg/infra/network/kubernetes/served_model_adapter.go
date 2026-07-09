@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"model_registry_service/pkg/app"
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
@@ -37,6 +38,41 @@ type ServedModelConfig struct {
 	PollInterval time.Duration
 }
 
+const (
+	servedModelObjectAPIVersion = "apiVersion"
+	servedModelObjectKind       = "kind"
+	servedModelObjectMetadata   = "metadata"
+	servedModelObjectLabels     = "labels"
+	servedModelObjectName       = "name"
+	servedModelObjectNamespace  = "namespace"
+	servedModelObjectSpec       = "spec"
+	servedModelObjectStatus     = "status"
+
+	servedModelLabelName      = "app.kubernetes.io/name"
+	servedModelLabelManagedBy = "app.kubernetes.io/managed-by"
+	servedModelLabelModelID   = "bighill.io/model-id"
+
+	servedModelSpecModelID     = "modelID"
+	servedModelSpecTrainingID  = "trainingRunID"
+	servedModelSpecDatasetID   = "datasetID"
+	servedModelSpecKind        = "modelKind"
+	servedModelSpecName        = "name"
+	servedModelSpecVersion     = "modelVersion"
+	servedModelSpecBaseModel   = "baseModel"
+	servedModelSpecArtifactLoc = "artifactLocation"
+	servedModelSpecArtifactFmt = "artifactFormat"
+	servedModelSpecChecksum    = "artifactChecksum"
+	servedModelSpecAdapterURI  = "adapterURI"
+	servedModelSpecTarget      = "servingTarget"
+	servedModelSpecModel       = "servingModel"
+	servedModelSpecProtocol    = "servingProtocol"
+	servedModelStatusLoad      = "servingLoadStatus"
+	servedModelStatusTarget    = "servingTarget"
+	servedModelStatusModel     = "servingModel"
+	servedModelStatusProtocol  = "servingProtocol"
+	servedModelStatusFailure   = "failureReason"
+)
+
 type ServedModelAdapter struct {
 	namespace string
 	gvr       schema.GroupVersionResource
@@ -44,16 +80,14 @@ type ServedModelAdapter struct {
 	client    dynamic.Interface
 }
 
-type ServingStatusRecorder interface {
-	RecordModelServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, idempotencyKey uuid.UUID) (*model.Model, error)
-}
-
 type ServedModelStatusObserver struct {
 	adapter      *ServedModelAdapter
-	recorder     ServingStatusRecorder
+	recorder     app.ServingStatusRecorder
 	pollInterval time.Duration
 	seen         map[string]uuid.UUID
 }
+
+type servedModelStatusDTOAdapter struct{}
 
 func NewServedModelAdapter(config ServedModelConfig) (*ServedModelAdapter, error) {
 	log.Trace("NewServedModelAdapter")
@@ -89,7 +123,7 @@ func NewServedModelAdapterWithClient(config ServedModelConfig, client dynamic.In
 	}, nil
 }
 
-func NewServedModelStatusObserver(adapter *ServedModelAdapter, recorder ServingStatusRecorder, pollInterval time.Duration) (*ServedModelStatusObserver, error) {
+func NewServedModelStatusObserver(adapter *ServedModelAdapter, recorder app.ServingStatusRecorder, pollInterval time.Duration) (*ServedModelStatusObserver, error) {
 	log.Trace("NewServedModelStatusObserver")
 
 	if adapter == nil {
@@ -229,7 +263,7 @@ func (o *ServedModelStatusObserver) ProcessWatchEvent(ctx context.Context, event
 func (o *ServedModelStatusObserver) processStatusObject(ctx context.Context, obj *unstructured.Unstructured) {
 	log.Trace("ServedModelStatusObserver processStatusObject")
 
-	status, ok, err := servedModelStatusFromObject(obj)
+	status, ok, err := servedModelStatusDTOAdapter{}.FromObject(obj)
 	if err != nil {
 		log.WithContext(ctx).WithError(err).WithField("served_model", obj.GetName()).Error("served model status ignored")
 		return
@@ -255,40 +289,40 @@ func (a *ServedModelAdapter) servedModelObject(name string, registeredModel *mod
 	log.Trace("ServedModelAdapter servedModelObject")
 
 	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": a.gvr.Group + "/" + a.gvr.Version,
-		"kind":       a.kind,
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": a.namespace,
-			"labels": map[string]any{
-				"app.kubernetes.io/name":       "served-model",
-				"app.kubernetes.io/managed-by": "model-registry-service",
-				"bighill.io/model-id":          registeredModel.ModelID.String(),
+		servedModelObjectAPIVersion: a.gvr.Group + "/" + a.gvr.Version,
+		servedModelObjectKind:       a.kind,
+		servedModelObjectMetadata: map[string]any{
+			servedModelObjectName:      name,
+			servedModelObjectNamespace: a.namespace,
+			servedModelObjectLabels: map[string]any{
+				servedModelLabelName:      "served-model",
+				servedModelLabelManagedBy: "model-registry-service",
+				servedModelLabelModelID:   registeredModel.ModelID.String(),
 			},
 		},
-		"spec": map[string]any{
-			"modelID":          registeredModel.ModelID.String(),
-			"trainingRunID":    uuidutil.StringOrEmpty(registeredModel.TrainingRunID),
-			"datasetID":        uuidutil.StringOrEmpty(registeredModel.DatasetID),
-			"modelKind":        registeredModel.ModelKind.String(),
-			"name":             registeredModel.Name,
-			"modelVersion":     int64(registeredModel.ModelVersion),
-			"baseModel":        registeredModel.BaseModel,
-			"artifactLocation": registeredModel.ArtifactLocation,
-			"artifactFormat":   registeredModel.ArtifactFormat,
-			"artifactChecksum": registeredModel.ArtifactChecksum,
-			"adapterURI":       registeredModel.AdapterURI,
-			"servingTarget":    registeredModel.ServingTarget,
-			"servingModel":     registeredModel.ServingModel,
-			"servingProtocol":  registeredModel.ServingProtocol.String(),
+		servedModelObjectSpec: map[string]any{
+			servedModelSpecModelID:     registeredModel.ModelID.String(),
+			servedModelSpecTrainingID:  uuidutil.StringOrEmpty(registeredModel.TrainingRunID),
+			servedModelSpecDatasetID:   uuidutil.StringOrEmpty(registeredModel.DatasetID),
+			servedModelSpecKind:        registeredModel.ModelKind.String(),
+			servedModelSpecName:        registeredModel.Name,
+			servedModelSpecVersion:     int64(registeredModel.ModelVersion),
+			servedModelSpecBaseModel:   registeredModel.BaseModel,
+			servedModelSpecArtifactLoc: registeredModel.ArtifactLocation,
+			servedModelSpecArtifactFmt: registeredModel.ArtifactFormat,
+			servedModelSpecChecksum:    registeredModel.ArtifactChecksum,
+			servedModelSpecAdapterURI:  registeredModel.AdapterURI,
+			servedModelSpecTarget:      registeredModel.ServingTarget,
+			servedModelSpecModel:       registeredModel.ServingModel,
+			servedModelSpecProtocol:    registeredModel.ServingProtocol.String(),
 		},
 	}}
 }
 
-func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedModelStatus, bool, error) {
-	log.Trace("servedModelStatusFromObject")
+func (servedModelStatusDTOAdapter) FromObject(obj *unstructured.Unstructured) (*model.ServedModelStatus, bool, error) {
+	log.Trace("servedModelStatusDTOAdapter FromObject")
 
-	statusRaw, _, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
+	statusRaw, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusLoad)
 	if statusRaw == "" {
 		return nil, false, nil
 	}
@@ -296,28 +330,28 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: served model status %s has invalid load status: %w", domain.ErrValidationFailed, obj.GetName(), err)
 	}
-	modelIDRaw, _, _ := unstructured.NestedString(obj.Object, "spec", "modelID")
+	modelIDRaw, _, _ := unstructured.NestedString(obj.Object, servedModelObjectSpec, servedModelSpecModelID)
 	modelID, err := uuid.Parse(modelIDRaw)
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: served model status %s has invalid model id: %w", domain.ErrValidationFailed, obj.GetName(), err)
 	}
-	servingTarget, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
+	servingTarget, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusTarget)
 	if servingTarget == "" {
-		servingTarget, _, _ = unstructured.NestedString(obj.Object, "spec", "servingTarget")
+		servingTarget, _, _ = unstructured.NestedString(obj.Object, servedModelObjectSpec, servedModelSpecTarget)
 	}
-	servingModel, _, _ := unstructured.NestedString(obj.Object, "status", "servingModel")
+	servingModel, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusModel)
 	if servingModel == "" {
-		servingModel, _, _ = unstructured.NestedString(obj.Object, "spec", "servingModel")
+		servingModel, _, _ = unstructured.NestedString(obj.Object, servedModelObjectSpec, servedModelSpecModel)
 	}
-	servingProtocol, _, _ := unstructured.NestedString(obj.Object, "status", "servingProtocol")
+	servingProtocol, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusProtocol)
 	if servingProtocol == "" {
-		servingProtocol, _, _ = unstructured.NestedString(obj.Object, "spec", "servingProtocol")
+		servingProtocol, _, _ = unstructured.NestedString(obj.Object, servedModelObjectSpec, servedModelSpecProtocol)
 	}
 	parsedServingProtocol, err := model.ToServingProtocol(servingProtocol)
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: served model status %s has invalid serving protocol: %w", domain.ErrValidationFailed, obj.GetName(), err)
 	}
-	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
+	failureReason, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusFailure)
 	return &model.ServedModelStatus{
 		ModelID:           modelID,
 		ServingTarget:     servingTarget,

@@ -61,6 +61,18 @@ func (s *inferenceUsecaseStub) ListEndpoints(ctx context.Context, orgID uuid.UUI
 	return s.endpoints, nil
 }
 
+func (s *inferenceUsecaseStub) PublishEndpoint(context.Context, model.EndpointPublication) (*model.PublishedEndpoint, error) {
+	return nil, s.err
+}
+
+func (s *inferenceUsecaseStub) SetEndpointDatasets(context.Context, model.EndpointDatasetBinding) (*model.PublishedEndpoint, error) {
+	return nil, s.err
+}
+
+func (s *inferenceUsecaseStub) SetEndpointMergeStrategy(context.Context, model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error) {
+	return nil, s.err
+}
+
 func (s *inferenceUsecaseStub) GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error) {
 	s.endpointID = endpointID
 	s.generateRequest = request
@@ -126,12 +138,13 @@ var _ = Describe("InferenceHandlers", func() {
 		endpointID = uuid.New()
 		usecase = &inferenceUsecaseStub{
 			endpoints: []*model.PublishedEndpoint{{
-				EndpointID:  endpointID,
-				OrgID:       orgID,
-				ModelID:     uuid.New(),
-				DatasetID:   uuid.New(),
-				Status:      model.PublishedEndpointStatusReady,
-				DisplayName: "Support bot",
+				EndpointID:    endpointID,
+				OrgID:         orgID,
+				ModelID:       uuid.New(),
+				DatasetIDs:    []uuid.UUID{uuid.New()},
+				MergeStrategy: model.RAGMergeStrategyReranker,
+				Status:        model.PublishedEndpointStatusReady,
+				DisplayName:   "Support bot",
 			}},
 		}
 		handlers = NewInferenceHandlers(usecase, adapter.NewInferenceDTOAdapter(serializers.NewJSONSerializer()))

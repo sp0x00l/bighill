@@ -51,14 +51,19 @@ var _ = Describe("InferenceDTOAdapter", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("serializes generation responses without leaking raw model or dataset IDs", func() {
+	It("serializes generation responses with retrieval provenance", func() {
+		datasetID := uuid.New()
+		contextDatasetID := uuid.New()
 		payload, err := adapter.ToGenerateDTO(context.Background(), &model.GenerateResponse{
-			RequestID: uuid.New(),
-			DatasetID: uuid.New(),
-			ModelID:   uuid.New(),
-			QueryText: "hello",
-			Answer:    "world",
+			RequestID:        uuid.New(),
+			DatasetID:        datasetID,
+			DatasetIDs:       []uuid.UUID{contextDatasetID},
+			ModelID:          uuid.New(),
+			QueryText:        "hello",
+			Answer:           "world",
+			RAGMergeStrategy: model.RAGMergeStrategyReranker,
 			Contexts: []model.RetrievedContext{{
+				DatasetID:  contextDatasetID,
 				ChunkIndex: 1,
 				SourceText: "source",
 				Similarity: 0.9,
@@ -70,8 +75,9 @@ var _ = Describe("InferenceDTOAdapter", func() {
 		Expect(json.Unmarshal(payload, &dto)).To(Succeed())
 		Expect(dto).To(HaveKey("request_id"))
 		Expect(dto).To(HaveKeyWithValue("answer", "world"))
+		Expect(dto).To(HaveKeyWithValue("dataset_id", datasetID.String()))
+		Expect(dto).To(HaveKeyWithValue("rag_merge_strategy", model.RAGMergeStrategyReranker.String()))
 		Expect(dto).NotTo(HaveKey("model_id"))
-		Expect(dto).NotTo(HaveKey("dataset_id"))
 	})
 
 	It("maps feedback DTOs to domain feedback", func() {
@@ -104,13 +110,16 @@ var _ = Describe("InferenceDTOAdapter", func() {
 
 	It("serializes safe endpoint projections", func() {
 		endpointID := uuid.New()
+		modelID := uuid.New()
+		datasetID := uuid.New()
 		payload, err := adapter.ToEndpointDTOs(context.Background(), []*model.PublishedEndpoint{{
-			EndpointID:  endpointID,
-			OrgID:       uuid.New(),
-			ModelID:     uuid.New(),
-			DatasetID:   uuid.New(),
-			Status:      model.PublishedEndpointStatusReady,
-			DisplayName: "Support bot",
+			EndpointID:    endpointID,
+			OrgID:         uuid.New(),
+			ModelID:       modelID,
+			DatasetIDs:    []uuid.UUID{datasetID},
+			MergeStrategy: model.RAGMergeStrategyReranker,
+			Status:        model.PublishedEndpointStatusReady,
+			DisplayName:   "Support bot",
 		}})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -119,7 +128,36 @@ var _ = Describe("InferenceDTOAdapter", func() {
 		Expect(dtos).To(HaveLen(1))
 		Expect(dtos[0]).To(HaveKeyWithValue("endpoint_id", endpointID.String()))
 		Expect(dtos[0]).To(HaveKeyWithValue("display_name", "Support bot"))
+		Expect(dtos[0]).To(HaveKeyWithValue("merge_strategy", model.RAGMergeStrategyReranker.String()))
 		Expect(dtos[0]).NotTo(HaveKey("model_id"))
+		Expect(dtos[0]).NotTo(HaveKey("dataset_ids"))
 		Expect(dtos[0]).NotTo(HaveKey("dataset_id"))
+		Expect(dtos[0]).NotTo(HaveKey("created_by_user_id"))
+	})
+
+	It("serializes endpoint details for endpoint management responses", func() {
+		endpointID := uuid.New()
+		modelID := uuid.New()
+		datasetID := uuid.New()
+		createdBy := uuid.New()
+		payload, err := adapter.ToEndpointDetailDTOs(context.Background(), []*model.PublishedEndpoint{{
+			EndpointID:      endpointID,
+			OrgID:           uuid.New(),
+			ModelID:         modelID,
+			DatasetIDs:      []uuid.UUID{datasetID},
+			MergeStrategy:   model.RAGMergeStrategyReranker,
+			Status:          model.PublishedEndpointStatusReady,
+			DisplayName:     "Support bot",
+			CreatedByUserID: createdBy,
+		}})
+
+		Expect(err).NotTo(HaveOccurred())
+		var dtos []map[string]any
+		Expect(json.Unmarshal(payload, &dtos)).To(Succeed())
+		Expect(dtos).To(HaveLen(1))
+		Expect(dtos[0]).To(HaveKeyWithValue("endpoint_id", endpointID.String()))
+		Expect(dtos[0]).To(HaveKeyWithValue("model_id", modelID.String()))
+		Expect(dtos[0]).To(HaveKeyWithValue("dataset_ids", []any{datasetID.String()}))
+		Expect(dtos[0]).To(HaveKeyWithValue("created_by_user_id", createdBy.String()))
 	})
 })

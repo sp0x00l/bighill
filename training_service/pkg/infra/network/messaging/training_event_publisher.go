@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"training_service/pkg/app"
 	"training_service/pkg/domain/model"
 
 	msgConn "lib/shared_lib/messaging"
@@ -11,18 +12,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type TrainingEventPublisher interface {
-	PublishModelTrainingCompleted(ctx context.Context, result *model.TrainingRunResult) error
-	PublishModelTrainingFailed(ctx context.Context, result *model.TrainingRunResult) error
-	PublishPromotionReportReady(ctx context.Context, report *model.PromotionReport) error
-}
-
 type trainingEventPublisher struct {
 	publisher msgConn.Publisher
 	builder   *TrainingEventBuilder
 }
 
-func NewTrainingEventPublisher(publisher msgConn.Publisher, topics TrainingTopics) TrainingEventPublisher {
+func NewTrainingEventPublisher(publisher msgConn.Publisher, topics TrainingTopics) app.TrainingEventPublisher {
 	log.Trace("NewTrainingEventPublisher")
 
 	return &trainingEventPublisher{

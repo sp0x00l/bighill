@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
@@ -235,13 +236,7 @@ func (u *modelRegistryUsecase) RecordModelArtifactIngested(ctx context.Context, 
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	ingestedModel.Status = model.ModelStatusEvaluated
-	if ingestedModel.ModelKind == model.ModelKindBase {
-		ingestedModel.UserID = uuid.Nil
-		ingestedModel.OrgID = uuid.Nil
-		ctx = ctxutil.WithSystemContext(ctx)
-	} else {
-		ctx = contextForModel(ctx, ingestedModel)
-	}
+	ctx = contextForModel(ctx, ingestedModel)
 	if ingestedModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
 		ingestedModel.Status = model.ModelStatusReady
 	}
@@ -385,7 +380,7 @@ func (u *modelRegistryUsecase) PromoteCandidate(ctx context.Context, modelID uui
 func (u *modelRegistryUsecase) evaluateCandidatePromotion(ctx context.Context, candidate *model.Model, report *model.PromotionReportResult) (model.GateDecision, error) {
 	log.Trace("ModelRegistryUsecase evaluateCandidatePromotion")
 
-	candidateMetrics, err := model.ParseEvalMetrics(candidate.MetricsMetadata)
+	candidateMetrics, err := parseEvalMetrics(candidate.MetricsMetadata)
 	if err != nil {
 		return model.GateDecision{Reason: err.Error(), Deltas: map[string]float64{}}, nil
 	}
@@ -395,7 +390,7 @@ func (u *modelRegistryUsecase) evaluateCandidatePromotion(ctx context.Context, c
 	}
 	var championMetrics *model.EvalMetrics
 	if champion != nil {
-		championMetrics, err = model.ParseEvalMetrics(champion.MetricsMetadata)
+		championMetrics, err = parseEvalMetrics(champion.MetricsMetadata)
 		if err != nil {
 			return model.GateDecision{Reason: "champion metrics invalid: " + err.Error(), Deltas: map[string]float64{}}, nil
 		}
@@ -539,11 +534,11 @@ func (u *modelRegistryUsecase) upsertPublishedEndpoint(ctx context.Context, tx p
 	if u.endpointRepository == nil || modelRecord == nil {
 		return nil
 	}
-	if modelRecord.OrgID == uuid.Nil || modelRecord.UserID == uuid.Nil || modelRecord.DatasetID == uuid.Nil {
-		if modelRecord.ModelKind == model.ModelKindBase && modelRecord.OrgID == uuid.Nil && modelRecord.UserID == uuid.Nil && modelRecord.DatasetID == uuid.Nil {
-			return nil
-		}
-		return fmt.Errorf("%w: published endpoint requires org_id, user_id, and dataset_id", domain.ErrValidationFailed)
+	if modelRecord.OrgID == uuid.Nil || modelRecord.UserID == uuid.Nil {
+		return fmt.Errorf("%w: published endpoint requires org_id and user_id", domain.ErrValidationFailed)
+	}
+	if modelRecord.DatasetID == uuid.Nil {
+		return nil
 	}
 	status := model.PublishedEndpointStatusDisabled
 	if modelRecord.Status == model.ModelStatusReady && modelRecord.ServingLoadStatus == model.ModelLoadStatusLoaded {
@@ -588,4 +583,51 @@ func promotionDeltasJSON(deltas map[string]float64) (string, error) {
 		return "", fmt.Errorf("%w: marshal promotion deltas: %w", domain.ErrValidationFailed, err)
 	}
 	return string(raw), nil
+}
+
+type evalMetricsMetadataJSON struct {
+	Passed           bool               `json:"passed"`
+	Metrics          map[string]float64 `json:"metrics"`
+	Thresholds       map[string]float64 `json:"thresholds"`
+	ReportURI        string             `json:"report_uri"`
+	EvaluatorName    string             `json:"evaluator_name"`
+	EvaluatorVersion string             `json:"evaluator_version"`
+	MetricSuite      string             `json:"metric_suite"`
+	EvalDatasetURI   string             `json:"eval_dataset_uri"`
+	EvalDatasetMode  string             `json:"eval_dataset_mode"`
+	DeepchecksPassed bool               `json:"deepchecks_passed,omitempty"`
+	DeepchecksURI    string             `json:"deepchecks_report_uri,omitempty"`
+	EvidentlyPassed  bool               `json:"evidently_passed,omitempty"`
+	EvidentlyURI     string             `json:"evidently_report_uri,omitempty"`
+}
+
+func parseEvalMetrics(metricsMetadata string) (*model.EvalMetrics, error) {
+	log.Trace("parseEvalMetrics")
+
+	metadata := strings.TrimSpace(metricsMetadata)
+	if metadata == "" {
+		return nil, fmt.Errorf("metrics metadata is required")
+	}
+	var record evalMetricsMetadataJSON
+	if err := json.Unmarshal([]byte(metadata), &record); err != nil {
+		return nil, fmt.Errorf("parse metrics metadata: %w", err)
+	}
+	if len(record.Metrics) == 0 {
+		return nil, fmt.Errorf("metrics metadata must include metrics")
+	}
+	return &model.EvalMetrics{
+		Passed:           record.Passed,
+		Metrics:          record.Metrics,
+		Thresholds:       record.Thresholds,
+		ReportURI:        record.ReportURI,
+		EvaluatorName:    record.EvaluatorName,
+		EvaluatorVersion: record.EvaluatorVersion,
+		MetricSuite:      record.MetricSuite,
+		EvalDatasetURI:   record.EvalDatasetURI,
+		EvalDatasetMode:  record.EvalDatasetMode,
+		DeepchecksPassed: record.DeepchecksPassed,
+		DeepchecksURI:    record.DeepchecksURI,
+		EvidentlyPassed:  record.EvidentlyPassed,
+		EvidentlyURI:     record.EvidentlyURI,
+	}, nil
 }

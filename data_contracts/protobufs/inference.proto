@@ -23,24 +23,27 @@ message GenerateRequest {
 
 message GenerateResponse {
   string dataset_id = 1;
-  string model_id = 2;
-  string query_text = 3;
-  string answer = 4;
-  repeated RetrievedContext contexts = 5;
-  string request_id = 6;
-  string prompt_strategy_version = 7;
-  string generation_protocol = 8;
-  string generation_model = 9;
-  string org_id = 10;
+  repeated string dataset_ids = 2;
+  string model_id = 3;
+  string query_text = 4;
+  string answer = 5;
+  repeated RetrievedContext contexts = 6;
+  string request_id = 7;
+  string prompt_strategy_version = 8;
+  string generation_protocol = 9;
+  string generation_model = 10;
+  string rag_merge_strategy = 11;
+  string org_id = 12;
 }
 
 message RetrievedContext {
   string embedding_record_id = 1;
   string embedding_snapshot_id = 2;
-  int32 chunk_index = 3;
-  string source_text = 4;
-  double distance = 5;
-  double similarity = 6;
+  string dataset_id = 3;
+  int32 chunk_index = 4;
+  string source_text = 5;
+  double distance = 6;
+  double similarity = 7;
 }
 
 message RecordFeedbackRequest {

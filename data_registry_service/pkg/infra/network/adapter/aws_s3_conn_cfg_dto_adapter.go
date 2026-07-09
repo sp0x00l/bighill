@@ -20,7 +20,21 @@ type AwsS3StorageConnCfgDTO struct {
 	WhitelistedBuckets []string `json:"whitelistedBuckets,omitempty"`
 }
 
+type awsS3ConnCfgDTOAdapter struct {
+	validator *validator.Validate
+}
+
+func NewAwsS3ConnCfgDTOAdapter() *awsS3ConnCfgDTOAdapter {
+	log.Trace("NewAwsS3ConnCfgDTOAdapter")
+
+	return &awsS3ConnCfgDTOAdapter{validator: validator.New()}
+}
+
 func ToAwsS3ConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
+	return NewAwsS3ConnCfgDTOAdapter().ToDTO(ctx, conn, secretizer, serializer)
+}
+
+func (a *awsS3ConnCfgDTOAdapter) ToDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
 	log.Trace("adapter ToAwsS3ConnCfgDTO")
 
 	connCfg, ok := conn.(*model.AwsS3StorageConnCfg)
@@ -52,6 +66,10 @@ func ToAwsS3ConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretiz
 }
 
 func FromAwsS3ConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
+	return NewAwsS3ConnCfgDTOAdapter().FromDTO(ctx, cfgBytes, deserializer)
+}
+
+func (a *awsS3ConnCfgDTOAdapter) FromDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
 	log.Trace("adapter FromAwsS3ConnCfgDTO")
 
 	var dto AwsS3StorageConnCfgDTO
@@ -60,7 +78,7 @@ func FromAwsS3ConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer seri
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}
 
-	if err := validator.New().Struct(dto); err != nil {
+	if err := a.validator.Struct(dto); err != nil {
 		log.WithContext(ctx).WithError(err).Error("failed to validate AWS S3 source connector configuration")
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}

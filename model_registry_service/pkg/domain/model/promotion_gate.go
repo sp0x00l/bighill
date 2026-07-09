@@ -1,7 +1,6 @@
 package model
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,19 +16,19 @@ type Lineage struct {
 }
 
 type EvalMetrics struct {
-	Passed           bool               `json:"passed"`
-	Metrics          map[string]float64 `json:"metrics"`
-	Thresholds       map[string]float64 `json:"thresholds"`
-	ReportURI        string             `json:"report_uri"`
-	EvaluatorName    string             `json:"evaluator_name"`
-	EvaluatorVersion string             `json:"evaluator_version"`
-	MetricSuite      string             `json:"metric_suite"`
-	EvalDatasetURI   string             `json:"eval_dataset_uri"`
-	EvalDatasetMode  string             `json:"eval_dataset_mode"`
-	DeepchecksPassed bool               `json:"deepchecks_passed,omitempty"`
-	DeepchecksURI    string             `json:"deepchecks_report_uri,omitempty"`
-	EvidentlyPassed  bool               `json:"evidently_passed,omitempty"`
-	EvidentlyURI     string             `json:"evidently_report_uri,omitempty"`
+	Passed           bool
+	Metrics          map[string]float64
+	Thresholds       map[string]float64
+	ReportURI        string
+	EvaluatorName    string
+	EvaluatorVersion string
+	MetricSuite      string
+	EvalDatasetURI   string
+	EvalDatasetMode  string
+	DeepchecksPassed bool
+	DeepchecksURI    string
+	EvidentlyPassed  bool
+	EvidentlyURI     string
 }
 
 type PromotionReport struct {
@@ -99,23 +98,6 @@ func LineageForModel(modelRecord *Model) Lineage {
 		OrgID:  modelRecord.OrgID,
 		Name:   modelRecord.Name,
 	}
-}
-
-func ParseEvalMetrics(metricsMetadata string) (*EvalMetrics, error) {
-	log.Trace("ParseEvalMetrics")
-
-	metadata := strings.TrimSpace(metricsMetadata)
-	if metadata == "" {
-		return nil, fmt.Errorf("metrics metadata is required")
-	}
-	var metrics EvalMetrics
-	if err := json.Unmarshal([]byte(metadata), &metrics); err != nil {
-		return nil, fmt.Errorf("parse metrics metadata: %w", err)
-	}
-	if len(metrics.Metrics) == 0 {
-		return nil, fmt.Errorf("metrics metadata must include metrics")
-	}
-	return &metrics, nil
 }
 
 func EvaluatePromotion(candidate *EvalMetrics, champion *EvalMetrics, report *PromotionReport, policy GatePolicy) GateDecision {

@@ -16,7 +16,7 @@ The gateway is intentionally thin: it does not own domain state. Profile, data r
 ## How It Fits
 
 - Authenticates and authorizes incoming API calls.
-- Routes profile/auth calls to `profile_service`.
+- Routes profile/auth calls to `tenant_service`.
 - Routes dataset/source/upload flows to `data_registry_service` and `ingestion_service`.
 - Routes inference and feedback flows to `inference_service`.
 - Keeps orchestration and state transitions out of the edge layer.
@@ -24,6 +24,10 @@ The gateway is intentionally thin: it does not own domain state. Profile, data r
 ## Local Development
 
 Run the root infra and services first, then start the gateway through the existing scripts. The gateway tests live under `api_gateway/test` and are normally exercised from the root `make test` flow.
+
+The RAG e2e specs require a local Ollama generation model in `/api/tags`. The test selects an
+available generation tag and sends it through the model upload/onboarding API as the fixture
+`base_model`.
 
 ## Real Hugging Face E2E
 
@@ -45,6 +49,6 @@ export BIGHILL_E2E_HUGGINGFACE_ARTIFACT_FORMAT=GGUF_MODEL
 export BIGHILL_E2E_HUGGINGFACE_TIMEOUT_SECONDS=1200
 ```
 
-Use `make test-api-w-hf`, which loads `.env.huggingface-e2e`, resolves a Python 3.11+ interpreter with `huggingface_hub` and the shared Python artifact validators, constructs the real `training_jobs.model_onboard` command, maps `BIGHILL_E2E_HUGGINGFACE_TIMEOUT_SECONDS` into the ingestion download timeout, and rebuilds the service binaries before starting the stack. Set `BIGHILL_E2E_HUGGINGFACE_PYTHON` only if you need to point at a non-default Python runtime. Set `BIGHILL_E2E_START_MODE=run` only when you deliberately want to reuse prebuilt service binaries. The token must have access to the configured Hugging Face repository and file.
+Use `make test-api-w-hf`, which loads `.env.huggingface-e2e`, resolves a Python 3.11+ interpreter with `huggingface_hub` and the shared Python artifact validators, verifies token/repository/file metadata without downloading the model, constructs the real `training_jobs.model_onboard` command, maps `BIGHILL_E2E_HUGGINGFACE_TIMEOUT_SECONDS` into the ingestion download timeout, and rebuilds the service binaries before starting the stack. Set `BIGHILL_E2E_HUGGINGFACE_PYTHON` only if you need to point at a non-default Python runtime. Set `BIGHILL_E2E_START_MODE=run` only when you deliberately want to reuse prebuilt service binaries. The token must have access to the configured Hugging Face repository and file.
 
-The spec writes the token through the profile API, invokes `/v1/private/models/onboard/huggingface`, and fails unless the response contains a real 40-character Hugging Face commit SHA.
+The spec writes the token through the profile API, invokes `/v1/private/models/onboard/huggingface`, downloads the configured file through the ingestion/onboarding service path, and fails unless the response contains a real 40-character Hugging Face commit SHA.

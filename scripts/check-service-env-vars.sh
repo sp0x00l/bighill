@@ -12,7 +12,7 @@ declare -a search_paths=(
   "inference_service"
   "model_registry_service"
   "model_serving_service"
-  "profile_service"
+  "tenant_service"
   "training_service"
   "scripts"
   ".vscode/launch.json"

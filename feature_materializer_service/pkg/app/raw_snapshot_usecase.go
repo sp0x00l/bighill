@@ -107,7 +107,11 @@ func (u *rawSnapshotUsecase) markRawReady(ctx context.Context, rawSnapshot *mode
 		if err := u.repo.MarkRawReady(ctx, tx, rawSnapshot); err != nil {
 			return err
 		}
-		if err := enqueue(u.eventBuilder.RawSnapshotReadyMessage(rawSnapshot)); err != nil {
+		msg, err := u.eventBuilder.RawSnapshotReadyMessage(rawSnapshot)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(msg); err != nil {
 			return fmt.Errorf("enqueue raw snapshot ready: %w", err)
 		}
 		return nil

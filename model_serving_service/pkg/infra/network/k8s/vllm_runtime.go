@@ -68,36 +68,44 @@ func NewVLLMRuntime(config VLLMRuntimeConfig, client dynamic.Interface) (*VLLMRu
 	if strings.TrimSpace(config.Image) == "" {
 		return nil, domain.ErrValidationFailed.Extend("vllm image is required")
 	}
+	if strings.TrimSpace(config.ImagePullPolicy) == "" {
+		return nil, domain.ErrValidationFailed.Extend("vllm image pull policy is required")
+	}
 	if config.Replicas <= 0 {
 		return nil, domain.ErrValidationFailed.Extend("serving replicas must be greater than zero")
 	}
 	if config.Port <= 0 {
 		return nil, domain.ErrValidationFailed.Extend("serving port must be greater than zero")
 	}
+	if strings.TrimSpace(config.CPU) == "" {
+		return nil, domain.ErrValidationFailed.Extend("vllm cpu is required")
+	}
+	if strings.TrimSpace(config.Memory) == "" {
+		return nil, domain.ErrValidationFailed.Extend("vllm memory is required")
+	}
 	if client == nil {
 		return nil, domain.ErrValidationFailed.Extend("kubernetes client is required")
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		timeout := config.RequestTimeout
-		if timeout <= 0 {
-			timeout = 5 * time.Second
+		if config.RequestTimeout <= 0 {
+			return nil, domain.ErrValidationFailed.Extend("vllm request timeout must be greater than zero")
 		}
 		httpClient = &http.Client{
-			Timeout:   timeout,
+			Timeout:   config.RequestTimeout,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		}
 	}
 	return &VLLMRuntime{
 		namespace:       strings.TrimSpace(config.Namespace),
 		image:           strings.TrimSpace(config.Image),
-		imagePullPolicy: withDefaultString(config.ImagePullPolicy, "IfNotPresent"),
+		imagePullPolicy: strings.TrimSpace(config.ImagePullPolicy),
 		serviceAccount:  strings.TrimSpace(config.ServiceAccount),
 		multiTenant:     config.MultiTenant,
 		replicas:        config.Replicas,
 		port:            config.Port,
-		cpu:             withDefaultString(config.CPU, "1"),
-		memory:          withDefaultString(config.Memory, "4Gi"),
+		cpu:             strings.TrimSpace(config.CPU),
+		memory:          strings.TrimSpace(config.Memory),
 		gpuResource:     strings.TrimSpace(config.GPUResource),
 		gpu:             strings.TrimSpace(config.GPU),
 		httpClient:      httpClient,
@@ -506,13 +514,4 @@ func servingLabels(servedModel *model.ServedModel, workloadName string) map[stri
 		"app.kubernetes.io/managed-by": "model-serving-service",
 		"bighill.io/served-model":      workloadName,
 	}
-}
-
-func withDefaultString(value, fallback string) string {
-	log.Trace("withDefaultString")
-
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return strings.TrimSpace(value)
 }

@@ -36,11 +36,29 @@ BEFORE UPDATE ON bighill_feature_materializer_db.tenants
 FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();
 
+CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.dataset_materialization_event_state (
+    dataset_id uuid NOT NULL,
+    org_id uuid NOT NULL,
+    next_event_seq BIGINT NOT NULL DEFAULT 1 CHECK (next_event_seq > 0),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (dataset_id, org_id)
+);
+
+CREATE INDEX IF NOT EXISTS index_dataset_materialization_event_state_org_id
+ON bighill_feature_materializer_db.dataset_materialization_event_state(org_id);
+
+CREATE TRIGGER dataset_materialization_event_state_updated_at
+BEFORE UPDATE ON bighill_feature_materializer_db.dataset_materialization_event_state
+FOR EACH ROW
+EXECUTE FUNCTION updated_at_column();
+
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.raw_snapshots (
     raw_snapshot_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     dataset_id uuid NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
     org_id uuid NOT NULL,
+    materialization_event_seq BIGINT NOT NULL DEFAULT 0 CHECK (materialization_event_seq >= 0),
     idempotency_key uuid NOT NULL UNIQUE,
     source_storage_location text NOT NULL,
     storage_location text NOT NULL,
@@ -74,6 +92,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.feature_snapshots (
     dataset_id uuid NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
     org_id uuid NOT NULL,
+    materialization_event_seq BIGINT NOT NULL DEFAULT 0 CHECK (materialization_event_seq >= 0),
     idempotency_key uuid NOT NULL UNIQUE,
     storage_location text NOT NULL DEFAULT '',
     table_namespace text NOT NULL,
@@ -104,6 +123,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_snapshots (
     dataset_id uuid NOT NULL,
     user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
     org_id uuid NOT NULL,
+    materialization_event_seq BIGINT NOT NULL DEFAULT 0 CHECK (materialization_event_seq >= 0),
     idempotency_key uuid NOT NULL UNIQUE,
     vector_store text NOT NULL DEFAULT '',
     collection_name text NOT NULL DEFAULT '',
@@ -207,6 +227,18 @@ USING (
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
     OR NULLIF(current_setting('app.current_user_id', true), '')::uuid = id
+);
+
+ALTER TABLE bighill_feature_materializer_db.dataset_materialization_event_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_feature_materializer_db.dataset_materialization_event_state FORCE ROW LEVEL SECURITY;
+CREATE POLICY dataset_materialization_event_state_tenant_isolation ON bighill_feature_materializer_db.dataset_materialization_event_state
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
 ALTER TABLE bighill_feature_materializer_db.raw_snapshots ENABLE ROW LEVEL SECURITY;

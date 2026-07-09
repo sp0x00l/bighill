@@ -119,19 +119,19 @@ variable "model_registry_service_http_port" {
   default     = "8084"
 }
 
-variable "profile_service_http_domain" {
-  description = "Profile service host"
+variable "tenant_service_http_domain" {
+  description = "Tenant service host"
   type        = string
   default     = ""
 
   validation {
-    condition     = length(trimspace(var.profile_service_http_domain)) > 0
-    error_message = "Set profile_service_http_domain to the reachable hostname for the profile service."
+    condition     = length(trimspace(var.tenant_service_http_domain)) > 0
+    error_message = "Set tenant_service_http_domain to the reachable hostname for the tenant service."
   }
 }
 
-variable "profile_service_http_port" {
-  description = "Profile service port"
+variable "tenant_service_http_port" {
+  description = "Tenant service port"
   type        = string
   default     = "8082"
 }

@@ -52,15 +52,15 @@ var _ = Describe("readMaterializerConfig", func() {
 		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME", "local-dev-bucket")).To(Succeed())
 		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_PROVIDER", "tei")).To(Succeed())
 		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_URL", "http://tei.local")).To(Succeed())
-		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_PROFILE_SUBSCRIBER_TOPIC")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TENANT_SUBSCRIBER_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS")).To(Succeed())
 	})
 
-	It("uses the profile service topic for tenant projections by default", func() {
+	It("uses the tenant service topic for tenant projections by default", func() {
 		cfg := readMaterializerConfig()
 
-		Expect(cfg.ProfileTopic).To(Equal("profile"))
+		Expect(cfg.TenantTopic).To(Equal("tenant"))
 		Expect(cfg.Temporal.ConnectTimeout).To(Equal(60 * time.Second))
 		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(time.Second))
 	})

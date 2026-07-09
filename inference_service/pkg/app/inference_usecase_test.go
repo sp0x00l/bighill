@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"inference_service/pkg/app"
 	"inference_service/pkg/domain"
@@ -58,6 +60,7 @@ func (s *inferenceModelRepositoryStub) ReadByID(_ context.Context, userID uuid.U
 
 type inferenceDatasetRepositoryStub struct {
 	dataset        *model.InferenceDataset
+	datasets       map[uuid.UUID]*model.InferenceDataset
 	upserted       *model.InferenceDataset
 	idempotencyKey uuid.UUID
 	readUserID     uuid.UUID
@@ -80,32 +83,54 @@ func (s *inferenceDatasetRepositoryStub) ReadDataset(_ context.Context, userID u
 	if s.err != nil {
 		return nil, s.err
 	}
+	if s.datasets != nil {
+		if dataset, ok := s.datasets[datasetID]; ok {
+			return dataset, nil
+		}
+		return nil, domain.ErrDatasetNotFound
+	}
 	return s.dataset, nil
 }
 
 type retrievalClientStub struct {
-	userID          uuid.UUID
-	datasetID       uuid.UUID
-	queryText       string
-	topK            int
-	metadataFilters map[string]string
-	contexts        []model.RetrievedContext
-	err             error
+	mu                sync.Mutex
+	userID            uuid.UUID
+	datasetID         uuid.UUID
+	queryText         string
+	topK              int
+	metadataFilters   map[string]string
+	contexts          []model.RetrievedContext
+	contextsByDataset map[uuid.UUID][]model.RetrievedContext
+	err               error
+	errorsByDataset   map[uuid.UUID]error
+	calls             []uuid.UUID
 }
 
 func (s *retrievalClientStub) SearchEmbeddings(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error) {
+	s.mu.Lock()
 	s.userID = userID
 	s.datasetID = datasetID
 	s.queryText = queryText
 	s.topK = topK
 	s.metadataFilters = metadataFilters
+	s.calls = append(s.calls, datasetID)
+	s.mu.Unlock()
+	if s.errorsByDataset != nil {
+		if err, ok := s.errorsByDataset[datasetID]; ok {
+			return nil, err
+		}
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
-	if topK < len(s.contexts) {
-		return s.contexts[:topK], nil
+	contexts := s.contexts
+	if s.contextsByDataset != nil {
+		contexts = s.contextsByDataset[datasetID]
 	}
-	return s.contexts, nil
+	if topK < len(contexts) {
+		return contexts[:topK], nil
+	}
+	return contexts, nil
 }
 
 func (s *retrievalClientStub) Close() error {
@@ -155,6 +180,55 @@ type inferenceRequestRepositoryStub struct {
 func (s *inferenceRequestRepositoryStub) RecordInferenceRequest(_ context.Context, request *model.InferenceRequest) error {
 	s.request = request
 	return s.err
+}
+
+type publishedEndpointRepositoryStub struct {
+	endpoint       *model.PublishedEndpoint
+	upserted       *model.PublishedEndpoint
+	datasetIDs     []uuid.UUID
+	readOrgID      uuid.UUID
+	readEndpointID uuid.UUID
+	err            error
+}
+
+func (s *publishedEndpointRepositoryStub) UpsertEndpoint(_ context.Context, endpoint *model.PublishedEndpoint) (*model.PublishedEndpoint, error) {
+	s.upserted = endpoint
+	if s.err != nil {
+		return nil, s.err
+	}
+	return endpoint, nil
+}
+
+func (s *publishedEndpointRepositoryStub) SetEndpointDatasets(_ context.Context, _ uuid.UUID, _ uuid.UUID, datasetIDs []uuid.UUID) (*model.PublishedEndpoint, error) {
+	s.datasetIDs = datasetIDs
+	if s.err != nil {
+		return nil, s.err
+	}
+	endpoint := s.endpoint
+	if endpoint == nil {
+		endpoint = &model.PublishedEndpoint{}
+	}
+	endpoint.DatasetIDs = datasetIDs
+	return endpoint, nil
+}
+
+func (s *publishedEndpointRepositoryStub) ListEndpoints(_ context.Context, _ uuid.UUID) ([]*model.PublishedEndpoint, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.endpoint == nil {
+		return nil, nil
+	}
+	return []*model.PublishedEndpoint{s.endpoint}, nil
+}
+
+func (s *publishedEndpointRepositoryStub) ReadEndpoint(_ context.Context, orgID uuid.UUID, endpointID uuid.UUID) (*model.PublishedEndpoint, error) {
+	s.readOrgID = orgID
+	s.readEndpointID = endpointID
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.endpoint, nil
 }
 
 type inferenceFeedbackRepositoryStub struct {
@@ -221,12 +295,15 @@ func (s *preferenceDatasetWriterStub) WritePreferenceDataset(_ context.Context, 
 }
 
 type queryTransformerStub struct {
-	request model.QueryTransformRequest
-	result  *model.QueryTransformResult
-	err     error
+	request     model.QueryTransformRequest
+	result      *model.QueryTransformResult
+	err         error
+	deadline    time.Time
+	deadlineSet bool
 }
 
-func (s *queryTransformerStub) TransformQuery(_ context.Context, request model.QueryTransformRequest) (*model.QueryTransformResult, error) {
+func (s *queryTransformerStub) TransformQuery(ctx context.Context, request model.QueryTransformRequest) (*model.QueryTransformResult, error) {
+	s.deadline, s.deadlineSet = ctx.Deadline()
 	s.request = request
 	return s.result, s.err
 }
@@ -622,7 +699,11 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(requestRepository.request.PromptText).To(ContainSubstring("retrieved context"))
 		Expect(requestRepository.request.AnswerText).To(Equal("generated answer"))
 		Expect(requestRepository.request.RetrievedContexts).NotTo(BeEmpty())
-		var auditedContexts []model.RetrievedContextAudit
+		var auditedContexts []struct {
+			EmbeddingRecordID   string `json:"embedding_record_id"`
+			EmbeddingSnapshotID string `json:"embedding_snapshot_id"`
+			SourceText          string `json:"source_text"`
+		}
 		Expect(json.Unmarshal([]byte(requestRepository.request.RetrievedContexts), &auditedContexts)).To(Succeed())
 		Expect(auditedContexts).To(HaveLen(1))
 		Expect(auditedContexts[0].SourceText).To(Equal("retrieved context"))
@@ -653,6 +734,7 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
 			app.WithRetrievalClient(retrieval),
 			app.WithQueryTransformer(transformer),
+			app.WithQueryTransformerTimeout(17*time.Second),
 			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
 				model.ServingProtocolOpenAIChatCompletions.String(): generator,
 			}),
@@ -674,11 +756,261 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(transformer.request.QueryText).To(Equal("original question"))
 		Expect(transformer.request.UserID).To(Equal(dataset.UserID))
+		Expect(transformer.deadlineSet).To(BeTrue())
+		Expect(time.Until(transformer.deadline)).To(BeNumerically(">", 15*time.Second))
 		Expect(retrieval.userID).To(Equal(dataset.UserID))
 		Expect(retrieval.queryText).To(Equal("semantic query"))
 		Expect(retrieval.metadataFilters).To(Equal(map[string]string{"section": "risk", "source": "generated"}))
 		Expect(generator.request.Query).To(Equal("original question"))
 		Expect(response.QueryText).To(Equal("original question"))
+	})
+
+	It("uses the ready endpoint dataset that supplied retrieved context for prompt, response, and audit", func() {
+		notReadyDataset := validInferenceDataset()
+		notReadyDataset.ProcessingState = model.DatasetProcessingFeatureMaterialized
+		readyDataset := validInferenceDataset()
+		readyDataset.UserID = notReadyDataset.UserID
+		readyDataset.OrgID = notReadyDataset.OrgID
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = readyDataset.UserID
+		inferenceModel.OrgID = readyDataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         readyDataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			DatasetIDs:    []uuid.UUID{notReadyDataset.DatasetID, readyDataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		requestRepository := &inferenceRequestRepositoryStub{}
+		generator := &generationAdapterStub{}
+		retrieval := &retrievalClientStub{contextsByDataset: map[uuid.UUID][]model.RetrievedContext{
+			readyDataset.DatasetID: {{
+				EmbeddingRecordID:   uuid.New(),
+				EmbeddingSnapshotID: readyDataset.EmbeddingSnapshotID,
+				DatasetID:           readyDataset.DatasetID,
+				ChunkIndex:          1,
+				SourceText:          "ready endpoint context",
+				Similarity:          0.91,
+			}},
+		}}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{
+				notReadyDataset.DatasetID: notReadyDataset,
+				readyDataset.DatasetID:    readyDataset,
+			}}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithRetrievalClient(retrieval),
+			app.WithDefaultRAGMergeStrategy(model.RAGMergeStrategyScoreNormalized),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    readyDataset.UserID,
+			OrgID:     readyDataset.OrgID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.DatasetID).To(Equal(readyDataset.DatasetID))
+		Expect(response.DatasetIDs).To(Equal([]uuid.UUID{readyDataset.DatasetID}))
+		Expect(generator.request.Dataset).To(Equal(readyDataset))
+		Expect(generator.request.Prompt).To(ContainSubstring(readyDataset.DatasetID.String()))
+		Expect(generator.request.Prompt).NotTo(ContainSubstring(notReadyDataset.DatasetID.String()))
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.DatasetID).To(Equal(readyDataset.DatasetID))
+		Expect(requestRepository.request.EmbeddingSnapshotID).To(Equal(readyDataset.EmbeddingSnapshotID))
+		Expect(retrieval.calls).To(Equal([]uuid.UUID{readyDataset.DatasetID}))
+	})
+
+	It("continues endpoint generation when one ready dataset retrieval fails and another succeeds", func() {
+		failedDataset := validInferenceDataset()
+		successDataset := validInferenceDataset()
+		successDataset.UserID = failedDataset.UserID
+		successDataset.OrgID = failedDataset.OrgID
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = successDataset.UserID
+		inferenceModel.OrgID = successDataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         successDataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			DatasetIDs:    []uuid.UUID{failedDataset.DatasetID, successDataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		retrieval := &retrievalClientStub{
+			errorsByDataset: map[uuid.UUID]error{failedDataset.DatasetID: errors.New("vector store unavailable")},
+			contextsByDataset: map[uuid.UUID][]model.RetrievedContext{
+				successDataset.DatasetID: {{
+					EmbeddingRecordID:   uuid.New(),
+					EmbeddingSnapshotID: successDataset.EmbeddingSnapshotID,
+					DatasetID:           successDataset.DatasetID,
+					ChunkIndex:          7,
+					SourceText:          "successful dataset context",
+					Similarity:          0.88,
+				}},
+			},
+		}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{
+				failedDataset.DatasetID:  failedDataset,
+				successDataset.DatasetID: successDataset,
+			}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithRetrievalClient(retrieval),
+			app.WithDefaultRAGMergeStrategy(model.RAGMergeStrategyScoreNormalized),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    successDataset.UserID,
+			OrgID:     successDataset.OrgID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Contexts).To(HaveLen(1))
+		Expect(response.Contexts[0].DatasetID).To(Equal(successDataset.DatasetID))
+		Expect(retrieval.calls).To(ConsistOf(failedDataset.DatasetID, successDataset.DatasetID))
+	})
+
+	It("fails endpoint generation when all ready dataset retrievals fail", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		requestRepository := &inferenceRequestRepositoryStub{}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithRetrievalClient(&retrievalClientStub{errorsByDataset: map[uuid.UUID]error{dataset.DatasetID: errors.New("vector store unavailable")}}),
+			app.WithDefaultRAGMergeStrategy(model.RAGMergeStrategyScoreNormalized),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		_, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      2,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrRetrievalFailed)).To(BeTrue())
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
+	})
+
+	It("score-normalized endpoint merge uses a global candidate scale instead of dataset order", func() {
+		firstDataset := validInferenceDataset()
+		secondDataset := validInferenceDataset()
+		secondDataset.UserID = firstDataset.UserID
+		secondDataset.OrgID = firstDataset.OrgID
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = firstDataset.UserID
+		inferenceModel.OrgID = firstDataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         firstDataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			DatasetIDs:    []uuid.UUID{firstDataset.DatasetID, secondDataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		retrieval := &retrievalClientStub{contextsByDataset: map[uuid.UUID][]model.RetrievedContext{
+			firstDataset.DatasetID: {
+				{EmbeddingRecordID: uuid.New(), EmbeddingSnapshotID: firstDataset.EmbeddingSnapshotID, DatasetID: firstDataset.DatasetID, ChunkIndex: 1, SourceText: "low relevance first", Similarity: 0.10},
+				{EmbeddingRecordID: uuid.New(), EmbeddingSnapshotID: firstDataset.EmbeddingSnapshotID, DatasetID: firstDataset.DatasetID, ChunkIndex: 2, SourceText: "lower relevance first", Similarity: 0.09},
+			},
+			secondDataset.DatasetID: {
+				{EmbeddingRecordID: uuid.New(), EmbeddingSnapshotID: secondDataset.EmbeddingSnapshotID, DatasetID: secondDataset.DatasetID, ChunkIndex: 3, SourceText: "high relevance second", Similarity: 0.95},
+			},
+		}}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{
+				firstDataset.DatasetID:  firstDataset,
+				secondDataset.DatasetID: secondDataset,
+			}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithRetrievalClient(retrieval),
+			app.WithDefaultRAGMergeStrategy(model.RAGMergeStrategyScoreNormalized),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{},
+			}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    firstDataset.UserID,
+			OrgID:     firstDataset.OrgID,
+			ModelID:   inferenceModel.ModelID,
+			QueryText: "query",
+			TopK:      1,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Contexts).To(HaveLen(1))
+		Expect(response.Contexts[0].DatasetID).To(Equal(secondDataset.DatasetID))
+		Expect(response.Contexts[0].RerankScore).To(Equal(1.0))
 	})
 
 	It("falls back to raw retrieval when query transformation fails", func() {

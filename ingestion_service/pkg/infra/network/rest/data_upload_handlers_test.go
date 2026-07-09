@@ -91,6 +91,7 @@ func (s *stubUploadUseCase) OnboardHuggingFaceModel(_ context.Context, request m
 			UploadID:        uuid.New(),
 			ResourceType:    model.UploadResourceModelArtifact,
 			ResourceID:      request.ResourceID,
+			DatasetID:       request.DatasetID,
 			UserID:          request.UserID,
 			StorageLocation: "s3://local-dev-bucket/models/huggingface/" + request.ResourceID.String() + "/snapshot",
 			Status:          model.UploadSessionPromoted,
@@ -286,7 +287,9 @@ var _ = Describe("DataUploadHandlers", func() {
 			UploadID:        uploadID,
 			ResourceType:    model.UploadResourceModelArtifact,
 			ResourceID:      resourceID,
+			DatasetID:       datasetID,
 			UserID:          userID,
+			OrgID:           orgID,
 			StorageLocation: "s3://local-dev-bucket/models/artifacts/adapter.safetensors",
 			Status:          model.UploadSessionPromoted,
 			Checksum:        "checksum",
@@ -310,6 +313,7 @@ var _ = Describe("DataUploadHandlers", func() {
 		var body map[string]any
 		Expect(json.Unmarshal(response.Payload(), &body)).To(Succeed())
 		Expect(body).To(HaveKeyWithValue("resource_id", resourceID.String()))
+		Expect(body).To(HaveKeyWithValue("dataset_id", datasetID.String()))
 		Expect(body).To(HaveKeyWithValue("storage_location", "s3://local-dev-bucket/models/artifacts/adapter.safetensors"))
 		Expect(body).To(HaveKeyWithValue("artifact_type", "LORA_ADAPTER"))
 		Expect(body).To(HaveKeyWithValue("artifact_format", "safetensors"))
@@ -322,6 +326,7 @@ var _ = Describe("DataUploadHandlers", func() {
 			UploadID:         uploadID,
 			ResourceType:     model.UploadResourceModelArtifact,
 			ResourceID:       resourceID,
+			DatasetID:        datasetID,
 			UserID:           userID,
 			StorageLocation:  "s3://local-dev-bucket/models/huggingface/" + resourceID.String() + "/snapshot",
 			ManifestLocation: "s3://local-dev-bucket/models/huggingface/" + resourceID.String() + "/manifest.json",
@@ -339,13 +344,14 @@ var _ = Describe("DataUploadHandlers", func() {
 			HFRevision:       "main",
 			HFCommitSHA:      "abc123",
 		}
-		req := httptest.NewRequest(http.MethodPost, "/v1/models/onboard/huggingface", bytes.NewReader([]byte(`{"resource_id":"`+resourceID.String()+`","repo_id":"meta-llama/Llama-3.1-8B","revision":"main","client_nonce":"hf-1","model_name":"llama","model_version":"1","base_model":"meta-llama/Llama-3.1-8B"}`)))
+		req := httptest.NewRequest(http.MethodPost, "/v1/models/onboard/huggingface", bytes.NewReader([]byte(`{"resource_id":"`+resourceID.String()+`","dataset_id":"`+datasetID.String()+`","repo_id":"meta-llama/Llama-3.1-8B","revision":"main","client_nonce":"hf-1","model_name":"llama","model_version":"1","base_model":"meta-llama/Llama-3.1-8B"}`)))
 
 		response, err := handler.OnboardHuggingFaceModel(context.Background(), req)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(response.StatusCode()).To(Equal(http.StatusCreated))
 		Expect(uploadUseCase.receivedOnboardRequest.ResourceID).To(Equal(resourceID))
+		Expect(uploadUseCase.receivedOnboardRequest.DatasetID).To(Equal(datasetID))
 		Expect(uploadUseCase.receivedOnboardRequest.UserID).To(Equal(userID))
 		Expect(uploadUseCase.receivedOnboardRequest.OrgID).To(Equal(orgID))
 		Expect(uploadUseCase.receivedOnboardRequest.RepoID).To(Equal("meta-llama/Llama-3.1-8B"))
@@ -363,7 +369,7 @@ var _ = Describe("DataUploadHandlers", func() {
 	It("returns service unavailable when Hugging Face onboarding waits on tenant projection", func() {
 		uploadUseCase.err = domain.ErrDependencyNotReady.Extend("tenant projection is not ready")
 		resourceID := uuid.New()
-		req := httptest.NewRequest(http.MethodPost, "/v1/models/onboard/huggingface", bytes.NewReader([]byte(`{"resource_id":"`+resourceID.String()+`","repo_id":"meta-llama/Llama-3.1-8B","revision":"main","client_nonce":"hf-1","model_name":"llama","model_version":"1","base_model":"meta-llama/Llama-3.1-8B"}`)))
+		req := httptest.NewRequest(http.MethodPost, "/v1/models/onboard/huggingface", bytes.NewReader([]byte(`{"resource_id":"`+resourceID.String()+`","dataset_id":"`+datasetID.String()+`","repo_id":"meta-llama/Llama-3.1-8B","revision":"main","client_nonce":"hf-1","model_name":"llama","model_version":"1","base_model":"meta-llama/Llama-3.1-8B"}`)))
 
 		response, err := handler.OnboardHuggingFaceModel(context.Background(), req)
 
@@ -382,7 +388,7 @@ var _ = Describe("DataUploadHandlers", func() {
 			Message:    "Access to model meta-llama/Meta-Llama-3-8B is restricted",
 		}
 		resourceID := uuid.New()
-		req := httptest.NewRequest(http.MethodPost, "/v1/models/onboard/huggingface", bytes.NewReader([]byte(`{"resource_id":"`+resourceID.String()+`","repo_id":"meta-llama/Meta-Llama-3-8B","revision":"main","client_nonce":"hf-1","model_name":"llama","model_version":"1","base_model":"meta-llama/Meta-Llama-3-8B"}`)))
+		req := httptest.NewRequest(http.MethodPost, "/v1/models/onboard/huggingface", bytes.NewReader([]byte(`{"resource_id":"`+resourceID.String()+`","dataset_id":"`+datasetID.String()+`","repo_id":"meta-llama/Meta-Llama-3-8B","revision":"main","client_nonce":"hf-1","model_name":"llama","model_version":"1","base_model":"meta-llama/Meta-Llama-3-8B"}`)))
 
 		response, err := handler.OnboardHuggingFaceModel(context.Background(), req)
 

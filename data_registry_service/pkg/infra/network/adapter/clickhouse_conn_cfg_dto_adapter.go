@@ -20,7 +20,21 @@ type ClickHouseConnCfgDTO struct {
 	Password           string `json:"password,omitempty"`
 }
 
+type clickHouseConnCfgDTOAdapter struct {
+	validator *validator.Validate
+}
+
+func NewClickHouseConnCfgDTOAdapter() *clickHouseConnCfgDTOAdapter {
+	log.Trace("NewClickHouseConnCfgDTOAdapter")
+
+	return &clickHouseConnCfgDTOAdapter{validator: validator.New()}
+}
+
 func ToClickHouseConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
+	return NewClickHouseConnCfgDTOAdapter().ToDTO(ctx, conn, secretizer, serializer)
+}
+
+func (a *clickHouseConnCfgDTOAdapter) ToDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
 	log.Trace("adapter ToClickHouseConnCfgDTO")
 
 	connCfg, ok := conn.(*model.ClickHouseConnCfg)
@@ -51,6 +65,10 @@ func ToClickHouseConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, sec
 }
 
 func FromClickHouseConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
+	return NewClickHouseConnCfgDTOAdapter().FromDTO(ctx, cfgBytes, deserializer)
+}
+
+func (a *clickHouseConnCfgDTOAdapter) FromDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
 	log.Trace("adapter FromClickHouseConnCfgDTO")
 
 	var dto ClickHouseConnCfgDTO
@@ -59,7 +77,7 @@ func FromClickHouseConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}
 
-	if err := validator.New().Struct(dto); err != nil {
+	if err := a.validator.Struct(dto); err != nil {
 		log.WithContext(ctx).WithError(err).Error("failed to validate ClickHouse source connector configuration")
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}

@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
-from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi
 from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
-from bighill_model_artifacts.gguf import inspect_gguf
 
 
 DEFAULT_GGUF_REPO = "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF"
@@ -19,6 +16,33 @@ def require_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"{name} is required")
     return value
+
+
+def model_info(api: HfApi, *, repo_id: str, revision: str, token: str):
+    try:
+        return api.model_info(repo_id=repo_id, revision=revision, token=token, files_metadata=True)
+    except TypeError:
+        return api.model_info(repo_id=repo_id, revision=revision, token=token)
+
+
+def sibling_attr(sibling: object, name: str):
+    if isinstance(sibling, dict):
+        return sibling.get(name)
+    return getattr(sibling, name, None)
+
+
+def lfs_attr(sibling: object, name: str):
+    lfs = sibling_attr(sibling, "lfs")
+    if isinstance(lfs, dict):
+        return lfs.get(name)
+    return getattr(lfs, name, None)
+
+
+def find_sibling(info: object, filename: str):
+    for sibling in getattr(info, "siblings", []) or []:
+        if sibling_attr(sibling, "rfilename") == filename:
+            return sibling
+    return None
 
 
 def main() -> int:
@@ -36,22 +60,13 @@ def main() -> int:
         username = str(whoami.get("name") or whoami.get("email") or "").strip()
         if not username:
             raise RuntimeError("Hugging Face token login validation failed")
-        info = api.model_info(repo_id=repo_id, revision=revision, token=token)
-        local_dir = tempfile.mkdtemp(prefix="bighill-hf-e2e-preflight-")
+        info = model_info(api, repo_id=repo_id, revision=revision, token=token)
         filename = model_file or "config.json"
-        downloaded = Path(
-            hf_hub_download(
-                repo_id=repo_id,
-                revision=revision,
-                filename=filename,
-                token=token,
-                local_dir=local_dir,
-            )
-        )
-        if filename.lower().endswith(".gguf") or artifact_format in {"GGUF", "GGUF_MODEL", "GGUF_LORA_ADAPTER"}:
-            inspection = inspect_gguf(downloaded)
-            if artifact_format in {"", "GGUF", "GGUF_MODEL"} and not inspection.chat_template_present:
-                raise RuntimeError("GGUF preflight failed: tokenizer.chat_template is required for chat completions")
+        sibling = find_sibling(info, filename)
+        if sibling is None:
+            raise RuntimeError(f"file {filename!r} was not found in the Hugging Face repo metadata")
+        if artifact_format in {"GGUF", "GGUF_MODEL", "GGUF_LORA_ADAPTER"} and not filename.lower().endswith(".gguf"):
+            raise RuntimeError(f"artifact format {artifact_format} requires a .gguf file, got {filename!r}")
     except GatedRepoError as err:
         print(
             f"Hugging Face repo access denied for {repo_id}@{revision}. "
@@ -66,7 +81,11 @@ def main() -> int:
         return 1
 
     file_suffix = f" file {model_file}" if model_file else ""
-    print(f"Hugging Face repo access verified for {repo_id}@{revision}{file_suffix} ({info.sha}) as {username}")
+    size = sibling_attr(sibling, "size") or lfs_attr(sibling, "size")
+    oid = lfs_attr(sibling, "sha256") or lfs_attr(sibling, "oid")
+    size_suffix = f", size={size}" if size else ""
+    oid_suffix = f", lfs_sha256={oid}" if oid else ""
+    print(f"Hugging Face repo access verified for {repo_id}@{revision}{file_suffix} ({info.sha}) as {username}{size_suffix}{oid_suffix}")
     return 0
 
 

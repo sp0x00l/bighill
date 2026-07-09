@@ -21,7 +21,21 @@ type GoogleCloudStorageConnCfgDTO struct {
 	DefaultCtasFormat string `json:"defaultCtasFormat,omitempty"`
 }
 
+type googleCloudStorageConnCfgDTOAdapter struct {
+	validator *validator.Validate
+}
+
+func NewGoogleCloudStorageConnCfgDTOAdapter() *googleCloudStorageConnCfgDTOAdapter {
+	log.Trace("NewGoogleCloudStorageConnCfgDTOAdapter")
+
+	return &googleCloudStorageConnCfgDTOAdapter{validator: validator.New()}
+}
+
 func ToGoogleCloudStorageConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
+	return NewGoogleCloudStorageConnCfgDTOAdapter().ToDTO(ctx, conn, secretizer, serializer)
+}
+
+func (a *googleCloudStorageConnCfgDTOAdapter) ToDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
 	log.Trace("adapter ToGoogleCloudStorageConnCfgDTO")
 
 	connCfg, ok := conn.(*model.GoogleCloudStorageConnCfg)
@@ -51,6 +65,10 @@ func ToGoogleCloudStorageConnCfgDTO(ctx context.Context, conn model.ConnectorCon
 }
 
 func FromGoogleCloudStorageConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
+	return NewGoogleCloudStorageConnCfgDTOAdapter().FromDTO(ctx, cfgBytes, deserializer)
+}
+
+func (a *googleCloudStorageConnCfgDTOAdapter) FromDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
 	log.Trace("adapter FromGoogleCloudStorageConnCfgDTO")
 
 	var dto GoogleCloudStorageConnCfgDTO
@@ -59,7 +77,7 @@ func FromGoogleCloudStorageConnCfgDTO(ctx context.Context, cfgBytes []byte, dese
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}
 
-	if err := validator.New().Struct(dto); err != nil {
+	if err := a.validator.Struct(dto); err != nil {
 		log.WithContext(ctx).WithError(err).Error("failed to validate Google Cloud Storage source connector configuration")
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}

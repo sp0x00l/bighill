@@ -66,7 +66,7 @@ func (s *datasetUsecaseStub) AdvanceDatasetProcessingState(context.Context, uuid
 	return nil, nil
 }
 
-func (s *datasetUsecaseStub) RecordDatasetMaterialization(context.Context, *model.Dataset, model.ProcessingState) (*model.Dataset, error) {
+func (s *datasetUsecaseStub) RecordDatasetMaterialization(context.Context, *model.Dataset, model.ProcessingState, int64) (*model.Dataset, error) {
 	return nil, nil
 }
 

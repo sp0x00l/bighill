@@ -24,7 +24,7 @@ run_api_gateway_tests()
     wait_for_api_gateway_ready 120 2 "$BASE_URL"
 
     cd "$GATEWAY_ROOT"
-    ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1
+    ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1 --label-filter='!real-huggingface'
 
     cd "$CURRENT_DIR"
 }

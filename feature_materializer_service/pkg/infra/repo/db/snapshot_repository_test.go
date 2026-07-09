@@ -202,22 +202,23 @@ func (r errorRow) Scan(...any) error {
 }
 
 type rawSnapshotRow struct {
-	RawSnapshotID     uuid.UUID
-	DatasetID         uuid.UUID
-	UserID            uuid.UUID
-	OrgID             uuid.UUID
-	StorageLocation   string
-	ContentType       string
-	FileExtension     string
-	TableNamespace    string
-	TableName         string
-	TableFormat       string
-	CatalogProvider   string
-	ProcessingProfile string
-	SchemaVersion     int
-	SchemaMetadata    string
-	Status            string
-	FailureReason     string
+	RawSnapshotID           uuid.UUID
+	DatasetID               uuid.UUID
+	UserID                  uuid.UUID
+	OrgID                   uuid.UUID
+	MaterializationEventSeq int64
+	StorageLocation         string
+	ContentType             string
+	FileExtension           string
+	TableNamespace          string
+	TableName               string
+	TableFormat             string
+	CatalogProvider         string
+	ProcessingProfile       string
+	SchemaVersion           int
+	SchemaMetadata          string
+	Status                  string
+	FailureReason           string
 }
 
 func (r rawSnapshotRow) Scan(dest ...any) error {
@@ -225,9 +226,49 @@ func (r rawSnapshotRow) Scan(dest ...any) error {
 	*(dest[1].(*string)) = r.DatasetID.String()
 	*(dest[2].(*string)) = r.UserID.String()
 	*(dest[3].(*string)) = r.OrgID.String()
-	*(dest[4].(*string)) = r.StorageLocation
-	*(dest[5].(*string)) = r.ContentType
-	*(dest[6].(*string)) = r.FileExtension
+	*(dest[4].(*int64)) = r.MaterializationEventSeq
+	*(dest[5].(*string)) = r.StorageLocation
+	*(dest[6].(*string)) = r.ContentType
+	*(dest[7].(*string)) = r.FileExtension
+	*(dest[8].(*string)) = r.TableNamespace
+	*(dest[9].(*string)) = r.TableName
+	*(dest[10].(*string)) = r.TableFormat
+	*(dest[11].(*string)) = r.CatalogProvider
+	*(dest[12].(*string)) = r.ProcessingProfile
+	*(dest[13].(*int)) = r.SchemaVersion
+	*(dest[14].(*string)) = r.SchemaMetadata
+	*(dest[15].(*string)) = r.Status
+	*(dest[16].(*string)) = r.FailureReason
+	return nil
+}
+
+type featureSnapshotRow struct {
+	FeatureSnapshotID       uuid.UUID
+	RawSnapshotID           uuid.UUID
+	DatasetID               uuid.UUID
+	UserID                  uuid.UUID
+	OrgID                   uuid.UUID
+	MaterializationEventSeq int64
+	StorageLocation         string
+	TableNamespace          string
+	TableName               string
+	TableFormat             string
+	CatalogProvider         string
+	ProcessingProfile       string
+	SchemaVersion           int
+	SchemaMetadata          string
+	Status                  string
+	FailureReason           string
+}
+
+func (r featureSnapshotRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.FeatureSnapshotID.String()
+	*(dest[1].(*string)) = r.RawSnapshotID.String()
+	*(dest[2].(*string)) = r.DatasetID.String()
+	*(dest[3].(*string)) = r.UserID.String()
+	*(dest[4].(*string)) = r.OrgID.String()
+	*(dest[5].(*int64)) = r.MaterializationEventSeq
+	*(dest[6].(*string)) = r.StorageLocation
 	*(dest[7].(*string)) = r.TableNamespace
 	*(dest[8].(*string)) = r.TableName
 	*(dest[9].(*string)) = r.TableFormat
@@ -240,67 +281,31 @@ func (r rawSnapshotRow) Scan(dest ...any) error {
 	return nil
 }
 
-type featureSnapshotRow struct {
-	FeatureSnapshotID uuid.UUID
-	RawSnapshotID     uuid.UUID
-	DatasetID         uuid.UUID
-	UserID            uuid.UUID
-	OrgID             uuid.UUID
-	StorageLocation   string
-	TableNamespace    string
-	TableName         string
-	TableFormat       string
-	CatalogProvider   string
-	ProcessingProfile string
-	SchemaVersion     int
-	SchemaMetadata    string
-	Status            string
-	FailureReason     string
-}
-
-func (r featureSnapshotRow) Scan(dest ...any) error {
-	*(dest[0].(*string)) = r.FeatureSnapshotID.String()
-	*(dest[1].(*string)) = r.RawSnapshotID.String()
-	*(dest[2].(*string)) = r.DatasetID.String()
-	*(dest[3].(*string)) = r.UserID.String()
-	*(dest[4].(*string)) = r.OrgID.String()
-	*(dest[5].(*string)) = r.StorageLocation
-	*(dest[6].(*string)) = r.TableNamespace
-	*(dest[7].(*string)) = r.TableName
-	*(dest[8].(*string)) = r.TableFormat
-	*(dest[9].(*string)) = r.CatalogProvider
-	*(dest[10].(*string)) = r.ProcessingProfile
-	*(dest[11].(*int)) = r.SchemaVersion
-	*(dest[12].(*string)) = r.SchemaMetadata
-	*(dest[13].(*string)) = r.Status
-	*(dest[14].(*string)) = r.FailureReason
-	return nil
-}
-
 type embeddingSnapshotRow struct {
-	EmbeddingSnapshotID uuid.UUID
-	FeatureSnapshotID   uuid.UUID
-	DatasetID           uuid.UUID
-	UserID              uuid.UUID
-	OrgID               uuid.UUID
-	VectorStore         string
-	CollectionName      string
-	EmbeddingDimensions int
-	EmbeddingCount      int64
-	StrategyVersion     string
-	ExtractorName       string
-	ExtractorVersion    string
-	CleanerName         string
-	CleanerVersion      string
-	ChunkerName         string
-	ChunkerVersion      string
-	ChunkSize           int
-	ChunkOverlap        int
-	EmbeddingProvider   string
-	EmbeddingModel      string
-	ActiveForRetrieval  bool
-	Status              string
-	FailureReason       string
+	EmbeddingSnapshotID     uuid.UUID
+	FeatureSnapshotID       uuid.UUID
+	DatasetID               uuid.UUID
+	UserID                  uuid.UUID
+	OrgID                   uuid.UUID
+	MaterializationEventSeq int64
+	VectorStore             string
+	CollectionName          string
+	EmbeddingDimensions     int
+	EmbeddingCount          int64
+	StrategyVersion         string
+	ExtractorName           string
+	ExtractorVersion        string
+	CleanerName             string
+	CleanerVersion          string
+	ChunkerName             string
+	ChunkerVersion          string
+	ChunkSize               int
+	ChunkOverlap            int
+	EmbeddingProvider       string
+	EmbeddingModel          string
+	ActiveForRetrieval      bool
+	Status                  string
+	FailureReason           string
 }
 
 func (r embeddingSnapshotRow) Scan(dest ...any) error {
@@ -309,24 +314,38 @@ func (r embeddingSnapshotRow) Scan(dest ...any) error {
 	*(dest[2].(*string)) = r.DatasetID.String()
 	*(dest[3].(*string)) = r.UserID.String()
 	*(dest[4].(*string)) = r.OrgID.String()
-	*(dest[5].(*string)) = r.VectorStore
-	*(dest[6].(*string)) = r.CollectionName
-	*(dest[7].(*int)) = r.EmbeddingDimensions
-	*(dest[8].(*int64)) = r.EmbeddingCount
-	*(dest[9].(*string)) = r.StrategyVersion
-	*(dest[10].(*string)) = r.ExtractorName
-	*(dest[11].(*string)) = r.ExtractorVersion
-	*(dest[12].(*string)) = r.CleanerName
-	*(dest[13].(*string)) = r.CleanerVersion
-	*(dest[14].(*string)) = r.ChunkerName
-	*(dest[15].(*string)) = r.ChunkerVersion
-	*(dest[16].(*int)) = r.ChunkSize
-	*(dest[17].(*int)) = r.ChunkOverlap
-	*(dest[18].(*string)) = r.EmbeddingProvider
-	*(dest[19].(*string)) = r.EmbeddingModel
-	*(dest[20].(*bool)) = r.ActiveForRetrieval
-	*(dest[21].(*string)) = r.Status
-	*(dest[22].(*string)) = r.FailureReason
+	*(dest[5].(*int64)) = r.MaterializationEventSeq
+	*(dest[6].(*string)) = r.VectorStore
+	*(dest[7].(*string)) = r.CollectionName
+	*(dest[8].(*int)) = r.EmbeddingDimensions
+	*(dest[9].(*int64)) = r.EmbeddingCount
+	*(dest[10].(*string)) = r.StrategyVersion
+	*(dest[11].(*string)) = r.ExtractorName
+	*(dest[12].(*string)) = r.ExtractorVersion
+	*(dest[13].(*string)) = r.CleanerName
+	*(dest[14].(*string)) = r.CleanerVersion
+	*(dest[15].(*string)) = r.ChunkerName
+	*(dest[16].(*string)) = r.ChunkerVersion
+	*(dest[17].(*int)) = r.ChunkSize
+	*(dest[18].(*int)) = r.ChunkOverlap
+	*(dest[19].(*string)) = r.EmbeddingProvider
+	*(dest[20].(*string)) = r.EmbeddingModel
+	*(dest[21].(*bool)) = r.ActiveForRetrieval
+	*(dest[22].(*string)) = r.Status
+	*(dest[23].(*string)) = r.FailureReason
+	return nil
+}
+
+type int64Row struct {
+	value int64
+	err   error
+}
+
+func (r int64Row) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	*(dest[0].(*int64)) = r.value
 	return nil
 }
 
@@ -499,27 +518,36 @@ var _ = Describe("SnapshotRepository", func() {
 
 	Describe("MarkRawReady", func() {
 		It("marks the raw snapshot ready", func() {
-			err := repository.MarkRawReady(ctx, tx, &model.RawSnapshot{
+			poolMock.NextRows = []pgx.Row{int64Row{value: 1}}
+			rawSnapshot := &model.RawSnapshot{
 				RawSnapshotID:   rawSnapshotID,
+				DatasetID:       datasetID,
+				OrgID:           orgID,
 				StorageLocation: "s3://lakehouse/raw/snapshot.parquet",
 				TableFormat:     "PARQUET",
 				SchemaVersion:   1,
 				SchemaMetadata:  "{}",
-			})
+			}
+
+			err := repository.MarkRawReady(ctx, tx, rawSnapshot)
 
 			Expect(err).NotTo(HaveOccurred())
+			Expect(rawSnapshot.MaterializationEventSeq).To(Equal(int64(1)))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("INSERT INTO test_db.dataset_materialization_event_state"))
 			Expect(poolMock.ExecCalled).To(BeTrue())
 			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("UPDATE test_db.raw_snapshots"))
 			args := namedArgs(poolMock.ExecArgs[0])
 			Expect(args).To(HaveKeyWithValue("raw_snapshot_id", pgtype.UUID{Bytes: rawSnapshotID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("materialization_event_seq", int64(1)))
 			Expect(args).To(HaveKeyWithValue("storage_location", "s3://lakehouse/raw/snapshot.parquet"))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
 		})
 
 		It("returns raw snapshot not found when no row is updated", func() {
+			poolMock.NextRows = []pgx.Row{int64Row{value: 1}}
 			poolMock.NextRowsAffected = 0
 
-			err := repository.MarkRawReady(ctx, tx, &model.RawSnapshot{RawSnapshotID: rawSnapshotID})
+			err := repository.MarkRawReady(ctx, tx, &model.RawSnapshot{RawSnapshotID: rawSnapshotID, DatasetID: datasetID, OrgID: orgID})
 
 			Expect(errors.Is(err, domain.ErrRawSnapshotNotFound)).To(BeTrue())
 		})
@@ -601,6 +629,33 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(featureSnapshot).To(BeNil())
 			Expect(errors.Is(err, domain.ErrRawSnapshotNotFound)).To(BeTrue())
 			Expect(poolMock.QueryRowCalledCount).To(Equal(1))
+		})
+	})
+
+	Describe("MarkFeatureReady", func() {
+		It("marks the feature snapshot ready", func() {
+			poolMock.NextRows = []pgx.Row{int64Row{value: 2}}
+			featureSnapshot := &model.FeatureSnapshot{
+				FeatureSnapshotID: featureID,
+				DatasetID:         datasetID,
+				OrgID:             orgID,
+				StorageLocation:   "s3://lakehouse/features/snapshot.parquet",
+				TableFormat:       "PARQUET",
+				SchemaVersion:     2,
+				SchemaMetadata:    "{}",
+			}
+
+			err := repository.MarkFeatureReady(ctx, tx, featureSnapshot)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(featureSnapshot.MaterializationEventSeq).To(Equal(int64(2)))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("INSERT INTO test_db.dataset_materialization_event_state"))
+			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("UPDATE test_db.feature_snapshots"))
+			args := namedArgs(poolMock.ExecArgs[0])
+			Expect(args).To(HaveKeyWithValue("feature_snapshot_id", pgtype.UUID{Bytes: featureID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("materialization_event_seq", int64(2)))
+			Expect(args).To(HaveKeyWithValue("storage_location", "s3://lakehouse/features/snapshot.parquet"))
+			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
 		})
 	})
 
@@ -704,7 +759,8 @@ var _ = Describe("SnapshotRepository", func() {
 
 	Describe("MarkEmbeddingReady", func() {
 		It("marks the embedding snapshot ready", func() {
-			err := repository.MarkEmbeddingReady(ctx, tx, &model.EmbeddingSnapshot{
+			poolMock.NextRows = []pgx.Row{int64Row{value: 3}}
+			embeddingSnapshot := &model.EmbeddingSnapshot{
 				EmbeddingSnapshotID: embeddingID,
 				DatasetID:           datasetID,
 				OrgID:               orgID,
@@ -723,15 +779,19 @@ var _ = Describe("SnapshotRepository", func() {
 				ChunkOverlap:        model.DefaultChunkOverlap,
 				EmbeddingProvider:   "ollama",
 				EmbeddingModel:      model.DefaultEmbeddingModel,
-			})
+			}
+
+			err := repository.MarkEmbeddingReady(ctx, tx, embeddingSnapshot)
 
 			Expect(err).NotTo(HaveOccurred())
+			Expect(embeddingSnapshot.MaterializationEventSeq).To(Equal(int64(3)))
 			Expect(poolMock.ExecCalls).To(HaveLen(2))
 			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("active_for_retrieval = false"))
 			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("UPDATE test_db.embedding_snapshots"))
 			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("active_for_retrieval = true"))
 			args := namedArgs(poolMock.ExecArgs[1])
 			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("materialization_event_seq", int64(3)))
 			Expect(args).To(HaveKeyWithValue("vector_store", "pgvector"))
 			Expect(args).To(HaveKeyWithValue("collection_name", "movies"))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
@@ -741,9 +801,10 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 
 		It("returns embedding snapshot not found when no row is updated", func() {
+			poolMock.NextRows = []pgx.Row{int64Row{value: 3}}
 			poolMock.NextRowsAffected = 0
 
-			err := repository.MarkEmbeddingReady(ctx, tx, &model.EmbeddingSnapshot{EmbeddingSnapshotID: embeddingID})
+			err := repository.MarkEmbeddingReady(ctx, tx, &model.EmbeddingSnapshot{EmbeddingSnapshotID: embeddingID, DatasetID: datasetID, OrgID: orgID})
 
 			Expect(errors.Is(err, domain.ErrEmbeddingSnapshotNotFound)).To(BeTrue())
 		})

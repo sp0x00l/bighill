@@ -40,3 +40,7 @@ type ModelEventBuilder interface {
 type ModelServingDeployer interface {
 	EnsureServedModel(ctx context.Context, registeredModel *model.Model) error
 }
+
+type ServingStatusRecorder interface {
+	RecordModelServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, idempotencyKey uuid.UUID) (*model.Model, error)
+}

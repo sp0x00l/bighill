@@ -48,6 +48,18 @@ func (u *recordingInferenceUsecase) ListEndpoints(context.Context, uuid.UUID) ([
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) PublishEndpoint(context.Context, model.EndpointPublication) (*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) SetEndpointDatasets(context.Context, model.EndpointDatasetBinding) (*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) SetEndpointMergeStrategy(context.Context, model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
 func (u *recordingInferenceUsecase) GenerateForEndpoint(context.Context, uuid.UUID, model.GenerateRequest) (*model.GenerateResponse, error) {
 	return nil, nil
 }
@@ -130,13 +142,17 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 
-	It("maps an ingested base model update without training or dataset ids", func() {
+	It("maps an ingested base model update with owner and without training or dataset ids", func() {
 		modelID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
 		uc := &recordingInferenceUsecase{}
 		listener := inferencemessaging.NewModelUpdatedEventListener(uc)
 
 		err := listener.Handle(context.Background(), modelID, &modelregistrypb.ModelUpdatedEvent{
 			ModelId:           modelID.String(),
+			UserId:            userID.String(),
+			OrgId:             orgID.String(),
 			ModelKind:         "BASE",
 			Source:            "UPLOAD",
 			SourceUri:         "s3://local-dev-bucket/models/base-model",
@@ -157,8 +173,8 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.model.ModelID).To(Equal(modelID))
-		Expect(uc.model.UserID).To(Equal(uuid.Nil))
-		Expect(uc.model.OrgID).To(Equal(uuid.Nil))
+		Expect(uc.model.UserID).To(Equal(userID))
+		Expect(uc.model.OrgID).To(Equal(orgID))
 		Expect(uc.model.TrainingRunID).To(Equal(uuid.Nil))
 		Expect(uc.model.DatasetID).To(Equal(uuid.Nil))
 		Expect(uc.model.ModelKind).To(Equal(model.ModelKindBase))

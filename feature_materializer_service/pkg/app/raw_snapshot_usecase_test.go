@@ -38,7 +38,7 @@ type snapshotUnitOfWorkStub struct {
 
 type snapshotEventBuilderStub struct{}
 
-func (snapshotEventBuilderStub) RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) msgConn.OutboundMessage {
+func (snapshotEventBuilderStub) RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) (msgConn.OutboundMessage, error) {
 	return msgConn.OutboundMessage{
 		Topic: "feature_materializer",
 		Message: msgConn.Message{
@@ -46,10 +46,10 @@ func (snapshotEventBuilderStub) RawSnapshotReadyMessage(rawSnapshot *model.RawSn
 			MsgType:     msgConn.MsgTypeRawSnapshotReady,
 		},
 		DispatchKey: "raw_snapshot_ready:" + rawSnapshot.RawSnapshotID.String(),
-	}
+	}, nil
 }
 
-func (snapshotEventBuilderStub) FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) msgConn.OutboundMessage {
+func (snapshotEventBuilderStub) FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) (msgConn.OutboundMessage, error) {
 	return msgConn.OutboundMessage{
 		Topic: "feature_materializer",
 		Message: msgConn.Message{
@@ -57,10 +57,10 @@ func (snapshotEventBuilderStub) FeatureSnapshotReadyMessage(featureSnapshot *mod
 			MsgType:     msgConn.MsgTypeFeatureSnapshotReady,
 		},
 		DispatchKey: "feature_snapshot_ready:" + featureSnapshot.FeatureSnapshotID.String(),
-	}
+	}, nil
 }
 
-func (snapshotEventBuilderStub) EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) msgConn.OutboundMessage {
+func (snapshotEventBuilderStub) EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) (msgConn.OutboundMessage, error) {
 	return msgConn.OutboundMessage{
 		Topic: "feature_materializer",
 		Message: msgConn.Message{
@@ -68,7 +68,7 @@ func (snapshotEventBuilderStub) EmbeddingSnapshotReadyMessage(embeddingSnapshot 
 			MsgType:     msgConn.MsgTypeEmbeddingSnapshotReady,
 		},
 		DispatchKey: "embedding_snapshot_ready:" + embeddingSnapshot.EmbeddingSnapshotID.String(),
-	}
+	}, nil
 }
 
 func (s *snapshotUnitOfWorkStub) Do(ctx context.Context, fn shareduow.TxFunc) error {
@@ -93,6 +93,7 @@ func (s *rawSnapshotRepoStub) SavePendingRawSnapshot(_ context.Context, _ pgx.Tx
 
 func (s *rawSnapshotRepoStub) MarkRawReady(_ context.Context, _ pgx.Tx, rawSnapshot *model.RawSnapshot) error {
 	s.readyID = rawSnapshot.RawSnapshotID
+	rawSnapshot.MaterializationEventSeq = 1
 	return nil
 }
 

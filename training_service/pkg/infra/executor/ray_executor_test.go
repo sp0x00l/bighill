@@ -47,10 +47,14 @@ func (r *manifestReaderStub) Stat(_ context.Context, location string) (model.Obj
 }
 
 var _ = Describe("RayExecutor", func() {
-	It("panics when constructed without a manifest reader", func() {
-		Expect(func() {
-			_, _ = executor.NewRayExecutorWithClient(rayConfig(), nil, &http.Client{})
-		}).To(Panic())
+	It("rejects missing boundary dependencies or config", func() {
+		_, err := executor.NewRayExecutorWithClient(rayConfig(), nil, &http.Client{})
+		Expect(err).To(MatchError(ContainSubstring("manifest reader is required")))
+
+		config := rayConfig()
+		config.PollInterval = 0
+		_, err = executor.NewRayExecutorWithClient(config, &manifestReaderStub{}, &http.Client{})
+		Expect(err).To(MatchError(ContainSubstring("poll interval must be greater than zero")))
 	})
 
 	It("submits a deterministic Ray training job and reads the artifact manifest on success", func() {

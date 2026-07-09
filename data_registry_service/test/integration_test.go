@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,13 +124,25 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		Expect(read.TableFormat).To(Equal(model.Parquet))
 		Expect(read.ProcessingState).To(Equal(model.DatasetProcessingPending))
 
-		rawReady, err := datasets.AdvanceDatasetProcessingState(tenantCtx, datasetID, userID, model.DatasetProcessingRawMaterialized)
+		rawSnapshotID := uuid.New()
+		featureSnapshotID := uuid.New()
+		rawReady, err := datasets.RecordDatasetMaterialization(tenantCtx, &model.Dataset{
+			ID:                datasetID,
+			UserID:            userID,
+			Location:          "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:    "raw",
+			TableName:         "movie_features_raw",
+			TableFormat:       model.Parquet,
+			CatalogProvider:   model.LocalCatalog,
+			SchemaVersion:     1,
+			SchemaMetadata:    `{"columns":["title","release_year"]}`,
+			RawSnapshotID:     rawSnapshotID,
+			ProcessingProfile: model.GenericParquetProfile,
+		}, model.DatasetProcessingRawMaterialized, 1)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rawReady.ProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
 		Expect(rawReady.DatasetVersion).To(BeNumerically(">=", 2))
 
-		rawSnapshotID := uuid.New()
-		featureSnapshotID := uuid.New()
 		materialized, err := datasets.RecordDatasetMaterialization(tenantCtx, &model.Dataset{
 			ID:                datasetID,
 			UserID:            userID,
@@ -142,7 +155,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			SchemaMetadata:    `{"columns":["title","views"]}`,
 			RawSnapshotID:     rawSnapshotID,
 			FeatureSnapshotID: featureSnapshotID,
-		}, model.DatasetProcessingFeatureMaterialized)
+		}, model.DatasetProcessingFeatureMaterialized, 2)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(materialized.ProcessingState).To(Equal(model.DatasetProcessingFeatureMaterialized))
 		Expect(materialized.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/data.parquet"))
@@ -154,7 +167,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			UserID:        userID,
 			Location:      "s3://local-dev-bucket/lakehouse/raw/data.parquet",
 			RawSnapshotID: rawSnapshotID,
-		}, model.DatasetProcessingRawMaterialized)
+		}, model.DatasetProcessingRawMaterialized, 1)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(lateRawReplay.ProcessingState).To(Equal(model.DatasetProcessingFeatureMaterialized))
 		Expect(lateRawReplay.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/data.parquet"))
@@ -169,7 +182,7 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			CollectionName:      "movie_features",
 			EmbeddingDimensions: 384,
 			EmbeddingCount:      2,
-		}, model.DatasetProcessingEmbeddingsMaterialized)
+		}, model.DatasetProcessingEmbeddingsMaterialized, 3)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(embedded.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 		Expect(embedded.EmbeddingSnapshotID).To(Equal(embeddingSnapshotID))
@@ -472,6 +485,22 @@ var _ = Describe("Data registry integration", Ordered, func() {
 		})
 		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 
+		rawSnapshotID := uuid.New()
+		_, err = datasets.RecordDatasetMaterialization(tenantCtx, &model.Dataset{
+			ID:                datasetID,
+			UserID:            userID,
+			Location:          "s3://warehouse/raw/table-grpc.parquet",
+			TableNamespace:    "raw",
+			TableName:         "table_grpc_raw",
+			TableFormat:       model.Parquet,
+			CatalogProvider:   model.LocalCatalog,
+			SchemaVersion:     1,
+			SchemaMetadata:    `{"columns":["title"]}`,
+			RawSnapshotID:     rawSnapshotID,
+			ProcessingProfile: model.GenericParquetProfile,
+		}, model.DatasetProcessingRawMaterialized, 1)
+		Expect(err).NotTo(HaveOccurred())
+
 		_, err = datasets.RecordDatasetMaterialization(tenantCtx, &model.Dataset{
 			ID:              datasetID,
 			UserID:          userID,
@@ -482,7 +511,8 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			CatalogProvider: model.LocalCatalog,
 			SchemaVersion:   2,
 			SchemaMetadata:  `{"columns":["title","year"]}`,
-		}, model.DatasetProcessingFeatureMaterialized)
+			RawSnapshotID:   rawSnapshotID,
+		}, model.DatasetProcessingFeatureMaterialized, 2)
 		Expect(err).NotTo(HaveOccurred())
 
 		res, err := server.ReadDatasetTable(ctx, &dataregistrypb.ReadDatasetTableRequest{
@@ -601,12 +631,16 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			GroupID: "data-registry-integration-publisher-" + suffix,
 			DlqURL:  "http://localhost:4566/data-registry-dev-env-queue/",
 		}, cancel)
+		defer func() {
+			_ = publisherMessenger.Close(runCtx)
+		}()
 		publisher, err := publisherMessenger.Publisher(runCtx)
 		Expect(err).NotTo(HaveOccurred())
 		subscriber, err := subscriberMessenger.Subscriber(runCtx)
 		Expect(err).NotTo(HaveOccurred())
 
-		materializationSubscriber := registrymessaging.NewMaterializationSubscriber(subscriber, datasets, topics)
+		observedDatasets := &observedMaterializationUsecase{DatasetUsecase: datasets}
+		materializationSubscriber := registrymessaging.NewMaterializationSubscriber(subscriber, observedDatasets, topics)
 		go func() {
 			_ = materializationSubscriber.Start(runCtx)
 		}()
@@ -616,18 +650,19 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeRawSnapshotReady,
 		}, &featurepb.RawSnapshotReadyEvent{
-			RawSnapshotId:     uuid.NewString(),
-			DatasetId:         datasetID.String(),
-			UserId:            userID.String(),
-			OrgId:             orgID.String(),
-			StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
-			TableNamespace:    "raw",
-			TableName:         "kafka_materialization_raw",
-			TableFormat:       "PARQUET",
-			CatalogProvider:   "LOCAL",
-			SchemaVersion:     1,
-			SchemaMetadata:    "{}",
-			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 1,
+			RawSnapshotId:           uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:          "raw",
+			TableName:               "kafka_materialization_raw",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           1,
+			SchemaMetadata:          "{}",
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -641,19 +676,20 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeFeatureSnapshotReady,
 		}, &featurepb.FeatureSnapshotReadyEvent{
-			FeatureSnapshotId: uuid.NewString(),
-			RawSnapshotId:     uuid.NewString(),
-			DatasetId:         datasetID.String(),
-			UserId:            userID.String(),
-			OrgId:             orgID.String(),
-			StorageLocation:   "s3://local-dev-bucket/lakehouse/features/data.parquet",
-			TableNamespace:    "features",
-			TableName:         "kafka_materialization",
-			TableFormat:       "PARQUET",
-			CatalogProvider:   "LOCAL",
-			SchemaVersion:     3,
-			SchemaMetadata:    `{"columns":["title"]}`,
-			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 2,
+			RawSnapshotId:           uuid.NewString(),
+			FeatureSnapshotId:       uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:          "features",
+			TableName:               "kafka_materialization",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           3,
+			SchemaMetadata:          `{"columns":["title"]}`,
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
 		})).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -669,17 +705,17 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			ResourceKey: datasetID,
 			MsgType:     sharedmessaging.MsgTypeEmbeddingSnapshotReady,
 		}, &featurepb.EmbeddingSnapshotReadyEvent{
-			EmbeddingSnapshotId: uuid.NewString(),
-			FeatureSnapshotId:   uuid.NewString(),
-			DatasetId:           datasetID.String(),
-			UserId:              userID.String(),
-			OrgId:               orgID.String(),
-			VectorStore:         "pgvector",
-			CollectionName:      "kafka_materialization",
-			EmbeddingDimensions: 384,
-			EmbeddingCount:      1,
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 3,
+			FeatureSnapshotId:       uuid.NewString(),
+			EmbeddingSnapshotId:     uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			VectorStore:             "pgvector",
+			CollectionName:          "kafka_materialization",
+			EmbeddingDimensions:     384,
+			EmbeddingCount:          1,
 		})).To(Succeed())
-		Expect(publisherMessenger.Close(runCtx)).To(Succeed())
 
 		Eventually(func(g Gomega) {
 			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
@@ -689,8 +725,258 @@ var _ = Describe("Data registry integration", Ordered, func() {
 			g.Expect(dataset.ProcessingProfile).To(Equal(model.TextRAGProfile))
 			g.Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
 		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
+
+		rawReplayCount := observedDatasets.callCount(model.DatasetProcessingRawMaterialized, 1)
+		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeRawSnapshotReady,
+		}, &featurepb.RawSnapshotReadyEvent{
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 1,
+			RawSnapshotId:           uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/raw/replayed-data.parquet",
+			TableNamespace:          "raw",
+			TableName:               "kafka_materialization_raw_replay",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           1,
+			SchemaMetadata:          "{}",
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
+		})).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(observedDatasets.callCount(model.DatasetProcessingRawMaterialized, 1)).To(BeNumerically(">", rawReplayCount))
+			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/data.parquet"))
+			g.Expect(dataset.TableName).To(Equal("kafka_materialization"))
+			g.Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
+
+		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeRawSnapshotReady,
+		}, &featurepb.RawSnapshotReadyEvent{
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 4,
+			RawSnapshotId:           uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/raw/rerun-data.parquet",
+			TableNamespace:          "raw",
+			TableName:               "kafka_materialization_raw_rerun",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           1,
+			SchemaMetadata:          "{}",
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
+		})).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/raw/rerun-data.parquet"))
+			g.Expect(dataset.TableName).To(Equal("kafka_materialization_raw_rerun"))
+			g.Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
+		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
+
+		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeFeatureSnapshotReady,
+		}, &featurepb.FeatureSnapshotReadyEvent{
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 5,
+			RawSnapshotId:           uuid.NewString(),
+			FeatureSnapshotId:       uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/features/rerun-data.parquet",
+			TableNamespace:          "features",
+			TableName:               "kafka_materialization_rerun",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           4,
+			SchemaMetadata:          `{"columns":["title","summary"]}`,
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
+		})).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/rerun-data.parquet"))
+			g.Expect(dataset.TableName).To(Equal("kafka_materialization_rerun"))
+			g.Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingFeatureMaterialized))
+		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
+
+		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeEmbeddingSnapshotReady,
+		}, &featurepb.EmbeddingSnapshotReadyEvent{
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 6,
+			FeatureSnapshotId:       uuid.NewString(),
+			EmbeddingSnapshotId:     uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			VectorStore:             "pgvector",
+			CollectionName:          "kafka_materialization_rerun",
+			EmbeddingDimensions:     384,
+			EmbeddingCount:          2,
+		})).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/rerun-data.parquet"))
+			g.Expect(dataset.TableName).To(Equal("kafka_materialization_rerun"))
+			g.Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
+	})
+
+	It("consumes consecutive Kafka materialization events through one ordered stream", func() {
+		userID := uuid.New()
+		orgID := uuid.New()
+		tenantCtx := ctxutil.WithActorOrg(ctx, userID, orgID)
+		Expect(upsertDataRegistryTenant(ctx, database, userID)).To(Succeed())
+		dataset := &model.Dataset{
+			ID:             uuid.New(),
+			UserID:         userID,
+			Title:          "kafka-materialization-ordered-stream",
+			SchemaMetadata: "{}",
+		}
+		Expect(datasets.CreateDataset(tenantCtx, dataset, uuid.New())).To(Succeed())
+		datasetID := dataset.ID
+
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
+		suffix := fmt.Sprintf("%d", rand.Int64())
+		topics := registrymessaging.MaterializationTopics{
+			FeatureMaterializer: "feature_materializer",
+		}
+		Expect(purgeTopic(ctx, brokers, topics.FeatureMaterializer)).To(Succeed())
+
+		startedFactory, _, err := sharedmessaging.StartStreamSubscriber(runCtx, sharedmessaging.StreamSubscriberConfig{
+			Brokers:         brokers,
+			DLQURL:          "http://localhost:4566/data-registry-dev-env-queue/",
+			BaseGroupID:     "data-registry-integration-ordered-" + suffix,
+			AutoOffsetReset: "earliest",
+			Cancel:          cancel,
+		}, "materialization", topics.List(), func(subscriber sharedmessaging.Subscriber) {
+			registrymessaging.ConfigureMaterializationSubscriber(subscriber, datasets)
+		})
+		Expect(err).NotTo(HaveOccurred())
+		defer func() {
+			_ = startedFactory.Close(runCtx)
+		}()
+
+		publisherMessenger := sharedmessaging.NewMessenger(sharedmessaging.MessengerConfig{
+			Brokers: brokers,
+			GroupID: "data-registry-integration-ordered-publisher-" + suffix,
+			DlqURL:  "http://localhost:4566/data-registry-dev-env-queue/",
+		}, cancel)
+		defer func() {
+			_ = publisherMessenger.Close(runCtx)
+		}()
+		publisher, err := publisherMessenger.Publisher(runCtx)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeRawSnapshotReady,
+		}, &featurepb.RawSnapshotReadyEvent{
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 1,
+			RawSnapshotId:           uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/raw/ordered-stream.parquet",
+			TableNamespace:          "raw",
+			TableName:               "ordered_stream_raw",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           1,
+			SchemaMetadata:          "{}",
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
+		})).To(Succeed())
+		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeFeatureSnapshotReady,
+		}, &featurepb.FeatureSnapshotReadyEvent{
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 2,
+			RawSnapshotId:           uuid.NewString(),
+			FeatureSnapshotId:       uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/features/ordered-stream.parquet",
+			TableNamespace:          "features",
+			TableName:               "ordered_stream_features",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           2,
+			SchemaMetadata:          `{"columns":["text"]}`,
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
+		})).To(Succeed())
+		Expect(publisher.Publish(runCtx, topics.FeatureMaterializer, sharedmessaging.Message{
+			ResourceKey: datasetID,
+			MsgType:     sharedmessaging.MsgTypeEmbeddingSnapshotReady,
+		}, &featurepb.EmbeddingSnapshotReadyEvent{
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 3,
+			FeatureSnapshotId:       uuid.NewString(),
+			EmbeddingSnapshotId:     uuid.NewString(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			VectorStore:             "pgvector",
+			CollectionName:          "ordered_stream_features",
+			EmbeddingDimensions:     384,
+			EmbeddingCount:          3,
+		})).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			dataset, err := datasets.ReadDatasetForUser(tenantCtx, datasetID, userID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(dataset.Location).To(Equal("s3://local-dev-bucket/lakehouse/features/ordered-stream.parquet"))
+			g.Expect(dataset.TableName).To(Equal("ordered_stream_features"))
+			g.Expect(dataset.ProcessingState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+			g.Expect(dataset.EmbeddingCount).To(Equal(int64(3)))
+		}, 30*time.Second, 500*time.Millisecond).Should(Succeed())
 	})
 })
+
+type observedMaterializationUsecase struct {
+	usecase.DatasetUsecase
+	mu    sync.Mutex
+	calls []observedMaterializationCall
+}
+
+type observedMaterializationCall struct {
+	state    model.ProcessingState
+	eventSeq int64
+}
+
+func (u *observedMaterializationUsecase) RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState, eventSeq int64) (*model.Dataset, error) {
+	u.mu.Lock()
+	u.calls = append(u.calls, observedMaterializationCall{state: state, eventSeq: eventSeq})
+	u.mu.Unlock()
+	return u.DatasetUsecase.RecordDatasetMaterialization(ctx, dataset, state, eventSeq)
+}
+
+func (u *observedMaterializationUsecase) callCount(state model.ProcessingState, eventSeq int64) int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	count := 0
+	for _, call := range u.calls {
+		if call.state == state && call.eventSeq == eventSeq {
+			count++
+		}
+	}
+	return count
+}
 
 func newIntegrationHandlers(datasets usecase.DatasetUsecase, connectors usecase.SourceUsecase) *registryrest.DataRegistryHandlers {
 	log.Trace("newIntegrationHandlers")

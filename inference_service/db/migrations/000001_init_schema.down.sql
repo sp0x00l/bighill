@@ -5,6 +5,8 @@ DROP TRIGGER IF EXISTS inference_datasets_updated_at ON bighill_inference_db.inf
 DROP TRIGGER IF EXISTS inference_models_updated_at ON bighill_inference_db.inference_models;
 DROP TRIGGER IF EXISTS tenants_updated_at ON bighill_inference_db.tenants;
 DROP TABLE IF EXISTS bighill_inference_db.outbox_messages;
+DROP INDEX IF EXISTS bighill_inference_db.index_published_endpoint_datasets_dataset_id;
+DROP TABLE IF EXISTS bighill_inference_db.published_endpoint_datasets;
 DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_natural_key;
 DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_model_id;
 DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_org_id;

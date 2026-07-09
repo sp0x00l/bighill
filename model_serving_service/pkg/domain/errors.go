@@ -19,6 +19,10 @@ func (e *ServiceError) Extend(message string) *ServiceError {
 }
 
 var (
-	ErrValidationFailed = &ServiceError{Code: "validation_failed", Message: "validation failed"}
-	ErrModelServe       = &ServiceError{Code: "model_serve_failed", Message: "model serve failed"}
+	ErrValidationFailed    = &ServiceError{Code: "validation_failed", Message: "validation failed"}
+	ErrModelServe          = &ServiceError{Code: "model_serve_failed", Message: "model serve failed"}
+	ErrServedModelNotFound = &ServiceError{
+		Code:    "served_model_not_found",
+		Message: "served model not found",
+	}
 )

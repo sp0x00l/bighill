@@ -21,7 +21,21 @@ type OracleDBConnCfgDTO struct {
 	AuthenticationType string `json:"authenticationType"      validate:"required"`
 }
 
+type oracleDBConnCfgDTOAdapter struct {
+	validator *validator.Validate
+}
+
+func NewOracleDBConnCfgDTOAdapter() *oracleDBConnCfgDTOAdapter {
+	log.Trace("NewOracleDBConnCfgDTOAdapter")
+
+	return &oracleDBConnCfgDTOAdapter{validator: validator.New()}
+}
+
 func ToOracleDBConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
+	return NewOracleDBConnCfgDTOAdapter().ToDTO(ctx, conn, secretizer, serializer)
+}
+
+func (a *oracleDBConnCfgDTOAdapter) ToDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
 	log.Trace("adapter ToOracleDBConnCfgDTO")
 
 	connCfg, ok := conn.(*model.OracleDBConnCfg)
@@ -56,6 +70,10 @@ func ToOracleDBConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secre
 }
 
 func FromOracleDBConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
+	return NewOracleDBConnCfgDTOAdapter().FromDTO(ctx, cfgBytes, deserializer)
+}
+
+func (a *oracleDBConnCfgDTOAdapter) FromDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
 	log.Trace("adapter FromOracleDBConnCfgDTO")
 
 	var dto OracleDBConnCfgDTO
@@ -64,7 +82,7 @@ func FromOracleDBConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer s
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}
 
-	if err := validator.New().Struct(dto); err != nil {
+	if err := a.validator.Struct(dto); err != nil {
 		log.WithContext(ctx).WithError(err).Error("failed to validate Oracle DB source connector configuration")
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}

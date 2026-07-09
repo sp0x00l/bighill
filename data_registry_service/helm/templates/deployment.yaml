@@ -123,7 +123,7 @@ spec:
               value: {{ .Values.env.topic | quote }}
             - name: DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC
               value: {{ .Values.env.featureMaterializerSubscriberTopic | quote }}
-            - name: DATA_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC
+            - name: DATA_REGISTRY_SERVICE_TENANT_SUBSCRIBER_TOPIC
               value: {{ .Values.env.profileSubscriberTopic | quote }}
             - name: DATA_REGISTRY_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}

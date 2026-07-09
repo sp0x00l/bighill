@@ -73,7 +73,7 @@ func (f *registryFixture) ReadDatasetTable(_ context.Context, req *dataregistryp
 	return table, nil
 }
 
-var _ = Describe("Data stream datasource integration", Ordered, func() {
+var _ = Describe("Data stream datasource integration", Label("external-data-source"), Ordered, func() {
 	var (
 		ctx          context.Context
 		cancel       context.CancelFunc
@@ -343,7 +343,7 @@ func requireExternalDatasourceFixtures() {
 	for _, fixture := range fixtures {
 		conn, err := net.DialTimeout("tcp", net.JoinHostPort(fixture.host, fmt.Sprintf("%d", fixture.port)), 250*time.Millisecond)
 		if err != nil {
-			Skip("external datasource fixtures are not running")
+			Fail("external datasource fixtures are not running; run scripts/start-data-sources.sh before running datasource integration specs")
 		}
 		_ = conn.Close()
 	}

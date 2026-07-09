@@ -167,11 +167,11 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
-	if modelKind.String() != model.ModelKindBase.String() && userID == uuid.Nil {
-		return nil, uuid.Nil, fmt.Errorf("user id is required for non-base models")
+	if userID == uuid.Nil {
+		return nil, uuid.Nil, fmt.Errorf("user id is required")
 	}
-	if modelKind.String() != model.ModelKindBase.String() && orgID == uuid.Nil {
-		return nil, uuid.Nil, fmt.Errorf("org id is required for non-base models")
+	if orgID == uuid.Nil {
+		return nil, uuid.Nil, fmt.Errorf("org id is required")
 	}
 	status, err := model.ToModelStatus(strings.TrimSpace(payload.GetStatus()))
 	if err != nil {

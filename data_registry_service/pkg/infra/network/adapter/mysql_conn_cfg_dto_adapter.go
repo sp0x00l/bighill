@@ -20,7 +20,21 @@ type MysqlDBConnCfg struct {
 	Password           string `json:"password,omitempty"`
 }
 
+type mySqlDBConnCfgDTOAdapter struct {
+	validator *validator.Validate
+}
+
+func NewMySqlDBConnCfgDTOAdapter() *mySqlDBConnCfgDTOAdapter {
+	log.Trace("NewMySqlDBConnCfgDTOAdapter")
+
+	return &mySqlDBConnCfgDTOAdapter{validator: validator.New()}
+}
+
 func ToMySqlDBConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
+	return NewMySqlDBConnCfgDTOAdapter().ToDTO(ctx, conn, secretizer, serializer)
+}
+
+func (a *mySqlDBConnCfgDTOAdapter) ToDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
 	log.Trace("adapter ToMySqlDBConnCfgDTO")
 
 	connCfg, ok := conn.(*model.MysqlDBConnCfg)
@@ -51,6 +65,10 @@ func ToMySqlDBConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secret
 }
 
 func FromMySqlDBConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
+	return NewMySqlDBConnCfgDTOAdapter().FromDTO(ctx, cfgBytes, deserializer)
+}
+
+func (a *mySqlDBConnCfgDTOAdapter) FromDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
 	log.Trace("adapter FromMySqlDBConnCfgDTO")
 
 	var dto MysqlDBConnCfg
@@ -59,7 +77,7 @@ func FromMySqlDBConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer se
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}
 
-	if err := validator.New().Struct(dto); err != nil {
+	if err := a.validator.Struct(dto); err != nil {
 		log.WithContext(ctx).WithError(err).Error("failed to validate MySQL DB source connector configuration")
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}

@@ -373,6 +373,10 @@ func (p *workflowTrainingEventPublisher) PublishModelTrainingFailed(_ context.Co
 	return nil
 }
 
+func (p *workflowTrainingEventPublisher) PublishPromotionReportReady(context.Context, *model.PromotionReport) error {
+	return nil
+}
+
 func workflowHTTPResponse(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,

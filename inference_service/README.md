@@ -31,4 +31,6 @@ It also exports preference datasets from feedback so the training loop can impro
 
 Local and CI use the same runtime contract as staging and production: generation protocol, endpoint, and served model name come from the model record projected from `model_registry_service`. The service fails closed when a loaded model is missing `serving_protocol`, `serving_target`, or `serving_model`.
 
-`INFERENCE_SERVICE_QUERY_TRANSFORMER_*` config is only for the optional utility model used by self-query retrieval. It is not a fallback generator for user inference.
+Self-query retrieval uses the same served model record as the inference request. There is no separately configured query-transformer model, endpoint, or protocol.
+
+`INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS` caps generated answer length for every self-hosted runtime adapter. Staging currently uses `256`, which is enough for the RAG/API e2e answers and prevents non-streaming local Ollama calls from running until the HTTP request timeout. Increase it deliberately, for example to `512`, only for workloads that need longer generated responses.

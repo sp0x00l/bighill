@@ -13,7 +13,7 @@ source "${SCRIPT_DIR}/k8s-common.sh"
 if [ -z "$ENVIRONMENT" ]; then
   echo "Usage: $0 [staging|prod] [optional-service]"
   echo " - With a service name, only that service is fetched."
-  echo " - Special case: profile-service uses HTTP-filtered logs."
+  echo " - Special case: tenant-service uses HTTP-filtered logs."
   exit 1
 fi
 
@@ -73,8 +73,8 @@ echo "Environment: ${ENVIRONMENT}"
 echo "Namespace:   ${NAMESPACE}"
 echo
 if [ -n "${SERVICE_FILTER}" ]; then
-  if [ "${SERVICE_FILTER}" = "profile-service" ]; then
-    # profile-service has noisy OTEL lines; filter them with the dedicated helper
+  if [ "${SERVICE_FILTER}" = "tenant-service" ]; then
+    # tenant-service has noisy OTEL lines; filter them with the dedicated helper
     NS="${NAMESPACE}" LABEL="app=${SERVICE_FILTER}" "${SCRIPT_DIR}/k8s-filter-logs.sh"
   else
     fetch_service_logs "${SERVICE_FILTER}"

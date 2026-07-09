@@ -173,7 +173,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 			"rating": -1,
 			"feedback_label": "REJECTED"
 		}]`, exampleID.String(), feedbackID.String(), requestID.String(), userID.String(), orgID.String(), datasetID.String(), modelID.String())
-		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), orgID.String(), modelID.String(), "BASE", "s3://models/base-artifact", "sha256:base", "", "llama3.1:8b", 1, rawExamples}}}
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{datasetID.String(), userID.String(), orgID.String(), modelID.String(), "BASE", "s3://models/base-artifact", "sha256:base", "", "local-test-model:latest", 1, rawExamples}}}
 
 		dataset, err := repository.ReadPreferenceDataset(ctx, model.PreferenceDatasetExportRequest{
 			RequestID: requestID,
@@ -190,7 +190,7 @@ var _ = Describe("InferenceFeedbackRepository", func() {
 		Expect(dataset.ParentArtifactURI).To(Equal("s3://models/base-artifact"))
 		Expect(dataset.ParentArtifactChecksum).To(Equal("sha256:base"))
 		Expect(dataset.ParentAdapterURI).To(Equal(""))
-		Expect(dataset.ParentBaseModel).To(Equal("llama3.1:8b"))
+		Expect(dataset.ParentBaseModel).To(Equal("local-test-model:latest"))
 		Expect(dataset.ParentModelVersion).To(Equal(1))
 		Expect(dataset.Examples).To(HaveLen(1))
 	})

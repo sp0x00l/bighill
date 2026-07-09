@@ -453,6 +453,28 @@ var _ = Describe("ServedModelController", func() {
 		Expect(statusRaw).To(Equal("NOT_LOADED"))
 	})
 
+	It("does not requeue a served model that has already been deleted from the store", func() {
+		servedModel := validServedModel()
+		obj := servedModelCR(servedModel)
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
+		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+
+		Expect(controller.ProcessWatchEvent(context.Background(), watch.Event{
+			Type:   watch.Modified,
+			Object: obj,
+		})).To(Succeed())
+
+		health := controller.Health()
+		Expect(health.KnownServedModels).To(Equal(0))
+		Expect(health.OutstandingServedModels).To(Equal(0))
+		Expect(health.LastError).To(BeEmpty())
+	})
+
 })
 
 func storeConfig() servingk8s.ServedModelStoreConfig {
@@ -475,6 +497,7 @@ func runtimeConfig() servingk8s.VLLMRuntimeConfig {
 		Memory:          "4Gi",
 		GPUResource:     "nvidia.com/gpu",
 		GPU:             "1",
+		RequestTimeout:  time.Second,
 	}
 }
 

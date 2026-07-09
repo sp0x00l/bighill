@@ -106,6 +106,14 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.metadata(
     deleted BOOLEAN DEFAULT FALSE
 );
 
+CREATE TABLE IF NOT EXISTS bighill_data_registry_db.dataset_materialization_event_state (
+  dataset_id uuid PRIMARY KEY REFERENCES bighill_data_registry_db.datasets(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  org_id uuid NOT NULL,
+  next_expected_event_seq BIGINT NOT NULL DEFAULT 1 CHECK (next_expected_event_seq > 0),
+  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS bighill_data_registry_db.outbox_messages (
     outbox_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     dispatch_key text NOT NULL UNIQUE,
@@ -141,6 +149,8 @@ CREATE INDEX index_connectors_org_id ON bighill_data_registry_db.connectors(org_
 CREATE INDEX index_dataset_id_metadata ON bighill_data_registry_db.metadata(dataset_id);
 CREATE INDEX index_metadata_user_id ON bighill_data_registry_db.metadata(user_id);
 CREATE INDEX index_metadata_org_id ON bighill_data_registry_db.metadata(org_id);
+CREATE INDEX index_dataset_materialization_event_state_org_id
+ON bighill_data_registry_db.dataset_materialization_event_state(org_id);
 CREATE INDEX index_outbox_messages_pending
 ON bighill_data_registry_db.outbox_messages(status, next_attempt_at, created_at);
 CREATE INDEX index_outbox_messages_processing
@@ -151,6 +161,7 @@ ON bighill_data_registry_db.outbox_messages(resource_key, created_at);
 CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.datasets FOR EACH ROW EXECUTE FUNCTION updated_at_column();
 CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.connectors FOR EACH ROW EXECUTE FUNCTION updated_at_column();
 CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.metadata FOR EACH ROW EXECUTE FUNCTION updated_at_column();
+CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.dataset_materialization_event_state FOR EACH ROW EXECUTE FUNCTION updated_at_column();
 CREATE TRIGGER updated_at_trigger BEFORE INSERT OR UPDATE ON bighill_data_registry_db.tenants FOR EACH ROW EXECUTE FUNCTION updated_at_column();
 
 ALTER TABLE bighill_data_registry_db.tenants ENABLE ROW LEVEL SECURITY;
@@ -192,6 +203,18 @@ WITH CHECK (
 ALTER TABLE bighill_data_registry_db.metadata ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bighill_data_registry_db.metadata FORCE ROW LEVEL SECURITY;
 CREATE POLICY metadata_tenant_isolation ON bighill_data_registry_db.metadata
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_data_registry_db.dataset_materialization_event_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_data_registry_db.dataset_materialization_event_state FORCE ROW LEVEL SECURITY;
+CREATE POLICY dataset_materialization_event_state_tenant_isolation ON bighill_data_registry_db.dataset_materialization_event_state
 USING (
     current_setting('app.system_context', true) = 'true'
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id

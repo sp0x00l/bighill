@@ -153,16 +153,6 @@ var _ = Describe("PromotionGate", func() {
 		Expect(decision.Reason).To(ContainSubstring("evidently"))
 	})
 
-	It("parses valid metrics metadata and rejects missing metrics", func() {
-		metrics, err := model.ParseEvalMetrics(`{"metrics":{"faithfulness":0.8},"eval_dataset_uri":"s3://evals"}`)
-
-		Expect(err).NotTo(HaveOccurred())
-		Expect(metrics.Metrics).To(HaveKeyWithValue("faithfulness", 0.8))
-
-		_, err = model.ParseEvalMetrics(`{"passed":true}`)
-		Expect(err).To(HaveOccurred())
-	})
-
 	It("formats and parses promotion decision outcomes", func() {
 		Expect(model.PromotionDecisionOutcomeAccepted.String()).To(Equal("PROMOTION_ACCEPTED"))
 		Expect(model.PromotionDecisionOutcomeRejected.String()).To(Equal("PROMOTION_REJECTED"))

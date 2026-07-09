@@ -45,7 +45,7 @@ type registryConfig struct {
 	OutboxBackend         string
 	OutboxRelay           messagingConn.OutboxRelayConfig
 	Topic                 string
-	ProfileTopic          string
+	TenantTopic           string
 	MaterializationTopics registrymessaging.MaterializationTopics
 	Catalog               catalogConfig
 	Health                healthConfig
@@ -219,27 +219,18 @@ func main() {
 	}
 
 	materializationTopics := cfg.MaterializationTopics.List()
-	startSubscriber("raw-snapshot-ready", materializationTopics, func(subscriber messagingConn.Subscriber) {
-		registrymessaging.ConfigureSubscriberErrorPolicy(subscriber)
-		messagingConn.AddListener(subscriber, registrymessaging.NewRawSnapshotReadyEventListener(datasetUseCase))
+	startSubscriber("materialization", materializationTopics, func(subscriber messagingConn.Subscriber) {
+		registrymessaging.ConfigureMaterializationSubscriber(subscriber, datasetUseCase)
 	})
-	startSubscriber("feature-snapshot-ready", materializationTopics, func(subscriber messagingConn.Subscriber) {
-		registrymessaging.ConfigureSubscriberErrorPolicy(subscriber)
-		messagingConn.AddListener(subscriber, registrymessaging.NewFeatureSnapshotReadyEventListener(datasetUseCase))
-	})
-	startSubscriber("embedding-snapshot-ready", materializationTopics, func(subscriber messagingConn.Subscriber) {
-		registrymessaging.ConfigureSubscriberErrorPolicy(subscriber)
-		messagingConn.AddListener(subscriber, registrymessaging.NewEmbeddingSnapshotReadyEventListener(datasetUseCase))
-	})
-	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-created", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-updated", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-deleted", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
@@ -284,8 +275,8 @@ func readRegistryConfig() registryConfig {
 			FailureBackoff: time.Duration(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS", "2000")) * time.Millisecond,
 			BatchSize:      int32(env.WithDefaultInt("DATA_REGISTRY_SERVICE_OUTBOX_RELAY_BATCH_SIZE", "100")),
 		},
-		Topic:        env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry"),
-		ProfileTopic: env.WithDefaultString("DATA_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
+		Topic:       env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry"),
+		TenantTopic: env.WithDefaultString("DATA_REGISTRY_SERVICE_TENANT_SUBSCRIBER_TOPIC", "tenant"),
 		MaterializationTopics: registrymessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("DATA_REGISTRY_SERVICE_FEATURE_MATERIALIZER_SUBSCRIBER_TOPIC", "feature_materializer"),
 		},

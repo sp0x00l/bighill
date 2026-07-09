@@ -58,6 +58,7 @@ type stubDatasetRepository struct {
 
 	updateMaterializationDataset *model.Dataset
 	updateMaterializationState   model.ProcessingState
+	updateMaterializationSeq     int64
 	updateMaterializationResult  *model.Dataset
 	updateMaterializationErr     error
 
@@ -133,9 +134,10 @@ func (s *stubDatasetRepository) UpdateProcessingState(_ context.Context, _ pgx.T
 	return s.updateProcessingResult, s.updateProcessingChanged, s.updateProcessingErr
 }
 
-func (s *stubDatasetRepository) RecordMaterialization(_ context.Context, _ pgx.Tx, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, bool, error) {
+func (s *stubDatasetRepository) RecordMaterialization(_ context.Context, _ pgx.Tx, dataset *model.Dataset, state model.ProcessingState, eventSeq int64) (*model.Dataset, bool, error) {
 	s.updateMaterializationDataset = dataset
 	s.updateMaterializationState = state
+	s.updateMaterializationSeq = eventSeq
 	return s.updateMaterializationResult, s.updateMaterializationResult != nil, s.updateMaterializationErr
 }
 
@@ -405,11 +407,12 @@ var _ = Describe("DatasetUsecase", func() {
 		updated.TableName = materialized.TableName
 		updated.Location = materialized.Location
 
-		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingFeatureMaterialized)
+		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingFeatureMaterialized, 2)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(updated))
 		Expect(repo.updateMaterializationState).To(Equal(model.DatasetProcessingFeatureMaterialized))
+		Expect(repo.updateMaterializationSeq).To(Equal(int64(2)))
 		Expect(repo.updateMaterializationDataset.Location).To(Equal(materialized.Location))
 		Expect(repo.updateMaterializationDataset.TableNamespace).To(Equal("features"))
 		Expect(repo.updateMaterializationDataset.RawSnapshotID).To(Equal(materialized.RawSnapshotID))
@@ -438,10 +441,11 @@ var _ = Describe("DatasetUsecase", func() {
 			CollectionName:      "movies",
 			EmbeddingDimensions: 384,
 			EmbeddingCount:      2,
-		}, model.DatasetProcessingEmbeddingsMaterialized)
+		}, model.DatasetProcessingEmbeddingsMaterialized, 3)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(repo.updateMaterializationState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+		Expect(repo.updateMaterializationSeq).To(Equal(int64(3)))
 	})
 
 	It("records catalog-backed materialization without synchronous catalog validation", func() {
@@ -459,7 +463,7 @@ var _ = Describe("DatasetUsecase", func() {
 			CatalogProvider: model.PolarisCatalog,
 		}
 
-		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingFeatureMaterialized)
+		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingFeatureMaterialized, 2)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(updated))
@@ -482,7 +486,7 @@ var _ = Describe("DatasetUsecase", func() {
 			CatalogProvider: model.PolarisCatalog,
 		}
 
-		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingRawMaterialized)
+		got, err := uc.RecordDatasetMaterialization(ctx, materialized, model.DatasetProcessingRawMaterialized, 1)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(updated))

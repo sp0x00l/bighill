@@ -35,8 +35,8 @@ resource "aws_cloudformation_stack" "api_gateway" {
     IngestionServiceHttpPort       = var.ingestion_service_http_port
     ModelRegistryServiceHttpDomain = var.model_registry_service_http_domain
     ModelRegistryServiceHttpPort   = var.model_registry_service_http_port
-    ProfileServiceHttpDomain       = var.profile_service_http_domain
-    ProfileServiceHttpPort         = var.profile_service_http_port
+    TenantServiceHttpDomain       = var.tenant_service_http_domain
+    TenantServiceHttpPort         = var.tenant_service_http_port
     TrainingServiceHttpDomain      = var.training_service_http_domain
     TrainingServiceHttpPort        = var.training_service_http_port
     InferenceServiceHttpDomain     = var.inference_service_http_domain

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	usecase "ingestion_service/pkg/app"
 	"ingestion_service/pkg/domain"
 	"ingestion_service/pkg/domain/model"
 	dtoadapter "ingestion_service/pkg/infra/network/adapter"
-	"io"
 	"lib/shared_lib/ctxutil"
 	"lib/shared_lib/transport"
+	"lib/shared_lib/uuidutil"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -31,11 +32,6 @@ var (
 	textPriorityFormats     = []string{FileTypeText, FileTypeHTML, FileTypePDF, FileTypeParquet, FileTypeJSON, FileTypeCSV}
 	defaultPriorityFormats  = []string{FileTypeParquet, FileTypeJSON, FileTypePDF, FileTypeHTML, FileTypeCSV, FileTypeMarkdown, FileTypeText}
 )
-
-type FileDetector interface {
-	DetectFileFormat(ctx context.Context, file io.ReadSeeker, fileSize int, validFormats []string) string
-	GetContentType(fileType string) string
-}
 
 type DataUploadUseCase interface {
 	UploadFile(ctx context.Context, upload *model.DataFile) error
@@ -69,11 +65,11 @@ type DataUploadHandlers struct {
 	authenticator           Authenticator
 	maxFileSizeBytes        int64
 	MaxBytesReaderSizeBytes int64
-	detector                FileDetector
+	detector                usecase.FileDetector
 	supportedFilesFormats   map[string][]string
 }
 
-func NewDataUploadHandlers(uploadUseCase DataUploadUseCase, datasetUseCase DatasetUsecase, uploadDTOAdapter UploadDTOAdapter, detector FileDetector, authenticator Authenticator, maxFileSizeBytes int64) *DataUploadHandlers {
+func NewDataUploadHandlers(uploadUseCase DataUploadUseCase, datasetUseCase DatasetUsecase, uploadDTOAdapter UploadDTOAdapter, detector usecase.FileDetector, authenticator Authenticator, maxFileSizeBytes int64) *DataUploadHandlers {
 	log.Trace("rest NewDataUploadHandlers")
 
 	return &DataUploadHandlers{
@@ -169,6 +165,7 @@ type initiateModelUploadResponse struct {
 type completeModelUploadResponse struct {
 	UploadID         string `json:"upload_id"`
 	ResourceID       string `json:"resource_id"`
+	DatasetID        string `json:"dataset_id,omitempty"`
 	StorageLocation  string `json:"storage_location"`
 	Status           string `json:"status"`
 	Checksum         string `json:"checksum"`
@@ -300,6 +297,7 @@ func (h *DataUploadHandlers) CompleteModelUploadSession(ctx context.Context, r *
 	return jsonResponse(http.StatusCreated, completeModelUploadResponse{
 		UploadID:         session.UploadID.String(),
 		ResourceID:       session.ResourceID.String(),
+		DatasetID:        uuidutil.StringOrEmpty(session.DatasetID),
 		StorageLocation:  session.StorageLocation,
 		Status:           string(session.Status),
 		Checksum:         session.Checksum,
@@ -342,6 +340,7 @@ func (h *DataUploadHandlers) OnboardHuggingFaceModel(ctx context.Context, r *htt
 	return jsonResponse(http.StatusCreated, completeModelUploadResponse{
 		UploadID:         session.UploadID.String(),
 		ResourceID:       session.ResourceID.String(),
+		DatasetID:        uuidutil.StringOrEmpty(session.DatasetID),
 		StorageLocation:  session.StorageLocation,
 		Status:           string(session.Status),
 		Checksum:         session.Checksum,

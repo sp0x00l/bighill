@@ -26,16 +26,13 @@ var _ = Describe("Data Registry API", Ordered, func() {
 			"category":    "training",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", payload, user.Token, uuid.New())
-		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-
-		created := decodeObject(body)
+		created := createDataRegistryDataset(user, payload)
 		datasetID = stringField(created, "id")
 		Expect(created["userId"]).To(Equal(user.ID.String()))
 		Expect(created["title"]).To(Equal("Customer Churn Training Data"))
 		Expect(created["status"]).To(Equal("draft"))
 
-		status, body = doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
+		status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
 		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 		read := decodeObject(body)
 		Expect(read["id"]).To(Equal(datasetID))
@@ -85,11 +82,9 @@ var _ = Describe("Data Registry API", Ordered, func() {
 			"location":    "gs://bighill-mlops-fixtures/other-tenant.csv",
 			"category":    "training",
 		}
-		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", otherPayload, otherUser.Token, uuid.New())
-		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		otherDatasetID := stringField(decodeObject(body), "id")
+		otherDatasetID := stringField(createDataRegistryDataset(otherUser, otherPayload), "id")
 
-		status, body = doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, otherUser.Token, uuid.Nil)
+		status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, otherUser.Token, uuid.Nil)
 		Expect(status).To(SatisfyAny(Equal(http.StatusForbidden), Equal(http.StatusNotFound)), "body: %s", string(body))
 
 		status, body = doJSON(http.MethodGet, "/v1/private/data/registry?limit=25&page=1", nil, otherUser.Token, uuid.Nil)

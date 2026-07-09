@@ -50,6 +50,18 @@ func (s *inferenceUsecaseStub) ListEndpoints(context.Context, uuid.UUID) ([]*mod
 	return nil, nil
 }
 
+func (s *inferenceUsecaseStub) PublishEndpoint(context.Context, model.EndpointPublication) (*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
+func (s *inferenceUsecaseStub) SetEndpointDatasets(context.Context, model.EndpointDatasetBinding) (*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
+func (s *inferenceUsecaseStub) SetEndpointMergeStrategy(context.Context, model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
 func (s *inferenceUsecaseStub) GenerateForEndpoint(_ context.Context, _ uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error) {
 	s.request = request
 	return s.result, s.err
@@ -104,7 +116,7 @@ var _ = Describe("InferenceServer", func() {
 				Answer:                "generated answer",
 				PromptStrategyVersion: "rag-prompt-v1",
 				GenerationProtocol:    "OPENAI_CHAT_COMPLETIONS",
-				GenerationModel:       "llama3.1:8b",
+				GenerationModel:       "local-test-model:latest",
 				Contexts: []model.RetrievedContext{{
 					EmbeddingRecordID:   recordID,
 					EmbeddingSnapshotID: snapshotID,
@@ -141,7 +153,7 @@ var _ = Describe("InferenceServer", func() {
 		Expect(response.GetRequestId()).To(Equal(requestID.String()))
 		Expect(response.GetPromptStrategyVersion()).To(Equal("rag-prompt-v1"))
 		Expect(response.GetGenerationProtocol()).To(Equal("OPENAI_CHAT_COMPLETIONS"))
-		Expect(response.GetGenerationModel()).To(Equal("llama3.1:8b"))
+		Expect(response.GetGenerationModel()).To(Equal("local-test-model:latest"))
 		Expect(response.GetContexts()).To(HaveLen(1))
 		Expect(response.GetContexts()[0].GetEmbeddingRecordId()).To(Equal(recordID.String()))
 	})

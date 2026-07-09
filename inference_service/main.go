@@ -48,7 +48,7 @@ type inferenceConfig struct {
 	OutboxBackend       string
 	OutboxRelay         messagingConn.OutboxRelayConfig
 	Topics              inferencemessaging.InferenceTopics
-	ProfileTopic        string
+	TenantTopic         string
 	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
 	Generation          generationConfig
 	Reranker            rerankerConfig
@@ -62,9 +62,11 @@ type inferenceConfig struct {
 
 type generationConfig struct {
 	RequestTimeout   time.Duration
+	MaxOutputTokens  int
 	PromptStrategy   string
 	MaxContextTokens int
 	MaxContextChunks int
+	RAGMergeStrategy string
 }
 
 type rerankerConfig struct {
@@ -76,11 +78,8 @@ type rerankerConfig struct {
 }
 
 type queryTransformerConfig struct {
-	Provider        string
-	UtilityProtocol string
-	UtilityEndpoint string
-	UtilityModel    string
-	RequestTimeout  time.Duration
+	Provider       string
+	RequestTimeout time.Duration
 }
 
 type preferenceDatasetConfig struct {
@@ -173,13 +172,17 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create reranker adapter")
 	}
-	queryTransformer, err := newQueryTransformer(cfg.QueryTransformer)
+	queryTransformer, err := newQueryTransformer(cfg.QueryTransformer, generationAdapters)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create query transformer")
 	}
 	promptStrategy, err := promptStrategyFromConfig(cfg.Generation)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("invalid prompt strategy configuration")
+	}
+	defaultRAGMergeStrategy, err := model.ToRAGMergeStrategy(cfg.Generation.RAGMergeStrategy)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("invalid rag merge strategy configuration")
 	}
 	preferenceEventBuilder := inferencemessaging.NewPreferenceDatasetEventBuilder(cfg.Topics.PreferenceDataset)
 	inferenceOptions := []app.InferenceOption{
@@ -191,6 +194,7 @@ func main() {
 		app.WithRetrievalClient(retrievalClient),
 		app.WithGenerationAdapters(generationAdapters),
 		app.WithPromptStrategy(promptStrategy),
+		app.WithDefaultRAGMergeStrategy(defaultRAGMergeStrategy),
 		app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
 		app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
 	}
@@ -201,7 +205,10 @@ func main() {
 		)
 	}
 	if queryTransformer != nil {
-		inferenceOptions = append(inferenceOptions, app.WithQueryTransformer(queryTransformer))
+		inferenceOptions = append(inferenceOptions,
+			app.WithQueryTransformer(queryTransformer),
+			app.WithQueryTransformerTimeout(cfg.QueryTransformer.RequestTimeout),
+		)
 	}
 	preferenceDatasetWriter := inferencepreference.NewS3ObjectDatasetWriter(cancelCtx, cfg.PreferenceDataset.BucketRegion, cfg.PreferenceDataset.UploadPartSizeMB*1024*1024)
 	if preferenceDatasetWriter == nil {
@@ -290,15 +297,15 @@ func main() {
 	startSubscriber("dataset-updated", []string{cfg.Topics.DataRegistry}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, inferencemessaging.NewDatasetUpdatedEventListener(inferenceUsecase))
 	})
-	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-created", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-updated", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-deleted", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
@@ -355,7 +362,7 @@ func readInferenceConfig() inferenceConfig {
 			DataRegistry:      env.WithDefaultString("INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 			PreferenceDataset: env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_TOPIC", "inference"),
 		},
-		ProfileTopic: env.WithDefaultString("INFERENCE_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
+		TenantTopic: env.WithDefaultString("INFERENCE_SERVICE_TENANT_SUBSCRIBER_TOPIC", "tenant"),
 		FeatureMaterializer: inferencegrpc.FeatureMaterializerClientConfig{
 			Address:       env.WithDefaultString("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS", "localhost:7072"),
 			DialTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_DIAL_TIMEOUT_MS", "500"),
@@ -364,9 +371,11 @@ func readInferenceConfig() inferenceConfig {
 		},
 		Generation: generationConfig{
 			RequestTimeout:   secondsFromEnv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS", "60"),
+			MaxOutputTokens:  env.WithDefaultInt("INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS", "256"),
 			PromptStrategy:   env.WithDefaultString("INFERENCE_SERVICE_PROMPT_STRATEGY_VERSION", "rag-prompt-v1"),
 			MaxContextTokens: env.WithDefaultInt("INFERENCE_SERVICE_PROMPT_MAX_CONTEXT_TOKENS", "3000"),
 			MaxContextChunks: env.WithDefaultInt("INFERENCE_SERVICE_PROMPT_MAX_CONTEXT_CHUNKS", "8"),
+			RAGMergeStrategy: env.MustString("INFERENCE_SERVICE_RAG_MERGE_STRATEGY"),
 		},
 		Reranker: rerankerConfig{
 			Provider:            env.WithDefaultString("INFERENCE_SERVICE_RERANKER_PROVIDER", ""),
@@ -376,11 +385,8 @@ func readInferenceConfig() inferenceConfig {
 			CandidateMultiplier: env.WithDefaultInt("INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER", "5"),
 		},
 		QueryTransformer: queryTransformerConfig{
-			Provider:        env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", ""),
-			UtilityProtocol: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_PROTOCOL", ""),
-			UtilityEndpoint: env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_ENDPOINT", ""),
-			UtilityModel:    env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_MODEL", ""),
-			RequestTimeout:  secondsFromEnv("INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS", "30"),
+			Provider:       env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", ""),
+			RequestTimeout: secondsFromEnv("INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS", "30"),
 		},
 		PreferenceDataset: preferenceDatasetConfig{
 			ExportEnabled:    preferenceDatasetExportEnabled,
@@ -426,6 +432,13 @@ func validateInferenceConfig(cfg inferenceConfig) error {
 	if err := validateRerankerConfig(cfg.Reranker); err != nil {
 		return err
 	}
+	mergeStrategy, err := model.ToRAGMergeStrategy(cfg.Generation.RAGMergeStrategy)
+	if err != nil {
+		return fmt.Errorf("INFERENCE_SERVICE_RAG_MERGE_STRATEGY is invalid: %w", err)
+	}
+	if mergeStrategy == model.RAGMergeStrategyReranker && strings.TrimSpace(cfg.Reranker.Provider) == "" {
+		return fmt.Errorf("INFERENCE_SERVICE_RAG_MERGE_STRATEGY=reranker requires INFERENCE_SERVICE_RERANKER_PROVIDER")
+	}
 	if err := validateQueryTransformerConfig(cfg.QueryTransformer); err != nil {
 		return err
 	}
@@ -441,6 +454,12 @@ func validateGenerationConfig(cfg generationConfig) error {
 	if cfg.RequestTimeout <= 0 {
 		return fmt.Errorf("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS must be greater than zero")
 	}
+	if cfg.MaxOutputTokens <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS must be greater than zero")
+	}
+	if _, err := model.ToRAGMergeStrategy(cfg.RAGMergeStrategy); err != nil {
+		return fmt.Errorf("INFERENCE_SERVICE_RAG_MERGE_STRATEGY is invalid: %w", err)
+	}
 	return nil
 }
 
@@ -450,7 +469,7 @@ func validateRerankerConfig(cfg rerankerConfig) error {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	switch provider {
 	case "":
-		return fmt.Errorf("INFERENCE_SERVICE_RERANKER_PROVIDER is required")
+		return nil
 	case "tei":
 		if strings.TrimSpace(cfg.URL) == "" {
 			return fmt.Errorf("INFERENCE_SERVICE_RERANKER_URL is required for tei reranking")
@@ -475,15 +494,6 @@ func validateQueryTransformerConfig(cfg queryTransformerConfig) error {
 	case "":
 		return nil
 	case "self_query":
-		if strings.TrimSpace(cfg.UtilityProtocol) == "" {
-			return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_PROTOCOL is required for self_query")
-		}
-		if strings.TrimSpace(cfg.UtilityEndpoint) == "" {
-			return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_ENDPOINT is required for self_query")
-		}
-		if strings.TrimSpace(cfg.UtilityModel) == "" {
-			return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_MODEL is required for self_query")
-		}
 		if cfg.RequestTimeout <= 0 {
 			return fmt.Errorf("INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS must be greater than zero")
 		}
@@ -497,20 +507,25 @@ func newGenerationAdapters(cfg generationConfig) map[string]app.GenerationAdapte
 	log.Trace("newGenerationAdapters")
 
 	return map[string]app.GenerationAdapter{
-		model.ServingProtocolOpenAIChatCompletions.String(): generation.NewOpenAIChatCompletionsGenerator(cfg.RequestTimeout),
-		model.ServingProtocolOllamaGenerate.String():        generation.NewOllamaGenerateGenerator(cfg.RequestTimeout),
+		model.ServingProtocolOpenAIChatCompletions.String(): generation.NewOpenAIChatCompletionsGenerator(cfg.RequestTimeout, cfg.MaxOutputTokens),
+		model.ServingProtocolOllamaGenerate.String():        generation.NewOllamaGenerateGenerator(cfg.RequestTimeout, cfg.MaxOutputTokens),
 	}
 }
 
-func newQueryTransformer(cfg queryTransformerConfig) (app.QueryTransformer, error) {
+func newQueryTransformer(cfg queryTransformerConfig, adapters map[string]app.GenerationAdapter) (app.QueryTransformer, error) {
 	log.Trace("newQueryTransformer")
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
 	case "":
 		return nil, nil
 	case "self_query":
-		generator := generation.NewHTTPUtilityGenerator(strings.TrimSpace(cfg.UtilityProtocol), cfg.UtilityEndpoint, cfg.UtilityModel, cfg.RequestTimeout)
-		return retrieval.NewSelfQueryTransformer(generator), nil
+		generators := make(map[string]retrieval.QueryGenerator, len(adapters))
+		for protocol, adapter := range adapters {
+			if adapter != nil {
+				generators[protocol] = adapter
+			}
+		}
+		return retrieval.NewSelfQueryTransformer(generators), nil
 	default:
 		return nil, fmt.Errorf("unsupported query transformer provider %q", cfg.Provider)
 	}
@@ -520,6 +535,8 @@ func newRerankerAdapter(cfg rerankerConfig) (app.Reranker, error) {
 	log.Trace("newRerankerAdapter")
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "":
+		return nil, nil
 	case "tei":
 		if cfg.CandidateMultiplier < 2 {
 			return nil, fmt.Errorf("reranker candidate multiplier must be at least 2")

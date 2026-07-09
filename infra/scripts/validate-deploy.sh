@@ -60,7 +60,7 @@ validate_platform_chart() {
     helm template bighill-infra "${PLATFORM_CHART}" \
       -f "${PLATFORM_CHART}/values.yaml" \
       -f "${PLATFORM_CHART}/${env}-values.yaml" \
-      --set postgres.dbnames='bighill_data_registry_db bighill_ingestion_db bighill_feature_materializer_db bighill_inference_db bighill_model_registry_db bighill_profile_db' \
+      --set postgres.dbnames='bighill_data_registry_db bighill_ingestion_db bighill_feature_materializer_db bighill_inference_db bighill_model_registry_db bighill_tenant_db' \
       --set postgres.host=example.cluster.local \
       --set postgres.credentialsSecret.name=aurora-creds-test \
       >"$rendered"

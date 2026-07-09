@@ -67,8 +67,7 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT models_tenant_ownership_ck CHECK (
-        (model_kind = 'BASE' AND user_id IS NULL AND org_id IS NULL)
-        OR (model_kind <> 'BASE' AND user_id IS NOT NULL AND org_id IS NOT NULL)
+        user_id IS NOT NULL AND org_id IS NOT NULL
     ),
     CONSTRAINT models_loaded_serving_runtime_ck CHECK (
         serving_load_status <> 'LOADED'
@@ -145,12 +144,10 @@ ALTER TABLE bighill_model_registry_db.models FORCE ROW LEVEL SECURITY;
 CREATE POLICY models_tenant_isolation ON bighill_model_registry_db.models
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR org_id IS NULL
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR (model_kind = 'BASE' AND user_id IS NULL AND org_id IS NULL)
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 

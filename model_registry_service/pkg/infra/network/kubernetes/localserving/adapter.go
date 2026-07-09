@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"model_registry_service/pkg/app"
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
@@ -22,13 +23,9 @@ type Adapter struct {
 
 type StatusObserver struct {
 	adapter        *Adapter
-	recorder       ServingStatusRecorder
+	recorder       app.ServingStatusRecorder
 	resyncInterval time.Duration
 	seen           map[string]uuid.UUID
-}
-
-type ServingStatusRecorder interface {
-	RecordModelServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, idempotencyKey uuid.UUID) (*model.Model, error)
 }
 
 func NewAdapter(namespace string, path string) (*Adapter, error) {
@@ -68,7 +65,7 @@ func ServedModelName(modelID uuid.UUID, modelVersion int) string {
 	return localstore.ResourceName(modelID.String(), modelVersion)
 }
 
-func NewStatusObserver(adapter *Adapter, recorder ServingStatusRecorder, resyncInterval time.Duration) (*StatusObserver, error) {
+func NewStatusObserver(adapter *Adapter, recorder app.ServingStatusRecorder, resyncInterval time.Duration) (*StatusObserver, error) {
 	log.Trace("localserving NewStatusObserver")
 
 	if adapter == nil {

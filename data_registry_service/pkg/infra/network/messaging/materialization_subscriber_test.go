@@ -30,6 +30,7 @@ type materializationUsecaseStub struct {
 	advancedState     model.ProcessingState
 	recordedDataset   *model.Dataset
 	recordedState     model.ProcessingState
+	recordedEventSeq  int64
 	recordedActorID   uuid.UUID
 	recordedOrgID     uuid.UUID
 	err               error
@@ -44,9 +45,10 @@ func (s *materializationUsecaseStub) AdvanceDatasetProcessingState(_ context.Con
 	return &model.Dataset{ID: datasetID, UserID: userID, ProcessingState: state}, s.err
 }
 
-func (s *materializationUsecaseStub) RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error) {
+func (s *materializationUsecaseStub) RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState, eventSeq int64) (*model.Dataset, error) {
 	s.recordedDataset = dataset
 	s.recordedState = state
+	s.recordedEventSeq = eventSeq
 	s.recordedActorID, _ = ctxutil.TenantID(ctx)
 	s.recordedOrgID, _ = ctxutil.OrgID(ctx)
 	return dataset, s.err
@@ -134,6 +136,9 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(sub.policy.IsNonRetryableError(msgConn.NonRetryable(errors.New("bad payload")))).To(BeTrue())
 		Expect(sub.policy.IsNonRetryableError(msgConn.AlreadyProcessed(errors.New("duplicate")))).To(BeTrue())
 		Expect(sub.policy.IsNonRetryableError(domainErrors.ErrValidationFailed)).To(BeTrue())
+		Expect(sub.policy.IsNonRetryableError(domainErrors.ErrMaterializationEventSequenceInvalid)).To(BeTrue())
+		Expect(sub.policy.IsNonRetryableError(domainErrors.ErrMaterializationEventSequenceNotReady)).To(BeFalse())
+		Expect(sub.policy.IsNonRetryableError(domainErrors.ErrMaterializationEventSequenceMismatch)).To(BeFalse())
 		Expect(sub.policy.IsNonRetryableError(errors.New("transient"))).To(BeFalse())
 	})
 
@@ -178,18 +183,19 @@ var _ = Describe("Materialization event listeners", func() {
 		listener := registrymessaging.NewRawSnapshotReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.RawSnapshotReadyEvent{
-			DatasetId:         datasetID.String(),
-			UserId:            userID.String(),
-			OrgId:             orgID.String(),
-			RawSnapshotId:     rawSnapshotID.String(),
-			StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
-			TableNamespace:    "raw",
-			TableName:         "movies_raw",
-			TableFormat:       "PARQUET",
-			CatalogProvider:   "LOCAL",
-			SchemaVersion:     1,
-			SchemaMetadata:    "{}",
-			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 1,
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			RawSnapshotId:           rawSnapshotID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:          "raw",
+			TableName:               "movies_raw",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           1,
+			SchemaMetadata:          "{}",
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -202,6 +208,7 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedActorID).To(Equal(userID))
 		Expect(uc.recordedOrgID).To(Equal(orgID))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingRawMaterialized))
+		Expect(uc.recordedEventSeq).To(Equal(int64(1)))
 	})
 
 	It("records table metadata when a feature snapshot is ready", func() {
@@ -214,19 +221,20 @@ var _ = Describe("Materialization event listeners", func() {
 		listener := registrymessaging.NewFeatureSnapshotReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.FeatureSnapshotReadyEvent{
-			FeatureSnapshotId: featureSnapshotID.String(),
-			RawSnapshotId:     rawSnapshotID.String(),
-			DatasetId:         datasetID.String(),
-			UserId:            userID.String(),
-			OrgId:             orgID.String(),
-			StorageLocation:   "s3://local-dev-bucket/lakehouse/features/data.parquet",
-			TableNamespace:    "features",
-			TableName:         "movies",
-			TableFormat:       "PARQUET",
-			CatalogProvider:   "LOCAL",
-			SchemaVersion:     2,
-			SchemaMetadata:    `{"columns":["title"]}`,
-			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 2,
+			RawSnapshotId:           rawSnapshotID.String(),
+			FeatureSnapshotId:       featureSnapshotID.String(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:          "features",
+			TableName:               "movies",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "LOCAL",
+			SchemaVersion:           2,
+			SchemaMetadata:          `{"columns":["title"]}`,
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -242,6 +250,7 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedActorID).To(Equal(userID))
 		Expect(uc.recordedOrgID).To(Equal(orgID))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingFeatureMaterialized))
+		Expect(uc.recordedEventSeq).To(Equal(int64(2)))
 	})
 
 	It("advances state when embeddings are ready", func() {
@@ -254,22 +263,23 @@ var _ = Describe("Materialization event listeners", func() {
 		listener := registrymessaging.NewEmbeddingSnapshotReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.EmbeddingSnapshotReadyEvent{
-			EmbeddingSnapshotId: embeddingSnapshotID.String(),
-			FeatureSnapshotId:   featureSnapshotID.String(),
-			DatasetId:           datasetID.String(),
-			UserId:              userID.String(),
-			OrgId:               orgID.String(),
-			VectorStore:         "pgvector",
-			CollectionName:      "movies",
-			EmbeddingDimensions: 384,
-			EmbeddingCount:      2,
-			StrategyVersion:     "rag-v1",
-			ChunkerName:         "go-token-window",
-			ChunkerVersion:      "v1",
-			ChunkSize:           384,
-			ChunkOverlap:        64,
-			EmbeddingProvider:   "ollama",
-			EmbeddingModel:      "bge-small-en-v1.5",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 3,
+			FeatureSnapshotId:       featureSnapshotID.String(),
+			EmbeddingSnapshotId:     embeddingSnapshotID.String(),
+			UserId:                  userID.String(),
+			OrgId:                   orgID.String(),
+			VectorStore:             "pgvector",
+			CollectionName:          "movies",
+			EmbeddingDimensions:     384,
+			EmbeddingCount:          2,
+			StrategyVersion:         "rag-v1",
+			ChunkerName:             "go-token-window",
+			ChunkerVersion:          "v1",
+			ChunkSize:               384,
+			ChunkOverlap:            64,
+			EmbeddingProvider:       "ollama",
+			EmbeddingModel:          "bge-small-en-v1.5",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -285,6 +295,31 @@ var _ = Describe("Materialization event listeners", func() {
 		Expect(uc.recordedActorID).To(Equal(userID))
 		Expect(uc.recordedOrgID).To(Equal(orgID))
 		Expect(uc.recordedState).To(Equal(model.DatasetProcessingEmbeddingsMaterialized))
+		Expect(uc.recordedEventSeq).To(Equal(int64(3)))
+	})
+
+	It("delegates invalid materialization event sequence errors to the subscriber policy", func() {
+		datasetID := uuid.New()
+		uc := &materializationUsecaseStub{err: domainErrors.ErrMaterializationEventSequenceInvalid}
+		listener := registrymessaging.NewRawSnapshotReadyEventListener(uc)
+
+		err := listener.Handle(context.Background(), datasetID, &featurepb.RawSnapshotReadyEvent{
+			DatasetId:         datasetID.String(),
+			UserId:            uuid.NewString(),
+			OrgId:             uuid.NewString(),
+			RawSnapshotId:     uuid.NewString(),
+			StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:    "raw",
+			TableName:         "movies_raw",
+			TableFormat:       "PARQUET",
+			CatalogProvider:   "LOCAL",
+			SchemaVersion:     1,
+			SchemaMetadata:    "{}",
+			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
+		})
+
+		Expect(errors.Is(err, domainErrors.ErrMaterializationEventSequenceInvalid)).To(BeTrue())
+		Expect(uc.recordedEventSeq).To(Equal(int64(0)))
 	})
 
 	It("returns non-retryable errors for invalid feature-ready payloads", func() {
@@ -292,14 +327,15 @@ var _ = Describe("Materialization event listeners", func() {
 		listener := registrymessaging.NewFeatureSnapshotReadyEventListener(&materializationUsecaseStub{})
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.FeatureSnapshotReadyEvent{
-			DatasetId:       datasetID.String(),
-			UserId:          uuid.NewString(),
-			OrgId:           uuid.NewString(),
-			StorageLocation: "s3://local-dev-bucket/lakehouse/features/data.parquet",
-			TableNamespace:  "features",
-			TableName:       "movies",
-			TableFormat:     "NOT_A_FORMAT",
-			CatalogProvider: "LOCAL",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 2,
+			UserId:                  uuid.NewString(),
+			OrgId:                   uuid.NewString(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/features/data.parquet",
+			TableNamespace:          "features",
+			TableName:               "movies",
+			TableFormat:             "NOT_A_FORMAT",
+			CatalogProvider:         "LOCAL",
 		})
 
 		Expect(err).To(HaveOccurred())
@@ -311,18 +347,19 @@ var _ = Describe("Materialization event listeners", func() {
 		listener := registrymessaging.NewRawSnapshotReadyEventListener(&materializationUsecaseStub{})
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.RawSnapshotReadyEvent{
-			DatasetId:         datasetID.String(),
-			UserId:            uuid.NewString(),
-			OrgId:             uuid.NewString(),
-			RawSnapshotId:     uuid.NewString(),
-			StorageLocation:   "s3://local-dev-bucket/lakehouse/raw/data.parquet",
-			TableNamespace:    "raw",
-			TableName:         "movies_raw",
-			TableFormat:       "PARQUET",
-			CatalogProvider:   "NOT_A_CATALOG",
-			SchemaVersion:     1,
-			SchemaMetadata:    "{}",
-			ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 1,
+			UserId:                  uuid.NewString(),
+			OrgId:                   uuid.NewString(),
+			RawSnapshotId:           uuid.NewString(),
+			StorageLocation:         "s3://local-dev-bucket/lakehouse/raw/data.parquet",
+			TableNamespace:          "raw",
+			TableName:               "movies_raw",
+			TableFormat:             "PARQUET",
+			CatalogProvider:         "NOT_A_CATALOG",
+			SchemaVersion:           1,
+			SchemaMetadata:          "{}",
+			ProcessingProfile:       "TEXT_RAG_PROCESSING_PROFILE",
 		})
 
 		Expect(err).To(HaveOccurred())
@@ -335,13 +372,14 @@ var _ = Describe("Materialization event listeners", func() {
 		listener := registrymessaging.NewEmbeddingSnapshotReadyEventListener(uc)
 
 		err := listener.Handle(context.Background(), datasetID, &featurepb.EmbeddingSnapshotReadyEvent{
-			DatasetId:           datasetID.String(),
-			UserId:              uuid.NewString(),
-			OrgId:               uuid.NewString(),
-			FeatureSnapshotId:   uuid.NewString(),
-			EmbeddingSnapshotId: uuid.NewString(),
-			VectorStore:         "pgvector",
-			CollectionName:      "movies",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 3,
+			UserId:                  uuid.NewString(),
+			OrgId:                   uuid.NewString(),
+			FeatureSnapshotId:       uuid.NewString(),
+			EmbeddingSnapshotId:     uuid.NewString(),
+			VectorStore:             "pgvector",
+			CollectionName:          "movies",
 		})
 
 		Expect(err).To(MatchError("database unavailable"))
@@ -353,13 +391,14 @@ var _ = Describe("Materialization event listeners", func() {
 		listener := registrymessaging.NewEmbeddingSnapshotReadyEventListener(&materializationUsecaseStub{})
 
 		err := listener.Handle(context.Background(), uuid.New(), &featurepb.EmbeddingSnapshotReadyEvent{
-			DatasetId:           datasetID.String(),
-			UserId:              uuid.NewString(),
-			OrgId:               uuid.NewString(),
-			FeatureSnapshotId:   uuid.NewString(),
-			EmbeddingSnapshotId: uuid.NewString(),
-			VectorStore:         "pgvector",
-			CollectionName:      "movies",
+			DatasetId:               datasetID.String(),
+			MaterializationEventSeq: 3,
+			UserId:                  uuid.NewString(),
+			OrgId:                   uuid.NewString(),
+			FeatureSnapshotId:       uuid.NewString(),
+			EmbeddingSnapshotId:     uuid.NewString(),
+			VectorStore:             "pgvector",
+			CollectionName:          "movies",
 		})
 
 		Expect(err).To(HaveOccurred())

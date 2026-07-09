@@ -25,7 +25,7 @@ type DatasetUsecase interface {
 	PublishDataset(ctx context.Context, ID uuid.UUID, userID uuid.UUID) error
 	ReplaceDataset(ctx context.Context, dataset *model.Dataset) (*model.Dataset, error)
 	AdvanceDatasetProcessingState(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, state model.ProcessingState) (*model.Dataset, error)
-	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error)
+	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState, eventSeq int64) (*model.Dataset, error)
 	ReadDatasetTable(ctx context.Context, datasetID uuid.UUID, userID uuid.UUID, snapshotID string) (*model.Dataset, error)
 }
 
@@ -249,7 +249,7 @@ func (u *datasetUseCase) AdvanceDatasetProcessingState(ctx context.Context, data
 	return updated, err
 }
 
-func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, materialized *model.Dataset, state model.ProcessingState) (updated *model.Dataset, err error) {
+func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, materialized *model.Dataset, state model.ProcessingState, eventSeq int64) (updated *model.Dataset, err error) {
 	log.Trace("DatasetUsecase RecordDatasetMaterialization")
 
 	var attrs []attribute.KeyValue
@@ -258,6 +258,7 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 			attribute.String("dataset_id", materialized.ID.String()),
 			attribute.String("user_id", materialized.UserID.String()),
 			attribute.String("processing_state", state.String()),
+			attribute.Int64("materialization_event_seq", eventSeq),
 		)
 	}
 	ctx, span := usecasetrace.StartSpan(ctx, "data_registry_service/app", "dataset.record_materialization", attrs...)
@@ -274,7 +275,7 @@ func (u *datasetUseCase) RecordDatasetMaterialization(ctx context.Context, mater
 	err = u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		var changed bool
 		var updateErr error
-		updated, changed, updateErr = u.datasetsRepository.RecordMaterialization(ctx, tx, materialized, state)
+		updated, changed, updateErr = u.datasetsRepository.RecordMaterialization(ctx, tx, materialized, state, eventSeq)
 		if updateErr != nil {
 			return updateErr
 		}

@@ -5,8 +5,6 @@ import (
 	"api/pkg/middleware"
 	"api/pkg/router"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"context"
@@ -56,92 +54,40 @@ func NewAPIHandler() APIHandler {
 	httpClientTimeout := time.Duration(httpClientTimeoutSeconds) * time.Second
 
 	client := &http.Client{Timeout: httpClientTimeout}
-	cfg := routerConfigFromEnv()
+	cfg := router.Config{
+		DataRegistryServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("DATA_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("DATA_REGISTRY_SERVICE_HTTP_PORT", "8081"),
+		),
+		IngestionServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("INGESTION_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("INGESTION_SERVICE_HTTP_PORT", "8086"),
+		),
+		ModelRegistryServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("MODEL_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("MODEL_REGISTRY_SERVICE_HTTP_PORT", "8084"),
+		),
+		TenantServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("TENANT_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("TENANT_SERVICE_HTTP_PORT", "8082"),
+		),
+		TrainingServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("TRAINING_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("TRAINING_SERVICE_HTTP_PORT", "8085"),
+		),
+		InferenceServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("INFERENCE_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("INFERENCE_SERVICE_HTTP_PORT", "8087"),
+		),
+	}
 
 	return APIHandler{
 		handler: middlewareChain(router.NewRouter(client, http.NewRequest, cfg), middleware.TraceMiddleware),
 	}
 }
 
-func routerConfigFromEnv() router.Config {
-	return router.Config{
-		DataRegistryServiceRoute: serviceBaseRoute(
-			serviceHost("DATA_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
-			servicePort("DATA_REGISTRY_SERVICE_HTTP_PORT", "8081"),
-		),
-		IngestionServiceRoute: serviceBaseRoute(
-			serviceHost("INGESTION_SERVICE_HTTP_HOST", "127.0.0.1"),
-			servicePort("INGESTION_SERVICE_HTTP_PORT", "8086"),
-		),
-		ModelRegistryServiceRoute: serviceBaseRoute(
-			serviceHost("MODEL_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
-			servicePort("MODEL_REGISTRY_SERVICE_HTTP_PORT", "8084"),
-		),
-		ProfileServiceRoute: serviceBaseRoute(
-			serviceHost("PROFILE_SERVICE_HTTP_HOST", "127.0.0.1"),
-			servicePort("PROFILE_SERVICE_HTTP_PORT", "8082"),
-		),
-		TrainingServiceRoute: serviceBaseRoute(
-			serviceHost("TRAINING_SERVICE_HTTP_HOST", "127.0.0.1"),
-			servicePort("TRAINING_SERVICE_HTTP_PORT", "8085"),
-		),
-		InferenceServiceRoute: serviceBaseRoute(
-			serviceHost("INFERENCE_SERVICE_HTTP_HOST", "127.0.0.1"),
-			servicePort("INFERENCE_SERVICE_HTTP_PORT", "8087"),
-		),
-	}
-}
-
 func serviceBaseRoute(host, port string) string {
 	return "http://" + host + ":" + port
-}
-
-func serviceHost(key, localDefault string) string {
-	value := serviceEnv(key, localDefault)
-	if !usesLocalServiceDefaults() && isLocalhost(value) {
-		log.Fatalf("%s=%q is only valid for local-dev or cicd", key, value)
-	}
-	return value
-}
-
-func servicePort(key, localDefault string) string {
-	return serviceEnv(key, localDefault)
-}
-
-func serviceEnv(key, localDefault string) string {
-	if usesLocalServiceDefaults() {
-		return env.WithDefaultString(key, localDefault)
-	}
-	value := strings.TrimSpace(env.MustString(key))
-	if value == "" {
-		log.Fatalf("environment variable %s must not be empty", key)
-	}
-	return value
-}
-
-func usesLocalServiceDefaults() bool {
-	switch normalizedEnvironment() {
-	case "", "local-dev", "cicd":
-		return true
-	case "staging", "prod":
-		return false
-	default:
-		log.Fatalf("ENVIRONMENT must be one of local-dev, cicd, staging, prod")
-		return false
-	}
-}
-
-func normalizedEnvironment() string {
-	return strings.ToLower(strings.TrimSpace(os.Getenv("ENVIRONMENT")))
-}
-
-func isLocalhost(host string) bool {
-	switch strings.ToLower(strings.TrimSpace(host)) {
-	case "127.0.0.1", "localhost", "::1", "0.0.0.0":
-		return true
-	default:
-		return false
-	}
 }
 
 func (h APIHandler) Invoke(ctx context.Context, payload []byte) ([]byte, error) {

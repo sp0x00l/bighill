@@ -110,7 +110,11 @@ func (u *embeddingMaterializationUsecase) markEmbeddingReady(ctx context.Context
 		if err := u.repo.MarkEmbeddingReady(ctx, tx, embeddingSnapshot); err != nil {
 			return err
 		}
-		if err := enqueue(u.eventBuilder.EmbeddingSnapshotReadyMessage(embeddingSnapshot)); err != nil {
+		msg, err := u.eventBuilder.EmbeddingSnapshotReadyMessage(embeddingSnapshot)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(msg); err != nil {
 			return fmt.Errorf("enqueue embedding snapshot ready: %w", err)
 		}
 		return nil

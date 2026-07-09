@@ -118,9 +118,18 @@ func embeddingSearchMatchesToContexts(matches []*featurepb.EmbeddingSearchMatch)
 		if err != nil || snapshotID == uuid.Nil {
 			return nil, fmt.Errorf("feature materializer returned invalid embedding_snapshot_id")
 		}
+		datasetID := uuid.Nil
+		if match.GetDatasetId() != "" {
+			parsedDatasetID, err := uuid.Parse(match.GetDatasetId())
+			if err != nil || parsedDatasetID == uuid.Nil {
+				return nil, fmt.Errorf("feature materializer returned invalid dataset_id")
+			}
+			datasetID = parsedDatasetID
+		}
 		contexts = append(contexts, model.RetrievedContext{
 			EmbeddingRecordID:   recordID,
 			EmbeddingSnapshotID: snapshotID,
+			DatasetID:           datasetID,
 			ChunkIndex:          int(match.GetChunkIndex()),
 			SourceText:          match.GetSourceText(),
 			Distance:            match.GetDistance(),

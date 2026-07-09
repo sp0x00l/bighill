@@ -35,6 +35,7 @@ func (s *featureSnapshotRepoStub) SavePendingFeatureSnapshot(_ context.Context, 
 
 func (s *featureSnapshotRepoStub) MarkFeatureReady(_ context.Context, _ pgx.Tx, featureSnapshot *model.FeatureSnapshot) error {
 	s.readyID = featureSnapshot.FeatureSnapshotID
+	featureSnapshot.MaterializationEventSeq = 1
 	return nil
 }
 

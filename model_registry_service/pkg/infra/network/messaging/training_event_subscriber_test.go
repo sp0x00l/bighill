@@ -252,12 +252,18 @@ var _ = Describe("Model artifact ingested listener", func() {
 	It("maps uploaded base model artifacts into model registrations", func() {
 		artifactID := uuid.New()
 		uploadID := uuid.New()
+		datasetID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
 		listener := registrymessaging.NewModelArtifactIngestedEventListener(uc)
 
 		err := listener.Handle(context.Background(), artifactID, &ingestionpb.ModelArtifactIngestedEvent{
 			ArtifactId:        artifactID.String(),
 			UploadId:          uploadID.String(),
+			UserId:            userID.String(),
+			OrgId:             orgID.String(),
+			DatasetId:         datasetID.String(),
 			Source:            "upload",
 			StorageLocation:   "s3://local-dev-bucket/models/artifacts/base",
 			ArtifactType:      "BASE_MODEL",
@@ -275,7 +281,9 @@ var _ = Describe("Model artifact ingested listener", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(uc.idempotencyKey).To(Equal(uploadID))
 		Expect(uc.ingestedModel.ModelID).To(Equal(artifactID))
-		Expect(uc.ingestedModel.UserID).To(Equal(uuid.Nil))
+		Expect(uc.ingestedModel.UserID).To(Equal(userID))
+		Expect(uc.ingestedModel.OrgID).To(Equal(orgID))
+		Expect(uc.ingestedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.ingestedModel.ModelKind).To(Equal(model.ModelKindBase))
 		Expect(uc.ingestedModel.Source).To(Equal(model.ModelSourceUpload))
 		Expect(uc.ingestedModel.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/artifacts/base"))
@@ -318,7 +326,37 @@ var _ = Describe("Model artifact ingested listener", func() {
 		Expect(uc.ingestedModel.ModelVersion).To(Equal(2))
 	})
 
-	It("rejects adapter artifacts without an owning user", func() {
+	It("maps uploaded model artifacts without a provenance dataset", func() {
+		artifactID := uuid.New()
+		uploadID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
+		uc := &recordingModelRegistryUsecase{}
+		listener := registrymessaging.NewModelArtifactIngestedEventListener(uc)
+
+		err := listener.Handle(context.Background(), artifactID, &ingestionpb.ModelArtifactIngestedEvent{
+			ArtifactId:        artifactID.String(),
+			UploadId:          uploadID.String(),
+			UserId:            userID.String(),
+			OrgId:             orgID.String(),
+			Source:            "upload",
+			StorageLocation:   "s3://local-dev-bucket/models/artifacts/base",
+			ArtifactType:      "BASE_MODEL",
+			ArtifactFormat:    "HF_MODEL",
+			ArtifactSizeBytes: 1024,
+			ArtifactChecksum:  "sha256:base",
+			ModelName:         "movie-base",
+			ModelVersion:      "1",
+			BaseModel:         "mistral-7b",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.ingestedModel.UserID).To(Equal(userID))
+		Expect(uc.ingestedModel.OrgID).To(Equal(orgID))
+		Expect(uc.ingestedModel.DatasetID).To(Equal(uuid.Nil))
+	})
+
+	It("rejects uploaded model artifacts without an owning user", func() {
 		artifactID := uuid.New()
 		uploadID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
@@ -327,6 +365,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 		err := listener.Handle(context.Background(), artifactID, &ingestionpb.ModelArtifactIngestedEvent{
 			ArtifactId:        artifactID.String(),
 			UploadId:          uploadID.String(),
+			DatasetId:         uuid.NewString(),
 			Source:            "upload",
 			StorageLocation:   "s3://local-dev-bucket/models/artifacts/adapter",
 			ArtifactType:      "LORA_ADAPTER",
@@ -341,7 +380,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 		Expect(err).To(MatchError(ContainSubstring("user_id required")))
 	})
 
-	It("rejects adapter artifacts without an owning org", func() {
+	It("rejects uploaded model artifacts without an owning org", func() {
 		artifactID := uuid.New()
 		uploadID := uuid.New()
 		uc := &recordingModelRegistryUsecase{}
@@ -351,6 +390,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 			ArtifactId:        artifactID.String(),
 			UploadId:          uploadID.String(),
 			UserId:            uuid.NewString(),
+			DatasetId:         uuid.NewString(),
 			Source:            "upload",
 			StorageLocation:   "s3://local-dev-bucket/models/artifacts/adapter",
 			ArtifactType:      "LORA_ADAPTER",

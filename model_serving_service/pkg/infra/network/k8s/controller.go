@@ -186,7 +186,7 @@ func (c *ServedModelController) processWatchEvent(ctx context.Context, event wat
 		if !ok {
 			return domain.ErrModelServe.Extend("served model watch event object is not unstructured")
 		}
-		servedModel, err := servedModelFromObject(obj, c.store.Namespace())
+		servedModel, err := servedModelDTOAdapter{namespace: c.store.Namespace()}.FromObject(obj)
 		if err != nil {
 			log.WithContext(ctx).WithError(err).WithField("served_model", obj.GetName()).Error("served model spec ignored")
 			return nil
@@ -218,6 +218,11 @@ func (c *ServedModelController) processResource(ctx context.Context, resourceNam
 
 	servedModel, err := c.store.Read(ctx, resourceName)
 	if err != nil {
+		if errors.Is(err, domain.ErrServedModelNotFound) {
+			c.markResourceDeleted(resourceName)
+			c.clearRetry(resourceName)
+			return
+		}
 		c.markError(err)
 		log.WithContext(ctx).WithError(err).WithField("served_model", resourceName).Error("served model read failed")
 		c.scheduleRequeue(ctx, resourceName)

@@ -45,7 +45,39 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 	})
 
 	It("allows a consumer to invoke only published endpoints in their active org", func() {
-		Skip("local-dev cannot honestly serve fine-tuned adapters through Ollama until HF_PEFT_ADAPTER to GGUF conversion and ollama create are implemented")
+		admin := createVerifiedProfileAndLogin()
+		consumer := createVerifiedProfileAndLogin()
+		addOrgMember(admin, admin.OrgID, consumer.ID, authz.RoleConsumer)
+		consumer = loginExistingProfile(consumer)
+
+		datasetID := createRAGInferenceDataset(admin)
+		materializeRAGInferenceDataset(admin, datasetID)
+		modelID := uploadBaseModelThroughIngestion(admin, datasetID)
+		selectedModel := assertModelSelectable(admin, modelID, "UPLOAD", "rag-e2e-uploaded-base")
+		endpointID := waitForPublishedEndpoint(consumer.Token, "rag-e2e-uploaded-base")
+
+		status, body := doJSONWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+endpointID.String()+"/generations", map[string]any{
+			"query_text": "What phrase identifies the embedded knowledge base?",
+			"top_k":      3,
+		}, consumer.Token, uuid.New(), ragE2EGenerateCallTimeout)
+		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		generation := decodeObject(body)
+		Expect(strings.TrimSpace(stringField(generation, "answer"))).NotTo(BeEmpty())
+		Expect(generation["generation_model"]).To(Equal(stringField(selectedModel, "serving_model")))
+		Expect(generation["generation_protocol"]).To(Equal(stringField(selectedModel, "serving_protocol")))
+
+		otherAdmin := createVerifiedProfileAndLogin()
+		otherDatasetID := createRAGInferenceDataset(otherAdmin)
+		materializeRAGInferenceDataset(otherAdmin, otherDatasetID)
+		otherModelID := uploadBaseModelThroughIngestion(otherAdmin, otherDatasetID)
+		assertModelSelectable(otherAdmin, otherModelID, "UPLOAD", "rag-e2e-uploaded-base")
+		otherEndpointID := waitForPublishedEndpoint(otherAdmin.Token, "rag-e2e-uploaded-base")
+
+		status, body = doJSONWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+otherEndpointID.String()+"/generations", map[string]any{
+			"query_text": "What phrase identifies the embedded knowledge base?",
+			"top_k":      3,
+		}, consumer.Token, uuid.New(), ragE2EGenerateCallTimeout)
+		Expect(status).To(Equal(http.StatusNotFound), "body: %s", string(body))
 	})
 })
 
@@ -75,7 +107,7 @@ func waitForPublishedEndpoint(token string, displayName string) uuid.UUID {
 			return
 		}
 		g.Expect(endpoints).To(ContainElement(HaveKeyWithValue("display_name", displayName)))
-	}, 45*time.Second, 1*time.Second).Should(Succeed())
+	}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(Succeed())
 	return endpointID
 }
 

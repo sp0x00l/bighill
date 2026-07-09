@@ -25,6 +25,8 @@ env:
   rerankerProvider: "tei"
   rerankerUrl: "http://text-embeddings-inference-reranker:80"
   rerankerModel: "bge-reranker-large"
+  generationMaxOutputTokens: "256"
+  ragMergeStrategy: "reranker"
   queryTransformerProvider: ""
   preferenceDatasetUriTemplate: "s3://bighill-mlops-lakehouse/preferences/{dataset_id}/{preference_dataset_id}.jsonl"
   preferenceDatasetBucketRegion: "eu-west-1"

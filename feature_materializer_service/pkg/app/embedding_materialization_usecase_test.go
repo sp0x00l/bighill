@@ -40,6 +40,7 @@ func (s *embeddingSnapshotRepoStub) SaveEmbeddingRecords(_ context.Context, _ pg
 
 func (s *embeddingSnapshotRepoStub) MarkEmbeddingReady(_ context.Context, _ pgx.Tx, embeddingSnapshot *model.EmbeddingSnapshot) error {
 	s.readyID = embeddingSnapshot.EmbeddingSnapshotID
+	embeddingSnapshot.MaterializationEventSeq = 1
 	return nil
 }
 

@@ -192,14 +192,135 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, tx pgx.Tx, datas
 	return current, false, nil
 }
 
-func (db *datasetDB) RecordMaterialization(ctx context.Context, tx pgx.Tx, materialized *model.Dataset, state model.ProcessingState) (*model.Dataset, bool, error) {
+func (db *datasetDB) RecordMaterialization(ctx context.Context, tx pgx.Tx, materialized *model.Dataset, state model.ProcessingState, eventSeq int64) (*model.Dataset, bool, error) {
 	log.Trace("DatasetDB RecordMaterialization")
 
+	status, err := db.checkMaterializationEventSeq(ctx, tx, materialized.ID, eventSeq)
+	if err != nil {
+		return nil, false, err
+	}
+	switch status {
+	case domainErrors.MaterializationEventSeqDuplicate:
+		current, err := db.readMaterializationDatasetTx(ctx, tx, materialized.ID, materialized.UserID)
+		if err != nil {
+			return nil, false, err
+		}
+		return current, false, nil
+	case domainErrors.MaterializationEventSeqFuture:
+		return nil, false, fmt.Errorf("%w: dataset_id=%s event_seq=%d", domainErrors.ErrMaterializationEventSequenceNotReady, materialized.ID, eventSeq)
+	}
 	updated, changed, err := db.recordMaterializationTx(ctx, tx, materialized, state)
 	if err != nil {
 		return nil, false, err
 	}
+	if err := db.advanceMaterializationEventSeq(ctx, tx, materialized.ID, eventSeq); err != nil {
+		return nil, false, err
+	}
 	return updated, changed, nil
+}
+
+func (db *datasetDB) checkMaterializationEventSeq(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, eventSeq int64) (domainErrors.MaterializationEventSeqStatus, error) {
+	log.Trace("DatasetDB checkMaterializationEventSeq")
+
+	if eventSeq <= 0 {
+		return "", fmt.Errorf("%w: dataset_id=%s event_seq=%d", domainErrors.ErrMaterializationEventSequenceInvalid, datasetID, eventSeq)
+	}
+	expected, err := db.readLockedMaterializationEventSeq(ctx, tx, datasetID)
+	if errors.Is(err, domainErrors.ErrResourceNotFound) {
+		if seedErr := db.seedMaterializationEventSeq(ctx, tx, datasetID, 1); seedErr != nil {
+			return "", seedErr
+		}
+		expected, err = db.readLockedMaterializationEventSeq(ctx, tx, datasetID)
+	}
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case eventSeq < expected:
+		return domainErrors.MaterializationEventSeqDuplicate, nil
+	case eventSeq > expected:
+		return domainErrors.MaterializationEventSeqFuture, nil
+	default:
+		return domainErrors.MaterializationEventSeqReady, nil
+	}
+}
+
+func (db *datasetDB) readLockedMaterializationEventSeq(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID) (int64, error) {
+	log.Trace("DatasetDB readLockedMaterializationEventSeq")
+
+	return db.readMaterializationEventSeq(ctx, tx, datasetID, true)
+}
+
+func (db *datasetDB) readMaterializationEventSeq(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, lock bool) (int64, error) {
+	log.Trace("DatasetDB readMaterializationEventSeq")
+
+	lockClause := ""
+	if lock {
+		lockClause = "FOR UPDATE"
+	}
+	var expected int64
+	err := tx.QueryRow(ctx, `
+		SELECT next_expected_event_seq
+		FROM `+db.Name+`.dataset_materialization_event_state
+		WHERE dataset_id = @dataset_id
+		  AND org_id = @org_id
+		`+lockClause+`;`, pgx.NamedArgs{
+		"dataset_id": datasetID,
+		"org_id":     db.orgIDFromContext(ctx),
+	}).Scan(&expected)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, domainErrors.ErrResourceNotFound.Extend("materialization event sequence was not found")
+	}
+	if err != nil {
+		if lock {
+			return 0, fmt.Errorf("lock materialization event sequence: %w", err)
+		}
+		return 0, fmt.Errorf("read materialization event sequence: %w", err)
+	}
+	return expected, nil
+}
+
+func (db *datasetDB) seedMaterializationEventSeq(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, nextExpectedEventSeq int64) error {
+	log.Trace("DatasetDB seedMaterializationEventSeq")
+
+	_, err := tx.Exec(ctx, `
+		INSERT INTO `+db.Name+`.dataset_materialization_event_state (dataset_id, org_id, next_expected_event_seq)
+		SELECT id, org_id, @next_expected_event_seq
+		FROM `+db.Name+`.datasets
+		WHERE id = @dataset_id
+		  AND org_id = @org_id
+		  AND deleted = false
+		ON CONFLICT (dataset_id) DO NOTHING;`, pgx.NamedArgs{
+		"dataset_id":              datasetID,
+		"org_id":                  db.orgIDFromContext(ctx),
+		"next_expected_event_seq": nextExpectedEventSeq,
+	})
+	if err != nil {
+		return fmt.Errorf("seed materialization event sequence: %w", err)
+	}
+	return nil
+}
+
+func (db *datasetDB) advanceMaterializationEventSeq(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, eventSeq int64) error {
+	log.Trace("DatasetDB advanceMaterializationEventSeq")
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE `+db.Name+`.dataset_materialization_event_state
+		SET next_expected_event_seq = next_expected_event_seq + 1
+		WHERE dataset_id = @dataset_id
+		  AND org_id = @org_id
+		  AND next_expected_event_seq = @event_seq;`, pgx.NamedArgs{
+		"dataset_id": datasetID,
+		"org_id":     db.orgIDFromContext(ctx),
+		"event_seq":  eventSeq,
+	})
+	if err != nil {
+		return fmt.Errorf("advance materialization event sequence: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: dataset_id=%s event_seq=%d", domainErrors.ErrMaterializationEventSequenceMismatch, datasetID, eventSeq)
+	}
+	return nil
 }
 
 func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, materialized *model.Dataset, state model.ProcessingState) (*model.Dataset, bool, error) {
@@ -210,8 +331,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 	datasetDAO["processing_state"] = pgtype.Text{String: state.String(), Valid: true}
 
 	requestedState := "@processing_state::dataset_processing_state_enum"
-	currentState := "d.processing_state"
-	metadataUpdateAllowed := `(` + requestedState + ` >= ` + currentState + `)`
+	metadataUpdateAllowed := `TRUE`
 	locationValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@location, ''), d.location) ELSE d.location END`
 	tableNamespaceValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@table_namespace, ''), d.table_namespace) ELSE d.table_namespace END`
 	tableNameValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@table_name, ''), d.table_name) ELSE d.table_name END`
@@ -243,10 +363,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 			processing_profile = ` + processingProfileValue + `,
 			schema_version = ` + schemaVersionValue + `,
 			schema_metadata = ` + schemaMetadataValue + `,
-			processing_state = CASE
-				WHEN ` + requestedState + ` > ` + currentState + ` THEN @processing_state::dataset_processing_state_enum
-				ELSE d.processing_state
-			END,
+			processing_state = @processing_state::dataset_processing_state_enum,
 			dataset_version = d.dataset_version + 1,
 			raw_snapshot_id = ` + rawSnapshotIDValue + `,
 			feature_snapshot_id = ` + featureSnapshotIDValue + `,
@@ -267,7 +384,7 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 			AND d.status != '` + model.Blacklisted.DBString() + `'::dataset_status_enum
 			AND d.deleted = false
 			AND (
-				` + requestedState + ` > ` + currentState + `
+				d.processing_state IS DISTINCT FROM ` + requestedState + `
 				OR d.location IS DISTINCT FROM ` + locationValue + `
 				OR d.table_namespace IS DISTINCT FROM ` + tableNamespaceValue + `
 				OR d.table_name IS DISTINCT FROM ` + tableNameValue + `

@@ -15,7 +15,7 @@ import (
 )
 
 type EmbeddingSnapshotReadyListener interface {
-	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState) (*model.Dataset, error)
+	RecordDatasetMaterialization(ctx context.Context, dataset *model.Dataset, state model.ProcessingState, eventSeq int64) (*model.Dataset, error)
 }
 
 type embeddingSnapshotReadyEventListener struct {
@@ -53,7 +53,7 @@ func (l *embeddingSnapshotReadyEventListener) Handle(ctx context.Context, resour
 		return msgConn.NonRetryable(err)
 	}
 	ctx = ctxutil.WithActorOrg(ctx, dataset.UserID, dataset.OrgID)
-	_, err = l.listener.RecordDatasetMaterialization(ctx, dataset, model.DatasetProcessingEmbeddingsMaterialized)
+	_, err = l.listener.RecordDatasetMaterialization(ctx, dataset, model.DatasetProcessingEmbeddingsMaterialized, payload.GetMaterializationEventSeq())
 	return err
 }
 

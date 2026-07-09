@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"training_service/pkg/app"
 	"training_service/pkg/domain/model"
 
 	inferencepb "lib/data_contracts_lib/inference"
@@ -19,15 +20,6 @@ import (
 
 var errPreferenceDatasetParentNotReady = errors.New("preference dataset parent model is not ready")
 
-type TrainingWorkflowStarter interface {
-	StartTrainingWorkflow(ctx context.Context, request model.TrainingRunRequest) error
-}
-
-type TrainingProfileCatalog interface {
-	ResolveTrainingProfile(ctx context.Context, name string) (model.TrainingProfile, error)
-	ResolveEvaluationProfile(ctx context.Context, name string) (string, error)
-}
-
 type TrainingTopics struct {
 	Inference     string
 	ModelRegistry string
@@ -35,13 +27,13 @@ type TrainingTopics struct {
 }
 
 type preferenceDatasetReadyEventListener struct {
-	starter               TrainingWorkflowStarter
-	profileCatalog        TrainingProfileCatalog
+	starter               app.TrainingWorkflowStarter
+	profileCatalog        app.TrainingProfileCatalog
 	trainingProfileName   string
 	evaluationProfileName string
 }
 
-func NewPreferenceDatasetReadyEventListener(starter TrainingWorkflowStarter, profileCatalog TrainingProfileCatalog, trainingProfileName string, evaluationProfileName string) *preferenceDatasetReadyEventListener {
+func NewPreferenceDatasetReadyEventListener(starter app.TrainingWorkflowStarter, profileCatalog app.TrainingProfileCatalog, trainingProfileName string, evaluationProfileName string) *preferenceDatasetReadyEventListener {
 	log.Trace("NewPreferenceDatasetReadyEventListener")
 
 	return &preferenceDatasetReadyEventListener{

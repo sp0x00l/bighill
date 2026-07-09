@@ -27,6 +27,12 @@ type TrainingWorkflowStatusReader interface {
 	ReadTrainingWorkflowStatus(ctx context.Context, trainingRunID string) (*model.TrainingRunStatusResult, error)
 }
 
+type TrainingEventPublisher interface {
+	PublishModelTrainingCompleted(ctx context.Context, result *model.TrainingRunResult) error
+	PublishModelTrainingFailed(ctx context.Context, result *model.TrainingRunResult) error
+	PublishPromotionReportReady(ctx context.Context, report *model.PromotionReport) error
+}
+
 type DatasetResolver interface {
 	ResolveMaterializedDataset(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, datasetID uuid.UUID) (model.MaterializedDatasetRef, error)
 }

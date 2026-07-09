@@ -241,6 +241,21 @@ var _ = Describe("Connector config DTO adapter validation", func() {
 		Expect(fromDTO).NotTo(BeNil())
 	})
 
+	It("validates payloads through connector config adapter factory wiring", func() {
+		fromDTO, err := GetConnCfgFromDTOFunc(ctx, model.Postgres)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = fromDTO(ctx, []byte(`{
+			"hostname":"localhost",
+			"port":5432,
+			"databaseName":"pagila",
+			"authenticationType":"MASTER",
+			"username":"postgres"
+		}`), encoder.Deserialize)
+
+		Expect(errors.Is(err, domainErrors.ErrValidationFailed)).To(BeTrue())
+	})
+
 	It("rejects unknown connector config adapter factories", func() {
 		Expect(GetConnCfgToDTOFunc(ctx, model.UnknownStorageType)).To(BeNil())
 		_, err := GetConnCfgFromDTOFunc(ctx, model.UnknownStorageType)

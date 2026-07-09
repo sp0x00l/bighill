@@ -56,8 +56,10 @@ var _ = Describe("UploadDTOAdapter", func() {
 
 	It("maps Hugging Face onboarding DTOs to base model requests", func() {
 		userID := uuid.New()
+		datasetID := uuid.New()
 
 		request, err := adapter.FromOnboardHuggingFaceModelDTO(context.Background(), []byte(`{
+			"dataset_id":"`+datasetID.String()+`",
 			"repo_id":"meta-llama/Llama-3.1-8B",
 			"client_nonce":"hf-1",
 			"model_name":"llama",
@@ -67,6 +69,7 @@ var _ = Describe("UploadDTOAdapter", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(request.UserID).To(Equal(userID))
+		Expect(request.DatasetID).To(Equal(datasetID))
 		Expect(request.Revision).To(Equal("main"))
 		Expect(request.ArtifactType).To(Equal("BASE_MODEL"))
 		Expect(request.ArtifactFormat).To(Equal("HF_MODEL"))
@@ -74,8 +77,10 @@ var _ = Describe("UploadDTOAdapter", func() {
 
 	It("maps Hugging Face exact-file GGUF onboarding DTOs", func() {
 		userID := uuid.New()
+		datasetID := uuid.New()
 
 		request, err := adapter.FromOnboardHuggingFaceModelDTO(context.Background(), []byte(`{
+			"dataset_id":"`+datasetID.String()+`",
 			"repo_id":"QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
 			"revision":"main",
 			"hf_file":"Meta-Llama-3-8B-Instruct.Q4_K_M.gguf",
@@ -89,6 +94,7 @@ var _ = Describe("UploadDTOAdapter", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(request.UserID).To(Equal(userID))
+		Expect(request.DatasetID).To(Equal(datasetID))
 		Expect(request.HuggingFaceFile).To(Equal("Meta-Llama-3-8B-Instruct.Q4_K_M.gguf"))
 		Expect(request.ArtifactType).To(Equal("BASE_MODEL"))
 		Expect(request.ArtifactFormat).To(Equal("GGUF_MODEL"))
@@ -133,6 +139,29 @@ var _ = Describe("UploadDTOAdapter", func() {
 			"base_model":"meta-llama/Llama-3.1-8B"
 		}`), uuid.New(), 1024)
 
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+	})
+
+	It("rejects model upload and Hugging Face onboarding DTOs without a dataset", func() {
+		_, err := adapter.FromInitiateModelUploadDTO(context.Background(), []byte(`{
+			"file_name":"adapter.safetensors",
+			"artifact_type":"lora-adapter",
+			"artifact_format":"safetensors",
+			"declared_size_bytes":512,
+			"client_nonce":"model-retry-1",
+			"model_name":"movie-twin",
+			"model_version":"1",
+			"base_model":"meta-llama/Llama-3.1-8B"
+		}`), uuid.New(), 1024)
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+
+		_, err = adapter.FromOnboardHuggingFaceModelDTO(context.Background(), []byte(`{
+			"repo_id":"meta-llama/Llama-3.1-8B",
+			"client_nonce":"hf-1",
+			"model_name":"llama",
+			"model_version":"1",
+			"base_model":"meta-llama/Llama-3.1-8B"
+		}`), uuid.New())
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 })

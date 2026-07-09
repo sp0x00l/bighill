@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"inference_service/pkg/domain"
@@ -18,11 +20,16 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const maxConcurrentDatasetRetrievals = 4
+
 type InferenceUsecase interface {
 	RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error)
 	RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error)
 	ReadModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
 	ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error)
+	PublishEndpoint(ctx context.Context, request model.EndpointPublication) (*model.PublishedEndpoint, error)
+	SetEndpointDatasets(ctx context.Context, request model.EndpointDatasetBinding) (*model.PublishedEndpoint, error)
+	SetEndpointMergeStrategy(ctx context.Context, request model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error)
 	GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error)
 	Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error)
 	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
@@ -45,7 +52,9 @@ type inferenceUsecase struct {
 	generationAdapters        map[string]GenerationAdapter
 	preferenceDatasetWriter   PreferenceDatasetWriter
 	promptStrategy            model.PromptStrategy
+	queryTransformerTimeout   time.Duration
 	rerankCandidateMultiplier int
+	defaultRAGMergeStrategy   model.RAGMergeStrategy
 }
 
 type InferenceOption func(*inferenceUsecase)
@@ -79,6 +88,14 @@ func WithQueryTransformer(transformer QueryTransformer) InferenceOption {
 
 	return func(u *inferenceUsecase) {
 		u.queryTransformer = transformer
+	}
+}
+
+func WithQueryTransformerTimeout(timeout time.Duration) InferenceOption {
+	log.Trace("WithQueryTransformerTimeout")
+
+	return func(u *inferenceUsecase) {
+		u.queryTransformerTimeout = timeout
 	}
 }
 
@@ -136,6 +153,14 @@ func WithRerankCandidateMultiplier(multiplier int) InferenceOption {
 
 	return func(u *inferenceUsecase) {
 		u.rerankCandidateMultiplier = multiplier
+	}
+}
+
+func WithDefaultRAGMergeStrategy(strategy model.RAGMergeStrategy) InferenceOption {
+	log.Trace("WithDefaultRAGMergeStrategy")
+
+	return func(u *inferenceUsecase) {
+		u.defaultRAGMergeStrategy = strategy
 	}
 }
 
@@ -229,6 +254,86 @@ func (u *inferenceUsecase) ListEndpoints(ctx context.Context, orgID uuid.UUID) (
 	return out, nil
 }
 
+func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.EndpointPublication) (*model.PublishedEndpoint, error) {
+	log.Trace("InferenceUsecase PublishEndpoint")
+
+	if u.endpointRepository == nil {
+		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
+	}
+	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	inferenceModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, request.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	if inferenceModel.OrgID != request.OrgID {
+		return nil, domain.ErrModelNotFound
+	}
+	if len(request.DatasetIDs) == 0 {
+		return nil, domain.ErrValidationFailed.Extend("at least one dataset_id is required")
+	}
+	if err := u.ensureDatasetsExist(ctx, request.OrgID, request.DatasetIDs); err != nil {
+		return nil, err
+	}
+	strategy, err := u.endpointMergeStrategy(request.MergeStrategy)
+	if err != nil {
+		return nil, err
+	}
+	if strategy == model.RAGMergeStrategyReranker && u.reranker == nil {
+		return nil, domain.ErrValidationFailed.Extend("reranker merge strategy requires a configured reranker")
+	}
+	displayName := strings.TrimSpace(request.DisplayName)
+	if displayName == "" {
+		displayName = inferenceModel.Name
+	}
+	return u.endpointRepository.UpsertEndpoint(ctx, &model.PublishedEndpoint{
+		OrgID:           request.OrgID,
+		ModelID:         request.ModelID,
+		DatasetIDs:      dedupeUUIDs(request.DatasetIDs),
+		MergeStrategy:   strategy,
+		Status:          model.PublishedEndpointStatusReady,
+		DisplayName:     displayName,
+		CreatedByUserID: request.UserID,
+	})
+}
+
+func (u *inferenceUsecase) SetEndpointDatasets(ctx context.Context, request model.EndpointDatasetBinding) (*model.PublishedEndpoint, error) {
+	log.Trace("InferenceUsecase SetEndpointDatasets")
+
+	if u.endpointRepository == nil {
+		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
+	}
+	if len(request.DatasetIDs) == 0 {
+		return nil, domain.ErrValidationFailed.Extend("at least one dataset_id is required")
+	}
+	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	if err := u.ensureDatasetsExist(ctx, request.OrgID, request.DatasetIDs); err != nil {
+		return nil, err
+	}
+	return u.endpointRepository.SetEndpointDatasets(ctx, request.OrgID, request.EndpointID, dedupeUUIDs(request.DatasetIDs))
+}
+
+func (u *inferenceUsecase) SetEndpointMergeStrategy(ctx context.Context, request model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error) {
+	log.Trace("InferenceUsecase SetEndpointMergeStrategy")
+
+	if u.endpointRepository == nil {
+		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
+	}
+	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, request.EndpointID)
+	if err != nil {
+		return nil, err
+	}
+	strategy, err := u.endpointMergeStrategy(request.MergeStrategy)
+	if err != nil {
+		return nil, err
+	}
+	if strategy == model.RAGMergeStrategyReranker && u.reranker == nil {
+		return nil, domain.ErrValidationFailed.Extend("reranker merge strategy requires a configured reranker")
+	}
+	endpoint.MergeStrategy = strategy
+	return u.endpointRepository.UpsertEndpoint(ctx, endpoint)
+}
+
 func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error) {
 	log.Trace("InferenceUsecase GenerateForEndpoint")
 
@@ -243,9 +348,8 @@ func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID u
 	if !endpoint.IsReady() {
 		return nil, domain.ErrModelNotReady.Extend("inference endpoint is not ready")
 	}
-	request.DatasetID = endpoint.DatasetID
 	request.ModelID = endpoint.ModelID
-	return u.Generate(ctx, request)
+	return u.generate(ctx, request, endpoint)
 }
 
 func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
@@ -332,6 +436,12 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	log.Trace("InferenceUsecase Generate")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	return u.generate(ctx, request, nil)
+}
+
+func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint) (response *model.GenerateResponse, err error) {
+	log.Trace("InferenceUsecase generate")
+
 	startedAt := time.Now()
 
 	var dataset *model.InferenceDataset
@@ -340,14 +450,24 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	var promptText string
 	var answerText string
 
-	dataset, err = u.datasetRepository.ReadDataset(ctx, request.OrgID, request.DatasetID)
-	if err != nil {
-		return nil, err
-	}
 	inferenceModel, err = u.modelRepository.ReadByID(ctx, request.OrgID, request.ModelID)
 	if err != nil {
 		return nil, err
 	}
+	datasetIDs, err := u.generateDatasetIDs(request, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	datasets, err := u.readGenerateDatasets(ctx, request.OrgID, datasetIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(datasets) == 0 {
+		return nil, domain.ErrDatasetNotFound
+	}
+	dataset = datasets[0]
+	request.DatasetID = dataset.DatasetID
+
 	generationProtocol := strings.TrimSpace(inferenceModel.ServingProtocol.String())
 	generationModel := strings.TrimSpace(inferenceModel.ServingModel)
 	if inferenceModel.Status != model.ModelStatusReady {
@@ -367,29 +487,45 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		err = domain.ErrModelNotReady.Extend(fmt.Sprintf("serving protocol %q is not supported", generationProtocol))
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
-	if inferenceModel.RequiresDatasetMatch() && inferenceModel.DatasetID != request.DatasetID {
+	if inferenceModel.RequiresDatasetMatch() && !containsUUID(datasetIDs, inferenceModel.DatasetID) {
 		err = domain.ErrModelMismatch.Extend("model dataset does not match request dataset")
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
-	if !dataset.IsRAGReady() {
-		err = domain.ErrDatasetNotReady.Extend("dataset embeddings are not materialized")
+	// Raw Generate is an explicit single-dataset request, so fail closed if that dataset is not usable.
+	// Endpoint Generate is a model-level binding and can degrade by skipping unusable bound datasets below.
+	if endpoint == nil {
+		if !dataset.IsRAGReady() {
+			err = domain.ErrDatasetNotReady.Extend("dataset embeddings are not materialized")
+			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		}
+		if !dataset.HasSupportedEmbeddingProvider() {
+			err = domain.ErrDatasetNotReady.Extend(fmt.Sprintf("dataset embedding provider %q is not supported", dataset.EmbeddingProvider))
+			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		}
+	}
+	readyDatasets := filterReadyRAGDatasets(ctx, datasets)
+	if len(readyDatasets) == 0 {
+		err = domain.ErrDatasetNotReady.Extend("no endpoint datasets have materialized embeddings")
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
-	if !dataset.HasSupportedEmbeddingProvider() {
-		err = domain.ErrDatasetNotReady.Extend(fmt.Sprintf("dataset embedding provider %q is not supported", dataset.EmbeddingProvider))
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
-	}
+	dataset = readyDatasets[0]
+	request.DatasetID = dataset.DatasetID
 
 	retrievalQuery := request.QueryText
 	retrievalFilters := copyMetadataFilters(request.MetadataFilters)
 	if u.queryTransformer != nil {
-		transformCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		transformCtx := ctx
+		cancel := func() {}
+		if u.queryTransformerTimeout > 0 {
+			transformCtx, cancel = context.WithTimeout(ctx, u.queryTransformerTimeout)
+		}
 		transformed, transformErr := u.queryTransformer.TransformQuery(transformCtx, model.QueryTransformRequest{
 			RequestID:       request.RequestID,
 			UserID:          request.UserID,
 			OrgID:           request.OrgID,
 			DatasetID:       request.DatasetID,
 			ModelID:         request.ModelID,
+			Model:           inferenceModel,
 			QueryText:       request.QueryText,
 			MetadataFilters: copyMetadataFilters(request.MetadataFilters),
 		})
@@ -404,22 +540,36 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		}
 	}
 
+	mergeStrategy, err := u.generateMergeStrategy(endpoint)
+	if err != nil {
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
 	candidateK := request.TopK
-	if u.reranker != nil && u.rerankCandidateMultiplier > 1 {
+	if mergeStrategy == model.RAGMergeStrategyReranker && u.reranker != nil && u.rerankCandidateMultiplier > 1 {
 		candidateK = request.TopK * u.rerankCandidateMultiplier
 	}
 
-	contexts, err = u.retrievalClient.SearchEmbeddings(ctx, request.UserID, request.DatasetID, retrievalQuery, candidateK, retrievalFilters)
+	contexts, err = u.retrieveFromDatasets(ctx, request.UserID, readyDatasets, retrievalQuery, candidateK, retrievalFilters)
 	if err != nil {
 		err = fmt.Errorf("%w: %w", domain.ErrRetrievalFailed, err)
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
-	if u.reranker != nil {
+	switch mergeStrategy {
+	case model.RAGMergeStrategyReranker:
+		if u.reranker == nil {
+			err = domain.ErrRerankFailed.Extend("reranker merge strategy requires a configured reranker")
+			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		}
 		contexts, err = u.reranker.Rerank(ctx, retrievalQuery, contexts, request.TopK)
 		if err != nil {
 			err = fmt.Errorf("%w: %w", domain.ErrRerankFailed, err)
 			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 		}
+	case model.RAGMergeStrategyScoreNormalized:
+		contexts = scoreNormalizedMerge(contexts, request.TopK)
+	default:
+		err = domain.ErrValidationFailed.Extend(fmt.Sprintf("unsupported rag merge strategy %q", mergeStrategy))
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	contexts, err = u.contextPacker.Pack(ctx, model.ContextPackRequest{
 		Query:    retrievalQuery,
@@ -428,6 +578,8 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	if err != nil {
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
+	dataset = primaryDatasetForContexts(readyDatasets, contexts)
+	request.DatasetID = dataset.DatasetID
 	promptPackage, err := u.promptBuilder.BuildPrompt(ctx, model.PromptBuildRequest{
 		Query:    request.QueryText,
 		Dataset:  dataset,
@@ -457,6 +609,7 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		RequestID:             request.RequestID,
 		OrgID:                 request.OrgID,
 		DatasetID:             request.DatasetID,
+		DatasetIDs:            datasetIDsFromModels(readyDatasets),
 		ModelID:               inferenceModel.ModelID,
 		QueryText:             request.QueryText,
 		Answer:                answer,
@@ -464,11 +617,261 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 		PromptStrategyVersion: promptPackage.Strategy.Version,
 		GenerationProtocol:    generationProtocol,
 		GenerationModel:       generationModel,
+		RAGMergeStrategy:      mergeStrategy,
 	}
 	if err := u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusCompleted, ""); err != nil {
 		return nil, err
 	}
 	return response, nil
+}
+
+func (u *inferenceUsecase) generateDatasetIDs(request model.GenerateRequest, endpoint *model.PublishedEndpoint) ([]uuid.UUID, error) {
+	log.Trace("InferenceUsecase generateDatasetIDs")
+
+	if endpoint != nil {
+		datasetIDs := dedupeUUIDs(endpoint.DatasetIDs)
+		if len(datasetIDs) == 0 {
+			return nil, domain.ErrValidationFailed.Extend("published endpoint has no datasets")
+		}
+		return datasetIDs, nil
+	}
+	if request.DatasetID == uuid.Nil {
+		return nil, domain.ErrValidationFailed.Extend("dataset_id is required")
+	}
+	return []uuid.UUID{request.DatasetID}, nil
+}
+
+func (u *inferenceUsecase) readGenerateDatasets(ctx context.Context, orgID uuid.UUID, datasetIDs []uuid.UUID) ([]*model.InferenceDataset, error) {
+	log.Trace("InferenceUsecase readGenerateDatasets")
+
+	datasets := make([]*model.InferenceDataset, 0, len(datasetIDs))
+	for _, datasetID := range datasetIDs {
+		if datasetID == uuid.Nil {
+			return nil, domain.ErrValidationFailed.Extend("dataset_id is required")
+		}
+		dataset, err := u.datasetRepository.ReadDataset(ctx, orgID, datasetID)
+		if err != nil {
+			return nil, err
+		}
+		datasets = append(datasets, dataset)
+	}
+	return datasets, nil
+}
+
+func (u *inferenceUsecase) ensureDatasetsExist(ctx context.Context, orgID uuid.UUID, datasetIDs []uuid.UUID) error {
+	log.Trace("InferenceUsecase ensureDatasetsExist")
+
+	_, err := u.readGenerateDatasets(ctx, orgID, dedupeUUIDs(datasetIDs))
+	return err
+}
+
+func (u *inferenceUsecase) endpointMergeStrategy(strategy model.RAGMergeStrategy) (model.RAGMergeStrategy, error) {
+	log.Trace("InferenceUsecase endpointMergeStrategy")
+
+	if strategy != "" {
+		return model.ToRAGMergeStrategy(strategy.String())
+	}
+	if u.defaultRAGMergeStrategy != "" {
+		return model.ToRAGMergeStrategy(u.defaultRAGMergeStrategy.String())
+	}
+	return model.RAGMergeStrategyReranker, nil
+}
+
+func (u *inferenceUsecase) generateMergeStrategy(endpoint *model.PublishedEndpoint) (model.RAGMergeStrategy, error) {
+	log.Trace("InferenceUsecase generateMergeStrategy")
+
+	if endpoint != nil {
+		return u.endpointMergeStrategy(endpoint.MergeStrategy)
+	}
+	if u.defaultRAGMergeStrategy != "" {
+		return model.ToRAGMergeStrategy(u.defaultRAGMergeStrategy.String())
+	}
+	if u.reranker != nil {
+		return model.RAGMergeStrategyReranker, nil
+	}
+	return model.RAGMergeStrategyScoreNormalized, nil
+}
+
+func filterReadyRAGDatasets(ctx context.Context, datasets []*model.InferenceDataset) []*model.InferenceDataset {
+	log.Trace("filterReadyRAGDatasets")
+
+	ready := make([]*model.InferenceDataset, 0, len(datasets))
+	for _, dataset := range datasets {
+		if dataset == nil {
+			continue
+		}
+		if !dataset.IsRAGReady() {
+			log.WithContext(ctx).WithField("dataset_id", dataset.DatasetID).Warn("skipping endpoint dataset without materialized embeddings")
+			continue
+		}
+		if !dataset.HasSupportedEmbeddingProvider() {
+			log.WithContext(ctx).
+				WithField("dataset_id", dataset.DatasetID).
+				WithField("embedding_provider", dataset.EmbeddingProvider).
+				Warn("skipping endpoint dataset with unsupported embedding provider")
+			continue
+		}
+		ready = append(ready, dataset)
+	}
+	return ready
+}
+
+func (u *inferenceUsecase) retrieveFromDatasets(ctx context.Context, userID uuid.UUID, datasets []*model.InferenceDataset, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error) {
+	log.Trace("InferenceUsecase retrieveFromDatasets")
+
+	contexts := make([]model.RetrievedContext, 0, topK*len(datasets))
+	errs := make([]error, 0)
+	successfulRetrievals := 0
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	limit := min(len(datasets), maxConcurrentDatasetRetrievals)
+	if limit <= 0 {
+		return nil, nil
+	}
+	sem := make(chan struct{}, limit)
+	for _, dataset := range datasets {
+		if dataset == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(dataset *model.InferenceDataset) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			datasetContexts, err := u.retrievalClient.SearchEmbeddings(ctx, userID, dataset.DatasetID, queryText, topK, metadataFilters)
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("dataset %s: %w", dataset.DatasetID, err))
+				mu.Unlock()
+				log.WithContext(ctx).WithError(err).WithField("dataset_id", dataset.DatasetID).Warn("retrieval failed for endpoint dataset")
+				return
+			}
+			for i := range datasetContexts {
+				if datasetContexts[i].DatasetID == uuid.Nil {
+					datasetContexts[i].DatasetID = dataset.DatasetID
+				}
+				if datasetContexts[i].DatasetID != dataset.DatasetID {
+					mu.Lock()
+					errs = append(errs, fmt.Errorf("retrieval returned context for dataset %s while querying dataset %s", datasetContexts[i].DatasetID, dataset.DatasetID))
+					mu.Unlock()
+					return
+				}
+			}
+			mu.Lock()
+			successfulRetrievals++
+			contexts = append(contexts, datasetContexts...)
+			mu.Unlock()
+		}(dataset)
+	}
+	wg.Wait()
+	if successfulRetrievals == 0 && len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	if len(errs) > 0 {
+		log.WithContext(ctx).WithField("failed_dataset_count", len(errs)).Warn("continuing generation with partial endpoint retrieval results")
+	}
+	return contexts, nil
+}
+
+func scoreNormalizedMerge(contexts []model.RetrievedContext, topK int) []model.RetrievedContext {
+	log.Trace("scoreNormalizedMerge")
+
+	if len(contexts) == 0 || topK <= 0 {
+		return nil
+	}
+	minScore := contexts[0].Similarity
+	maxScore := contexts[0].Similarity
+	for _, context := range contexts {
+		score := context.Similarity
+		if score < minScore {
+			minScore = score
+		}
+		if score > maxScore {
+			maxScore = score
+		}
+	}
+	merged := make([]model.RetrievedContext, len(contexts))
+	copy(merged, contexts)
+	for i, context := range merged {
+		if maxScore == minScore {
+			merged[i].RerankScore = 1
+			continue
+		}
+		merged[i].RerankScore = (context.Similarity - minScore) / (maxScore - minScore)
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		if merged[i].RerankScore == merged[j].RerankScore {
+			return merged[i].Similarity > merged[j].Similarity
+		}
+		return merged[i].RerankScore > merged[j].RerankScore
+	})
+	if len(merged) > topK {
+		return merged[:topK]
+	}
+	return merged
+}
+
+func primaryDatasetForContexts(datasets []*model.InferenceDataset, contexts []model.RetrievedContext) *model.InferenceDataset {
+	log.Trace("primaryDatasetForContexts")
+
+	if len(datasets) == 0 {
+		return nil
+	}
+	if len(contexts) == 0 {
+		return datasets[0]
+	}
+	contextDatasetID := contexts[0].DatasetID
+	for _, dataset := range datasets {
+		if dataset != nil && dataset.DatasetID == contextDatasetID {
+			return dataset
+		}
+	}
+	return datasets[0]
+}
+
+func datasetIDsFromModels(datasets []*model.InferenceDataset) []uuid.UUID {
+	log.Trace("datasetIDsFromModels")
+
+	ids := make([]uuid.UUID, 0, len(datasets))
+	for _, dataset := range datasets {
+		if dataset != nil && dataset.DatasetID != uuid.Nil {
+			ids = append(ids, dataset.DatasetID)
+		}
+	}
+	return ids
+}
+
+func dedupeUUIDs(ids []uuid.UUID) []uuid.UUID {
+	log.Trace("dedupeUUIDs")
+
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[uuid.UUID]struct{}{}
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func containsUUID(ids []uuid.UUID, needle uuid.UUID) bool {
+	log.Trace("containsUUID")
+
+	for _, id := range ids {
+		if id == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func preferenceDatasetOutputURI(uriTemplate string, dataset *model.PreferenceDataset) string {
@@ -544,20 +947,25 @@ func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferen
 	if u.endpointRepository == nil || inferenceModel == nil {
 		return nil
 	}
-	if inferenceModel.OrgID == uuid.Nil || inferenceModel.UserID == uuid.Nil || inferenceModel.DatasetID == uuid.Nil {
-		if inferenceModel.ModelKind == model.ModelKindBase && inferenceModel.OrgID == uuid.Nil && inferenceModel.UserID == uuid.Nil && inferenceModel.DatasetID == uuid.Nil {
-			return nil
-		}
-		return domain.ErrValidationFailed.Extend("published endpoint requires org_id, user_id, and dataset_id")
+	if inferenceModel.OrgID == uuid.Nil || inferenceModel.UserID == uuid.Nil {
+		return domain.ErrValidationFailed.Extend("published endpoint requires org_id and user_id")
+	}
+	if inferenceModel.DatasetID == uuid.Nil {
+		return nil
 	}
 	status := model.PublishedEndpointStatusDisabled
 	if inferenceModel.Status == model.ModelStatusReady && inferenceModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
 		status = model.PublishedEndpointStatusReady
 	}
-	_, err := u.endpointRepository.UpsertEndpoint(ctx, &model.PublishedEndpoint{
+	strategy, err := u.endpointMergeStrategy("")
+	if err != nil {
+		return err
+	}
+	_, err = u.endpointRepository.UpsertEndpoint(ctx, &model.PublishedEndpoint{
 		OrgID:           inferenceModel.OrgID,
 		ModelID:         inferenceModel.ModelID,
-		DatasetID:       inferenceModel.DatasetID,
+		DatasetIDs:      []uuid.UUID{inferenceModel.DatasetID},
+		MergeStrategy:   strategy,
 		Status:          status,
 		DisplayName:     inferenceModel.Name,
 		CreatedByUserID: inferenceModel.UserID,
@@ -700,7 +1108,17 @@ func marshalRetrievedContextIDs(contexts []model.RetrievedContext) (string, erro
 func marshalRetrievedContexts(contexts []model.RetrievedContext) (string, error) {
 	log.Trace("marshalRetrievedContexts")
 
-	records := make([]model.RetrievedContextAudit, 0, len(contexts))
+	type retrievedContextAuditRecord struct {
+		EmbeddingRecordID   string  `json:"embedding_record_id"`
+		EmbeddingSnapshotID string  `json:"embedding_snapshot_id"`
+		ChunkIndex          int     `json:"chunk_index"`
+		SourceText          string  `json:"source_text"`
+		Distance            float64 `json:"distance"`
+		Similarity          float64 `json:"similarity"`
+		RerankScore         float64 `json:"rerank_score,omitempty"`
+	}
+
+	records := make([]retrievedContextAuditRecord, 0, len(contexts))
 	for i, retrieved := range contexts {
 		if retrieved.EmbeddingRecordID == uuid.Nil {
 			return "", fmt.Errorf("retrieved context %d has empty embedding record id", i)
@@ -708,7 +1126,7 @@ func marshalRetrievedContexts(contexts []model.RetrievedContext) (string, error)
 		if retrieved.EmbeddingSnapshotID == uuid.Nil {
 			return "", fmt.Errorf("retrieved context %d has empty embedding snapshot id", i)
 		}
-		records = append(records, model.RetrievedContextAudit{
+		records = append(records, retrievedContextAuditRecord{
 			EmbeddingRecordID:   retrieved.EmbeddingRecordID.String(),
 			EmbeddingSnapshotID: retrieved.EmbeddingSnapshotID.String(),
 			ChunkIndex:          retrieved.ChunkIndex,

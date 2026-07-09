@@ -343,11 +343,18 @@ var _ = Describe("Model registry integration", Ordered, func() {
 	It("registers uploaded base model artifacts and emits a serving intent", func() {
 		artifactID := uuid.New()
 		uploadID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
+		datasetID := uuid.New()
+		Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
 		listener := registrymessaging.NewModelArtifactIngestedEventListener(modelsUse)
 
 		Expect(listener.Handle(ctx, artifactID, &ingestionpb.ModelArtifactIngestedEvent{
 			ArtifactId:        artifactID.String(),
 			UploadId:          uploadID.String(),
+			UserId:            userID.String(),
+			OrgId:             orgID.String(),
+			DatasetId:         datasetID.String(),
 			Source:            "upload",
 			StorageLocation:   "s3://local-dev-bucket/models/base",
 			ArtifactType:      "BASE_MODEL",
@@ -361,7 +368,9 @@ var _ = Describe("Model registry integration", Ordered, func() {
 
 		baseModel, err := models.ReadByID(ctxutil.WithSystemContext(ctx), artifactID)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(baseModel.UserID).To(Equal(uuid.Nil))
+		Expect(baseModel.UserID).To(Equal(userID))
+		Expect(baseModel.OrgID).To(Equal(orgID))
+		Expect(baseModel.DatasetID).To(Equal(datasetID))
 		Expect(baseModel.ModelKind).To(Equal(model.ModelKindBase))
 		Expect(baseModel.Status).To(Equal(model.ModelStatusEvaluated))
 		Expect(baseModel.Source).To(Equal(model.ModelSourceUpload))

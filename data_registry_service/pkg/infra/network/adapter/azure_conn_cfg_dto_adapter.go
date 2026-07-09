@@ -23,7 +23,21 @@ type AzureStorageConnCfgDTO struct {
 	TokenEndpoint     string `json:"tokenEndpoint,omitempty"`
 }
 
+type azureStorageConnCfgDTOAdapter struct {
+	validator *validator.Validate
+}
+
+func NewAzureStorageConnCfgDTOAdapter() *azureStorageConnCfgDTOAdapter {
+	log.Trace("NewAzureStorageConnCfgDTOAdapter")
+
+	return &azureStorageConnCfgDTOAdapter{validator: validator.New()}
+}
+
 func ToAzureStorageConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
+	return NewAzureStorageConnCfgDTOAdapter().ToDTO(ctx, conn, secretizer, serializer)
+}
+
+func (a *azureStorageConnCfgDTOAdapter) ToDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
 	log.Trace("adapter ToAzureStorageConnCfgDTO")
 
 	connCfg, ok := conn.(*model.AzureStorageConnCfg)
@@ -58,6 +72,10 @@ func ToAzureStorageConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, s
 }
 
 func FromAzureStorageConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
+	return NewAzureStorageConnCfgDTOAdapter().FromDTO(ctx, cfgBytes, deserializer)
+}
+
+func (a *azureStorageConnCfgDTOAdapter) FromDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
 	log.Trace("adapter FromAzureStorageConnCfgDTO")
 
 	var dto AzureStorageConnCfgDTO
@@ -66,7 +84,7 @@ func FromAzureStorageConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializ
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}
 
-	if err := validator.New().Struct(dto); err != nil {
+	if err := a.validator.Struct(dto); err != nil {
 		log.WithContext(ctx).WithError(err).Error("failed to validate Azure Storage source connector configuration")
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}

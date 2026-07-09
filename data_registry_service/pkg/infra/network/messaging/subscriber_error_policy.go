@@ -1,6 +1,8 @@
 package messaging
 
 import (
+	"errors"
+
 	domainErrors "data_registry_service/pkg/domain"
 	msgConn "lib/shared_lib/messaging"
 
@@ -28,5 +30,6 @@ func (errorPolicy) IsNonRetryableError(err error) bool {
 
 	return msgConn.IsNonRetryable(err) ||
 		msgConn.IsAlreadyProcessed(err) ||
-		domainErrors.IsServiceError(err, domainErrors.ErrValidationFailed)
+		domainErrors.IsServiceError(err, domainErrors.ErrValidationFailed) ||
+		errors.Is(err, domainErrors.ErrMaterializationEventSequenceInvalid)
 }

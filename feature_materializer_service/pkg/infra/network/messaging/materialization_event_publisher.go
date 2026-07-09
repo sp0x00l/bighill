@@ -43,19 +43,23 @@ func (p *materializationEventPublisher) PublishRawSnapshotReady(ctx context.Cont
 	if rawSnapshot == nil {
 		return msgConn.NonRetryable(fmt.Errorf("raw snapshot is required"))
 	}
+	if rawSnapshot.MaterializationEventSeq <= 0 {
+		return msgConn.NonRetryable(fmt.Errorf("raw snapshot materialization event sequence is required"))
+	}
 	return p.publish(ctx, rawSnapshot.DatasetID, msgConn.MsgTypeRawSnapshotReady, &featurepb.RawSnapshotReadyEvent{
-		RawSnapshotId:     rawSnapshot.RawSnapshotID.String(),
-		DatasetId:         rawSnapshot.DatasetID.String(),
-		UserId:            rawSnapshot.UserID.String(),
-		OrgId:             rawSnapshot.OrgID.String(),
-		StorageLocation:   rawSnapshot.StorageLocation,
-		TableNamespace:    rawSnapshot.TableNamespace,
-		TableName:         rawSnapshot.TableName,
-		TableFormat:       rawSnapshot.TableFormat,
-		CatalogProvider:   rawSnapshot.CatalogProvider,
-		SchemaVersion:     int32(rawSnapshot.SchemaVersion),
-		SchemaMetadata:    rawSnapshot.SchemaMetadata,
-		ProcessingProfile: rawSnapshot.ProcessingProfile.String(),
+		DatasetId:               rawSnapshot.DatasetID.String(),
+		MaterializationEventSeq: rawSnapshot.MaterializationEventSeq,
+		RawSnapshotId:           rawSnapshot.RawSnapshotID.String(),
+		UserId:                  rawSnapshot.UserID.String(),
+		OrgId:                   rawSnapshot.OrgID.String(),
+		StorageLocation:         rawSnapshot.StorageLocation,
+		TableNamespace:          rawSnapshot.TableNamespace,
+		TableName:               rawSnapshot.TableName,
+		TableFormat:             rawSnapshot.TableFormat,
+		CatalogProvider:         rawSnapshot.CatalogProvider,
+		SchemaVersion:           int32(rawSnapshot.SchemaVersion),
+		SchemaMetadata:          rawSnapshot.SchemaMetadata,
+		ProcessingProfile:       rawSnapshot.ProcessingProfile.String(),
 	})
 }
 
@@ -65,20 +69,24 @@ func (p *materializationEventPublisher) PublishFeatureSnapshotReady(ctx context.
 	if featureSnapshot == nil {
 		return msgConn.NonRetryable(fmt.Errorf("feature snapshot is required"))
 	}
+	if featureSnapshot.MaterializationEventSeq <= 0 {
+		return msgConn.NonRetryable(fmt.Errorf("feature snapshot materialization event sequence is required"))
+	}
 	return p.publish(ctx, featureSnapshot.DatasetID, msgConn.MsgTypeFeatureSnapshotReady, &featurepb.FeatureSnapshotReadyEvent{
-		FeatureSnapshotId: featureSnapshot.FeatureSnapshotID.String(),
-		RawSnapshotId:     featureSnapshot.RawSnapshotID.String(),
-		DatasetId:         featureSnapshot.DatasetID.String(),
-		UserId:            featureSnapshot.UserID.String(),
-		OrgId:             featureSnapshot.OrgID.String(),
-		StorageLocation:   featureSnapshot.StorageLocation,
-		TableNamespace:    featureSnapshot.TableNamespace,
-		TableName:         featureSnapshot.TableName,
-		TableFormat:       featureSnapshot.TableFormat,
-		CatalogProvider:   featureSnapshot.CatalogProvider,
-		SchemaVersion:     int32(featureSnapshot.SchemaVersion),
-		SchemaMetadata:    featureSnapshot.SchemaMetadata,
-		ProcessingProfile: featureSnapshot.ProcessingProfile.String(),
+		DatasetId:               featureSnapshot.DatasetID.String(),
+		MaterializationEventSeq: featureSnapshot.MaterializationEventSeq,
+		RawSnapshotId:           featureSnapshot.RawSnapshotID.String(),
+		FeatureSnapshotId:       featureSnapshot.FeatureSnapshotID.String(),
+		UserId:                  featureSnapshot.UserID.String(),
+		OrgId:                   featureSnapshot.OrgID.String(),
+		StorageLocation:         featureSnapshot.StorageLocation,
+		TableNamespace:          featureSnapshot.TableNamespace,
+		TableName:               featureSnapshot.TableName,
+		TableFormat:             featureSnapshot.TableFormat,
+		CatalogProvider:         featureSnapshot.CatalogProvider,
+		SchemaVersion:           int32(featureSnapshot.SchemaVersion),
+		SchemaMetadata:          featureSnapshot.SchemaMetadata,
+		ProcessingProfile:       featureSnapshot.ProcessingProfile.String(),
 	})
 }
 
@@ -88,23 +96,27 @@ func (p *materializationEventPublisher) PublishEmbeddingSnapshotReady(ctx contex
 	if embeddingSnapshot == nil {
 		return msgConn.NonRetryable(fmt.Errorf("embedding snapshot is required"))
 	}
+	if embeddingSnapshot.MaterializationEventSeq <= 0 {
+		return msgConn.NonRetryable(fmt.Errorf("embedding snapshot materialization event sequence is required"))
+	}
 	return p.publish(ctx, embeddingSnapshot.DatasetID, msgConn.MsgTypeEmbeddingSnapshotReady, &featurepb.EmbeddingSnapshotReadyEvent{
-		EmbeddingSnapshotId: embeddingSnapshot.EmbeddingSnapshotID.String(),
-		FeatureSnapshotId:   embeddingSnapshot.FeatureSnapshotID.String(),
-		DatasetId:           embeddingSnapshot.DatasetID.String(),
-		UserId:              embeddingSnapshot.UserID.String(),
-		OrgId:               embeddingSnapshot.OrgID.String(),
-		VectorStore:         embeddingSnapshot.VectorStore,
-		CollectionName:      embeddingSnapshot.CollectionName,
-		EmbeddingDimensions: int32(embeddingSnapshot.EmbeddingDimensions),
-		EmbeddingCount:      embeddingSnapshot.EmbeddingCount,
-		StrategyVersion:     embeddingSnapshot.StrategyVersion,
-		ChunkerName:         embeddingSnapshot.ChunkerName,
-		ChunkerVersion:      embeddingSnapshot.ChunkerVersion,
-		ChunkSize:           int32(embeddingSnapshot.ChunkSize),
-		ChunkOverlap:        int32(embeddingSnapshot.ChunkOverlap),
-		EmbeddingProvider:   embeddingSnapshot.EmbeddingProvider,
-		EmbeddingModel:      embeddingSnapshot.EmbeddingModel,
+		DatasetId:               embeddingSnapshot.DatasetID.String(),
+		MaterializationEventSeq: embeddingSnapshot.MaterializationEventSeq,
+		FeatureSnapshotId:       embeddingSnapshot.FeatureSnapshotID.String(),
+		EmbeddingSnapshotId:     embeddingSnapshot.EmbeddingSnapshotID.String(),
+		UserId:                  embeddingSnapshot.UserID.String(),
+		OrgId:                   embeddingSnapshot.OrgID.String(),
+		VectorStore:             embeddingSnapshot.VectorStore,
+		CollectionName:          embeddingSnapshot.CollectionName,
+		EmbeddingDimensions:     int32(embeddingSnapshot.EmbeddingDimensions),
+		EmbeddingCount:          embeddingSnapshot.EmbeddingCount,
+		StrategyVersion:         embeddingSnapshot.StrategyVersion,
+		ChunkerName:             embeddingSnapshot.ChunkerName,
+		ChunkerVersion:          embeddingSnapshot.ChunkerVersion,
+		ChunkSize:               int32(embeddingSnapshot.ChunkSize),
+		ChunkOverlap:            int32(embeddingSnapshot.ChunkOverlap),
+		EmbeddingProvider:       embeddingSnapshot.EmbeddingProvider,
+		EmbeddingModel:          embeddingSnapshot.EmbeddingModel,
 	})
 }
 

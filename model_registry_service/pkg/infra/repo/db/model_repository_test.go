@@ -367,6 +367,26 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
 		})
 
+		It("does not force tenant-scoped base model owner fields to null", func() {
+			registered.ModelKind = model.ModelKindBase
+			registered.Source = model.ModelSourceUpload
+			poolMock.NextRows = []pgx.Row{newModelRow(registered)}
+
+			modelRecord, err := repository.Create(ctx, tx, registered, idempotencyKey)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(modelRecord.UserID).To(Equal(registered.UserID))
+			Expect(modelRecord.OrgID).To(Equal(registered.OrgID))
+			Expect(modelRecord.DatasetID).To(Equal(registered.DatasetID))
+			Expect(poolMock.QueryCalls[0]).NotTo(ContainSubstring("CASE WHEN @model_kind::model_kind_enum = 'BASE'::model_kind_enum THEN NULL::uuid"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WHERE id = @user_id AND deleted = false AND @user_id::uuid IS NOT NULL"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("model_kind", model.ModelKindBase.String()))
+			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: registered.UserID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: registered.OrgID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: registered.DatasetID, Valid: true}))
+		})
+
 		It("rejects non-base models when the tenant projection is missing", func() {
 			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
 

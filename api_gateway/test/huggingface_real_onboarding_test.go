@@ -40,10 +40,10 @@ const (
 	techniqueRAGPaperPageCount       = 14
 )
 
-var _ = Describe("Hugging Face real model onboarding", func() {
+var _ = Describe("Hugging Face real model onboarding", Label("real-huggingface"), func() {
 	It("downloads and provisions a real GGUF model, then grounds RAG over a pinned TechniqueRAG paper", func() {
 		if !strings.EqualFold(strings.TrimSpace(os.Getenv(realHuggingFaceE2EFlag)), "true") {
-			Skip("set BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true to run the real Hugging Face download e2e")
+			Fail("set BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true to run the real Hugging Face download e2e")
 		}
 		token := strings.TrimSpace(os.Getenv(realHuggingFaceTokenEnv))
 		Expect(token).NotTo(BeEmpty(), "set BIGHILL_E2E_HUGGINGFACE_TOKEN to run the real Hugging Face download e2e")
@@ -57,8 +57,8 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 		modelName := "hf-real-e2e-" + sanitizeModelName(repoID) + "-" + uuid.NewString()[:8]
 		clientNonce := "hf-real-" + uuid.NewString()
 
-		profileTopic := env.WithDefaultString("PROFILE_SERVICE_KAFKA_PUBLISHER_TOPIC", "profile")
-		profileSubscriber, startProfileSubscriber, stopProfileSubscriber := newKafkaAssertsSubscriber(context.Background(), topicList(profileTopic))
+		tenantTopic := env.WithDefaultString("TENANT_SERVICE_KAFKA_PUBLISHER_TOPIC", "tenant")
+		profileSubscriber, startProfileSubscriber, stopProfileSubscriber := newKafkaAssertsSubscriber(context.Background(), topicList(tenantTopic))
 		defer stopProfileSubscriber()
 		profileCreatedEvents := newKafkaEventCollector(msgConn.MsgTypeUserCreated, func() *profilepb.UserCreatedEvent {
 			return &profilepb.UserCreatedEvent{}
@@ -91,7 +91,12 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 			return strings.TrimSpace(event.GetHuggingfaceTokenCiphertext()) != ""
 		})
 
+		datasetID := createTechniqueRAGPaperDataset(user)
+		uploadTechniqueRAGPaper(user, datasetID)
+		materialized := waitForTechniqueRAGPaperMaterialized(user, datasetID, datasetUpdatedEvents, embeddingSnapshotReadyEvents)
+
 		status, body := doJSONWithTimeout(http.MethodPost, "/v1/private/models/onboard/huggingface", map[string]any{
+			"dataset_id":      datasetID,
 			"repo_id":         repoID,
 			"revision":        revision,
 			"hf_file":         hfFile,
@@ -111,6 +116,7 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 		Expect(completed).To(HaveKeyWithValue("artifact_format", artifactFormat))
 		Expect(completed).To(HaveKeyWithValue("source", "HUGGING_FACE"))
 		Expect(completed).To(HaveKeyWithValue("source_uri", "https://huggingface.co/"+repoID))
+		Expect(completed).To(HaveKeyWithValue("dataset_id", datasetID))
 		Expect(completed).To(HaveKeyWithValue("hf_repo_id", repoID))
 		Expect(completed).To(HaveKeyWithValue("hf_revision", revision))
 		Expect(completed).To(HaveKeyWithValue("model_name", modelName))
@@ -123,10 +129,6 @@ var _ = Describe("Hugging Face real model onboarding", func() {
 
 		commit := stringField(completed, "hf_commit_sha")
 		Expect(commit).To(MatchRegexp(`^[0-9a-f]{40}$`), "expected a real Hugging Face commit sha, got %q", commit)
-
-		datasetID := createTechniqueRAGPaperDataset(user)
-		uploadTechniqueRAGPaper(user, datasetID)
-		materialized := waitForTechniqueRAGPaperMaterialized(user, datasetID, datasetUpdatedEvents, embeddingSnapshotReadyEvents)
 
 		loadedModel := waitForRealHuggingFaceModelLoaded(user, modelID, modelName, stringField(completed, "checksum"))
 		servingModel := stringField(loadedModel, "serving_model")
@@ -182,9 +184,7 @@ func createTechniqueRAGPaperDataset(user profileTestUser) string {
 		"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
-	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-	created := decodeObject(body)
+	created := createDataRegistryDataset(user, createPayload)
 	return stringField(created, "id")
 }
 

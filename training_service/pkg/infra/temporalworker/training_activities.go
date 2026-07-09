@@ -16,13 +16,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type TrainingEventPublisher interface {
-	PublishModelTrainingCompleted(ctx context.Context, result *model.TrainingRunResult) error
-	PublishModelTrainingFailed(ctx context.Context, result *model.TrainingRunResult) error
-}
-
 type TrainingActivities struct {
-	eventPublisher       TrainingEventPublisher
+	eventPublisher       app.TrainingEventPublisher
 	executor             app.TrainingExecutor
 	modelURIPrefix       string
 	evaluationURIPrefix  string
@@ -85,7 +80,7 @@ func WithAxolotlCommand(command string) TrainingActivitiesOption {
 	}
 }
 
-func NewTrainingActivities(publisher TrainingEventPublisher, opts ...TrainingActivitiesOption) *TrainingActivities {
+func NewTrainingActivities(publisher app.TrainingEventPublisher, opts ...TrainingActivitiesOption) *TrainingActivities {
 	log.Trace("NewTrainingActivities")
 
 	activities := &TrainingActivities{

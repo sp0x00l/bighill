@@ -36,12 +36,12 @@ var _ = Describe("readRegistryConfig", func() {
 	BeforeEach(func() {
 		Expect(os.Setenv("ENVIRONMENT", "LOCAL-DEV")).To(Succeed())
 		env.ResetEnvironmentCache()
-		Expect(os.Unsetenv("DATA_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC")).To(Succeed())
+		Expect(os.Unsetenv("DATA_REGISTRY_SERVICE_TENANT_SUBSCRIBER_TOPIC")).To(Succeed())
 	})
 
-	It("uses the profile service topic for tenant projections by default", func() {
+	It("uses the tenant service topic for tenant projections by default", func() {
 		cfg := readRegistryConfig()
 
-		Expect(cfg.ProfileTopic).To(Equal("profile"))
+		Expect(cfg.TenantTopic).To(Equal("tenant"))
 	})
 })

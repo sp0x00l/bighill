@@ -24,7 +24,21 @@ type MongoDBConnCfgDTO struct {
 	AuthDatabase       string               `json:"authDatabase"          validate:"required"`
 }
 
+type mongoDBConnCfgDTOAdapter struct {
+	validator *validator.Validate
+}
+
+func NewMongoDBConnCfgDTOAdapter() *mongoDBConnCfgDTOAdapter {
+	log.Trace("NewMongoDBConnCfgDTOAdapter")
+
+	return &mongoDBConnCfgDTOAdapter{validator: validator.New()}
+}
+
 func ToMongoDBConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
+	return NewMongoDBConnCfgDTOAdapter().ToDTO(ctx, conn, secretizer, serializer)
+}
+
+func (a *mongoDBConnCfgDTOAdapter) ToDTO(ctx context.Context, conn model.ConnectorConfig, secretizer SecretizeFunc, serializer serializers.SerializeFunc) ([]byte, error) {
 	log.Trace("adapter ToMongoDBConnCfgDTO")
 
 	connCfg, ok := conn.(*model.MongoDBConnCfg)
@@ -61,6 +75,10 @@ func ToMongoDBConnCfgDTO(ctx context.Context, conn model.ConnectorConfig, secret
 }
 
 func FromMongoDBConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
+	return NewMongoDBConnCfgDTOAdapter().FromDTO(ctx, cfgBytes, deserializer)
+}
+
+func (a *mongoDBConnCfgDTOAdapter) FromDTO(ctx context.Context, cfgBytes []byte, deserializer serializers.DeserializeFunc) (model.ConnectorConfig, error) {
 	log.Trace("adapter FromMongoDBConnCfgDTO")
 
 	var dto MongoDBConnCfgDTO
@@ -69,7 +87,7 @@ func FromMongoDBConnCfgDTO(ctx context.Context, cfgBytes []byte, deserializer se
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}
 
-	if err := validator.New().Struct(dto); err != nil {
+	if err := a.validator.Struct(dto); err != nil {
 		log.WithContext(ctx).WithError(err).Errorf("failed to validate Mongo DB source connector configuration")
 		return nil, domainErrors.ErrValidationFailed.Extend(err.Error())
 	}

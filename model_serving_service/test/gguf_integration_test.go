@@ -54,10 +54,10 @@ var _ = Describe("GGUF local serving integration", func() {
 		Expect(stderr).To(ContainSubstring("tokenizer.chat_template"))
 	})
 
-	It("provisions a real GGUF artifact into real Ollama when explicitly configured", func() {
+	It("provisions a real GGUF artifact into real Ollama when explicitly configured", Label("real-ollama"), func() {
 		configuredArtifactPath := strings.TrimSpace(os.Getenv("BIGHILL_MODEL_SERVING_REAL_OLLAMA_GGUF_PATH"))
 		if configuredArtifactPath == "" {
-			Skip("set BIGHILL_MODEL_SERVING_REAL_OLLAMA_GGUF_PATH to run real Ollama GGUF provisioning integration")
+			Fail("set BIGHILL_MODEL_SERVING_REAL_OLLAMA_GGUF_PATH to run real Ollama GGUF provisioning integration")
 		}
 		artifactPath, err := filepath.Abs(configuredArtifactPath)
 		Expect(err).NotTo(HaveOccurred())
@@ -75,11 +75,12 @@ var _ = Describe("GGUF local serving integration", func() {
 				deleteOllamaModel(endpoint, createdModelName)
 			}
 		})
-		runtime := localserving.NewRuntime("default", 8080, endpoint,
+		runtime, err := localserving.NewRuntime("default", 8080, endpoint,
 			localserving.WithArtifactCache(GinkgoT().TempDir()),
 			localserving.WithGGUFInspectorCommand("sh "+filepath.Join(repoRoot(), "model_serving_service", "scripts", "gguf-inspector.sh")),
 			localserving.WithCreateTimeout(20*time.Minute),
 		)
+		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtime.EnsureServedModel(ctx, &model.ServedModel{
 			ModelID:          modelID,

@@ -37,6 +37,10 @@ func (p *recordingTrainingEventPublisher) PublishModelTrainingFailed(_ context.C
 	return p.err
 }
 
+func (p *recordingTrainingEventPublisher) PublishPromotionReportReady(context.Context, *model.PromotionReport) error {
+	return p.err
+}
+
 type recordingTrainingExecutor struct {
 	trainingSpec   model.TrainingJobSpec
 	evaluationSpec model.EvaluationJobSpec

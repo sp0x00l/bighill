@@ -367,6 +367,23 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(deployer.servedModel).To(Equal(result))
 	})
 
+	It("rejects a candidate when metrics metadata cannot be mapped to gate metrics", func() {
+		candidate := validModel()
+		candidate.Status = model.ModelStatusCandidate
+		candidate.MetricsMetadata = `{"passed":true}`
+		repo := &modelRepositoryStub{readModel: candidate}
+		deployer := &modelServingDeployerStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithModelServingDeployer(deployer))
+
+		result, err := uc.PromoteCandidate(context.Background(), candidate.ModelID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(model.ModelStatusFailed))
+		Expect(result.PromotionDecision).To(ContainSubstring("PROMOTION_REJECTED"))
+		Expect(result.FailureReason).To(ContainSubstring("metrics metadata must include metrics"))
+		Expect(deployer.servedModel).To(BeNil())
+	})
+
 	It("rejects a candidate that regresses against the champion", func() {
 		candidate := validModel()
 		candidate.Status = model.ModelStatusCandidate
@@ -445,11 +462,9 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(endpoints.endpoint.Status).To(Equal(model.PublishedEndpointStatusDisabled))
 	})
 
-	It("does not publish an inference endpoint for shared base models", func() {
+	It("does not publish an inference endpoint for tenant base models without a provenance dataset", func() {
 		modelRecord := validModel()
 		modelRecord.ModelKind = model.ModelKindBase
-		modelRecord.UserID = uuid.Nil
-		modelRecord.OrgID = uuid.Nil
 		modelRecord.DatasetID = uuid.Nil
 		endpoints := &publishedEndpointRepositoryStub{}
 		repo := &modelRepositoryStub{}
@@ -459,6 +474,29 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(endpoints.endpoint).To(BeNil())
+	})
+
+	It("publishes an inference endpoint for tenant-scoped base model artifacts", func() {
+		modelRecord := validModel()
+		modelRecord.ModelKind = model.ModelKindBase
+		modelRecord.Source = model.ModelSourceUpload
+		modelRecord.Status = model.ModelStatusEvaluated
+		modelRecord.ServingLoadStatus = model.ModelLoadStatusLoaded
+		endpoints := &publishedEndpointRepositoryStub{}
+		repo := &modelRepositoryStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithPublishedEndpointRepository(endpoints))
+
+		_, err := uc.RecordModelArtifactIngested(context.Background(), modelRecord, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(repo.createdModel.UserID).To(Equal(modelRecord.UserID))
+		Expect(repo.createdModel.OrgID).To(Equal(modelRecord.OrgID))
+		Expect(repo.createdModel.DatasetID).To(Equal(modelRecord.DatasetID))
+		Expect(endpoints.endpoint).NotTo(BeNil())
+		Expect(endpoints.endpoint.OrgID).To(Equal(modelRecord.OrgID))
+		Expect(endpoints.endpoint.ModelID).To(Equal(modelRecord.ModelID))
+		Expect(endpoints.endpoint.DatasetID).To(Equal(modelRecord.DatasetID))
+		Expect(endpoints.endpoint.Status).To(Equal(model.PublishedEndpointStatusReady))
 	})
 
 	It("does not let serving status make a candidate ready", func() {

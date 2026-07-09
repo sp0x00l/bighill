@@ -359,14 +359,14 @@ variable "model_registry_service_http_port" {
   default     = "80"
 }
 
-variable "profile_service_http_domain" {
-  description = "Profile service hostname reachable from API Lambda"
+variable "tenant_service_http_domain" {
+  description = "Tenant service hostname reachable from API Lambda"
   type        = string
-  default     = "profile.internal.bighill.example"
+  default     = "tenant.internal.bighill.example"
 }
 
-variable "profile_service_http_port" {
-  description = "Profile service HTTP port"
+variable "tenant_service_http_port" {
+  description = "Tenant service HTTP port"
   type        = string
   default     = "80"
 }

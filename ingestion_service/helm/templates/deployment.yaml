@@ -196,7 +196,7 @@ spec:
               value: {{ .Values.env.topic | quote }}
             - name: INGESTION_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
-            - name: INGESTION_SERVICE_PROFILE_SUBSCRIBER_TOPIC
+            - name: INGESTION_SERVICE_TENANT_SUBSCRIBER_TOPIC
               value: {{ .Values.env.profileSubscriberTopic | quote }}
             - name: INGESTION_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}

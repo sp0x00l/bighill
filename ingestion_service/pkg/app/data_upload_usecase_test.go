@@ -163,6 +163,33 @@ type stubTenantRepository struct {
 	err    error
 }
 
+type stubUploadDatasetRepository struct {
+	readDatasetID uuid.UUID
+	readUserID    uuid.UUID
+	err           error
+}
+
+func (s *stubUploadDatasetRepository) Upsert(context.Context, *model.Dataset) error {
+	return nil
+}
+
+func (s *stubUploadDatasetRepository) BlacklistDataset(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+
+func (s *stubUploadDatasetRepository) DeleteDataset(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+
+func (s *stubUploadDatasetRepository) ReadForUpload(_ context.Context, datasetID, userID uuid.UUID) (*model.Dataset, error) {
+	s.readDatasetID = datasetID
+	s.readUserID = userID
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &model.Dataset{DatasetID: datasetID, UserID: userID}, nil
+}
+
 func (s *stubTenantRepository) Upsert(context.Context, *sharedDomain.Tenant) error {
 	return nil
 }
@@ -400,8 +427,10 @@ var _ = Describe("DataUploadUseCase", func() {
 	It("initiates a model artifact upload session with deterministic model artifact keys", func() {
 		repo := &stubBlobRepository{}
 		sessions := &stubUploadSessionRepository{}
+		datasets := &stubUploadDatasetRepository{}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadDatasetRepository(datasets),
 			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
 			usecase.WithUploadPolicy(2048, time.Minute, 512),
 		)
@@ -437,6 +466,44 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(sessions.created.StagingKey).To(ContainSubstring("/adapter.safetensors"))
 		Expect(sessions.created.FinalKey).To(HavePrefix("models/artifacts/" + result.ResourceID.String() + "/" + result.UploadID.String() + "/"))
 		Expect(repo.signedMaxBytes).To(Equal(int64(1000)))
+		Expect(datasets.readDatasetID).To(Equal(datasetID))
+		Expect(datasets.readUserID).To(Equal(userID))
+	})
+
+	It("does not initiate a model artifact upload until the dataset projection is available", func() {
+		expectedErr := domain.ErrDependencyNotReady.Extend("tenant projection is not ready")
+		repo := &stubBlobRepository{}
+		sessions := &stubUploadSessionRepository{}
+		datasets := &stubUploadDatasetRepository{err: expectedErr}
+		uc := usecase.NewDataUploadUseCase(repo,
+			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadDatasetRepository(datasets),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
+			usecase.WithUploadPolicy(2048, time.Minute, 512),
+		)
+		userID := uuid.New()
+		datasetID := uuid.New()
+
+		result, err := uc.InitiateModelUploadSession(context.Background(), model.InitiateModelUploadSessionRequest{
+			DatasetID:           datasetID,
+			UserID:              userID,
+			OrgID:               uuid.New(),
+			ClientNonce:         "model-retry-token",
+			FileName:            "adapter.safetensors",
+			ArtifactType:        "lora-adapter",
+			ArtifactFormat:      "safetensors",
+			DeclaredContentType: "application/octet-stream",
+			DeclaredSizeBytes:   1000,
+			ModelName:           "movie-twin",
+			ModelVersion:        "1",
+			BaseModel:           "meta-llama/Llama-3.1-8B",
+		})
+
+		Expect(result).To(BeNil())
+		Expect(err).To(MatchError(expectedErr))
+		Expect(sessions.created).To(BeNil())
+		Expect(datasets.readDatasetID).To(Equal(datasetID))
+		Expect(datasets.readUserID).To(Equal(userID))
 	})
 
 	It("promotes a valid staged upload", func() {
@@ -489,20 +556,30 @@ var _ = Describe("DataUploadUseCase", func() {
 			ModelVersion:        "1",
 			BaseModel:           "meta-llama/Llama-3.1-8B",
 		}}
+		unitOfWork := &stubUploadSessionUnitOfWork{}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
-			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
+			usecase.WithUploadSessionUnitOfWork(unitOfWork, uploadEventBuilder()),
 			usecase.WithUploadFileDetector(stubDetector{format: "unsupported"}),
 			usecase.WithUploadPolicy(8192, time.Minute, 512),
 		)
 
-		session, err := uc.CompleteUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: sessions.readSession.UploadID, UserID: sessions.readSession.UserID, OrgID: sessions.readSession.OrgID})
+		session, err := uc.CompleteModelUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: sessions.readSession.UploadID, UserID: sessions.readSession.UserID, OrgID: sessions.readSession.OrgID})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(session.Status).To(Equal(model.UploadSessionPromoted))
 		Expect(sessions.completed.ResourceType).To(Equal(model.UploadResourceModelArtifact))
 		Expect(sessions.completed.ResourceID).To(Equal(resourceID))
+		Expect(sessions.completed.DatasetID).To(Equal(datasetID))
 		Expect(sessions.completed.Checksum).To(Equal(sha256String(object)))
+		Expect(unitOfWork.messages).To(HaveLen(1))
+		Expect(unitOfWork.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeModelArtifactIngested))
+		var event ingestionpb.ModelArtifactIngestedEvent
+		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
+		Expect(event.ArtifactId).To(Equal(resourceID.String()))
+		Expect(event.DatasetId).To(Equal(datasetID.String()))
+		Expect(event.UserId).To(Equal(sessions.readSession.UserID.String()))
+		Expect(event.OrgId).To(Equal(sessions.readSession.OrgID.String()))
 		Expect(repo.deleted).To(BeTrue())
 	})
 
@@ -581,9 +658,11 @@ var _ = Describe("DataUploadUseCase", func() {
 		unitOfWork := &stubUploadSessionUnitOfWork{}
 		downloader := &stubModelDownloader{}
 		tenants := &stubTenantRepository{tenant: &sharedDomain.Tenant{HuggingFaceTokenCiphertext: "ciphertext-1"}}
+		datasets := &stubUploadDatasetRepository{}
 		decryptor := &stubSecretDecryptor{token: "hf-token"}
 		uc := usecase.NewDataUploadUseCase(repo,
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadDatasetRepository(datasets),
 			usecase.WithUploadSessionUnitOfWork(unitOfWork, uploadEventBuilder()),
 			usecase.WithUploadTenantsRepository(tenants),
 			usecase.WithHuggingFaceTokenDecryptor(decryptor),
@@ -591,8 +670,10 @@ var _ = Describe("DataUploadUseCase", func() {
 		)
 		userID := uuid.New()
 		orgID := uuid.New()
+		datasetID := uuid.New()
 
 		session, err := uc.OnboardHuggingFaceModel(context.Background(), model.OnboardHuggingFaceModelRequest{
+			DatasetID:    datasetID,
 			UserID:       userID,
 			OrgID:        orgID,
 			ClientNonce:  "hf-1",
@@ -610,14 +691,18 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(sessions.recordedModel).To(Equal(session))
 		Expect(downloader.received.UserID).To(Equal(userID))
 		Expect(downloader.received.OrgID).To(Equal(orgID))
+		Expect(downloader.received.DatasetID).To(Equal(datasetID))
 		Expect(downloader.received.HuggingFaceToken).To(Equal("hf-token"))
 		Expect(decryptor.ciphertext).To(Equal("ciphertext-1"))
+		Expect(datasets.readDatasetID).To(Equal(datasetID))
+		Expect(datasets.readUserID).To(Equal(userID))
 		Expect(unitOfWork.messages).To(HaveLen(1))
 		Expect(unitOfWork.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeModelArtifactIngested))
 		var event ingestionpb.ModelArtifactIngestedEvent
 		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
 		Expect(event.UserId).To(Equal(userID.String()))
 		Expect(event.OrgId).To(Equal(orgID.String()))
+		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.Source).To(Equal("HUGGING_FACE"))
 		Expect(event.HfCommitSha).To(Equal("abc123"))
 		Expect(event.SourceMetadata).To(ContainSubstring(session.UploadID.String()))
@@ -628,9 +713,11 @@ var _ = Describe("DataUploadUseCase", func() {
 		unitOfWork := &stubUploadSessionUnitOfWork{}
 		downloader := &stubModelDownloader{}
 		tenants := &stubTenantRepository{tenant: &sharedDomain.Tenant{HuggingFaceTokenCiphertext: "ciphertext-1"}}
+		datasets := &stubUploadDatasetRepository{}
 		decryptor := &stubSecretDecryptor{token: "hf-token"}
 		uc := usecase.NewDataUploadUseCase(&stubBlobRepository{},
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadDatasetRepository(datasets),
 			usecase.WithUploadSessionUnitOfWork(unitOfWork, uploadEventBuilder()),
 			usecase.WithUploadTenantsRepository(tenants),
 			usecase.WithHuggingFaceTokenDecryptor(decryptor),
@@ -638,6 +725,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		)
 
 		session, err := uc.OnboardHuggingFaceModel(context.Background(), model.OnboardHuggingFaceModelRequest{
+			DatasetID:       uuid.New(),
 			UserID:          uuid.New(),
 			OrgID:           uuid.New(),
 			ClientNonce:     "hf-gguf-1",
@@ -666,15 +754,18 @@ var _ = Describe("DataUploadUseCase", func() {
 		unitOfWork := &stubUploadSessionUnitOfWork{}
 		downloader := &stubModelDownloader{}
 		tenants := &stubTenantRepository{tenant: &sharedDomain.Tenant{HuggingFaceTokenCiphertext: "ciphertext-1"}}
+		datasets := &stubUploadDatasetRepository{}
 		decryptor := &stubSecretDecryptor{token: "hf-token"}
 		uc := usecase.NewDataUploadUseCase(&stubBlobRepository{},
 			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadDatasetRepository(datasets),
 			usecase.WithUploadSessionUnitOfWork(unitOfWork, uploadEventBuilder()),
 			usecase.WithUploadTenantsRepository(tenants),
 			usecase.WithHuggingFaceTokenDecryptor(decryptor),
 			usecase.WithModelArtifactDownloader(downloader),
 		)
 		request := model.OnboardHuggingFaceModelRequest{
+			DatasetID:    uuid.New(),
 			UserID:       uuid.New(),
 			OrgID:        uuid.New(),
 			ClientNonce:  "hf-retry",

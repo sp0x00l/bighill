@@ -19,12 +19,16 @@ import (
 )
 
 var _ = Describe("KubeRayExecutor", func() {
-	It("panics when constructed without a manifest reader", func() {
+	It("rejects missing boundary dependencies or config", func() {
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
 
-		Expect(func() {
-			_, _ = executor.NewKubeRayExecutorWithClient(kubeRayConfig(), nil, client)
-		}).To(Panic())
+		_, err := executor.NewKubeRayExecutorWithClient(kubeRayConfig(), nil, client)
+		Expect(err).To(MatchError(ContainSubstring("manifest reader is required")))
+
+		config := kubeRayConfig()
+		config.PollInterval = 0
+		_, err = executor.NewKubeRayExecutorWithClient(config, &manifestReaderStub{}, client)
+		Expect(err).To(MatchError(ContainSubstring("poll interval must be greater than zero")))
 	})
 
 	It("creates a RayJob CR with the training image bound into head and worker pods", func() {

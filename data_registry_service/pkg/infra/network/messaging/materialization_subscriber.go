@@ -28,7 +28,7 @@ type MaterializationSubscriber struct {
 func NewMaterializationSubscriber(subscriber msgConn.Subscriber, usecase usecase.DatasetUsecase, topics MaterializationTopics) *MaterializationSubscriber {
 	log.Trace("NewMaterializationSubscriber")
 
-	configureErrorPolicy(subscriber)
+	ConfigureSubscriberErrorPolicy(subscriber)
 	return &MaterializationSubscriber{
 		subscriber: subscriber,
 		usecase:    usecase,
@@ -36,11 +36,18 @@ func NewMaterializationSubscriber(subscriber msgConn.Subscriber, usecase usecase
 	}
 }
 
+func ConfigureMaterializationSubscriber(subscriber msgConn.Subscriber, usecase usecase.DatasetUsecase) {
+	log.Trace("ConfigureMaterializationSubscriber")
+
+	ConfigureSubscriberErrorPolicy(subscriber)
+	msgConn.AddListener(subscriber, NewRawSnapshotReadyEventListener(usecase))
+	msgConn.AddListener(subscriber, NewFeatureSnapshotReadyEventListener(usecase))
+	msgConn.AddListener(subscriber, NewEmbeddingSnapshotReadyEventListener(usecase))
+}
+
 func (s *MaterializationSubscriber) Start(ctx context.Context) error {
 	log.Trace("MaterializationSubscriber Start")
 
-	msgConn.AddListener(s.subscriber, NewRawSnapshotReadyEventListener(s.usecase))
-	msgConn.AddListener(s.subscriber, NewFeatureSnapshotReadyEventListener(s.usecase))
-	msgConn.AddListener(s.subscriber, NewEmbeddingSnapshotReadyEventListener(s.usecase))
+	ConfigureMaterializationSubscriber(s.subscriber, s.usecase)
 	return s.subscriber.Subscribe(ctx, s.topics.List())
 }

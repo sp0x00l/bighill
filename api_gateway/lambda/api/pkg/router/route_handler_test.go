@@ -1,6 +1,7 @@
-package router
+package router_test
 
 import (
+	"api/pkg/router"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -8,11 +9,27 @@ import (
 	"lib/shared_lib/authz"
 	"net/http"
 	"strings"
+	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+const (
+	testUserHeader        = "X-User-ID"
+	testSessionHeader     = "X-Session-ID"
+	testOrgHeader         = "X-Org-ID"
+	testPermissionsHeader = "X-Permissions"
+	testCORSAllowOrigin   = "*"
+	testCORSAllowMethods  = "GET,POST,PUT,DELETE,PATCH,OPTIONS"
+	testCORSAllowHeaders  = "Content-Type,Authorization,X-Request-ID,X-Amz-Date,X-Api-Key,X-Amz-Security-Token"
+)
+
+func TestRouteHandler(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "API Gateway route handler test suite")
+}
 
 type observedRequest struct {
 	method  string
@@ -64,12 +81,12 @@ func responseWithBody(status int, body string) *http.Response {
 }
 
 func testRouter(client *routerHTTPClientMock) func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	return NewRouter(client, http.NewRequest, Config{
+	return router.NewRouter(client, http.NewRequest, router.Config{
 		DataRegistryServiceRoute:  "http://data-registry.service",
 		IngestionServiceRoute:     "http://ingestion.service",
 		InferenceServiceRoute:     "http://inference.service",
 		ModelRegistryServiceRoute: "http://model-registry.service",
-		ProfileServiceRoute:       "http://profile.service",
+		TenantServiceRoute:        "http://tenant.service",
 		TrainingServiceRoute:      "http://training.service",
 	})
 }
@@ -96,7 +113,7 @@ var _ = Describe("NewRouter", func() {
 		client = &routerHTTPClientMock{}
 	})
 
-	It("routes profile requests to the profile service and preserves request details", func() {
+	It("routes profile requests to the tenant service and preserves request details", func() {
 		client.responses = []*http.Response{responseWithBody(http.StatusCreated, `{"id":"profile-1"}`)}
 		handler := testRouter(client)
 
@@ -116,14 +133,14 @@ var _ = Describe("NewRouter", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 		Expect(resp.Body).To(Equal(`{"id":"profile-1"}`))
 		Expect(resp.Headers).To(HaveKeyWithValue("X-Downstream", "router-test"))
-		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Origin", corsAllowOrigin))
-		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Methods", corsAllowMethods))
-		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Headers", corsAllowHeaders))
+		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Origin", testCORSAllowOrigin))
+		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Methods", testCORSAllowMethods))
+		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Headers", testCORSAllowHeaders))
 
 		Expect(client.requests).To(HaveLen(1))
 		req := client.requests[0]
 		Expect(req.method).To(Equal(http.MethodPost))
-		Expect(req.url).To(Equal("http://profile.service/public/v1/profiles?invite=alpha"))
+		Expect(req.url).To(Equal("http://tenant.service/public/v1/profiles?invite=alpha"))
 		Expect(req.body).To(Equal(`{"email":"user@example.com"}`))
 		Expect(req.headers.Get("Content-Type")).To(Equal("application/json"))
 		Expect(req.headers.Values("Content-Length")).To(BeEmpty())
@@ -241,12 +258,12 @@ var _ = Describe("NewRouter", func() {
 		Expect(client.requests[7].url).To(Equal("http://training.service/v1/training-runs"))
 		Expect(client.requests[7].body).To(Equal(`{"dataset_id":"dataset-1","source_model_id":"model-1"}`))
 		Expect(client.requests[7].headers.Get("X-Request-ID")).To(Equal("request-1"))
-		Expect(client.requests[7].headers.Get(userHeader)).To(Equal("user-123"))
-		Expect(client.requests[7].headers.Get(orgHeader)).To(Equal("org-789"))
-		Expect(client.requests[7].headers.Get(permissionsHeader)).To(Equal(authz.EncodeStringSlice([]string{authz.PermissionTrainingStart})))
+		Expect(client.requests[7].headers.Get(testUserHeader)).To(Equal("user-123"))
+		Expect(client.requests[7].headers.Get(testOrgHeader)).To(Equal("org-789"))
+		Expect(client.requests[7].headers.Get(testPermissionsHeader)).To(Equal(authz.EncodeStringSlice([]string{authz.PermissionTrainingStart})))
 		Expect(client.requests[8].url).To(Equal("http://training.service/v1/training-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
-		Expect(client.requests[8].headers.Get(userHeader)).To(Equal("user-123"))
-		Expect(client.requests[8].headers.Get(orgHeader)).To(Equal("org-789"))
+		Expect(client.requests[8].headers.Get(testUserHeader)).To(Equal("user-123"))
+		Expect(client.requests[8].headers.Get(testOrgHeader)).To(Equal("org-789"))
 	})
 
 	It("forwards authenticated user and session context to profile logout", func() {
@@ -261,8 +278,8 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		Expect(client.requests).To(HaveLen(1))
-		Expect(client.requests[0].headers.Get(userHeader)).To(Equal("user-123"))
-		Expect(client.requests[0].headers.Get(sessionHeader)).To(Equal("session-456"))
+		Expect(client.requests[0].headers.Get(testUserHeader)).To(Equal("user-123"))
+		Expect(client.requests[0].headers.Get(testSessionHeader)).To(Equal("session-456"))
 	})
 
 	It("does not forward session context outside the logout route", func() {
@@ -277,8 +294,8 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		Expect(client.requests).To(HaveLen(1))
-		Expect(client.requests[0].headers.Get(userHeader)).To(Equal("user-123"))
-		Expect(client.requests[0].headers.Values(sessionHeader)).To(BeEmpty())
+		Expect(client.requests[0].headers.Get(testUserHeader)).To(Equal("user-123"))
+		Expect(client.requests[0].headers.Values(testSessionHeader)).To(BeEmpty())
 	})
 
 	It("routes inference facade requests and enforces consumer-safe permissions", func() {
@@ -334,8 +351,8 @@ var _ = Describe("NewRouter", func() {
 
 		Expect(client.requests).To(HaveLen(3))
 		Expect(client.requests[0].url).To(Equal("http://inference.service/v1/inference/endpoints"))
-		Expect(client.requests[0].headers.Get(userHeader)).To(Equal("user-123"))
-		Expect(client.requests[0].headers.Get(orgHeader)).To(Equal("org-789"))
+		Expect(client.requests[0].headers.Get(testUserHeader)).To(Equal("user-123"))
+		Expect(client.requests[0].headers.Get(testOrgHeader)).To(Equal("org-789"))
 		Expect(client.requests[1].url).To(Equal("http://inference.service/v1/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1/generations"))
 		Expect(client.requests[1].body).To(Equal(`{"query_text":"hello","top_k":5}`))
 		Expect(client.requests[1].headers.Get("X-Request-ID")).To(Equal("request-2"))
@@ -392,9 +409,9 @@ var _ = Describe("NewRouter", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
-		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Origin", corsAllowOrigin))
-		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Methods", corsAllowMethods))
-		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Headers", corsAllowHeaders))
+		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Origin", testCORSAllowOrigin))
+		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Methods", testCORSAllowMethods))
+		Expect(resp.Headers).To(HaveKeyWithValue("Access-Control-Allow-Headers", testCORSAllowHeaders))
 		Expect(client.requests).To(BeEmpty())
 	})
 

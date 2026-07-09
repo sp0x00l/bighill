@@ -22,21 +22,21 @@ func GetConnCfgToDTOFunc(ctx context.Context, storageType model.StorageType) ToD
 
 	switch storageType {
 	case model.S3:
-		return ToAwsS3ConnCfgDTO
+		return NewAwsS3ConnCfgDTOAdapter().ToDTO
 	case model.AzureStorage:
-		return ToAzureStorageConnCfgDTO
+		return NewAzureStorageConnCfgDTOAdapter().ToDTO
 	case model.GoogleCloudStorage:
-		return ToGoogleCloudStorageConnCfgDTO
+		return NewGoogleCloudStorageConnCfgDTOAdapter().ToDTO
 	case model.MongoDB:
-		return ToMongoDBConnCfgDTO
+		return NewMongoDBConnCfgDTOAdapter().ToDTO
 	case model.MySQL:
-		return ToMySqlDBConnCfgDTO
+		return NewMySqlDBConnCfgDTOAdapter().ToDTO
 	case model.ClickHouse:
-		return ToClickHouseConnCfgDTO
+		return NewClickHouseConnCfgDTOAdapter().ToDTO
 	case model.Oracle:
-		return ToOracleDBConnCfgDTO
+		return NewOracleDBConnCfgDTOAdapter().ToDTO
 	case model.Postgres:
-		return ToPostgresDBConnCfgDTO
+		return NewPostgresDBConnCfgDTOAdapter().ToDTO
 	default:
 		log.WithContext(ctx).Error("unknown source connector configuration type")
 		return nil
@@ -48,21 +48,21 @@ func GetConnCfgFromDTOFunc(ctx context.Context, storageType model.StorageType) (
 
 	switch storageType {
 	case model.S3:
-		return FromAwsS3ConnCfgDTO, nil
+		return NewAwsS3ConnCfgDTOAdapter().FromDTO, nil
 	case model.AzureStorage:
-		return FromAzureStorageConnCfgDTO, nil
+		return NewAzureStorageConnCfgDTOAdapter().FromDTO, nil
 	case model.GoogleCloudStorage:
-		return FromGoogleCloudStorageConnCfgDTO, nil
+		return NewGoogleCloudStorageConnCfgDTOAdapter().FromDTO, nil
 	case model.MongoDB:
-		return FromMongoDBConnCfgDTO, nil
+		return NewMongoDBConnCfgDTOAdapter().FromDTO, nil
 	case model.MySQL:
-		return FromMySqlDBConnCfgDTO, nil
+		return NewMySqlDBConnCfgDTOAdapter().FromDTO, nil
 	case model.ClickHouse:
-		return FromClickHouseConnCfgDTO, nil
+		return NewClickHouseConnCfgDTOAdapter().FromDTO, nil
 	case model.Oracle:
-		return FromOracleDBConnCfgDTO, nil
+		return NewOracleDBConnCfgDTOAdapter().FromDTO, nil
 	case model.Postgres:
-		return FromPostgresDBConnCfgDTO, nil
+		return NewPostgresDBConnCfgDTOAdapter().FromDTO, nil
 	default:
 		log.WithContext(ctx).Error("unknown source connector configuration type")
 		return nil, domainErrors.ErrValidationFailed.Extend("unknown source connector configuration type")

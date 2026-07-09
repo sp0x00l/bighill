@@ -1,6 +1,8 @@
 package messaging
 
 import (
+	"fmt"
+
 	"feature_materializer_service/pkg/domain/model"
 
 	featurepb "lib/data_contracts_lib/feature_materializer"
@@ -20,22 +22,29 @@ func NewSnapshotEventBuilder(topics MaterializationTopics) *snapshotEventBuilder
 	return &snapshotEventBuilder{topics: topics}
 }
 
-func (b *snapshotEventBuilder) RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) msgConn.OutboundMessage {
+func (b *snapshotEventBuilder) RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) (msgConn.OutboundMessage, error) {
 	log.Trace("snapshotEventBuilder RawSnapshotReadyMessage")
 
+	if rawSnapshot == nil {
+		return msgConn.OutboundMessage{}, fmt.Errorf("raw snapshot is required")
+	}
+	if rawSnapshot.MaterializationEventSeq <= 0 {
+		return msgConn.OutboundMessage{}, fmt.Errorf("raw snapshot materialization event sequence is required")
+	}
 	payload := marshalSnapshotEvent(&featurepb.RawSnapshotReadyEvent{
-		RawSnapshotId:     rawSnapshot.RawSnapshotID.String(),
-		DatasetId:         rawSnapshot.DatasetID.String(),
-		UserId:            rawSnapshot.UserID.String(),
-		OrgId:             rawSnapshot.OrgID.String(),
-		StorageLocation:   rawSnapshot.StorageLocation,
-		TableNamespace:    rawSnapshot.TableNamespace,
-		TableName:         rawSnapshot.TableName,
-		TableFormat:       rawSnapshot.TableFormat,
-		CatalogProvider:   rawSnapshot.CatalogProvider,
-		SchemaVersion:     int32(rawSnapshot.SchemaVersion),
-		SchemaMetadata:    rawSnapshot.SchemaMetadata,
-		ProcessingProfile: rawSnapshot.ProcessingProfile.String(),
+		DatasetId:               rawSnapshot.DatasetID.String(),
+		MaterializationEventSeq: rawSnapshot.MaterializationEventSeq,
+		RawSnapshotId:           rawSnapshot.RawSnapshotID.String(),
+		UserId:                  rawSnapshot.UserID.String(),
+		OrgId:                   rawSnapshot.OrgID.String(),
+		StorageLocation:         rawSnapshot.StorageLocation,
+		TableNamespace:          rawSnapshot.TableNamespace,
+		TableName:               rawSnapshot.TableName,
+		TableFormat:             rawSnapshot.TableFormat,
+		CatalogProvider:         rawSnapshot.CatalogProvider,
+		SchemaVersion:           int32(rawSnapshot.SchemaVersion),
+		SchemaMetadata:          rawSnapshot.SchemaMetadata,
+		ProcessingProfile:       rawSnapshot.ProcessingProfile.String(),
 	})
 	return msgConn.OutboundMessage{
 		Topic: b.topics.FeatureMaterializer,
@@ -45,26 +54,33 @@ func (b *snapshotEventBuilder) RawSnapshotReadyMessage(rawSnapshot *model.RawSna
 			Payload:     payload,
 		},
 		DispatchKey: "raw_snapshot_ready:" + rawSnapshot.RawSnapshotID.String(),
-	}
+	}, nil
 }
 
-func (b *snapshotEventBuilder) FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) msgConn.OutboundMessage {
+func (b *snapshotEventBuilder) FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) (msgConn.OutboundMessage, error) {
 	log.Trace("snapshotEventBuilder FeatureSnapshotReadyMessage")
 
+	if featureSnapshot == nil {
+		return msgConn.OutboundMessage{}, fmt.Errorf("feature snapshot is required")
+	}
+	if featureSnapshot.MaterializationEventSeq <= 0 {
+		return msgConn.OutboundMessage{}, fmt.Errorf("feature snapshot materialization event sequence is required")
+	}
 	payload := marshalSnapshotEvent(&featurepb.FeatureSnapshotReadyEvent{
-		FeatureSnapshotId: featureSnapshot.FeatureSnapshotID.String(),
-		RawSnapshotId:     featureSnapshot.RawSnapshotID.String(),
-		DatasetId:         featureSnapshot.DatasetID.String(),
-		UserId:            featureSnapshot.UserID.String(),
-		OrgId:             featureSnapshot.OrgID.String(),
-		StorageLocation:   featureSnapshot.StorageLocation,
-		TableNamespace:    featureSnapshot.TableNamespace,
-		TableName:         featureSnapshot.TableName,
-		TableFormat:       featureSnapshot.TableFormat,
-		CatalogProvider:   featureSnapshot.CatalogProvider,
-		SchemaVersion:     int32(featureSnapshot.SchemaVersion),
-		SchemaMetadata:    featureSnapshot.SchemaMetadata,
-		ProcessingProfile: featureSnapshot.ProcessingProfile.String(),
+		DatasetId:               featureSnapshot.DatasetID.String(),
+		MaterializationEventSeq: featureSnapshot.MaterializationEventSeq,
+		RawSnapshotId:           featureSnapshot.RawSnapshotID.String(),
+		FeatureSnapshotId:       featureSnapshot.FeatureSnapshotID.String(),
+		UserId:                  featureSnapshot.UserID.String(),
+		OrgId:                   featureSnapshot.OrgID.String(),
+		StorageLocation:         featureSnapshot.StorageLocation,
+		TableNamespace:          featureSnapshot.TableNamespace,
+		TableName:               featureSnapshot.TableName,
+		TableFormat:             featureSnapshot.TableFormat,
+		CatalogProvider:         featureSnapshot.CatalogProvider,
+		SchemaVersion:           int32(featureSnapshot.SchemaVersion),
+		SchemaMetadata:          featureSnapshot.SchemaMetadata,
+		ProcessingProfile:       featureSnapshot.ProcessingProfile.String(),
 	})
 	return msgConn.OutboundMessage{
 		Topic: b.topics.FeatureMaterializer,
@@ -74,29 +90,36 @@ func (b *snapshotEventBuilder) FeatureSnapshotReadyMessage(featureSnapshot *mode
 			Payload:     payload,
 		},
 		DispatchKey: "feature_snapshot_ready:" + featureSnapshot.FeatureSnapshotID.String(),
-	}
+	}, nil
 }
 
-func (b *snapshotEventBuilder) EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) msgConn.OutboundMessage {
+func (b *snapshotEventBuilder) EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) (msgConn.OutboundMessage, error) {
 	log.Trace("snapshotEventBuilder EmbeddingSnapshotReadyMessage")
 
+	if embeddingSnapshot == nil {
+		return msgConn.OutboundMessage{}, fmt.Errorf("embedding snapshot is required")
+	}
+	if embeddingSnapshot.MaterializationEventSeq <= 0 {
+		return msgConn.OutboundMessage{}, fmt.Errorf("embedding snapshot materialization event sequence is required")
+	}
 	payload := marshalSnapshotEvent(&featurepb.EmbeddingSnapshotReadyEvent{
-		EmbeddingSnapshotId: embeddingSnapshot.EmbeddingSnapshotID.String(),
-		FeatureSnapshotId:   embeddingSnapshot.FeatureSnapshotID.String(),
-		DatasetId:           embeddingSnapshot.DatasetID.String(),
-		UserId:              embeddingSnapshot.UserID.String(),
-		OrgId:               embeddingSnapshot.OrgID.String(),
-		VectorStore:         embeddingSnapshot.VectorStore,
-		CollectionName:      embeddingSnapshot.CollectionName,
-		EmbeddingDimensions: int32(embeddingSnapshot.EmbeddingDimensions),
-		EmbeddingCount:      embeddingSnapshot.EmbeddingCount,
-		StrategyVersion:     embeddingSnapshot.StrategyVersion,
-		ChunkerName:         embeddingSnapshot.ChunkerName,
-		ChunkerVersion:      embeddingSnapshot.ChunkerVersion,
-		ChunkSize:           int32(embeddingSnapshot.ChunkSize),
-		ChunkOverlap:        int32(embeddingSnapshot.ChunkOverlap),
-		EmbeddingProvider:   embeddingSnapshot.EmbeddingProvider,
-		EmbeddingModel:      embeddingSnapshot.EmbeddingModel,
+		DatasetId:               embeddingSnapshot.DatasetID.String(),
+		MaterializationEventSeq: embeddingSnapshot.MaterializationEventSeq,
+		FeatureSnapshotId:       embeddingSnapshot.FeatureSnapshotID.String(),
+		EmbeddingSnapshotId:     embeddingSnapshot.EmbeddingSnapshotID.String(),
+		UserId:                  embeddingSnapshot.UserID.String(),
+		OrgId:                   embeddingSnapshot.OrgID.String(),
+		VectorStore:             embeddingSnapshot.VectorStore,
+		CollectionName:          embeddingSnapshot.CollectionName,
+		EmbeddingDimensions:     int32(embeddingSnapshot.EmbeddingDimensions),
+		EmbeddingCount:          embeddingSnapshot.EmbeddingCount,
+		StrategyVersion:         embeddingSnapshot.StrategyVersion,
+		ChunkerName:             embeddingSnapshot.ChunkerName,
+		ChunkerVersion:          embeddingSnapshot.ChunkerVersion,
+		ChunkSize:               int32(embeddingSnapshot.ChunkSize),
+		ChunkOverlap:            int32(embeddingSnapshot.ChunkOverlap),
+		EmbeddingProvider:       embeddingSnapshot.EmbeddingProvider,
+		EmbeddingModel:          embeddingSnapshot.EmbeddingModel,
 	})
 	return msgConn.OutboundMessage{
 		Topic: b.topics.FeatureMaterializer,
@@ -106,7 +129,7 @@ func (b *snapshotEventBuilder) EmbeddingSnapshotReadyMessage(embeddingSnapshot *
 			Payload:     payload,
 		},
 		DispatchKey: "embedding_snapshot_ready:" + embeddingSnapshot.EmbeddingSnapshotID.String(),
-	}
+	}, nil
 }
 
 func marshalSnapshotEvent(payload proto.Message) []byte {

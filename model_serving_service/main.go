@@ -179,12 +179,16 @@ func newServingBackend(cfg modelServingConfig) (servingk8s.ServedModelRepository
 		if err != nil {
 			return nil, nil, err
 		}
-		return store, localserving.NewRuntime(cfg.Namespace, cfg.Runtime.Port, cfg.Runtime.LocalOllamaEndpoint,
+		runtimeAdapter, err := localserving.NewRuntime(cfg.Namespace, cfg.Runtime.Port, cfg.Runtime.LocalOllamaEndpoint,
 			localserving.WithArtifactCache(cfg.Runtime.LocalArtifactCache),
 			localserving.WithLocalS3Dir(cfg.Runtime.LocalS3StorageDir),
 			localserving.WithGGUFInspectorCommand(cfg.Runtime.GGUFInspector),
 			localserving.WithCreateTimeout(cfg.Runtime.OllamaCreateTimeout),
-		), nil
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, runtimeAdapter, nil
 	case "kubernetes":
 		client, err := servingk8s.NewDynamicClient()
 		if err != nil {

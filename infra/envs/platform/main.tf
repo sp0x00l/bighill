@@ -210,8 +210,8 @@ output "jwt_signing_key_id" {
   value = module.eks.jwt_signing_key_id
 }
 
-output "profile_service_role_arn" {
-  value = module.eks.profile_service_role_arn
+output "tenant_service_role_arn" {
+  value = module.eks.tenant_service_role_arn
 }
 
 output "object_store_bucket_name" {

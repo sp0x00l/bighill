@@ -148,6 +148,11 @@ func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request m
 		return nil, domain.ErrValidationFailed.Extend("org id is required")
 	}
 	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
+	if u.datasets != nil {
+		if _, err := u.datasets.ReadForUpload(ctx, request.DatasetID, request.UserID); err != nil {
+			return nil, err
+		}
+	}
 	now := time.Now().UTC()
 	uploadID, err := u.reserveID(ctx)
 	if err != nil {
@@ -211,6 +216,11 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 		return nil, domain.ErrValidationFailed.Extend("org id is required")
 	}
 	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
+	if u.datasets != nil {
+		if _, err := u.datasets.ReadForUpload(ctx, request.DatasetID, request.UserID); err != nil {
+			return nil, err
+		}
+	}
 	now := time.Now().UTC()
 	resourceID := request.ResourceID
 	if resourceID == uuid.Nil {
@@ -279,6 +289,11 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		return nil, domain.ErrValidationFailed.Extend("org id is required")
 	}
 	ctx = ctxutil.WithActorOrg(ctx, request.UserID, request.OrgID)
+	if u.datasets != nil {
+		if _, err := u.datasets.ReadForUpload(ctx, request.DatasetID, request.UserID); err != nil {
+			return nil, err
+		}
+	}
 	now := time.Now().UTC()
 	artifactFormat := normalizeModelToken(request.ArtifactFormat)
 	if artifactFormat == "" {
@@ -398,7 +413,7 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 	if expectedResourceType != "" && session.ResourceType != expectedResourceType {
 		return nil, domain.ErrValidationFailed.Extend("upload session has the wrong resource type")
 	}
-	if session.ResourceType == model.UploadResourceDataFile && u.datasets != nil {
+	if (session.ResourceType == model.UploadResourceDataFile || session.ResourceType == model.UploadResourceModelArtifact) && u.datasets != nil {
 		if _, err := u.datasets.ReadForUpload(ctx, session.DatasetID, session.UserID); err != nil {
 			return nil, err
 		}

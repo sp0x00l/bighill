@@ -327,7 +327,7 @@ func TestProfileDatabaseService(t *testing.T) {
 var _ = Describe("Profile Database", func() {
 	var (
 		dbConnMock     *testConnectionPool
-		database       db.ProfileDB
+		database       *db.ProfileDatabase
 		dbCore         *dbConn.Database
 		userID         uuid.UUID
 		email          string

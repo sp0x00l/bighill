@@ -88,12 +88,12 @@ get_jwt_signing_key_id() {
   echo "$KEY_ID"
 }
 
-# Get profile-service IAM role ARN for IRSA
-get_profile_service_role_arn() {
+# Get tenant-service IAM role ARN for IRSA
+get_tenant_service_role_arn() {
   # First try Terraform output (works locally)
   cd "$PROJECT_ROOT/infra/envs/platform"
   local ROLE_ARN=""
-  ROLE_ARN=$(tofu output -raw profile_service_role_arn 2>/dev/null || echo "")
+  ROLE_ARN=$(tofu output -raw tenant_service_role_arn 2>/dev/null || echo "")
   
   if [ -n "$ROLE_ARN" ] && [ "$ROLE_ARN" != "" ]; then
     echo "$ROLE_ARN"
@@ -102,7 +102,7 @@ get_profile_service_role_arn() {
   
   # Fallback: query AWS IAM directly
   ROLE_ARN=$(aws iam get-role \
-    --role-name "bighill-${ENVIRONMENT}-profile-service" \
+    --role-name "bighill-${ENVIRONMENT}-tenant-service" \
     --query 'Role.Arn' \
     --region "${REGION}" \
     --output text 2>/dev/null || echo "")
@@ -329,12 +329,12 @@ build_service_extra_args() {
     echo "Warning: JWT signing key not found, services will use local KMS"
   fi
 
-  PROFILE_EXTRA_ARGS="${KMS_EXTRA_ARGS}"
-  if [ -n "$PROFILE_SERVICE_ROLE_ARN" ]; then
-    echo "Using profile-service IAM role: ${PROFILE_SERVICE_ROLE_ARN}"
-    PROFILE_EXTRA_ARGS="${PROFILE_EXTRA_ARGS} --set serviceAccount.create=true --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${PROFILE_SERVICE_ROLE_ARN}"
+  TENANT_EXTRA_ARGS="${KMS_EXTRA_ARGS}"
+  if [ -n "$TENANT_SERVICE_ROLE_ARN" ]; then
+    echo "Using tenant-service IAM role: ${TENANT_SERVICE_ROLE_ARN}"
+    TENANT_EXTRA_ARGS="${TENANT_EXTRA_ARGS} --set serviceAccount.create=true --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${TENANT_SERVICE_ROLE_ARN}"
   else
-    echo "Warning: Profile service IAM role not found, IRSA disabled"
+    echo "Warning: Tenant service IAM role not found, IRSA disabled"
   fi
 
   INGESTION_EXTRA_ARGS="${KMS_EXTRA_ARGS}"
@@ -372,7 +372,7 @@ append_service_extra_args() {
 
   if [ -n "$ACM_CERT_ARN" ]; then
     case "${SERVICE_DIR}" in
-      data_registry_service|ingestion_service|profile_service|model_registry_service|training_service|inference_service)
+      data_registry_service|ingestion_service|tenant_service|model_registry_service|training_service|inference_service)
         EXTRA_ARGS="${EXTRA_ARGS} --set ingress.certificateArn=${ACM_CERT_ARN}"
         ;;
     esac
@@ -395,8 +395,8 @@ deploy_services() {
     local SERVICE_VERSION="${!VERSION_VAR:-0.0.1}"
     local EXTRA_ARGS=""
 
-    if [ "${SERVICE_DIR}" = "profile_service" ]; then
-      EXTRA_ARGS="${PROFILE_EXTRA_ARGS}"
+    if [ "${SERVICE_DIR}" = "tenant_service" ]; then
+      EXTRA_ARGS="${TENANT_EXTRA_ARGS}"
     elif [ "${SERVICE_DIR}" = "ingestion_service" ]; then
       EXTRA_ARGS="${INGESTION_EXTRA_ARGS}"
     fi
@@ -712,7 +712,7 @@ cleanup_ingresses
 wait_for_infra_ready
 
 JWT_SIGNING_KEY_ID=$(get_jwt_signing_key_id)
-PROFILE_SERVICE_ROLE_ARN=$(get_profile_service_role_arn)
+TENANT_SERVICE_ROLE_ARN=$(get_tenant_service_role_arn)
 
 echo "Fetching ACM certificate ARN..."
 ACM_CERT_ARN=$(get_acm_certificate_arn "$ENVIRONMENT")

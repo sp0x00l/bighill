@@ -58,6 +58,14 @@ func (c *recordingTrainingProfileCatalog) ResolveEvaluationProfile(_ context.Con
 	return c.evaluationProfile, nil
 }
 
+func (c *recordingTrainingProfileCatalog) DefaultTrainingProfileName() string {
+	return "dpo-default@v1"
+}
+
+func (c *recordingTrainingProfileCatalog) DefaultEvaluationProfileName() string {
+	return "dpo-eval@v1"
+}
+
 var _ = Describe("PreferenceDatasetReadyEventListener", func() {
 	It("starts DPO training from a preference dataset artifact", func() {
 		datasetID := uuid.New()

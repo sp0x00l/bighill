@@ -52,7 +52,7 @@ type Config struct {
 	DataRegistryServiceRoute  string
 	IngestionServiceRoute     string
 	ModelRegistryServiceRoute string
-	ProfileServiceRoute       string
+	TenantServiceRoute        string
 	TrainingServiceRoute      string
 	InferenceServiceRoute     string
 }
@@ -61,7 +61,7 @@ type routeResolver struct {
 	dataRegistryServiceRoute  string
 	ingestionServiceRoute     string
 	modelRegistryServiceRoute string
-	profileServiceRoute       string
+	tenantServiceRoute        string
 	trainingServiceRoute      string
 	inferenceServiceRoute     string
 }
@@ -95,8 +95,8 @@ func (cfg Config) resolver() (routeResolver, error) {
 	if cfg.ModelRegistryServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing model registry service route")
 	}
-	if cfg.ProfileServiceRoute == "" {
-		return routeResolver{}, fmt.Errorf("missing profile service route")
+	if cfg.TenantServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing tenant service route")
 	}
 	if cfg.TrainingServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing training service route")
@@ -108,7 +108,7 @@ func (cfg Config) resolver() (routeResolver, error) {
 		dataRegistryServiceRoute:  cfg.DataRegistryServiceRoute,
 		ingestionServiceRoute:     cfg.IngestionServiceRoute,
 		modelRegistryServiceRoute: cfg.ModelRegistryServiceRoute,
-		profileServiceRoute:       cfg.ProfileServiceRoute,
+		tenantServiceRoute:        cfg.TenantServiceRoute,
 		trainingServiceRoute:      cfg.TrainingServiceRoute,
 		inferenceServiceRoute:     cfg.InferenceServiceRoute,
 	}, nil
@@ -161,6 +161,12 @@ func requiredRoutePermission(request events.APIGatewayProxyRequest) string {
 	case "inference":
 		if len(afterResource) == 1 && afterResource[0] == "endpoints" && routeCtx.method == http.MethodGet {
 			return authz.PermissionInferenceEndpointsRead
+		}
+		if len(afterResource) == 1 && afterResource[0] == "endpoints" && routeCtx.method == http.MethodPost {
+			return authz.PermissionModelWrite
+		}
+		if len(afterResource) >= 3 && afterResource[0] == "endpoints" && (afterResource[2] == "datasets" || afterResource[2] == "merge-strategy") && routeCtx.method == http.MethodPut {
+			return authz.PermissionModelWrite
 		}
 		if len(afterResource) >= 3 && afterResource[0] == "endpoints" && afterResource[2] == "generations" && routeCtx.method == http.MethodPost {
 			return authz.PermissionInferenceInvoke
@@ -334,9 +340,9 @@ func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver)
 	path := backendPath(routeCtx)
 	switch routeCtx.resource {
 	case "profiles":
-		return fmt.Sprintf("%s%s", resolver.profileServiceRoute, profileBackendPath(routeCtx)), nil
+		return fmt.Sprintf("%s%s", resolver.tenantServiceRoute, profileBackendPath(routeCtx)), nil
 	case "orgs":
-		return fmt.Sprintf("%s%s", resolver.profileServiceRoute, profileBackendPath(routeCtx)), nil
+		return fmt.Sprintf("%s%s", resolver.tenantServiceRoute, profileBackendPath(routeCtx)), nil
 	case "data":
 		if len(routeCtx.segments) > routeCtx.resourceIndex+1 &&
 			(routeCtx.segments[routeCtx.resourceIndex+1] == "store" || routeCtx.segments[routeCtx.resourceIndex+1] == "uploads") {

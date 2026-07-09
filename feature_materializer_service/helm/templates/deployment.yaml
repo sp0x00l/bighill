@@ -56,7 +56,7 @@ spec:
               value: {{ .Values.env.ingestionSubscriberTopic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
-            - name: FEATURE_MATERIALIZER_SERVICE_PROFILE_SUBSCRIBER_TOPIC
+            - name: FEATURE_MATERIALIZER_SERVICE_TENANT_SUBSCRIBER_TOPIC
               value: {{ .Values.env.profileSubscriberTopic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}

@@ -65,7 +65,7 @@ Set these before applying a real environment:
 - service endpoint hostnames if they differ from the defaults
 - `deploy_api_gateway=true` only after `api_gateway/build/dist/api.zip` and `auth.zip` exist
 
-After apply, use the `object_store_service_role_arns` and `profile_service_role_arn` outputs as Helm
+After apply, use the `object_store_service_role_arns` and `tenant_service_role_arn` outputs as Helm
 service account annotations:
 
 ```yaml

@@ -12,10 +12,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	localstore "lib/shared_lib/servedmodel"
+	"model_serving_service/pkg/app"
 	"model_serving_service/pkg/domain"
 	"model_serving_service/pkg/domain/model"
+	servingk8s "model_serving_service/pkg/infra/network/k8s"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -28,11 +31,46 @@ func TestLocalServing(t *testing.T) {
 	RunSpecs(t, "Model serving local serving unit test suite")
 }
 
+func newTestRuntime(endpoint string, options ...RuntimeOption) *Runtime {
+	testOptions := []RuntimeOption{
+		WithArtifactCache(GinkgoT().TempDir()),
+		WithGGUFInspectorCommand("sh -c true"),
+		WithCreateTimeout(time.Second),
+	}
+	testOptions = append(testOptions, options...)
+	runtime, err := NewRuntime("default", 8080, endpoint, testOptions...)
+	Expect(err).NotTo(HaveOccurred())
+	return runtime
+}
+
 var _ = Describe("Runtime", func() {
+	It("rejects incomplete runtime config at the infra boundary", func() {
+		_, err := NewRuntime("", 8080, "http://ollama.local",
+			WithArtifactCache(GinkgoT().TempDir()),
+			WithGGUFInspectorCommand("sh -c true"),
+			WithCreateTimeout(time.Second),
+		)
+		Expect(err).To(MatchError(ContainSubstring("local serving namespace is required")))
+
+		_, err = NewRuntime("default", 8080, "http://ollama.local",
+			WithArtifactCache(""),
+			WithGGUFInspectorCommand("sh -c true"),
+			WithCreateTimeout(time.Second),
+		)
+		Expect(err).To(MatchError(ContainSubstring("local artifact cache is required")))
+
+		_, err = NewRuntime("default", 8080, "http://ollama.local",
+			WithArtifactCache(GinkgoT().TempDir()),
+			WithGGUFInspectorCommand(""),
+			WithCreateTimeout(time.Second),
+		)
+		Expect(err).To(MatchError(ContainSubstring("GGUF inspector command is required")))
+	})
+
 	It("returns a ready local runtime state for base-backed served models", func() {
 		modelID := uuid.New()
-		runtime := NewRuntime("default", 8080, "http://ollama.local")
-		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"llama3.1:8b"}]}`, func(req *http.Request) {
+		runtime := newTestRuntime("http://ollama.local")
+		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"local-test-model:latest"}]}`, func(req *http.Request) {
 			Expect(req.URL.Path).To(Equal("/api/tags"))
 		})}
 
@@ -41,19 +79,19 @@ var _ = Describe("Runtime", func() {
 			ModelKind:    "BASE",
 			Name:         "llama",
 			ModelVersion: 2,
-			BaseModel:    "llama3.1:8b",
+			BaseModel:    "local-test-model:latest",
 		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(state.Ready).To(BeTrue())
 		Expect(state.ServingTarget).To(Equal("http://ollama.local"))
-		Expect(state.ServingModel).To(Equal("llama3.1:8b"))
+		Expect(state.ServingModel).To(Equal("local-test-model:latest"))
 		Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOllamaGenerate))
 		Expect(state.ReadyReplicas).To(Equal(int32(1)))
 	})
 
 	It("matches Ollama tags that omit the explicit latest suffix", func() {
-		runtime := NewRuntime("default", 8080, "http://ollama.local")
+		runtime := newTestRuntime("http://ollama.local")
 		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"llama3.1:latest"}]}`, nil)}
 
 		state, err := runtime.EnsureServedModel(context.Background(), &model.ServedModel{
@@ -70,7 +108,7 @@ var _ = Describe("Runtime", func() {
 
 	It("treats major local model families as runtime data, not provider or protocol variants", func() {
 		families := []string{
-			"llama3.1:8b",
+			"local-test-model:latest",
 			"mistral:7b",
 			"qwen2.5:7b",
 			"deepseek-r1:7b",
@@ -78,7 +116,7 @@ var _ = Describe("Runtime", func() {
 		}
 
 		for _, baseModel := range families {
-			runtime := NewRuntime("default", 8080, "http://ollama.local")
+			runtime := newTestRuntime("http://ollama.local")
 			runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"`+baseModel+`"}]}`, nil)}
 
 			state, err := runtime.EnsureServedModel(context.Background(), &model.ServedModel{
@@ -96,12 +134,12 @@ var _ = Describe("Runtime", func() {
 	})
 
 	It("does not default non-base models to the base model", func() {
-		_, err := NewRuntime("default", 8080, "http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{
+		_, err := newTestRuntime("http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{
 			ModelID:      uuid.New(),
 			ModelKind:    "FINE_TUNED",
 			Name:         "fine-tune",
 			ModelVersion: 1,
-			BaseModel:    "llama3.1:8b",
+			BaseModel:    "local-test-model:latest",
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("serving model is required for non-base local served models")))
@@ -109,7 +147,7 @@ var _ = Describe("Runtime", func() {
 	})
 
 	It("rejects base models that are not loaded in local Ollama", func() {
-		runtime := NewRuntime("default", 8080, "http://ollama.local")
+		runtime := newTestRuntime("http://ollama.local")
 		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"other-model"}]}`, nil)}
 
 		_, err := runtime.EnsureServedModel(context.Background(), &model.ServedModel{
@@ -117,15 +155,15 @@ var _ = Describe("Runtime", func() {
 			ModelKind:    "BASE",
 			Name:         "llama",
 			ModelVersion: 1,
-			BaseModel:    "llama3.1:8b",
+			BaseModel:    "local-test-model:latest",
 		})
 
-		Expect(err).To(MatchError(ContainSubstring(`local ollama model "llama3.1:8b" is not available`)))
+		Expect(err).To(MatchError(ContainSubstring(`local ollama model "local-test-model:latest" is not available`)))
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 
 	It("rejects served models with no base model", func() {
-		_, err := NewRuntime("default", 8080, "http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{})
+		_, err := newTestRuntime("http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{})
 
 		Expect(err).To(MatchError(ContainSubstring("base model is required")))
 		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
@@ -139,7 +177,7 @@ var _ = Describe("Runtime", func() {
 			existingTags:     map[string]bool{},
 			inferredTemplate: "{{ range .Messages }}{{ .Content }}{{ end }}",
 		}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithLocalS3Dir(localS3Root),
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(inspector),
@@ -195,7 +233,7 @@ var _ = Describe("Runtime", func() {
 			blobHeadStatus:   http.StatusNotImplemented,
 			inferredTemplate: "{{ range .Messages }}{{ .Content }}{{ end }}",
 		}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithLocalS3Dir(localS3Root),
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(inspector),
@@ -223,7 +261,7 @@ var _ = Describe("Runtime", func() {
 		_, checksum, localS3Root := writeLocalS3Artifact("local-dev-bucket", "models/model.gguf", []byte("gguf bytes"))
 		inspector := writeInspectorScript(GinkgoT().TempDir(), 0, `{"architecture":"unknown","chat_template_present":true,"chat_template":"{% for message in messages %}{{ message['content'] }}{% endfor %}","stop_tokens":["<|end|>"]}`)
 		transport := &ollamaCreateTransport{existingTags: map[string]bool{}}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithLocalS3Dir(localS3Root),
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(inspector),
@@ -252,7 +290,7 @@ var _ = Describe("Runtime", func() {
 		_, checksum, localS3Root := writeLocalS3Artifact("local-dev-bucket", "models/model.gguf", []byte("gguf bytes"))
 		inspector := writeInspectorScript(GinkgoT().TempDir(), 0, llama3InspectionJSON())
 		transport := &ollamaCreateTransport{existingTags: map[string]bool{}}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithLocalS3Dir(localS3Root),
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(inspector),
@@ -285,7 +323,7 @@ var _ = Describe("Runtime", func() {
 		_, checksum, localS3Root := writeLocalS3Artifact("local-dev-bucket", "models/model.gguf", []byte("gguf bytes"))
 		inspector := writeInspectorScript(GinkgoT().TempDir(), 1, "missing tokenizer.chat_template")
 		transport := &ollamaCreateTransport{existingTags: map[string]bool{}}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithLocalS3Dir(localS3Root),
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(inspector),
@@ -316,7 +354,7 @@ var _ = Describe("Runtime", func() {
 			templates:    map[string]string{tag: "{{ .Prompt }}"},
 			parameters:   map[string]string{tag: `stop "<|eot_id|>"`},
 		}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(writeInspectorScript(GinkgoT().TempDir(), 1, "should not run")),
 		)
@@ -346,7 +384,7 @@ var _ = Describe("Runtime", func() {
 			parameters:       map[string]string{"bighill-existing-v1-aaaaaaaa": `stop "<|eot_id|>"`},
 			inferredTemplate: "{{ range .Messages }}{{ .Content }}{{ end }}",
 		}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithLocalS3Dir(localS3Root),
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(writeInspectorScript(GinkgoT().TempDir(), 0, llama3InspectionJSON())),
@@ -372,7 +410,7 @@ var _ = Describe("Runtime", func() {
 
 	It("does not mark an existing GGUF chat tag loaded without a chat template", func() {
 		transport := &ollamaCreateTransport{existingTags: map[string]bool{"bighill-existing-v1-aaaaaaaa-abc": true}}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(writeInspectorScript(GinkgoT().TempDir(), 1, "should not run")),
 		)
@@ -400,7 +438,7 @@ var _ = Describe("Runtime", func() {
 			existingTags: map[string]bool{tag: true},
 			templates:    map[string]string{tag: "{{ range .Messages }}{{ .Content }}{{ end }}"},
 		}
-		runtime := NewRuntime("default", 8080, "http://ollama.local",
+		runtime := newTestRuntime("http://ollama.local",
 			WithArtifactCache(GinkgoT().TempDir()),
 			WithGGUFInspectorCommand(writeInspectorScript(GinkgoT().TempDir(), 1, "should not run")),
 		)
@@ -638,6 +676,38 @@ var _ = Describe("Store record conversion", func() {
 })
 
 var _ = Describe("Store", func() {
+	It("reconciles dataset-bound local store intent into loaded model status", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
+		store, err := NewStore("default", path)
+		Expect(err).NotTo(HaveOccurred())
+		modelID := uuid.New()
+		datasetID := uuid.New()
+		name := localstore.ResourceName(modelID.String(), 1)
+		Expect(store.store.UpsertSpec(name, "default", localstore.Spec{
+			ModelID:        modelID.String(),
+			DatasetID:      datasetID.String(),
+			ModelKind:      "BASE",
+			Name:           "rag-e2e-uploaded-base",
+			ModelVersion:   1,
+			BaseModel:      "local-user-model:latest",
+			ArtifactFormat: "HF_MODEL",
+		})).To(Succeed())
+		runtime := newTestRuntime("http://ollama.local")
+		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"local-user-model:latest"}]}`, nil)}
+		reconciler := app.NewServedModelReconciler(runtime, store)
+		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+
+		Expect(controller.ProcessOnce(context.Background())).To(Succeed())
+
+		served, err := store.Read(context.Background(), name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(served.DatasetID).To(Equal(datasetID))
+		Expect(served.Status.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
+		Expect(served.Status.ServingTarget).To(Equal("http://ollama.local"))
+		Expect(served.Status.ServingModel).To(Equal("local-user-model:latest"))
+		Expect(served.Status.ServingProtocol).To(Equal(model.ServingProtocolOllamaGenerate))
+	})
+
 	It("reads and lists served models from the local store", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
 		store, err := NewStore("default", path)
@@ -662,14 +732,14 @@ var _ = Describe("Store", func() {
 		Expect(store.Namespace()).To(Equal("default"))
 	})
 
-	It("returns model serve errors for missing records", func() {
+	It("returns served-model-not-found errors for missing records", func() {
 		store, err := NewStore("default", filepath.Join(GinkgoT().TempDir(), "served_models.json"))
 		Expect(err).NotTo(HaveOccurred())
 
 		_, err = store.Read(context.Background(), "missing")
 
 		Expect(err).To(HaveOccurred())
-		Expect(errors.Is(err, domain.ErrModelServe)).To(BeTrue())
+		Expect(errors.Is(err, domain.ErrServedModelNotFound)).To(BeTrue())
 	})
 
 	It("updates local status records", func() {

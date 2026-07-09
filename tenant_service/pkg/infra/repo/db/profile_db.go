@@ -27,37 +27,7 @@ var (
 	ErrEmailNotVerified      = domain.ErrEmailNotVerified
 )
 
-type ProfileDB interface {
-	Save(ctx context.Context, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error
-	SaveTx(ctx context.Context, tx pgx.Tx, profile *domain.ProfileAccount, idempotencyKey uuid.UUID) error
-	Update(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error)
-	UpdateTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error)
-	UpdateHuggingFaceToken(ctx context.Context, userID uuid.UUID, ciphertext string) (*domain.Profile, error)
-	UpdateHuggingFaceTokenTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ciphertext string) (*domain.Profile, error)
-	UpdatePassword(ctx context.Context, userID uuid.UUID, newPassword string) error
-	VerifyEmail(ctx context.Context, token string) (*domain.Profile, error)
-	VerifyEmailTx(ctx context.Context, tx pgx.Tx, token string) (*domain.Profile, error)
-	Read(ctx context.Context, userID uuid.UUID) (*domain.Profile, error)
-	ReadTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (*domain.Profile, error)
-	ReadByVerifyToken(ctx context.Context, token string) (*domain.Profile, error)
-	ReadPasswordHash(ctx context.Context, email string) (uuid.UUID, string, error)
-	ReadOAuthProfileIDByProviderSubject(ctx context.Context, provider, subject string) (uuid.UUID, error)
-	ReadProfileIDByEmail(ctx context.Context, email string) (uuid.UUID, error)
-	CreateOAuthProfile(ctx context.Context, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error)
-	CreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error)
-	SaveOAuthIdentity(ctx context.Context, userID uuid.UUID, identity domain.OAuthIdentity) error
-	SaveOAuthIdentityTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, identity domain.OAuthIdentity) error
-	Delete(ctx context.Context, userID uuid.UUID) error
-	DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error
-	ReadDefaultMembership(ctx context.Context, userID uuid.UUID) (*domain.OrganizationMembership, error)
-	ReadMembership(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error)
-	ReadOrganization(ctx context.Context, orgID uuid.UUID) (*domain.Organization, error)
-	ListMemberships(ctx context.Context, orgID uuid.UUID) ([]*domain.OrganizationMembership, error)
-	UpsertMembership(ctx context.Context, tx pgx.Tx, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error)
-	DeleteMembership(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, userID uuid.UUID) error
-}
-
-type profileDB struct {
+type ProfileDatabase struct {
 	dbConn.Database
 }
 
@@ -66,13 +36,13 @@ type profileExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-func NewProfileDB(db *dbConn.Database) ProfileDB {
-	return &profileDB{
+func NewProfileDB(db *dbConn.Database) *ProfileDatabase {
+	return &ProfileDatabase{
 		*db,
 	}
 }
 
-func (db *profileDB) executor(tx pgx.Tx) profileExecutor {
+func (db *ProfileDatabase) executor(tx pgx.Tx) profileExecutor {
 	log.Trace("ProfileDB executor")
 
 	if tx != nil {
@@ -81,13 +51,13 @@ func (db *profileDB) executor(tx pgx.Tx) profileExecutor {
 	return db.Pool
 }
 
-func (db *profileDB) Save(ctx context.Context, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
+func (db *ProfileDatabase) Save(ctx context.Context, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
 	log.Trace("ProfileDB Save")
 
 	return db.SaveTx(ctx, nil, profileAccount, idempotencyKey)
 }
 
-func (db *profileDB) SaveTx(ctx context.Context, tx pgx.Tx, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
+func (db *ProfileDatabase) SaveTx(ctx context.Context, tx pgx.Tx, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) error {
 	log.Trace("ProfileDB SaveTx")
 
 	dao := ToDAOProfileAccount(profileAccount)
@@ -129,13 +99,13 @@ func (db *profileDB) SaveTx(ctx context.Context, tx pgx.Tx, profileAccount *doma
 	return nil
 }
 
-func (db *profileDB) Update(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error) {
+func (db *ProfileDatabase) Update(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error) {
 	log.Trace("ProfileDB Update")
 
 	return db.UpdateTx(ctx, nil, userID, profile)
 }
 
-func (db *profileDB) createDefaultOrganizationTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email string) (uuid.UUID, error) {
+func (db *ProfileDatabase) createDefaultOrganizationTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email string) (uuid.UUID, error) {
 	log.Trace("ProfileDB createDefaultOrganizationTx")
 
 	displayName := defaultOrganizationName(email)
@@ -189,7 +159,7 @@ func defaultOrganizationName(email string) string {
 	return email + " Organization"
 }
 
-func (db *profileDB) UpdateTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error) {
+func (db *ProfileDatabase) UpdateTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, profile *domain.Profile) (*domain.Profile, error) {
 	log.Trace("ProfileDB UpdateTx")
 
 	// important to use userID here, not profile.ID to avoid any potential security issues
@@ -231,13 +201,13 @@ func (db *profileDB) UpdateTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, 
 
 }
 
-func (db *profileDB) UpdateHuggingFaceToken(ctx context.Context, userID uuid.UUID, ciphertext string) (*domain.Profile, error) {
+func (db *ProfileDatabase) UpdateHuggingFaceToken(ctx context.Context, userID uuid.UUID, ciphertext string) (*domain.Profile, error) {
 	log.Trace("ProfileDB UpdateHuggingFaceToken")
 
 	return db.UpdateHuggingFaceTokenTx(ctx, nil, userID, ciphertext)
 }
 
-func (db *profileDB) UpdateHuggingFaceTokenTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ciphertext string) (*domain.Profile, error) {
+func (db *ProfileDatabase) UpdateHuggingFaceTokenTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, ciphertext string) (*domain.Profile, error) {
 	log.Trace("ProfileDB UpdateHuggingFaceTokenTx")
 
 	var profileDAO ProfileDAO
@@ -280,7 +250,7 @@ func (db *profileDB) UpdateHuggingFaceTokenTx(ctx context.Context, tx pgx.Tx, us
 	}
 }
 
-func (db *profileDB) UpdatePassword(ctx context.Context, userID uuid.UUID, newPassword string) error {
+func (db *ProfileDatabase) UpdatePassword(ctx context.Context, userID uuid.UUID, newPassword string) error {
 	log.Trace("ProfileDB UpdatePassword")
 
 	var sqlStatement = `
@@ -302,13 +272,13 @@ func (db *profileDB) UpdatePassword(ctx context.Context, userID uuid.UUID, newPa
 	return nil
 }
 
-func (db *profileDB) VerifyEmail(ctx context.Context, token string) (*domain.Profile, error) {
+func (db *ProfileDatabase) VerifyEmail(ctx context.Context, token string) (*domain.Profile, error) {
 	log.Trace("ProfileDB VerifyEmail")
 
 	return db.VerifyEmailTx(ctx, nil, token)
 }
 
-func (db *profileDB) VerifyEmailTx(ctx context.Context, tx pgx.Tx, token string) (*domain.Profile, error) {
+func (db *ProfileDatabase) VerifyEmailTx(ctx context.Context, tx pgx.Tx, token string) (*domain.Profile, error) {
 	log.Trace("ProfileDB VerifyEmailTx")
 
 	var profileDAO ProfileDAO
@@ -359,7 +329,7 @@ func (db *profileDB) VerifyEmailTx(ctx context.Context, tx pgx.Tx, token string)
 	}
 }
 
-func (db *profileDB) ReadByVerifyToken(ctx context.Context, token string) (*domain.Profile, error) {
+func (db *ProfileDatabase) ReadByVerifyToken(ctx context.Context, token string) (*domain.Profile, error) {
 	log.Trace("ProfileDB ReadByVerifyToken")
 
 	var profileDAO ProfileDAO
@@ -401,13 +371,13 @@ func (db *profileDB) ReadByVerifyToken(ctx context.Context, token string) (*doma
 	}
 }
 
-func (db *profileDB) Read(ctx context.Context, userID uuid.UUID) (*domain.Profile, error) {
+func (db *ProfileDatabase) Read(ctx context.Context, userID uuid.UUID) (*domain.Profile, error) {
 	log.Trace("ProfileDB Read")
 
 	return db.ReadTx(ctx, nil, userID)
 }
 
-func (db *profileDB) ReadTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (*domain.Profile, error) {
+func (db *ProfileDatabase) ReadTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (*domain.Profile, error) {
 	log.Trace("ProfileDB ReadTx")
 
 	var profileDao ProfileDAO
@@ -453,7 +423,7 @@ func (db *profileDB) ReadTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (*
 	}
 }
 
-func (db *profileDB) ReadPasswordHash(ctx context.Context, email string) (uuid.UUID, string, error) {
+func (db *ProfileDatabase) ReadPasswordHash(ctx context.Context, email string) (uuid.UUID, string, error) {
 	log.Trace("ProfileDB ReadPasswordHash")
 
 	var userID uuid.UUID
@@ -481,7 +451,7 @@ func (db *profileDB) ReadPasswordHash(ctx context.Context, email string) (uuid.U
 	}
 }
 
-func (db *profileDB) ReadOAuthProfileIDByProviderSubject(ctx context.Context, provider, subject string) (uuid.UUID, error) {
+func (db *ProfileDatabase) ReadOAuthProfileIDByProviderSubject(ctx context.Context, provider, subject string) (uuid.UUID, error) {
 	log.Trace("ProfileDB ReadOAuthProfileIDByProviderSubject")
 
 	var oauthProfileIDDAO OAuthProfileIDDAO
@@ -504,7 +474,7 @@ func (db *profileDB) ReadOAuthProfileIDByProviderSubject(ctx context.Context, pr
 	return FromDAOOAuthProfileID(&oauthProfileIDDAO), nil
 }
 
-func (db *profileDB) ReadProfileIDByEmail(ctx context.Context, email string) (uuid.UUID, error) {
+func (db *ProfileDatabase) ReadProfileIDByEmail(ctx context.Context, email string) (uuid.UUID, error) {
 	log.Trace("ProfileDB ReadProfileIDByEmail")
 
 	var profileIDDAO ProfileIDDAO
@@ -525,13 +495,13 @@ func (db *profileDB) ReadProfileIDByEmail(ctx context.Context, email string) (uu
 	return FromDAOProfileID(&profileIDDAO), nil
 }
 
-func (db *profileDB) CreateOAuthProfile(ctx context.Context, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error) {
+func (db *ProfileDatabase) CreateOAuthProfile(ctx context.Context, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error) {
 	log.Trace("ProfileDB CreateOAuthProfile")
 
 	return db.CreateOAuthProfileTx(ctx, nil, identity, passwordHash)
 }
 
-func (db *profileDB) CreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error) {
+func (db *ProfileDatabase) CreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, error) {
 	log.Trace("ProfileDB CreateOAuthProfileTx")
 
 	email := strings.ToLower(strings.TrimSpace(identity.Email))
@@ -563,13 +533,13 @@ func (db *profileDB) CreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identi
 	return parsedProfileID, nil
 }
 
-func (db *profileDB) SaveOAuthIdentity(ctx context.Context, userID uuid.UUID, identity domain.OAuthIdentity) error {
+func (db *ProfileDatabase) SaveOAuthIdentity(ctx context.Context, userID uuid.UUID, identity domain.OAuthIdentity) error {
 	log.Trace("ProfileDB SaveOAuthIdentity")
 
 	return db.SaveOAuthIdentityTx(ctx, nil, userID, identity)
 }
 
-func (db *profileDB) SaveOAuthIdentityTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, identity domain.OAuthIdentity) error {
+func (db *ProfileDatabase) SaveOAuthIdentityTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, identity domain.OAuthIdentity) error {
 	log.Trace("ProfileDB SaveOAuthIdentityTx")
 
 	dao := ToDAOOAuthIdentity(userID, domain.OAuthIdentity{
@@ -596,13 +566,13 @@ func (db *profileDB) SaveOAuthIdentityTx(ctx context.Context, tx pgx.Tx, userID 
 	return nil
 }
 
-func (db *profileDB) Delete(ctx context.Context, userID uuid.UUID) error {
+func (db *ProfileDatabase) Delete(ctx context.Context, userID uuid.UUID) error {
 	log.Trace("ProfileDB Delete")
 
 	return db.DeleteTx(ctx, nil, userID)
 }
 
-func (db *profileDB) DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
+func (db *ProfileDatabase) DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
 	log.Trace("ProfileDB DeleteTx")
 
 	var sqlStatement = `
@@ -623,7 +593,7 @@ func (db *profileDB) DeleteTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) 
 	return nil
 }
 
-func (db *profileDB) ReadDefaultMembership(ctx context.Context, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+func (db *ProfileDatabase) ReadDefaultMembership(ctx context.Context, userID uuid.UUID) (*domain.OrganizationMembership, error) {
 	log.Trace("ProfileDB ReadDefaultMembership")
 
 	var membership OrganizationMembershipDAO
@@ -654,7 +624,7 @@ func (db *profileDB) ReadDefaultMembership(ctx context.Context, userID uuid.UUID
 	}
 }
 
-func (db *profileDB) ReadMembership(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error) {
+func (db *ProfileDatabase) ReadMembership(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) (*domain.OrganizationMembership, error) {
 	log.Trace("ProfileDB ReadMembership")
 
 	var membership OrganizationMembershipDAO
@@ -687,7 +657,7 @@ func (db *profileDB) ReadMembership(ctx context.Context, orgID uuid.UUID, userID
 	}
 }
 
-func (db *profileDB) ReadOrganization(ctx context.Context, orgID uuid.UUID) (*domain.Organization, error) {
+func (db *ProfileDatabase) ReadOrganization(ctx context.Context, orgID uuid.UUID) (*domain.Organization, error) {
 	log.Trace("ProfileDB ReadOrganization")
 
 	var organization OrganizationDAO
@@ -713,7 +683,7 @@ func (db *profileDB) ReadOrganization(ctx context.Context, orgID uuid.UUID) (*do
 	}
 }
 
-func (db *profileDB) ListMemberships(ctx context.Context, orgID uuid.UUID) ([]*domain.OrganizationMembership, error) {
+func (db *ProfileDatabase) ListMemberships(ctx context.Context, orgID uuid.UUID) ([]*domain.OrganizationMembership, error) {
 	log.Trace("ProfileDB ListMemberships")
 
 	rows, err := db.Pool.Query(ctx, `
@@ -752,7 +722,7 @@ func (db *profileDB) ListMemberships(ctx context.Context, orgID uuid.UUID) ([]*d
 	return memberships, nil
 }
 
-func (db *profileDB) UpsertMembership(ctx context.Context, tx pgx.Tx, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error) {
+func (db *ProfileDatabase) UpsertMembership(ctx context.Context, tx pgx.Tx, membership *domain.OrganizationMembership) (*domain.OrganizationMembership, error) {
 	log.Trace("ProfileDB UpsertMembership")
 
 	if membership == nil {
@@ -804,7 +774,7 @@ func (db *profileDB) UpsertMembership(ctx context.Context, tx pgx.Tx, membership
 	return FromDAOOrganizationMembership(&dao), nil
 }
 
-func (db *profileDB) DeleteMembership(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, userID uuid.UUID) error {
+func (db *ProfileDatabase) DeleteMembership(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, userID uuid.UUID) error {
 	log.Trace("ProfileDB DeleteMembership")
 
 	tag, err := db.executor(tx).Exec(ctx, `

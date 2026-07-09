@@ -70,8 +70,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT inference_models_tenant_ownership_ck CHECK (
-        (model_kind = 'BASE' AND user_id IS NULL AND org_id IS NULL)
-        OR (model_kind <> 'BASE' AND user_id IS NOT NULL AND org_id IS NOT NULL)
+        user_id IS NOT NULL AND org_id IS NOT NULL
     ),
     CONSTRAINT inference_models_loaded_serving_runtime_ck CHECK (
         serving_load_status <> 'LOADED'
@@ -280,13 +279,14 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.published_inference_endpoints (
     endpoint_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id uuid NOT NULL,
     model_id uuid NOT NULL,
-    dataset_id uuid NOT NULL,
     status text NOT NULL DEFAULT 'ready',
+    rag_merge_strategy text NOT NULL DEFAULT 'reranker',
     display_name text NOT NULL,
     created_by_user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT published_inference_endpoint_status_ck CHECK (status IN ('ready', 'disabled'))
+    CONSTRAINT published_inference_endpoint_status_ck CHECK (status IN ('ready', 'disabled')),
+    CONSTRAINT published_inference_endpoint_rag_merge_strategy_ck CHECK (rag_merge_strategy IN ('reranker', 'score_normalized'))
 );
 
 CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_org_id
@@ -296,12 +296,23 @@ CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_model_id
 ON bighill_inference_db.published_inference_endpoints(model_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS index_published_inference_endpoints_natural_key
-ON bighill_inference_db.published_inference_endpoints(org_id, model_id, dataset_id);
+ON bighill_inference_db.published_inference_endpoints(org_id, model_id);
 
 CREATE TRIGGER published_inference_endpoints_updated_at
 BEFORE UPDATE ON bighill_inference_db.published_inference_endpoints
 FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.published_endpoint_datasets (
+    endpoint_id uuid NOT NULL REFERENCES bighill_inference_db.published_inference_endpoints(endpoint_id) ON DELETE CASCADE,
+    dataset_id uuid NOT NULL,
+    position integer NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (endpoint_id, dataset_id)
+);
+
+CREATE INDEX IF NOT EXISTS index_published_endpoint_datasets_dataset_id
+ON bighill_inference_db.published_endpoint_datasets(dataset_id);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.outbox_messages (
     outbox_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -355,12 +366,10 @@ ALTER TABLE bighill_inference_db.inference_models FORCE ROW LEVEL SECURITY;
 CREATE POLICY inference_models_tenant_isolation ON bighill_inference_db.inference_models
 USING (
     current_setting('app.system_context', true) = 'true'
-    OR org_id IS NULL
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 )
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
-    OR (model_kind = 'BASE' AND user_id IS NULL AND org_id IS NULL)
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
@@ -434,4 +443,26 @@ USING (
 WITH CHECK (
     current_setting('app.system_context', true) = 'true'
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.published_endpoint_datasets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.published_endpoint_datasets FORCE ROW LEVEL SECURITY;
+CREATE POLICY published_endpoint_datasets_tenant_isolation ON bighill_inference_db.published_endpoint_datasets
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR EXISTS (
+        SELECT 1
+        FROM bighill_inference_db.published_inference_endpoints endpoint
+        WHERE endpoint.endpoint_id = published_endpoint_datasets.endpoint_id
+          AND NULLIF(current_setting('app.current_org_id', true), '')::uuid = endpoint.org_id
+    )
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR EXISTS (
+        SELECT 1
+        FROM bighill_inference_db.published_inference_endpoints endpoint
+        WHERE endpoint.endpoint_id = published_endpoint_datasets.endpoint_id
+          AND NULLIF(current_setting('app.current_org_id', true), '')::uuid = endpoint.org_id
+    )
 );

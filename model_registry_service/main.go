@@ -46,7 +46,7 @@ type registryConfig struct {
 	OutboxBackend      string
 	OutboxRelay        messagingConn.OutboxRelayConfig
 	Topics             registrymessaging.ModelRegistryTopics
-	ProfileTopic       string
+	TenantTopic        string
 	Serving            servingConfig
 	Health             healthConfig
 	Lifecycle          lifecycle.Config
@@ -226,15 +226,15 @@ func main() {
 	startSubscriber("model-artifact-ingested", []string{cfg.Topics.Ingestion}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, registrymessaging.NewModelArtifactIngestedEventListener(modelUsecase))
 	})
-	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-created", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-updated", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-deleted", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
@@ -292,7 +292,7 @@ func readModelRegistryConfig() registryConfig {
 			Training:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC", "training"),
 			Ingestion:     env.WithDefaultString("MODEL_REGISTRY_SERVICE_INGESTION_SUBSCRIBER_TOPIC", "ingestion"),
 		},
-		ProfileTopic: env.WithDefaultString("MODEL_REGISTRY_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
+		TenantTopic: env.WithDefaultString("MODEL_REGISTRY_SERVICE_TENANT_SUBSCRIBER_TOPIC", "tenant"),
 		Serving: servingConfig{
 			Enabled:          env.WithDefaultBool("MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED", true),
 			Backend:          env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_BACKEND", defaultServingBackend()),
@@ -352,7 +352,7 @@ func newServingBackend(cfg servingConfig) (app.ModelServingDeployer, error) {
 	}
 }
 
-func newServingObserver(cfg servingConfig, deployer app.ModelServingDeployer, recorder localserving.ServingStatusRecorder) (interface {
+func newServingObserver(cfg servingConfig, deployer app.ModelServingDeployer, recorder app.ServingStatusRecorder) (interface {
 	Start(context.Context) error
 }, error) {
 	log.Trace("newServingObserver")

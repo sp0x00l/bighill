@@ -82,8 +82,8 @@ module "api_gateway" {
   ingestion_service_http_port        = var.ingestion_service_http_port
   model_registry_service_http_domain = var.model_registry_service_http_domain
   model_registry_service_http_port   = var.model_registry_service_http_port
-  profile_service_http_domain        = var.profile_service_http_domain
-  profile_service_http_port          = var.profile_service_http_port
+  tenant_service_http_domain        = var.tenant_service_http_domain
+  tenant_service_http_port          = var.tenant_service_http_port
   training_service_http_domain       = var.training_service_http_domain
   training_service_http_port         = var.training_service_http_port
   inference_service_http_domain      = var.inference_service_http_domain

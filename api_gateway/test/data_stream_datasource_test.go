@@ -252,7 +252,7 @@ func requireDatasourceFixtures() {
 		datasourcePortOpen(mongoDataSourceHost, mongoDataSourcePort) {
 		return
 	}
-	Skip("external datasource fixtures are not running")
+	Fail("external datasource fixtures are not running; run scripts/start-data-sources.sh before running datasource API specs")
 }
 
 func datasourcePortOpen(host string, port int) bool {
@@ -282,10 +282,7 @@ func createPostgresSourceConnector(user profileTestUser) string {
 		},
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/postgres", payload, user.Token, uuid.New())
-	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-
-	created := decodeObject(body)
+	created := createDataRegistryConnector(user, "postgres", payload)
 	return stringField(created, "id")
 }
 
@@ -301,10 +298,7 @@ func createMySQLSourceConnector(user profileTestUser) string {
 		},
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/mysql", payload, user.Token, uuid.New())
-	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-
-	created := decodeObject(body)
+	created := createDataRegistryConnector(user, "mysql", payload)
 	return stringField(created, "id")
 }
 
@@ -320,10 +314,7 @@ func createClickHouseSourceConnector(user profileTestUser) string {
 		},
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/clickhouse", payload, user.Token, uuid.New())
-	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-
-	created := decodeObject(body)
+	created := createDataRegistryConnector(user, "clickhouse", payload)
 	return stringField(created, "id")
 }
 
@@ -343,10 +334,7 @@ func createMongoSourceConnector(user profileTestUser) string {
 		},
 	}
 
-	status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/mongo", payload, user.Token, uuid.New())
-	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-
-	created := decodeObject(body)
+	created := createDataRegistryConnector(user, "mongo", payload)
 	return stringField(created, "id")
 }
 

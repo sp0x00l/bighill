@@ -18,10 +18,10 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Hugging Face onboarding integration", func() {
+var _ = Describe("Hugging Face onboarding integration", Label("real-huggingface"), func() {
 	It("downloads and validates a real Hugging Face model file when explicitly enabled", func() {
 		if !realHuggingFaceE2EEnabled() {
-			Skip("set BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true to run real Hugging Face onboarding integration")
+			Fail("set BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true to run real Hugging Face onboarding integration")
 		}
 		token := requiredHFEnv("BIGHILL_E2E_HUGGINGFACE_TOKEN")
 		repoID := requiredHFEnv("BIGHILL_E2E_HUGGINGFACE_REPO_ID")
@@ -62,7 +62,7 @@ var _ = Describe("Hugging Face onboarding integration", func() {
 
 	It("maps real Hugging Face provider failures to external provider errors when explicitly enabled", func() {
 		if !realHuggingFaceE2EEnabled() {
-			Skip("set BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true to run real Hugging Face provider error integration")
+			Fail("set BIGHILL_E2E_HUGGINGFACE_REAL_DOWNLOAD=true to run real Hugging Face provider error integration")
 		}
 		token := requiredHFEnv("BIGHILL_E2E_HUGGINGFACE_TOKEN")
 		repoID := "bighill/non-existent-model-" + uuid.NewString()
@@ -123,7 +123,7 @@ func realHuggingFaceE2EEnabled() bool {
 func requiredHFEnv(name string) string {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		Skip(name + " is required for real Hugging Face onboarding integration")
+		Fail(name + " is required for real Hugging Face onboarding integration")
 	}
 	return value
 }

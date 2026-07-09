@@ -22,6 +22,7 @@ type InferenceDatasetRepository interface {
 
 type PublishedEndpointRepository interface {
 	UpsertEndpoint(ctx context.Context, endpoint *model.PublishedEndpoint) (*model.PublishedEndpoint, error)
+	SetEndpointDatasets(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID, datasetIDs []uuid.UUID) (*model.PublishedEndpoint, error)
 	ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error)
 	ReadEndpoint(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID) (*model.PublishedEndpoint, error)
 }

@@ -25,7 +25,7 @@ type InitiateUploadDTO struct {
 
 type InitiateModelUploadDTO struct {
 	ResourceID        string `json:"resource_id"         validate:"omitempty,uuid"`
-	DatasetID         string `json:"dataset_id"          validate:"omitempty,uuid"`
+	DatasetID         string `json:"dataset_id"          validate:"required,uuid"`
 	FileName          string `json:"file_name"           validate:"required"`
 	ArtifactType      string `json:"artifact_type"       validate:"required,model_artifact_type"`
 	ArtifactFormat    string `json:"artifact_format"     validate:"required,model_artifact_format"`
@@ -39,7 +39,7 @@ type InitiateModelUploadDTO struct {
 
 type OnboardHuggingFaceModelDTO struct {
 	ResourceID     string `json:"resource_id"   validate:"omitempty,uuid"`
-	DatasetID      string `json:"dataset_id"    validate:"omitempty,uuid"`
+	DatasetID      string `json:"dataset_id"    validate:"required,uuid"`
 	RepoID         string `json:"repo_id"       validate:"required"`
 	Revision       string `json:"revision"`
 	HFFile         string `json:"hf_file"`

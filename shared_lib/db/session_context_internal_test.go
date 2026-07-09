@@ -29,7 +29,7 @@ var _ = Describe("session context hooks", func() {
 		orgID := uuid.New()
 		ctx := ctxutil.WithOrgID(ctxutil.WithTenantID(context.Background(), userID), orgID)
 
-		err := applyConnectionSessionContext(ctx, recorder, "bighill_profile_db")
+		err := applyConnectionSessionContext(ctx, recorder, "bighill_tenant_db")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(recorder.sqls).To(HaveLen(1))

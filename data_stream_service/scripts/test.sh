@@ -25,7 +25,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/data_stream_service
     . ./scripts/config.sh $1
-    ginkgo -timeout=120s -r -v --output-dir=../test_results/data_stream_service -procs=1 -race
+    ginkgo -timeout=120s -r -v --output-dir=../test_results/data_stream_service -procs=1 -race --label-filter='!external-data-source'
 
     echo "data stream service test complete"
     cd $CURRENT_DIR

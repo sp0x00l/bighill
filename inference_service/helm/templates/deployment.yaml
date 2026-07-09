@@ -113,7 +113,7 @@ spec:
               value: {{ .Values.env.modelRegistrySubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
-            - name: INFERENCE_SERVICE_PROFILE_SUBSCRIBER_TOPIC
+            - name: INFERENCE_SERVICE_TENANT_SUBSCRIBER_TOPIC
               value: {{ .Values.env.profileSubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_PREFERENCE_DATASET_TOPIC
               value: {{ .Values.env.preferenceDatasetTopic | quote }}
@@ -141,6 +141,8 @@ spec:
               value: {{ .Values.env.featureMaterializerGrpcRetryCount | quote }}
             - name: INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.generationRequestTimeoutSeconds | quote }}
+            - name: INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS
+              value: {{ .Values.env.generationMaxOutputTokens | quote }}
             - name: INFERENCE_SERVICE_RERANKER_PROVIDER
               value: {{ .Values.env.rerankerProvider | quote }}
             - name: INFERENCE_SERVICE_RERANKER_URL
@@ -151,14 +153,10 @@ spec:
               value: {{ .Values.env.rerankerRequestTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_RERANKER_CANDIDATE_MULTIPLIER
               value: {{ .Values.env.rerankerCandidateMultiplier | quote }}
+            - name: INFERENCE_SERVICE_RAG_MERGE_STRATEGY
+              value: {{ .Values.env.ragMergeStrategy | quote }}
             - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER
               value: {{ .Values.env.queryTransformerProvider | quote }}
-            - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_PROTOCOL
-              value: {{ .Values.env.queryTransformerUtilityProtocol | quote }}
-            - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_ENDPOINT
-              value: {{ .Values.env.queryTransformerUtilityEndpoint | quote }}
-            - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_UTILITY_MODEL
-              value: {{ .Values.env.queryTransformerUtilityModel | quote }}
             - name: INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.queryTransformerRequestTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED

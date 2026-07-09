@@ -219,14 +219,75 @@ var _ = Describe("DatasetDB", func() {
 		updatedDAO := validDatasetDAO(dataset.ID, userID, orgID)
 		updatedDAO.Location = pgtype.Text{String: materialized.Location, Valid: true}
 		updatedDAO.RawSnapshotID = pgtype.UUID{Bytes: rawSnapshotID, Valid: true}
-		pool.txRows = []pgx.Row{&datasetRowStub{dao: updatedDAO}}
+		pool.txRows = []pgx.Row{errorRowStub{err: pgx.ErrNoRows}, int64ScanRow(1, nil), &datasetRowStub{dao: updatedDAO}}
+		pool.execRowsAffected = []int64{1, 1}
 
-		got, changed, err := repo.RecordMaterialization(ctx, &repositoryTxStub{pool: pool}, materialized, model.DatasetProcessingRawMaterialized)
+		got, changed, err := repo.RecordMaterialization(ctx, &repositoryTxStub{pool: pool}, materialized, model.DatasetProcessingRawMaterialized, 1)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(changed).To(BeTrue())
 		Expect(got.RawSnapshotID).To(Equal(rawSnapshotID))
 		Expect(pool.commitCalled).To(BeFalse())
+	})
+
+	It("keeps future materialization events retryable until earlier events are recorded", func() {
+		featureSnapshotID := uuid.New()
+		embeddingSnapshotID := uuid.New()
+		materialized := validDatasetDomain(dataset.ID, userID, orgID)
+		materialized.FeatureSnapshotID = featureSnapshotID
+		materialized.EmbeddingSnapshotID = embeddingSnapshotID
+		materialized.VectorStore = "pgvector"
+		materialized.CollectionName = "movie_features"
+
+		pool.txRows = []pgx.Row{errorRowStub{err: pgx.ErrNoRows}, int64ScanRow(1, nil)}
+		pool.execRowsAffected = []int64{1}
+
+		got, changed, err := repo.RecordMaterialization(ctx, &repositoryTxStub{pool: pool}, materialized, model.DatasetProcessingEmbeddingsMaterialized, 3)
+
+		Expect(got).To(BeNil())
+		Expect(changed).To(BeFalse())
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domainErrors.ErrMaterializationEventSequenceNotReady)).To(BeTrue())
+		Expect(pool.commitCalled).To(BeFalse())
+		Expect(pool.rollbackCalled).To(BeFalse())
+	})
+
+	It("ignores duplicate materialization events after the sequence has advanced", func() {
+		currentDAO := validDatasetDAO(dataset.ID, userID, orgID)
+		currentDAO.ProcessingState = pgtype.Text{String: model.DatasetProcessingFeatureMaterialized.String(), Valid: true}
+		pool.txRows = []pgx.Row{int64ScanRow(3, nil), &datasetRowStub{dao: currentDAO}}
+		materialized := validDatasetDomain(dataset.ID, userID, orgID)
+		materialized.RawSnapshotID = uuid.New()
+
+		got, changed, err := repo.RecordMaterialization(ctx, &repositoryTxStub{pool: pool}, materialized, model.DatasetProcessingRawMaterialized, 1)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(changed).To(BeFalse())
+		Expect(got.ProcessingState).To(Equal(model.DatasetProcessingFeatureMaterialized))
+		Expect(pool.execCalled).To(BeFalse())
+	})
+
+	It("applies a rematerialization event when its sequence follows a completed earlier pass", func() {
+		rawSnapshotID := uuid.New()
+		materialized := validDatasetDomain(dataset.ID, userID, orgID)
+		materialized.Location = "s3://bucket/raw/rerun.parquet"
+		materialized.RawSnapshotID = rawSnapshotID
+
+		updatedDAO := validDatasetDAO(dataset.ID, userID, orgID)
+		updatedDAO.Location = pgtype.Text{String: materialized.Location, Valid: true}
+		updatedDAO.ProcessingState = pgtype.Text{String: model.DatasetProcessingRawMaterialized.String(), Valid: true}
+		updatedDAO.RawSnapshotID = pgtype.UUID{Bytes: rawSnapshotID, Valid: true}
+		pool.txRows = []pgx.Row{int64ScanRow(4, nil), &datasetRowStub{dao: updatedDAO}}
+		pool.execRowsAffected = []int64{1}
+
+		got, changed, err := repo.RecordMaterialization(ctx, &repositoryTxStub{pool: pool}, materialized, model.DatasetProcessingRawMaterialized, 4)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(changed).To(BeTrue())
+		Expect(got.Location).To(Equal("s3://bucket/raw/rerun.parquet"))
+		Expect(got.ProcessingState).To(Equal(model.DatasetProcessingRawMaterialized))
+		Expect(got.RawSnapshotID).To(Equal(rawSnapshotID))
+		Expect(pool.execCalled).To(BeTrue())
 	})
 
 	It("keeps materialization table fields unset when no table metadata is present", func() {
@@ -621,6 +682,16 @@ func intScanRow(value int, err error) pgx.Row {
 			return err
 		}
 		*(dest[0].(*int)) = value
+		return nil
+	})
+}
+
+func int64ScanRow(value int64, err error) pgx.Row {
+	return scanFuncRow(func(dest ...any) error {
+		if err != nil {
+			return err
+		}
+		*(dest[0].(*int64)) = value
 		return nil
 	})
 }

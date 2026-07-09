@@ -2,11 +2,17 @@ package test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	dataregistrypb "lib/data_contracts_lib/data_registry"
+	ingestionpb "lib/data_contracts_lib/ingestion"
+	profilepb "lib/data_contracts_lib/profile"
+	env "lib/shared_lib/env"
+	msgConn "lib/shared_lib/messaging"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -129,6 +135,9 @@ func stringField(body map[string]any, key string) string {
 }
 
 func createVerifiedProfileAndLogin() profileTestUser {
+	tenantEvents, stopTenantEvents := newTenantUserCreatedEventCollector()
+	defer stopTenantEvents()
+
 	password := "SecurePass123!"
 	email := fmt.Sprintf("gateway-%s@test.com", strings.ReplaceAll(uuid.NewString(), "-", "")[:12])
 	phone := uniqueGBPhone()
@@ -145,6 +154,9 @@ func createVerifiedProfileAndLogin() profileTestUser {
 	created := decodeObject(body)
 	userID, err := uuid.Parse(stringField(created, "id"))
 	Expect(err).NotTo(HaveOccurred())
+	tenantEvents.waitFor(userID, 30*time.Second, func(event *profilepb.UserCreatedEvent) bool {
+		return event.GetUserId() == userID.String()
+	})
 
 	verifyPayload := map[string]any{"token": testEmailVerificationToken(email)}
 	status, body = doJSON(http.MethodPost, "/public/v1/profiles/email/verify", verifyPayload, "", uuid.Nil)
@@ -176,6 +188,69 @@ func createVerifiedProfileAndLogin() profileTestUser {
 		Phone:    phone,
 		Token:    token,
 	}
+}
+
+func newTenantUserCreatedEventCollector() (*kafkaEventCollector[*profilepb.UserCreatedEvent], context.CancelFunc) {
+	tenantTopic := env.WithDefaultString("TENANT_SERVICE_KAFKA_PUBLISHER_TOPIC", "tenant")
+	subscriber, start, cancel := newKafkaAssertsSubscriber(context.Background(), topicList(tenantTopic))
+	collector := newKafkaEventCollector(msgConn.MsgTypeUserCreated, func() *profilepb.UserCreatedEvent {
+		return &profilepb.UserCreatedEvent{}
+	})
+	msgConn.AddListener(subscriber, collector)
+	start()
+	return collector, cancel
+}
+
+func newModelArtifactIngestedEventCollector() (*kafkaEventCollector[*ingestionpb.ModelArtifactIngestedEvent], context.CancelFunc) {
+	ingestionTopic := env.WithDefaultString("INGESTION_SERVICE_TOPIC", "ingestion")
+	subscriber, start, cancel := newKafkaAssertsSubscriber(context.Background(), topicList(ingestionTopic))
+	collector := newKafkaEventCollector(msgConn.MsgTypeModelArtifactIngested, func() *ingestionpb.ModelArtifactIngestedEvent {
+		return &ingestionpb.ModelArtifactIngestedEvent{}
+	})
+	msgConn.AddListener(subscriber, collector)
+	start()
+	return collector, cancel
+}
+
+func newDatasetCreatedEventCollector() (*kafkaEventCollector[*dataregistrypb.DatasetCreatedEvent], context.CancelFunc) {
+	dataRegistryTopic := env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry")
+	subscriber, start, cancel := newKafkaAssertsSubscriber(context.Background(), topicList(dataRegistryTopic))
+	collector := newKafkaEventCollector(msgConn.MsgTypeDatasetCreated, func() *dataregistrypb.DatasetCreatedEvent {
+		return &dataregistrypb.DatasetCreatedEvent{}
+	})
+	msgConn.AddListener(subscriber, collector)
+	start()
+	return collector, cancel
+}
+
+func createDataRegistryDataset(user profileTestUser, payload map[string]any) map[string]any {
+	datasetEvents, stopDatasetEvents := newDatasetCreatedEventCollector()
+	defer stopDatasetEvents()
+
+	var created map[string]any
+	Eventually(func(g Gomega) {
+		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", payload, user.Token, uuid.New())
+		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		created = decodeObject(body)
+	}, 30*time.Second, 1*time.Second).Should(Succeed())
+	datasetID, err := uuid.Parse(stringField(created, "id"))
+	Expect(err).NotTo(HaveOccurred())
+	datasetEvents.waitFor(datasetID, 30*time.Second, func(event *dataregistrypb.DatasetCreatedEvent) bool {
+		return event.GetDatasetId() == datasetID.String() &&
+			event.GetUserId() == user.ID.String() &&
+			event.GetOrgId() == user.OrgID.String()
+	})
+	return created
+}
+
+func createDataRegistryConnector(user profileTestUser, connectorType string, payload map[string]any) map[string]any {
+	var created map[string]any
+	Eventually(func(g Gomega) {
+		status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/"+connectorType, payload, user.Token, uuid.New())
+		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		created = decodeObject(body)
+	}, 30*time.Second, 1*time.Second).Should(Succeed())
+	return created
 }
 
 func testEmailVerificationToken(email string) string {

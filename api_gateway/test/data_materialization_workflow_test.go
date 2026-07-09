@@ -32,9 +32,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
-		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		created := decodeObject(body)
+		created := createDataRegistryDataset(user, createPayload)
 		datasetID := stringField(created, "id")
 
 		csv := []byte("title,views\nIntro,10\nNext,20\n")
@@ -73,9 +71,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "GENERIC_PARQUET_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
-		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		created := decodeObject(body)
+		created := createDataRegistryDataset(user, createPayload)
 		datasetID := uuid.MustParse(stringField(created, "id"))
 
 		openDataset, err := os.ReadFile("data/open_iris.csv")
@@ -132,9 +128,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
-		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		created := decodeObject(body)
+		created := createDataRegistryDataset(user, createPayload)
 		datasetID := stringField(created, "id")
 
 		csv := []byte("title,views\nPresigned Intro,30\nPresigned Next,40\n")
@@ -162,7 +156,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 
 		writeLocalS3Object("local-dev-bucket", fields["key"].(string), "text/csv", csv)
 
-		status, body = doJSON(http.MethodPost, "/v1/private/data/uploads/"+uploadID+"/complete", nil, user.Token, uuid.New())
+		status, body := doJSON(http.MethodPost, "/v1/private/data/uploads/"+uploadID+"/complete", nil, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 		completed := decodeObject(body)
 		Expect(completed["status"]).To(Equal("PROMOTED"))
@@ -199,9 +193,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
-		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		created := decodeObject(body)
+		created := createDataRegistryDataset(user, createPayload)
 		datasetID := stringField(created, "id")
 
 		pdf, err := os.ReadFile("data/example_PDF_1MB.pdf")
@@ -249,9 +241,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
 		}
 
-		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", createPayload, user.Token, uuid.New())
-		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		created := decodeObject(body)
+		created := createDataRegistryDataset(user, createPayload)
 		datasetID := stringField(created, "id")
 
 		html := []byte("<!doctype html><html><head><title>Ignored title</title><script>alert('x')</script></head><body><main><h1>Guide</h1><p>HTML knowledge content.</p></main></body></html>")

@@ -81,23 +81,37 @@ func WithCreateTimeout(timeout time.Duration) RuntimeOption {
 	}
 }
 
-func NewRuntime(namespace string, port int32, ollamaEndpoint string, options ...RuntimeOption) *Runtime {
+func NewRuntime(namespace string, port int32, ollamaEndpoint string, options ...RuntimeOption) (*Runtime, error) {
 	log.Trace("localserving NewRuntime")
 
 	runtime := &Runtime{
-		namespace:      namespace,
+		namespace:      strings.TrimSpace(namespace),
 		port:           port,
 		ollamaEndpoint: strings.TrimRight(strings.TrimSpace(ollamaEndpoint), "/"),
 		client:         &http.Client{},
-		artifactCache:  filepath.Join(os.TempDir(), "bighill", "model_serving_artifacts"),
-		localS3Dir:     strings.TrimSpace(os.Getenv("BIGHILL_LOCAL_S3_STORAGE_DIR")),
-		inspector:      []string{"python", "-m", "bighill_model_artifacts.gguf"},
-		createTimeout:  20 * time.Minute,
 	}
 	for _, option := range options {
 		option(runtime)
 	}
-	return runtime
+	if runtime.namespace == "" {
+		return nil, domain.ErrValidationFailed.Extend("local serving namespace is required")
+	}
+	if runtime.port <= 0 {
+		return nil, domain.ErrValidationFailed.Extend("local serving port is required")
+	}
+	if runtime.ollamaEndpoint == "" {
+		return nil, domain.ErrValidationFailed.Extend("local Ollama endpoint is required")
+	}
+	if strings.TrimSpace(runtime.artifactCache) == "" {
+		return nil, domain.ErrValidationFailed.Extend("local artifact cache is required")
+	}
+	if len(runtime.inspector) == 0 || strings.TrimSpace(runtime.inspector[0]) == "" {
+		return nil, domain.ErrValidationFailed.Extend("GGUF inspector command is required")
+	}
+	if runtime.createTimeout <= 0 {
+		return nil, domain.ErrValidationFailed.Extend("local Ollama create timeout is required")
+	}
+	return runtime, nil
 }
 
 func (r *Runtime) EnsureServedModel(ctx context.Context, servedModel *model.ServedModel) (*model.ServingRuntimeState, error) {

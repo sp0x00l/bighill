@@ -9,53 +9,56 @@ service FeatureMaterializerService {
 }
 
 message RawSnapshotReadyEvent {
-  string raw_snapshot_id = 1;
-  string user_id = 2;
-  string dataset_id = 3;
-  string storage_location = 4;
-  string table_namespace = 5;
-  string table_name = 6;
-  string table_format = 7;
-  string catalog_provider = 8;
-  int32 schema_version = 9;
-  string schema_metadata = 10;
-  string processing_profile = 11;
-  string org_id = 12;
+  string dataset_id = 1;
+  int64 materialization_event_seq = 2;
+  string raw_snapshot_id = 3;
+  string user_id = 4;
+  string org_id = 5;
+  string storage_location = 6;
+  string table_namespace = 7;
+  string table_name = 8;
+  string table_format = 9;
+  string catalog_provider = 10;
+  int32 schema_version = 11;
+  string schema_metadata = 12;
+  string processing_profile = 13;
 }
 
 message FeatureSnapshotReadyEvent {
-  string feature_snapshot_id = 1;
-  string user_id = 2;
+  string dataset_id = 1;
+  int64 materialization_event_seq = 2;
   string raw_snapshot_id = 3;
-  string dataset_id = 4;
-  string storage_location = 5;
-  string table_namespace = 6;
-  string table_name = 7;
-  string table_format = 8;
-  string catalog_provider = 9;
-  int32 schema_version = 10;
-  string schema_metadata = 11;
-  string processing_profile = 12;
-  string org_id = 13;
+  string feature_snapshot_id = 4;
+  string user_id = 5;
+  string org_id = 6;
+  string storage_location = 7;
+  string table_namespace = 8;
+  string table_name = 9;
+  string table_format = 10;
+  string catalog_provider = 11;
+  int32 schema_version = 12;
+  string schema_metadata = 13;
+  string processing_profile = 14;
 }
 
 message EmbeddingSnapshotReadyEvent {
-  string embedding_snapshot_id = 1;
-  string user_id = 2;
+  string dataset_id = 1;
+  int64 materialization_event_seq = 2;
   string feature_snapshot_id = 3;
-  string dataset_id = 4;
-  string vector_store = 5;
-  string collection_name = 6;
-  int32 embedding_dimensions = 7;
-  int64 embedding_count = 8;
-  string strategy_version = 9;
-  string chunker_name = 10;
-  string chunker_version = 11;
-  int32 chunk_size = 12;
-  int32 chunk_overlap = 13;
-  string embedding_provider = 14;
-  string embedding_model = 15;
-  string org_id = 16;
+  string embedding_snapshot_id = 4;
+  string user_id = 5;
+  string org_id = 6;
+  string vector_store = 7;
+  string collection_name = 8;
+  int32 embedding_dimensions = 9;
+  int64 embedding_count = 10;
+  string strategy_version = 11;
+  string chunker_name = 12;
+  string chunker_version = 13;
+  int32 chunk_size = 14;
+  int32 chunk_overlap = 15;
+  string embedding_provider = 16;
+  string embedding_model = 17;
 }
 
 message SearchEmbeddingsRequest {

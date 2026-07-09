@@ -99,7 +99,11 @@ func (u *featureSnapshotUsecase) markFeatureReady(ctx context.Context, featureSn
 		if err := u.repo.MarkFeatureReady(ctx, tx, featureSnapshot); err != nil {
 			return err
 		}
-		if err := enqueue(u.eventBuilder.FeatureSnapshotReadyMessage(featureSnapshot)); err != nil {
+		msg, err := u.eventBuilder.FeatureSnapshotReadyMessage(featureSnapshot)
+		if err != nil {
+			return err
+		}
+		if err := enqueue(msg); err != nil {
 			return fmt.Errorf("enqueue feature snapshot ready: %w", err)
 		}
 		return nil

@@ -7,6 +7,7 @@ import (
 
 	"inference_service/pkg/app"
 	"inference_service/pkg/domain"
+	"inference_service/pkg/domain/model"
 	"inference_service/pkg/infra/network/adapter"
 
 	"lib/shared_lib/ctxutil"
@@ -18,9 +19,11 @@ import (
 )
 
 const (
-	pathInferenceEndpoints           = "/v1/inference/endpoints"
-	pathInferenceEndpointGenerations = "/v1/inference/endpoints/{endpointId}/generations"
-	pathInferenceFeedback            = "/v1/inference/feedback"
+	pathInferenceEndpoints             = "/v1/inference/endpoints"
+	pathInferenceEndpointDatasets      = "/v1/inference/endpoints/{endpointId}/datasets"
+	pathInferenceEndpointMergeStrategy = "/v1/inference/endpoints/{endpointId}/merge-strategy"
+	pathInferenceEndpointGenerations   = "/v1/inference/endpoints/{endpointId}/generations"
+	pathInferenceFeedback              = "/v1/inference/feedback"
 )
 
 type InferenceHandlers struct {
@@ -43,6 +46,24 @@ func (h *InferenceHandlers) GetRoutes() []Route {
 			Handler:  h.ListEndpoints,
 			Method:   http.MethodGet,
 			SpanName: "list-inference-endpoints",
+		},
+		{
+			Path:     pathInferenceEndpoints,
+			Handler:  h.PublishEndpoint,
+			Method:   http.MethodPost,
+			SpanName: "publish-inference-endpoint",
+		},
+		{
+			Path:     pathInferenceEndpointDatasets,
+			Handler:  h.SetEndpointDatasets,
+			Method:   http.MethodPut,
+			SpanName: "set-inference-endpoint-datasets",
+		},
+		{
+			Path:     pathInferenceEndpointMergeStrategy,
+			Handler:  h.SetEndpointMergeStrategy,
+			Method:   http.MethodPut,
+			SpanName: "set-inference-endpoint-merge-strategy",
 		},
 		{
 			Path:     pathInferenceEndpointGenerations,
@@ -74,6 +95,87 @@ func (h *InferenceHandlers) ListEndpoints(ctx context.Context, req *http.Request
 	payload, err := h.adapter.ToEndpointDTOs(ctx, endpoints)
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoints")
+	}
+	return NewResponseWithPayload(http.StatusOK, payload), nil
+}
+
+func (h *InferenceHandlers) PublishEndpoint(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers PublishEndpoint")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	body, err := transport.ReadReqBody(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
+	}
+	command, err := h.adapter.FromEndpointPublicationDTO(ctx, body)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid publish endpoint request")
+	}
+	command.UserID = actor
+	command.OrgID = orgID
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.PublishEndpoint(ctx, command)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.adapter.ToEndpointDetailDTOs(ctx, []*model.PublishedEndpoint{result})
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoint")
+	}
+	return NewResponseWithPayload(http.StatusCreated, payload), nil
+}
+
+func (h *InferenceHandlers) SetEndpointDatasets(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers SetEndpointDatasets")
+
+	actor, orgID, endpointID, body, err := h.readEndpointMutation(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	command, err := h.adapter.FromEndpointDatasetBindingDTO(ctx, body)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid endpoint datasets request")
+	}
+	command.UserID = actor
+	command.OrgID = orgID
+	command.EndpointID = endpointID
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.SetEndpointDatasets(ctx, command)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.adapter.ToEndpointDetailDTOs(ctx, []*model.PublishedEndpoint{result})
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoint")
+	}
+	return NewResponseWithPayload(http.StatusOK, payload), nil
+}
+
+func (h *InferenceHandlers) SetEndpointMergeStrategy(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers SetEndpointMergeStrategy")
+
+	actor, orgID, endpointID, body, err := h.readEndpointMutation(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	command, err := h.adapter.FromEndpointMergeConfigurationDTO(ctx, body)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid endpoint merge strategy request")
+	}
+	command.UserID = actor
+	command.OrgID = orgID
+	command.EndpointID = endpointID
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.SetEndpointMergeStrategy(ctx, command)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.adapter.ToEndpointDetailDTOs(ctx, []*model.PublishedEndpoint{result})
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoint")
 	}
 	return NewResponseWithPayload(http.StatusOK, payload), nil
 }
@@ -148,6 +250,24 @@ func (h *InferenceHandlers) RecordFeedback(ctx context.Context, req *http.Reques
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode feedback response")
 	}
 	return NewResponseWithPayload(http.StatusCreated, payload), nil
+}
+
+func (h *InferenceHandlers) readEndpointMutation(ctx context.Context, req *http.Request) (uuid.UUID, uuid.UUID, uuid.UUID, []byte, error) {
+	log.Trace("InferenceHandlers readEndpointMutation")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, uuid.Nil, nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	endpointID, err := readEndpointID(req)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, uuid.Nil, nil, ErrBadRequest().Wrap(err).WithMessage("Invalid endpoint id")
+	}
+	body, err := transport.ReadReqBody(ctx, req)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, uuid.Nil, nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
+	}
+	return actor, orgID, endpointID, body, nil
 }
 
 func readActorOrg(ctx context.Context, req *http.Request) (uuid.UUID, uuid.UUID, error) {

@@ -61,7 +61,7 @@ type ingestionConfig struct {
 	OutboxRelay                   messagingConn.OutboxRelayConfig
 	DatasetUploadedTopic          string
 	DataRegistryTopic             string
-	ProfileTopic                  string
+	TenantTopic                   string
 	HuggingFaceTokenEncryptionKey string
 	HuggingFaceDownloadMode       string
 	HuggingFaceDownloadCommand    string
@@ -314,15 +314,15 @@ func main() {
 	startSubscriber("dataset-deleted", []string{cfg.DataRegistryTopic}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, ingestionmessaging.NewDatasetDeletedEventListener(datasetUseCase))
 	})
-	startSubscriber("tenant-created", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-created", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-updated", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-updated", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserUpdatedProjectionListener(tenantDB))
 	})
-	startSubscriber("tenant-deleted", []string{cfg.ProfileTopic}, func(subscriber messagingConn.Subscriber) {
+	startSubscriber("tenant-deleted", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserDeletedProjectionListener(tenantDB))
 	})
@@ -395,7 +395,7 @@ func readIngestionConfig() ingestionConfig {
 		},
 		DatasetUploadedTopic:          env.WithDefaultString("INGESTION_SERVICE_TOPIC", "ingestion"),
 		DataRegistryTopic:             env.WithDefaultString("INGESTION_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
-		ProfileTopic:                  env.WithDefaultString("INGESTION_SERVICE_PROFILE_SUBSCRIBER_TOPIC", "profile"),
+		TenantTopic:                   env.WithDefaultString("INGESTION_SERVICE_TENANT_SUBSCRIBER_TOPIC", "tenant"),
 		HuggingFaceTokenEncryptionKey: env.MustString("INGESTION_SERVICE_HUGGINGFACE_TOKEN_ENCRYPTION_KEY"),
 		HuggingFaceDownloadMode: env.WithDefaultString(
 			"INGESTION_SERVICE_HUGGINGFACE_DOWNLOAD_MODE",

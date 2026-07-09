@@ -25,10 +25,40 @@ type ServedModelStoreConfig struct {
 	Resource  string
 }
 
+const (
+	servedModelObjectSpec       = "spec"
+	servedModelObjectStatus     = "status"
+	servedModelSpecModelID      = "modelID"
+	servedModelSpecTrainingID   = "trainingRunID"
+	servedModelSpecDatasetID    = "datasetID"
+	servedModelSpecKind         = "modelKind"
+	servedModelSpecName         = "name"
+	servedModelSpecVersion      = "modelVersion"
+	servedModelSpecBaseModel    = "baseModel"
+	servedModelSpecArtifactLoc  = "artifactLocation"
+	servedModelSpecArtifactFmt  = "artifactFormat"
+	servedModelSpecChecksum     = "artifactChecksum"
+	servedModelSpecAdapterURI   = "adapterURI"
+	servedModelSpecTarget       = "servingTarget"
+	servedModelSpecModel        = "servingModel"
+	servedModelSpecProtocol     = "servingProtocol"
+	servedModelStatusLoad       = "servingLoadStatus"
+	servedModelStatusTarget     = "servingTarget"
+	servedModelStatusModel      = "servingModel"
+	servedModelStatusProtocol   = "servingProtocol"
+	servedModelStatusFailure    = "failureReason"
+	servedModelStatusGeneration = "observedGeneration"
+	servedModelStatusReplicas   = "readyReplicas"
+)
+
 type ServedModelStore struct {
 	namespace string
 	gvr       schema.GroupVersionResource
 	client    dynamic.Interface
+}
+
+type servedModelDTOAdapter struct {
+	namespace string
 }
 
 func NewServedModelStore(config ServedModelStoreConfig, client dynamic.Interface) (*ServedModelStore, error) {
@@ -65,9 +95,12 @@ func (s *ServedModelStore) Read(ctx context.Context, resourceName string) (*mode
 
 	obj, err := s.client.Resource(s.gvr).Namespace(s.namespace).Get(ctx, resourceName, metav1.GetOptions{})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: served model %s: %w", domain.ErrServedModelNotFound, resourceName, err)
+		}
 		return nil, fmt.Errorf("%w: read served model: %w", domain.ErrModelServe, err)
 	}
-	return servedModelFromObject(obj, s.namespace)
+	return servedModelDTOAdapter{namespace: s.namespace}.FromObject(obj)
 }
 
 func (s *ServedModelStore) List(ctx context.Context) ([]*model.ServedModel, error) {
@@ -85,8 +118,9 @@ func (s *ServedModelStore) ListWithResourceVersion(ctx context.Context) ([]*mode
 		return nil, "", fmt.Errorf("%w: list served models: %w", domain.ErrModelServe, err)
 	}
 	out := make([]*model.ServedModel, 0, len(items.Items))
+	adapter := servedModelDTOAdapter{namespace: s.namespace}
 	for i := range items.Items {
-		servedModel, err := servedModelFromObject(&items.Items[i], s.namespace)
+		servedModel, err := adapter.FromObject(&items.Items[i])
 		if err != nil {
 			log.WithContext(ctx).WithError(err).WithField("served_model", items.Items[i].GetName()).Error("served model spec ignored")
 			continue
@@ -135,13 +169,13 @@ func (s *ServedModelStore) UpdateStatus(ctx context.Context, resourceName string
 func servedModelStatusMatches(obj *unstructured.Unstructured, status *model.ServedModelStatus) bool {
 	log.Trace("servedModelStatusMatches")
 
-	loadStatus, _, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
-	servingTarget, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
-	servingModel, _, _ := unstructured.NestedString(obj.Object, "status", "servingModel")
-	servingProtocol, _, _ := unstructured.NestedString(obj.Object, "status", "servingProtocol")
-	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
-	observedGeneration, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
-	readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
+	loadStatus, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusLoad)
+	servingTarget, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusTarget)
+	servingModel, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusModel)
+	servingProtocol, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusProtocol)
+	failureReason, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusFailure)
+	observedGeneration, _, _ := unstructured.NestedInt64(obj.Object, servedModelObjectStatus, servedModelStatusGeneration)
+	readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, servedModelObjectStatus, servedModelStatusReplicas)
 	return loadStatus == status.ServingLoadStatus.String() &&
 		servingTarget == status.ServingTarget &&
 		servingModel == status.ServingModel &&
@@ -151,56 +185,56 @@ func servedModelStatusMatches(obj *unstructured.Unstructured, status *model.Serv
 		readyReplicas == int64(status.ReadyReplicas)
 }
 
-func servedModelFromObject(obj *unstructured.Unstructured, namespace string) (*model.ServedModel, error) {
-	log.Trace("servedModelFromObject")
+func (a servedModelDTOAdapter) FromObject(obj *unstructured.Unstructured) (*model.ServedModel, error) {
+	log.Trace("servedModelDTOAdapter FromObject")
 
-	modelID, err := uuid.Parse(requiredSpecString(obj, "modelID"))
+	modelID, err := uuid.Parse(requiredSpecString(obj, servedModelSpecModelID))
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid model id: %w", domain.ErrValidationFailed, err)
 	}
-	trainingRunID, err := parseOptionalUUID(specString(obj, "trainingRunID"))
+	trainingRunID, err := parseOptionalUUID(specString(obj, servedModelSpecTrainingID))
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid training run id: %w", domain.ErrValidationFailed, err)
 	}
-	datasetID, err := parseOptionalUUID(specString(obj, "datasetID"))
+	datasetID, err := parseOptionalUUID(specString(obj, servedModelSpecDatasetID))
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid dataset id: %w", domain.ErrValidationFailed, err)
 	}
-	modelVersion, _, _ := unstructured.NestedInt64(obj.Object, "spec", "modelVersion")
-	status, err := servedModelStatusFromObject(obj)
+	modelVersion, _, _ := unstructured.NestedInt64(obj.Object, servedModelObjectSpec, servedModelSpecVersion)
+	status, err := a.StatusFromObject(obj)
 	if err != nil {
 		return nil, err
 	}
-	servingProtocol, err := model.ToServingProtocol(specString(obj, "servingProtocol"))
+	servingProtocol, err := model.ToServingProtocol(specString(obj, servedModelSpecProtocol))
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid served model protocol: %w", domain.ErrValidationFailed, err)
 	}
 	return &model.ServedModel{
 		ResourceName:     obj.GetName(),
-		Namespace:        namespace,
+		Namespace:        a.namespace,
 		Generation:       obj.GetGeneration(),
 		ModelID:          modelID,
 		TrainingRunID:    trainingRunID,
 		DatasetID:        datasetID,
-		ModelKind:        specString(obj, "modelKind"),
-		Name:             specString(obj, "name"),
+		ModelKind:        specString(obj, servedModelSpecKind),
+		Name:             specString(obj, servedModelSpecName),
 		ModelVersion:     int(modelVersion),
-		BaseModel:        specString(obj, "baseModel"),
-		ArtifactLocation: specString(obj, "artifactLocation"),
-		ArtifactFormat:   specString(obj, "artifactFormat"),
-		ArtifactChecksum: specString(obj, "artifactChecksum"),
-		AdapterURI:       specString(obj, "adapterURI"),
-		ServingTarget:    specString(obj, "servingTarget"),
-		ServingModel:     specString(obj, "servingModel"),
+		BaseModel:        specString(obj, servedModelSpecBaseModel),
+		ArtifactLocation: specString(obj, servedModelSpecArtifactLoc),
+		ArtifactFormat:   specString(obj, servedModelSpecArtifactFmt),
+		ArtifactChecksum: specString(obj, servedModelSpecChecksum),
+		AdapterURI:       specString(obj, servedModelSpecAdapterURI),
+		ServingTarget:    specString(obj, servedModelSpecTarget),
+		ServingModel:     specString(obj, servedModelSpecModel),
 		ServingProtocol:  servingProtocol,
 		Status:           status,
 	}, nil
 }
 
-func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedModelStatus, error) {
-	log.Trace("servedModelStatusFromObject")
+func (a servedModelDTOAdapter) StatusFromObject(obj *unstructured.Unstructured) (*model.ServedModelStatus, error) {
+	log.Trace("servedModelDTOAdapter StatusFromObject")
 
-	loadStatusValue, exists, _ := unstructured.NestedString(obj.Object, "status", "servingLoadStatus")
+	loadStatusValue, exists, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusLoad)
 	if !exists || strings.TrimSpace(loadStatusValue) == "" {
 		return nil, nil
 	}
@@ -208,16 +242,16 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid served model load status: %w", domain.ErrValidationFailed, err)
 	}
-	servingTarget, _, _ := unstructured.NestedString(obj.Object, "status", "servingTarget")
-	servingModel, _, _ := unstructured.NestedString(obj.Object, "status", "servingModel")
-	servingProtocol, _, _ := unstructured.NestedString(obj.Object, "status", "servingProtocol")
+	servingTarget, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusTarget)
+	servingModel, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusModel)
+	servingProtocol, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusProtocol)
 	parsedServingProtocol, err := model.ToServingProtocol(servingProtocol)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid served model protocol: %w", domain.ErrValidationFailed, err)
 	}
-	failureReason, _, _ := unstructured.NestedString(obj.Object, "status", "failureReason")
-	observedGeneration, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
-	readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
+	failureReason, _, _ := unstructured.NestedString(obj.Object, servedModelObjectStatus, servedModelStatusFailure)
+	observedGeneration, _, _ := unstructured.NestedInt64(obj.Object, servedModelObjectStatus, servedModelStatusGeneration)
+	readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, servedModelObjectStatus, servedModelStatusReplicas)
 	return &model.ServedModelStatus{
 		ServingLoadStatus:  loadStatus,
 		ServingTarget:      servingTarget,
@@ -232,13 +266,13 @@ func servedModelStatusFromObject(obj *unstructured.Unstructured) (*model.ServedM
 func setStatusFields(obj *unstructured.Unstructured, status *model.ServedModelStatus) {
 	log.Trace("setStatusFields")
 
-	_ = unstructured.SetNestedField(obj.Object, status.ServingLoadStatus.String(), "status", "servingLoadStatus")
-	_ = unstructured.SetNestedField(obj.Object, status.ServingTarget, "status", "servingTarget")
-	_ = unstructured.SetNestedField(obj.Object, status.ServingModel, "status", "servingModel")
-	_ = unstructured.SetNestedField(obj.Object, status.ServingProtocol.String(), "status", "servingProtocol")
-	_ = unstructured.SetNestedField(obj.Object, status.FailureReason, "status", "failureReason")
-	_ = unstructured.SetNestedField(obj.Object, status.ObservedGeneration, "status", "observedGeneration")
-	_ = unstructured.SetNestedField(obj.Object, int64(status.ReadyReplicas), "status", "readyReplicas")
+	_ = unstructured.SetNestedField(obj.Object, status.ServingLoadStatus.String(), servedModelObjectStatus, servedModelStatusLoad)
+	_ = unstructured.SetNestedField(obj.Object, status.ServingTarget, servedModelObjectStatus, servedModelStatusTarget)
+	_ = unstructured.SetNestedField(obj.Object, status.ServingModel, servedModelObjectStatus, servedModelStatusModel)
+	_ = unstructured.SetNestedField(obj.Object, status.ServingProtocol.String(), servedModelObjectStatus, servedModelStatusProtocol)
+	_ = unstructured.SetNestedField(obj.Object, status.FailureReason, servedModelObjectStatus, servedModelStatusFailure)
+	_ = unstructured.SetNestedField(obj.Object, status.ObservedGeneration, servedModelObjectStatus, servedModelStatusGeneration)
+	_ = unstructured.SetNestedField(obj.Object, int64(status.ReadyReplicas), servedModelObjectStatus, servedModelStatusReplicas)
 }
 
 func requiredSpecString(obj *unstructured.Unstructured, key string) string {
@@ -250,7 +284,7 @@ func requiredSpecString(obj *unstructured.Unstructured, key string) string {
 func specString(obj *unstructured.Unstructured, key string) string {
 	log.Trace("specString")
 
-	value, _, _ := unstructured.NestedString(obj.Object, "spec", key)
+	value, _, _ := unstructured.NestedString(obj.Object, servedModelObjectSpec, key)
 	return strings.TrimSpace(value)
 }
 

@@ -141,7 +141,7 @@ func startSubscriberOrFail(ctx context.Context, name string, start func(context.
 
 var _ = Describe("Profile server entry points", Ordered, func() {
 	var (
-		profileDB       db.ProfileDB
+		profileDB       *db.ProfileDatabase
 		profilesUseCase usecase.ProfilesUseCase
 		httpServer      *transport.HttpServer
 		database        *dbConn.Database

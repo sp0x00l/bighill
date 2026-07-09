@@ -80,8 +80,13 @@ func (r *SnapshotRepository) SavePendingRawSnapshot(ctx context.Context, tx pgx.
 func (r *SnapshotRepository) MarkRawReady(ctx context.Context, tx pgx.Tx, rawSnapshot *model.RawSnapshot) error {
 	log.Trace("SnapshotRepository MarkRawReady")
 
+	eventSeq, err := r.nextMaterializationEventSeq(ctx, tx, rawSnapshot.DatasetID, rawSnapshot.OrgID)
+	if err != nil {
+		return err
+	}
 	query := `UPDATE ` + r.Name + `.raw_snapshots
 		SET status = @status::snapshot_status_enum,
+			materialization_event_seq = @materialization_event_seq,
 			storage_location = @storage_location,
 			table_format = @table_format::table_format_enum,
 			schema_version = @schema_version,
@@ -89,12 +94,13 @@ func (r *SnapshotRepository) MarkRawReady(ctx context.Context, tx pgx.Tx, rawSna
 			failure_reason = NULL
 		WHERE raw_snapshot_id = @raw_snapshot_id`
 	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
-		"raw_snapshot_id":  pgtype.UUID{Bytes: rawSnapshot.RawSnapshotID, Valid: true},
-		"storage_location": rawSnapshot.StorageLocation,
-		"table_format":     rawSnapshot.TableFormat,
-		"schema_version":   rawSnapshot.SchemaVersion,
-		"schema_metadata":  rawSnapshot.SchemaMetadata,
-		"status":           model.SnapshotStatusReady.String(),
+		"raw_snapshot_id":           pgtype.UUID{Bytes: rawSnapshot.RawSnapshotID, Valid: true},
+		"materialization_event_seq": eventSeq,
+		"storage_location":          rawSnapshot.StorageLocation,
+		"table_format":              rawSnapshot.TableFormat,
+		"schema_version":            rawSnapshot.SchemaVersion,
+		"schema_metadata":           rawSnapshot.SchemaMetadata,
+		"status":                    model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
 		r.LogPoolStatsOnError(ctx, "mark raw snapshot ready failed", err)
@@ -103,6 +109,7 @@ func (r *SnapshotRepository) MarkRawReady(ctx context.Context, tx pgx.Tx, rawSna
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: raw_snapshot_id=%s", domain.ErrRawSnapshotNotFound, rawSnapshot.RawSnapshotID)
 	}
+	rawSnapshot.MaterializationEventSeq = eventSeq
 	return nil
 }
 
@@ -220,8 +227,13 @@ func (r *SnapshotRepository) SavePendingFeatureSnapshot(ctx context.Context, tx 
 func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, tx pgx.Tx, featureSnapshot *model.FeatureSnapshot) error {
 	log.Trace("SnapshotRepository MarkFeatureReady")
 
+	eventSeq, err := r.nextMaterializationEventSeq(ctx, tx, featureSnapshot.DatasetID, featureSnapshot.OrgID)
+	if err != nil {
+		return err
+	}
 	query := `UPDATE ` + r.Name + `.feature_snapshots
 		SET status = @status::snapshot_status_enum,
+			materialization_event_seq = @materialization_event_seq,
 			storage_location = @storage_location,
 			table_format = @table_format::table_format_enum,
 			schema_version = @schema_version,
@@ -229,12 +241,13 @@ func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, tx pgx.Tx, fe
 			failure_reason = NULL
 		WHERE feature_snapshot_id = @feature_snapshot_id`
 	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
-		"feature_snapshot_id": pgtype.UUID{Bytes: featureSnapshot.FeatureSnapshotID, Valid: true},
-		"storage_location":    featureSnapshot.StorageLocation,
-		"table_format":        featureSnapshot.TableFormat,
-		"schema_version":      featureSnapshot.SchemaVersion,
-		"schema_metadata":     featureSnapshot.SchemaMetadata,
-		"status":              model.SnapshotStatusReady.String(),
+		"feature_snapshot_id":       pgtype.UUID{Bytes: featureSnapshot.FeatureSnapshotID, Valid: true},
+		"materialization_event_seq": eventSeq,
+		"storage_location":          featureSnapshot.StorageLocation,
+		"table_format":              featureSnapshot.TableFormat,
+		"schema_version":            featureSnapshot.SchemaVersion,
+		"schema_metadata":           featureSnapshot.SchemaMetadata,
+		"status":                    model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
 		r.LogPoolStatsOnError(ctx, "mark feature snapshot ready failed", err)
@@ -243,6 +256,7 @@ func (r *SnapshotRepository) MarkFeatureReady(ctx context.Context, tx pgx.Tx, fe
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: feature_snapshot_id=%s", domain.ErrFeatureSnapshotNotFound, featureSnapshot.FeatureSnapshotID)
 	}
+	featureSnapshot.MaterializationEventSeq = eventSeq
 	return nil
 }
 
@@ -420,6 +434,10 @@ func (r *SnapshotRepository) MarkEmbeddingReady(ctx context.Context, tx pgx.Tx, 
 func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx, embeddingSnapshot *model.EmbeddingSnapshot) error {
 	log.Trace("SnapshotRepository markEmbeddingReadyTx")
 
+	eventSeq, err := r.nextMaterializationEventSeq(ctx, tx, embeddingSnapshot.DatasetID, embeddingSnapshot.OrgID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE `+r.Name+`.embedding_snapshots
 		SET active_for_retrieval = false
 		WHERE dataset_id = @dataset_id
@@ -435,6 +453,7 @@ func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx
 
 	query := `UPDATE ` + r.Name + `.embedding_snapshots
 		SET status = @status::snapshot_status_enum,
+			materialization_event_seq = @materialization_event_seq,
 			active_for_retrieval = true,
 			vector_store = @vector_store,
 			collection_name = @collection_name,
@@ -454,23 +473,24 @@ func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx
 			failure_reason = NULL
 		WHERE embedding_snapshot_id = @embedding_snapshot_id`
 	tag, err := tx.Exec(ctx, query, pgx.NamedArgs{
-		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
-		"vector_store":          embeddingSnapshot.VectorStore,
-		"collection_name":       embeddingSnapshot.CollectionName,
-		"embedding_dimensions":  embeddingSnapshot.EmbeddingDimensions,
-		"embedding_count":       embeddingSnapshot.EmbeddingCount,
-		"strategy_version":      embeddingSnapshot.StrategyVersion,
-		"extractor_name":        embeddingSnapshot.ExtractorName,
-		"extractor_version":     embeddingSnapshot.ExtractorVersion,
-		"cleaner_name":          embeddingSnapshot.CleanerName,
-		"cleaner_version":       embeddingSnapshot.CleanerVersion,
-		"chunker_name":          embeddingSnapshot.ChunkerName,
-		"chunker_version":       embeddingSnapshot.ChunkerVersion,
-		"chunk_size":            embeddingSnapshot.ChunkSize,
-		"chunk_overlap":         embeddingSnapshot.ChunkOverlap,
-		"embedding_provider":    embeddingSnapshot.EmbeddingProvider,
-		"embedding_model":       embeddingSnapshot.EmbeddingModel,
-		"status":                model.SnapshotStatusReady.String(),
+		"embedding_snapshot_id":     pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
+		"materialization_event_seq": eventSeq,
+		"vector_store":              embeddingSnapshot.VectorStore,
+		"collection_name":           embeddingSnapshot.CollectionName,
+		"embedding_dimensions":      embeddingSnapshot.EmbeddingDimensions,
+		"embedding_count":           embeddingSnapshot.EmbeddingCount,
+		"strategy_version":          embeddingSnapshot.StrategyVersion,
+		"extractor_name":            embeddingSnapshot.ExtractorName,
+		"extractor_version":         embeddingSnapshot.ExtractorVersion,
+		"cleaner_name":              embeddingSnapshot.CleanerName,
+		"cleaner_version":           embeddingSnapshot.CleanerVersion,
+		"chunker_name":              embeddingSnapshot.ChunkerName,
+		"chunker_version":           embeddingSnapshot.ChunkerVersion,
+		"chunk_size":                embeddingSnapshot.ChunkSize,
+		"chunk_overlap":             embeddingSnapshot.ChunkOverlap,
+		"embedding_provider":        embeddingSnapshot.EmbeddingProvider,
+		"embedding_model":           embeddingSnapshot.EmbeddingModel,
+		"status":                    model.SnapshotStatusReady.String(),
 	})
 	if err != nil {
 		return fmt.Errorf("mark embedding snapshot ready: %w", err)
@@ -478,8 +498,29 @@ func (r *SnapshotRepository) markEmbeddingReadyTx(ctx context.Context, tx pgx.Tx
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: embedding_snapshot_id=%s", domain.ErrEmbeddingSnapshotNotFound, embeddingSnapshot.EmbeddingSnapshotID)
 	}
+	embeddingSnapshot.MaterializationEventSeq = eventSeq
 	embeddingSnapshot.ActiveForRetrieval = true
 	return nil
+}
+
+func (r *SnapshotRepository) nextMaterializationEventSeq(ctx context.Context, tx pgx.Tx, datasetID uuid.UUID, orgID uuid.UUID) (int64, error) {
+	log.Trace("SnapshotRepository nextMaterializationEventSeq")
+
+	var eventSeq int64
+	err := tx.QueryRow(ctx, `
+		INSERT INTO `+r.Name+`.dataset_materialization_event_state AS state (dataset_id, org_id, next_event_seq)
+		VALUES (@dataset_id, @org_id, 2)
+		ON CONFLICT (dataset_id, org_id) DO UPDATE
+		SET next_event_seq = state.next_event_seq + 1,
+			updated_at = now()
+		RETURNING next_event_seq - 1;`, pgx.NamedArgs{
+		"dataset_id": pgtype.UUID{Bytes: datasetID, Valid: true},
+		"org_id":     pgtype.UUID{Bytes: orgID, Valid: orgID != uuid.Nil},
+	}).Scan(&eventSeq)
+	if err != nil {
+		return 0, fmt.Errorf("allocate materialization event sequence: %w", err)
+	}
+	return eventSeq, nil
 }
 
 func (r *SnapshotRepository) MarkEmbeddingFailed(ctx context.Context, tx pgx.Tx, embeddingSnapshotID uuid.UUID, reason string) error {
@@ -718,18 +759,18 @@ func (r *SnapshotRepository) reopenEmbeddingSnapshotForRetry(ctx context.Context
 }
 
 func rawSnapshotColumns() string {
-	return `raw_snapshot_id::text, dataset_id::text, user_id::text, org_id::text, storage_location, content_type, file_extension,
+	return `raw_snapshot_id::text, dataset_id::text, user_id::text, org_id::text, materialization_event_seq, storage_location, content_type, file_extension,
 		table_namespace, table_name, table_format::text, catalog_provider::text, processing_profile::text, schema_version, schema_metadata::text, status::text, COALESCE(failure_reason, '')`
 }
 
 func featureSnapshotColumns() string {
-	return `feature_snapshot_id::text, raw_snapshot_id::text, dataset_id::text, user_id::text, org_id::text, storage_location,
+	return `feature_snapshot_id::text, raw_snapshot_id::text, dataset_id::text, user_id::text, org_id::text, materialization_event_seq, storage_location,
 		table_namespace, table_name, table_format::text, catalog_provider::text, processing_profile::text, schema_version, schema_metadata::text, status::text, COALESCE(failure_reason, '')`
 }
 
 func embeddingSnapshotColumns() string {
 	return `embedding_snapshot_id::text, feature_snapshot_id::text, dataset_id::text, user_id::text, org_id::text,
-		vector_store, collection_name, embedding_dimensions, embedding_count, strategy_version,
+		materialization_event_seq, vector_store, collection_name, embedding_dimensions, embedding_count, strategy_version,
 		extractor_name, extractor_version, cleaner_name, cleaner_version,
 		chunker_name, chunker_version, chunk_size, chunk_overlap, embedding_provider, embedding_model,
 		active_for_retrieval, status::text, COALESCE(failure_reason, '')`
@@ -743,6 +784,7 @@ func scanRawSnapshot(row pgx.Row) (*model.RawSnapshot, error) {
 		&datasetID,
 		&userID,
 		&orgID,
+		&rawSnapshot.MaterializationEventSeq,
 		&rawSnapshot.StorageLocation,
 		&rawSnapshot.ContentType,
 		&rawSnapshot.FileExtension,
@@ -784,6 +826,7 @@ func scanFeatureSnapshot(row pgx.Row) (*model.FeatureSnapshot, error) {
 		&datasetID,
 		&userID,
 		&orgID,
+		&featureSnapshot.MaterializationEventSeq,
 		&featureSnapshot.StorageLocation,
 		&featureSnapshot.TableNamespace,
 		&featureSnapshot.TableName,
@@ -824,6 +867,7 @@ func scanEmbeddingSnapshot(row pgx.Row) (*model.EmbeddingSnapshot, error) {
 		&datasetID,
 		&userID,
 		&orgID,
+		&embeddingSnapshot.MaterializationEventSeq,
 		&embeddingSnapshot.VectorStore,
 		&embeddingSnapshot.CollectionName,
 		&embeddingSnapshot.EmbeddingDimensions,

@@ -48,9 +48,9 @@ type SnapshotUnitOfWorkAdapter interface {
 }
 
 type SnapshotEventBuilder interface {
-	RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) shareduow.OutboundMessage
-	FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) shareduow.OutboundMessage
-	EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) shareduow.OutboundMessage
+	RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) (shareduow.OutboundMessage, error)
+	FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) (shareduow.OutboundMessage, error)
+	EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) (shareduow.OutboundMessage, error)
 }
 
 type EmbeddingSearchRepository interface {

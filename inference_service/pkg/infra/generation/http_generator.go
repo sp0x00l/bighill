@@ -28,18 +28,17 @@ const (
 )
 
 type HTTPGenerator struct {
-	protocol  string
-	endpoint  string
-	modelName string
-	client    *http.Client
+	protocol        string
+	client          *http.Client
+	maxOutputTokens int
 }
 
-func NewHTTPGenerator(protocol, endpoint string, timeout time.Duration) *HTTPGenerator {
+func NewHTTPGenerator(protocol string, timeout time.Duration, maxOutputTokens int) *HTTPGenerator {
 	log.Trace("NewHTTPGenerator")
 
 	return &HTTPGenerator{
-		protocol: strings.ToUpper(strings.TrimSpace(protocol)),
-		endpoint: strings.TrimRight(strings.TrimSpace(endpoint), "/"),
+		protocol:        strings.ToUpper(strings.TrimSpace(protocol)),
+		maxOutputTokens: maxOutputTokens,
 		client: &http.Client{
 			Timeout:   timeout,
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
@@ -47,24 +46,16 @@ func NewHTTPGenerator(protocol, endpoint string, timeout time.Duration) *HTTPGen
 	}
 }
 
-func NewHTTPUtilityGenerator(protocol, endpoint, modelName string, timeout time.Duration) *HTTPGenerator {
-	log.Trace("NewHTTPUtilityGenerator")
-
-	generator := NewHTTPGenerator(protocol, endpoint, timeout)
-	generator.modelName = strings.TrimSpace(modelName)
-	return generator
-}
-
-func NewOpenAIChatCompletionsGenerator(timeout time.Duration) *HTTPGenerator {
+func NewOpenAIChatCompletionsGenerator(timeout time.Duration, maxOutputTokens int) *HTTPGenerator {
 	log.Trace("NewOpenAIChatCompletionsGenerator")
 
-	return NewHTTPGenerator(servingProtocolOpenAIChatCompletions, "", timeout)
+	return NewHTTPGenerator(servingProtocolOpenAIChatCompletions, timeout, maxOutputTokens)
 }
 
-func NewOllamaGenerateGenerator(timeout time.Duration) *HTTPGenerator {
+func NewOllamaGenerateGenerator(timeout time.Duration, maxOutputTokens int) *HTTPGenerator {
 	log.Trace("NewOllamaGenerateGenerator")
 
-	return NewHTTPGenerator(servingProtocolOllamaGenerate, "", timeout)
+	return NewHTTPGenerator(servingProtocolOllamaGenerate, timeout, maxOutputTokens)
 }
 
 func (g *HTTPGenerator) Generate(ctx context.Context, request model.GenerationRequest) (string, error) {
@@ -93,9 +84,10 @@ func (g *HTTPGenerator) generateWithOllama(ctx context.Context, request model.Ge
 	}
 
 	body, err := json.Marshal(ollamaGenerateRequest{
-		Model:  modelName,
-		Prompt: prompt,
-		Stream: false,
+		Model:   modelName,
+		Prompt:  prompt,
+		Stream:  false,
+		Options: ollamaGenerateOptions{NumPredict: g.maxOutputTokens},
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal ollama request: %w", err)
@@ -145,6 +137,7 @@ func (g *HTTPGenerator) generateWithOpenAIChatCompletions(ctx context.Context, r
 			Content: prompt,
 		}},
 		Temperature: 0,
+		MaxTokens:   g.maxOutputTokens,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal chat completions request: %w", err)
@@ -185,12 +178,11 @@ func (g *HTTPGenerator) generateWithOpenAIChatCompletions(ctx context.Context, r
 func (g *HTTPGenerator) servingTarget(request model.GenerationRequest) (string, string, error) {
 	log.Trace("HTTPGenerator servingTarget")
 
-	modelName := strings.TrimSpace(g.modelName)
-	endpoint := strings.TrimRight(strings.TrimSpace(g.endpoint), "/")
-	if request.Model != nil {
-		modelName = strings.TrimSpace(request.Model.ServingModel)
-		endpoint = strings.TrimRight(strings.TrimSpace(request.Model.ServingTarget), "/")
+	if request.Model == nil {
+		return "", "", fmt.Errorf("served model record is required")
 	}
+	modelName := strings.TrimSpace(request.Model.ServingModel)
+	endpoint := strings.TrimRight(strings.TrimSpace(request.Model.ServingTarget), "/")
 	if modelName == "" {
 		return "", "", fmt.Errorf("served model name is required")
 	}
@@ -201,9 +193,14 @@ func (g *HTTPGenerator) servingTarget(request model.GenerationRequest) (string, 
 }
 
 type ollamaGenerateRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
+	Model   string                `json:"model"`
+	Prompt  string                `json:"prompt"`
+	Stream  bool                  `json:"stream"`
+	Options ollamaGenerateOptions `json:"options"`
+}
+
+type ollamaGenerateOptions struct {
+	NumPredict int `json:"num_predict"`
 }
 
 type ollamaGenerateResponse struct {
@@ -214,6 +211,7 @@ type openAIChatCompletionRequest struct {
 	Model       string              `json:"model"`
 	Messages    []openAIChatMessage `json:"messages"`
 	Temperature float64             `json:"temperature"`
+	MaxTokens   int                 `json:"max_tokens"`
 }
 
 type openAIChatMessage struct {
