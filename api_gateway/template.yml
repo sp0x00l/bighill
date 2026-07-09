@@ -39,43 +39,43 @@ Parameters:
     Description: Security group ID for Lambda VPC access
   DataRegistryServiceHttpDomain:
     Type: String
-    Default: data-registry.internal.bighill.example
-    Description: The data registry service host name
+    Default: host.docker.internal
+    Description: The data registry service host name. Override through deployment parameters for staging/prod.
   DataRegistryServiceHttpPort:
     Type: String
     Default: 8081
   IngestionServiceHttpDomain:
     Type: String
-    Default: ingestion.internal.bighill.example
-    Description: The ingestion service host name
+    Default: host.docker.internal
+    Description: The ingestion service host name. Override through deployment parameters for staging/prod.
   IngestionServiceHttpPort:
     Type: String
     Default: 8086
   ModelRegistryServiceHttpDomain:
     Type: String
-    Default: model-registry.internal.bighill.example
-    Description: The model registry service host name
+    Default: host.docker.internal
+    Description: The model registry service host name. Override through deployment parameters for staging/prod.
   ModelRegistryServiceHttpPort:
     Type: String
     Default: 8084
   ProfileServiceHttpDomain:
     Type: String
-    Default: profile.internal.bighill.example
-    Description: The profile service host name
+    Default: host.docker.internal
+    Description: The profile service host name. Override through deployment parameters for staging/prod.
   ProfileServiceHttpPort:
     Type: String
     Default: 8082
   TrainingServiceHttpDomain:
     Type: String
-    Default: training.internal.bighill.example
-    Description: The training service host name
+    Default: host.docker.internal
+    Description: The training service host name. Override through deployment parameters for staging/prod.
   TrainingServiceHttpPort:
     Type: String
     Default: 8085
   InferenceServiceHttpDomain:
     Type: String
-    Default: inference.internal.bighill.example
-    Description: The inference service host name
+    Default: host.docker.internal
+    Description: The inference service host name. Override through deployment parameters for staging/prod.
   InferenceServiceHttpPort:
     Type: String
     Default: 8087
@@ -89,8 +89,8 @@ Parameters:
     Description: In production, configure the OTLP exporter to send traces to Grafana Tempo. In local-dev, leave this value empty.
   RedisHost:
     Type: String
-    Default: redis.internal.bighill.example
-    Description: Redis hostname or IP
+    Default: host.docker.internal
+    Description: Redis hostname or IP. Override through deployment parameters for staging/prod.
   RedisPort:
     Type: String
     Default: 6379

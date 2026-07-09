@@ -4,6 +4,7 @@
 test_results
 build
 tmp
+api_gateway/template.local.generated.yml
 .env
 .env.*
 !.env.example

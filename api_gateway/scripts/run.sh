@@ -47,14 +47,6 @@ generate_local_template()
     "${API_GATEWAY_DIR}/scripts/local-template.sh"
 }
 
-load_local_gateway_config()
-{
-    # shellcheck disable=SC1090
-    . "${API_GATEWAY_DIR}/scripts/config.sh" "${ENVIRONMENT:-local-dev}"
-    SAM_REDIS_HOST="${REDIS_ADDRESS%:*}"
-    SAM_REDIS_PORT="${REDIS_ADDRESS##*:}"
-}
-
 start_sam_local()
 {
     cd "${API_GATEWAY_DIR}"
@@ -65,7 +57,6 @@ start_sam_local()
     fi
 
     sam local start-api -t template.local.generated.yml ${DOCKER_NETWORK_FLAG} \
-        --parameter-overrides "ParameterKey=RedisHost,ParameterValue=${SAM_REDIS_HOST}" "ParameterKey=RedisPort,ParameterValue=${SAM_REDIS_PORT}" \
         --warm-containers EAGER --log-file /dev/stdout --debug > api-debug.log 2>&1 &
 }
 
@@ -92,7 +83,6 @@ wait_for_gateway()
 set_aws_credentials
 check_bootstrap_binary
 generate_local_template
-load_local_gateway_config
 start_sam_local
 wait_for_gateway
 

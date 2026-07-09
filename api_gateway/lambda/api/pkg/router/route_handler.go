@@ -85,21 +85,6 @@ func (e *routeStatusError) Error() string {
 	return e.body
 }
 
-func DefaultConfig() Config {
-	return Config{
-		DataRegistryServiceRoute:  serviceBaseRoute("127.0.0.1", "8081"),
-		IngestionServiceRoute:     serviceBaseRoute("127.0.0.1", "8086"),
-		ModelRegistryServiceRoute: serviceBaseRoute("127.0.0.1", "8084"),
-		ProfileServiceRoute:       serviceBaseRoute("127.0.0.1", "8082"),
-		TrainingServiceRoute:      serviceBaseRoute("127.0.0.1", "8085"),
-		InferenceServiceRoute:     serviceBaseRoute("127.0.0.1", "8087"),
-	}
-}
-
-func serviceBaseRoute(host, port string) string {
-	return fmt.Sprintf("http://%s:%s", host, port)
-}
-
 func (cfg Config) resolver() (routeResolver, error) {
 	if cfg.DataRegistryServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing data registry service route")

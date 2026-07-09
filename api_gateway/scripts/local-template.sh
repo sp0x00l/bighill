@@ -27,6 +27,8 @@ yq "
   (.Parameters.DataRegistryServiceHttpPort.Default) = \"${DATA_REGISTRY_SERVICE_HTTP_PORT}\" |
   (.Parameters.IngestionServiceHttpDomain.Default) = \"${INGESTION_SERVICE_HTTP_HOST}\" |
   (.Parameters.IngestionServiceHttpPort.Default) = \"${INGESTION_SERVICE_HTTP_PORT}\" |
+  (.Parameters.ModelRegistryServiceHttpDomain.Default) = \"${MODEL_REGISTRY_SERVICE_HTTP_HOST}\" |
+  (.Parameters.ModelRegistryServiceHttpPort.Default) = \"${MODEL_REGISTRY_SERVICE_HTTP_PORT}\" |
   (.Parameters.ProfileServiceHttpDomain.Default) = \"${PROFILE_SERVICE_HTTP_HOST}\" |
   (.Parameters.ProfileServiceHttpPort.Default) = \"${PROFILE_SERVICE_HTTP_PORT}\" |
   (.Parameters.TrainingServiceHttpDomain.Default) = \"${TRAINING_SERVICE_HTTP_HOST}\" |
