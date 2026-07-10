@@ -1,4 +1,4 @@
-package k8s_test
+package kubernetes_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 
 	"model_serving_service/pkg/app"
 	"model_serving_service/pkg/domain/model"
-	servingk8s "model_serving_service/pkg/infra/network/k8s"
+	servingkubernetes "model_serving_service/pkg/infra/network/k8s"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -34,7 +34,7 @@ func TestK8s(t *testing.T) {
 var _ = Describe("ServedModelStore", func() {
 	It("lists ServedModel CR specs", func() {
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), servedModelCR(validServedModel()))
-		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		servedModels, err := store.List(context.Background())
@@ -49,7 +49,7 @@ var _ = Describe("ServedModelStore", func() {
 	It("writes ServedModel status", func() {
 		servedModel := validServedModel()
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), servedModelCR(servedModel))
-		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(store.UpdateStatus(context.Background(), servedModel.ResourceName, &model.ServedModelStatus{
@@ -89,7 +89,7 @@ var _ = Describe("ServedModelStore", func() {
 			}
 			return false, nil, nil
 		})
-		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(store.UpdateStatus(context.Background(), servedModel.ResourceName, &model.ServedModelStatus{
@@ -116,7 +116,7 @@ var _ = Describe("ServedModelStore", func() {
 				Resource: "servedmodels",
 			}, servedModel.ResourceName, stderrors.New("status update forbidden"))
 		})
-		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		err = store.UpdateStatus(context.Background(), servedModel.ResourceName, &model.ServedModelStatus{
@@ -139,11 +139,11 @@ var _ = Describe("ServedModelStore", func() {
 		v1.ModelVersion = 1
 		v2.ModelVersion = 2
 
-		Expect(servingk8s.WorkloadName(v1)).NotTo(Equal(servingk8s.WorkloadName(v2)))
+		Expect(servingkubernetes.WorkloadName(v1)).NotTo(Equal(servingkubernetes.WorkloadName(v2)))
 
 		v1.ResourceName = "served-model-4f4b8258-f9af-49f8-b5a8-f84d75891f3b-v1"
 		v2.ResourceName = "served-model-4f4b8258-f9af-49f8-b5a8-f84d75891f3b-v2"
-		Expect(servingk8s.WorkloadName(v1)).NotTo(Equal(servingk8s.WorkloadName(v2)))
+		Expect(servingkubernetes.WorkloadName(v1)).NotTo(Equal(servingkubernetes.WorkloadName(v2)))
 	})
 })
 
@@ -151,7 +151,7 @@ var _ = Describe("VLLMRuntime", func() {
 	It("creates a vLLM deployment and service for a ServedModel", func() {
 		servedModel := validServedModel()
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -161,14 +161,14 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(state.ServingModel).To(Equal("ranker-v1"))
 		Expect(state.ServingTarget).To(Equal("http://served-model-4f4b8258-f9af-49f8-b5a8-f84d75891f3b.default.svc.cluster.local:8000"))
 		Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
-		deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingk8s.WorkloadName(servedModel), metav1.GetOptions{})
+		deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingkubernetes.WorkloadName(servedModel), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
 		container := containers[0].(map[string]any)
 		Expect(container["image"]).To(Equal("vllm/vllm-openai:v-test"))
 		Expect(container["args"]).To(ContainElement("--enable-lora"))
 		Expect(container["args"]).To(ContainElement("ranker-v1=s3://models/run-1"))
-		service, err := client.Resource(serviceGVR()).Namespace("default").Get(context.Background(), servingk8s.WorkloadName(servedModel), metav1.GetOptions{})
+		service, err := client.Resource(serviceGVR()).Namespace("default").Get(context.Background(), servingkubernetes.WorkloadName(servedModel), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		ports, _, _ := unstructured.NestedSlice(service.Object, "spec", "ports")
 		Expect(ports[0].(map[string]any)["port"]).To(Equal(int64(8000)))
@@ -190,28 +190,28 @@ var _ = Describe("VLLMRuntime", func() {
 			servedModel.BaseModel = baseModel
 			servedModel.AdapterURI = ""
 			client := fake.NewSimpleDynamicClient(runtime.NewScheme())
-			runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+			runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
 			Expect(err).NotTo(HaveOccurred())
 
 			state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions), baseModel)
-			deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingk8s.WorkloadName(servedModel), metav1.GetOptions{})
+			deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingkubernetes.WorkloadName(servedModel), metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
 			args := containers[0].(map[string]any)["args"].([]any)
 			Expect(args).To(ContainElement("--model"), baseModel)
 			Expect(args).To(ContainElement(baseModel), baseModel)
 			Expect(args).To(ContainElement("--served-model-name"), baseModel)
-			Expect(args).To(ContainElement(servingk8s.ServingModelName(servedModel)), baseModel)
+			Expect(args).To(ContainElement(servingkubernetes.ServingModelName(servedModel)), baseModel)
 		}
 	})
 
 	It("uses a shared base runtime and dynamically loads adapters in multi-tenant mode", func() {
 		servedModel := validServedModel()
 		servedModel.ServingTarget = "http://vllm.test"
-		sharedWorkloadName := servingk8s.SharedRuntimeWorkloadName(servedModel)
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), readyDeploymentWithName(sharedWorkloadName), serviceObjectWithName(sharedWorkloadName))
 		loadRequests := 0
 		config := runtimeConfig()
@@ -232,7 +232,7 @@ var _ = Describe("VLLMRuntime", func() {
 				return nil, stderrors.New("unexpected vllm request " + req.Method + " " + req.URL.Path)
 			}
 		})}
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(config, client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -254,7 +254,7 @@ var _ = Describe("VLLMRuntime", func() {
 	It("does not mark a multi-tenant adapter failed when vLLM reports it is already loaded", func() {
 		servedModel := validServedModel()
 		servedModel.ServingTarget = "http://vllm.test"
-		sharedWorkloadName := servingk8s.SharedRuntimeWorkloadName(servedModel)
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), readyDeploymentWithName(sharedWorkloadName), serviceObjectWithName(sharedWorkloadName))
 		loadRequests := 0
 		config := runtimeConfig()
@@ -275,7 +275,7 @@ var _ = Describe("VLLMRuntime", func() {
 				return nil, stderrors.New("unexpected vllm request " + req.Method + " " + req.URL.Path)
 			}
 		})}
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(config, client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -298,8 +298,8 @@ var _ = Describe("VLLMRuntime", func() {
 		v2.ServingModel = "ranker-v2"
 		v2.AdapterURI = "s3://models/run-2"
 
-		Expect(servingk8s.WorkloadName(v1)).NotTo(Equal(servingk8s.WorkloadName(v2)))
-		Expect(servingk8s.SharedRuntimeWorkloadName(v1)).To(Equal(servingk8s.SharedRuntimeWorkloadName(v2)))
+		Expect(servingkubernetes.WorkloadName(v1)).NotTo(Equal(servingkubernetes.WorkloadName(v2)))
+		Expect(servingkubernetes.SharedRuntimeWorkloadName(v1)).To(Equal(servingkubernetes.SharedRuntimeWorkloadName(v2)))
 	})
 
 	It("hashes shared runtime names so normalized base-model collisions stay separate", func() {
@@ -308,8 +308,8 @@ var _ = Describe("VLLMRuntime", func() {
 		first.BaseModel = "org/Model-A"
 		second.BaseModel = "org-model-a"
 
-		Expect(servingk8s.SharedRuntimeWorkloadName(first)).NotTo(Equal(servingk8s.SharedRuntimeWorkloadName(second)))
-		Expect(servingk8s.SharedRuntimeServingModelName(first)).NotTo(Equal(servingk8s.SharedRuntimeServingModelName(second)))
+		Expect(servingkubernetes.SharedRuntimeWorkloadName(first)).NotTo(Equal(servingkubernetes.SharedRuntimeWorkloadName(second)))
+		Expect(servingkubernetes.SharedRuntimeServingModelName(first)).NotTo(Equal(servingkubernetes.SharedRuntimeServingModelName(second)))
 	})
 
 	It("reports loaded when the vLLM deployment is ready", func() {
@@ -318,7 +318,7 @@ var _ = Describe("VLLMRuntime", func() {
 		deployment := readyDeployment(servedModel)
 		service := serviceObject(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -335,7 +335,7 @@ var _ = Describe("VLLMRuntime", func() {
 		deployment := readyDeployment(servedModel)
 		service := serviceObject(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfigWithModels("base-model"), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels("base-model"), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -351,7 +351,7 @@ var _ = Describe("VLLMRuntime", func() {
 		deployment := failedDeployment(servedModel)
 		service := serviceObject(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -371,13 +371,13 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(unstructured.SetNestedStringSlice(service.Object, []string{"IPv4"}, "spec", "ipFamilies")).To(Succeed())
 		Expect(unstructured.SetNestedField(service.Object, "SingleStack", "spec", "ipFamilyPolicy")).To(Succeed())
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		_, err = runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
 
 		Expect(err).NotTo(HaveOccurred())
-		updated, err := client.Resource(serviceGVR()).Namespace("default").Get(context.Background(), servingk8s.WorkloadName(servedModel), metav1.GetOptions{})
+		updated, err := client.Resource(serviceGVR()).Namespace("default").Get(context.Background(), servingkubernetes.WorkloadName(servedModel), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		clusterIP, _, _ := unstructured.NestedString(updated.Object, "spec", "clusterIP")
 		clusterIPs, _, _ := unstructured.NestedStringSlice(updated.Object, "spec", "clusterIPs")
@@ -396,7 +396,7 @@ var _ = Describe("VLLMRuntime", func() {
 		deployment := readyDeployment(servedModel)
 		service := serviceObject(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -404,7 +404,7 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(state.Ready).To(BeTrue())
 		Expect(state.ServingModel).To(Equal("ranker-v1"))
-		updated, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingk8s.WorkloadName(servedModel), metav1.GetOptions{})
+		updated, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingkubernetes.WorkloadName(servedModel), metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		containers, _, _ := unstructured.NestedSlice(updated.Object, "spec", "template", "spec", "containers")
 		container := containers[0].(map[string]any)
@@ -416,12 +416,12 @@ var _ = Describe("VLLMRuntime", func() {
 var _ = Describe("ServedModelController", func() {
 	It("reconciles every listed ServedModel", func() {
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), servedModelCR(validServedModel()))
-		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
-		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
 
 		Expect(controller.ProcessOnce(context.Background())).To(Succeed())
 
@@ -435,12 +435,12 @@ var _ = Describe("ServedModelController", func() {
 		servedModel := validServedModel()
 		obj := servedModelCR(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), obj)
-		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
-		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
 
 		Expect(controller.ProcessWatchEvent(context.Background(), watch.Event{
 			Type:   watch.Modified,
@@ -457,12 +457,12 @@ var _ = Describe("ServedModelController", func() {
 		servedModel := validServedModel()
 		obj := servedModelCR(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
-		store, err := servingk8s.NewServedModelStore(storeConfig(), client)
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
 		reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
-		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
 
 		Expect(controller.ProcessWatchEvent(context.Background(), watch.Event{
 			Type:   watch.Modified,
@@ -477,8 +477,8 @@ var _ = Describe("ServedModelController", func() {
 
 })
 
-func storeConfig() servingk8s.ServedModelStoreConfig {
-	return servingk8s.ServedModelStoreConfig{
+func storeConfig() servingkubernetes.ServedModelStoreConfig {
+	return servingkubernetes.ServedModelStoreConfig{
 		Namespace: "default",
 		Group:     "serving.bighill.io",
 		Version:   "v1alpha1",
@@ -486,8 +486,8 @@ func storeConfig() servingk8s.ServedModelStoreConfig {
 	}
 }
 
-func runtimeConfig() servingk8s.VLLMRuntimeConfig {
-	return servingk8s.VLLMRuntimeConfig{
+func runtimeConfig() servingkubernetes.VLLMRuntimeConfig {
+	return servingkubernetes.VLLMRuntimeConfig{
 		Namespace:       "default",
 		Image:           "vllm/vllm-openai:v-test",
 		ImagePullPolicy: "IfNotPresent",
@@ -501,7 +501,7 @@ func runtimeConfig() servingk8s.VLLMRuntimeConfig {
 	}
 }
 
-func runtimeConfigWithModels(modelIDs ...string) servingk8s.VLLMRuntimeConfig {
+func runtimeConfigWithModels(modelIDs ...string) servingkubernetes.VLLMRuntimeConfig {
 	config := runtimeConfig()
 	config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		Expect(req.URL.Path).To(Equal("/v1/models"))
@@ -577,7 +577,7 @@ func servedModelCR(servedModel *model.ServedModel) *unstructured.Unstructured {
 }
 
 func readyDeployment(servedModel *model.ServedModel) *unstructured.Unstructured {
-	return readyDeploymentWithName(servingk8s.WorkloadName(servedModel))
+	return readyDeploymentWithName(servingkubernetes.WorkloadName(servedModel))
 }
 
 func readyDeploymentWithName(name string) *unstructured.Unstructured {
@@ -602,7 +602,7 @@ func failedDeployment(servedModel *model.ServedModel) *unstructured.Unstructured
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
 		"metadata": map[string]any{
-			"name":      servingk8s.WorkloadName(servedModel),
+			"name":      servingkubernetes.WorkloadName(servedModel),
 			"namespace": "default",
 		},
 		"status": map[string]any{
@@ -622,7 +622,7 @@ func failedDeployment(servedModel *model.ServedModel) *unstructured.Unstructured
 }
 
 func serviceObject(servedModel *model.ServedModel) *unstructured.Unstructured {
-	return serviceObjectWithName(servingk8s.WorkloadName(servedModel))
+	return serviceObjectWithName(servingkubernetes.WorkloadName(servedModel))
 }
 
 func serviceObjectWithName(name string) *unstructured.Unstructured {

@@ -20,6 +20,7 @@ resource "aws_cloudformation_stack" "api_gateway" {
     StageNameParam                     = var.stage_name
     BighillApiFunctionMemorySize       = var.bighill_api_function_memory_size
     BighillApiFunctionTimeout          = var.bighill_api_function_timeout
+    BighillAuthFunctionTimeout         = var.bighill_auth_function_timeout
     BighillApiHttpClientTimeoutSeconds = var.bighill_api_http_client_timeout_seconds
     BighillApiLogLevel                 = var.bighill_api_log_level
 

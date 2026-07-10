@@ -10,16 +10,15 @@ import (
 )
 
 var _ = Describe("source query command", func() {
-	It("defaults omitted sourceType to postgres", func() {
-		query, err := parseSourceQueryCommand(sourceQueryJSON(map[string]any{
+	It("requires sourceType instead of defaulting it", func() {
+		_, err := parseSourceQueryCommand(sourceQueryJSON(map[string]any{
 			"userId":            "user-1",
 			"orgId":             "org-1",
 			"sourceConnectorId": "connector-1",
 			"sql":               "select 1",
 		}))
 
-		Expect(err).NotTo(HaveOccurred())
-		Expect(query.SourceType).To(Equal(streamdomain.SourceTypePostgres))
+		Expect(err).To(MatchError(ContainSubstring("requires sourceType")))
 	})
 
 	It("parses all registered source types into the enum", func() {

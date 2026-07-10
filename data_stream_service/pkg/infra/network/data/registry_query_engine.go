@@ -142,7 +142,11 @@ func (e *registryQueryEngine) executePostgres(ctx context.Context, cfg *dataregi
 	if cfg == nil {
 		return nil, streamdomain.ErrValidationFailed.Extend("source connector does not include postgres config")
 	}
-	connConfig, err := pgx.ParseConfig(postgresConnectionString(cfg))
+	connectionString, err := postgresConnectionString(cfg)
+	if err != nil {
+		return nil, err
+	}
+	connConfig, err := pgx.ParseConfig(connectionString)
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres source connection config: %w", err)
 	}
@@ -172,22 +176,26 @@ func (e *registryQueryEngine) executePostgres(ctx context.Context, cfg *dataregi
 	return result, nil
 }
 
-func postgresConnectionString(cfg *dataregistrypb.PostgresSourceConfig) string {
+func postgresConnectionString(cfg *dataregistrypb.PostgresSourceConfig) (string, error) {
 	log.Trace("postgresConnectionString")
 
 	host := strings.TrimSpace(cfg.GetHostname())
 	if host == "" {
-		host = "localhost"
+		return "", streamdomain.ErrValidationFailed.Extend("postgres source hostname is required")
 	}
 	port := int(cfg.GetPort())
 	if port == 0 {
-		port = 5432
+		return "", streamdomain.ErrValidationFailed.Extend("postgres source port is required")
+	}
+	databaseName := strings.TrimSpace(cfg.GetDatabaseName())
+	if databaseName == "" {
+		return "", streamdomain.ErrValidationFailed.Extend("postgres source database name is required")
 	}
 
 	parts := []string{
 		fmt.Sprintf("host=%s", host),
 		fmt.Sprintf("port=%d", port),
-		fmt.Sprintf("dbname=%s", cfg.GetDatabaseName()),
+		fmt.Sprintf("dbname=%s", databaseName),
 		"sslmode=disable",
 	}
 	if cfg.GetUsername() != "" {
@@ -196,7 +204,7 @@ func postgresConnectionString(cfg *dataregistrypb.PostgresSourceConfig) string {
 	if cfg.GetPassword() != "" {
 		parts = append(parts, fmt.Sprintf("password=%s", cfg.GetPassword()))
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(parts, " "), nil
 }
 
 func (e *registryQueryEngine) rowsToArrow(rows pgx.Rows) (*QueryResult, error) {
@@ -232,7 +240,7 @@ func (e *registryQueryEngine) rowsToArrow(rows pgx.Rows) (*QueryResult, error) {
 		rowCount++
 	}
 
-	record := builder.NewRecord()
+	record := builder.NewRecordBatch()
 	return &QueryResult{
 		Schema:       schema,
 		Records:      []arrow.Record{record},

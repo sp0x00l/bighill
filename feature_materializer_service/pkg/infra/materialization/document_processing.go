@@ -16,11 +16,32 @@ import (
 	"golang.org/x/net/html"
 )
 
-const sourceTextField = "source_text"
-
 const (
+	sourceTextField = "source_text"
+
 	htmlExtractorName    = "go-html-text-extractor"
 	htmlExtractorVersion = "v1"
+
+	htmlTagScript     = "script"
+	htmlTagStyle      = "style"
+	htmlTagNoScript   = "noscript"
+	htmlTagTemplate   = "template"
+	htmlTagH1         = "h1"
+	htmlTagH2         = "h2"
+	htmlTagH3         = "h3"
+	htmlTagH4         = "h4"
+	htmlTagH5         = "h5"
+	htmlTagH6         = "h6"
+	htmlTagParagraph  = "p"
+	htmlTagListItem   = "li"
+	htmlTagBlockquote = "blockquote"
+	htmlTagPre        = "pre"
+	htmlTagCode       = "code"
+	htmlTagTableData  = "td"
+	htmlTagTableHead  = "th"
+
+	documentSectionKindHeading   = "heading"
+	documentSectionKindParagraph = "paragraph"
 )
 
 type DocumentExtraction struct {
@@ -115,7 +136,7 @@ func (e *HTMLDocumentExtractor) ExtractText(_ context.Context, data []byte) (*Do
 		}
 		if n.Type == html.ElementNode {
 			switch strings.ToLower(n.Data) {
-			case "script", "style", "noscript", "template":
+			case htmlTagScript, htmlTagStyle, htmlTagNoScript, htmlTagTemplate:
 				skip = true
 			}
 		}
@@ -147,7 +168,7 @@ func collectHTMLSections(n *html.Node, skip bool, sections *[]DocumentSection) {
 	}
 	if n.Type == html.ElementNode {
 		switch strings.ToLower(n.Data) {
-		case "script", "style", "noscript", "template":
+		case htmlTagScript, htmlTagStyle, htmlTagNoScript, htmlTagTemplate:
 			skip = true
 		}
 	}
@@ -169,19 +190,19 @@ func htmlSectionKind(tag string) (string, int, bool) {
 	log.Trace("htmlSectionKind")
 
 	switch strings.ToLower(tag) {
-	case "h1":
-		return "heading", 1, true
-	case "h2":
-		return "heading", 2, true
-	case "h3":
-		return "heading", 3, true
-	case "h4":
-		return "heading", 4, true
-	case "h5":
-		return "heading", 5, true
-	case "h6":
-		return "heading", 6, true
-	case "p", "li", "blockquote", "pre", "code", "td", "th":
+	case htmlTagH1:
+		return documentSectionKindHeading, 1, true
+	case htmlTagH2:
+		return documentSectionKindHeading, 2, true
+	case htmlTagH3:
+		return documentSectionKindHeading, 3, true
+	case htmlTagH4:
+		return documentSectionKindHeading, 4, true
+	case htmlTagH5:
+		return documentSectionKindHeading, 5, true
+	case htmlTagH6:
+		return documentSectionKindHeading, 6, true
+	case htmlTagParagraph, htmlTagListItem, htmlTagBlockquote, htmlTagPre, htmlTagCode, htmlTagTableData, htmlTagTableHead:
 		return strings.ToLower(tag), 0, true
 	default:
 		return "", 0, false
@@ -199,7 +220,7 @@ func nodeText(n *html.Node) string {
 		}
 		if current.Type == html.ElementNode {
 			switch strings.ToLower(current.Data) {
-			case "script", "style", "noscript", "template":
+			case htmlTagScript, htmlTagStyle, htmlTagNoScript, htmlTagTemplate:
 				skip = true
 			}
 		}
@@ -324,7 +345,7 @@ func plainDocumentSections(text string) []DocumentSection {
 	texts := plainTextSections(text)
 	sections := make([]DocumentSection, 0, len(texts))
 	for _, text := range texts {
-		sections = append(sections, DocumentSection{Text: text, Kind: "paragraph"})
+		sections = append(sections, DocumentSection{Text: text, Kind: documentSectionKindParagraph})
 	}
 	return sections
 }

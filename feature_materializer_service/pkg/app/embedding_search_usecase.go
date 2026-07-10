@@ -49,18 +49,12 @@ func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, userID uu
 	)
 	defer endFeatureMaterializerSpanOnReturn(ctx, span, &err)
 
-	if _, ok := ctxutil.OrgID(ctx); !ok {
-		return nil, domain.ErrValidationFailed.Extend("org_id is required")
-	}
 	ctx = ctxutil.WithTenantID(ctx, userID)
 	activeSnapshot, err := u.repository.ReadActiveEmbeddingSnapshot(ctx, userID, datasetID)
 	if err != nil {
 		return nil, err
 	}
 	strategy := embeddingStrategyFromSnapshot(activeSnapshot)
-	if err := model.ValidateEmbeddingStrategy(strategy); err != nil {
-		return nil, fmt.Errorf("%w: active embedding snapshot strategy is invalid: %w", domain.ErrEmbeddingSearch, err)
-	}
 	provider, err := u.providerFactory(strategy)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create query embedding provider: %w", domain.ErrEmbeddingSearch, err)

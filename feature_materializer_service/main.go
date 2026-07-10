@@ -68,6 +68,7 @@ type embeddingConfig struct {
 	Model            string
 	Dimensions       int
 	MaxRows          int
+	VectorStore      string
 	StrategyVersion  string
 	ExtractorName    string
 	ExtractorVersion string
@@ -230,7 +231,7 @@ func main() {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create embedding provider")
 	}
 	embeddingChunker := materialization.NewTokenWindowChunker(embeddingStrategy)
-	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, embeddingProvider, embeddingChunker, embeddingStrategy, "pgvector", cfg.Embedding.MaxRows)
+	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, embeddingProvider, embeddingChunker, embeddingStrategy, cfg.Embedding.VectorStore, cfg.Embedding.MaxRows)
 	rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(dataStreamRawWriter, rawWriter)
 	featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 	embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
@@ -360,15 +361,7 @@ func dialTemporalClient(ctx context.Context, cfg temporalConfig) (client.Client,
 func dialTemporalClientWith(ctx context.Context, cfg temporalConfig, dial temporalDialFunc) (client.Client, error) {
 	log.Trace("dialTemporalClientWith")
 
-	timeout := cfg.ConnectTimeout
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
-	interval := cfg.ConnectRetryInterval
-	if interval <= 0 {
-		interval = time.Second
-	}
-	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	dialCtx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
 	defer cancel()
 	options := client.Options{
 		HostPort:  cfg.Address,
@@ -388,7 +381,7 @@ func dialTemporalClientWith(ctx context.Context, cfg temporalConfig, dial tempor
 		select {
 		case <-dialCtx.Done():
 			return nil, fmt.Errorf("connect to Temporal at %s namespace %s: %w: %v", cfg.Address, cfg.Namespace, dialCtx.Err(), lastErr)
-		case <-time.After(interval):
+		case <-time.After(cfg.ConnectRetryInterval):
 		}
 	}
 }
@@ -441,6 +434,7 @@ func readMaterializerConfig() materializerConfig {
 			Model:            env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL", model.DefaultEmbeddingModel),
 			Dimensions:       env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS", strconv.Itoa(model.DefaultEmbeddingDimensions)),
 			MaxRows:          env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS", "1000"),
+			VectorStore:      env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_VECTOR_STORE", "pgvector"),
 			StrategyVersion:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_STRATEGY_VERSION", model.DefaultEmbeddingStrategyVersion),
 			ExtractorName:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EXTRACTOR_NAME", model.DefaultExtractorName),
 			ExtractorVersion: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EXTRACTOR_VERSION", model.DefaultExtractorVersion),
@@ -525,6 +519,57 @@ func validateMaterializerConfig(cfg materializerConfig) error {
 	if !env.IsDevEnv() && strings.TrimSpace(cfg.ArtifactBucket.Name) == "local-dev-bucket" {
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_BUCKET_NAME must not be local-dev-bucket outside dev environments")
 	}
+	if cfg.ArtifactBucket.UploadPartSize <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_UPLOAD_PART_SIZE_MB must be greater than zero")
+	}
+	if strings.TrimSpace(cfg.Temporal.Address) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS is required")
+	}
+	if strings.TrimSpace(cfg.Temporal.Namespace) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE is required")
+	}
+	if strings.TrimSpace(cfg.Temporal.TaskQueue) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_TASK_QUEUE is required")
+	}
+	if cfg.Temporal.ConnectTimeout <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.Temporal.ConnectRetryInterval <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS must be greater than zero")
+	}
+	if cfg.OutboxRelay.PollInterval <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_POLL_MS must be greater than zero")
+	}
+	if cfg.OutboxRelay.FailureBackoff <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS must be greater than zero")
+	}
+	if cfg.OutboxRelay.BatchSize <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_BATCH_SIZE must be greater than zero")
+	}
+	if cfg.GRPCPort <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_API_GRPC_PORT must be greater than zero")
+	}
+	if strings.TrimSpace(cfg.DatasetUploadedTopic) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_INGESTION_SUBSCRIBER_TOPIC is required")
+	}
+	if strings.TrimSpace(cfg.DataRegistryTopic) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC is required")
+	}
+	if strings.TrimSpace(cfg.TenantTopic) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_TENANT_SUBSCRIBER_TOPIC is required")
+	}
+	if strings.TrimSpace(cfg.PublishTopics.FeatureMaterializer) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_TOPIC is required")
+	}
+	if strings.TrimSpace(cfg.DataStream.Address) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_GRPC_ADDRESS is required")
+	}
+	if cfg.DataStream.RequestTimeout <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.Iceberg.WriterTimeout <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_ICEBERG_WRITER_TIMEOUT_SECONDS must be greater than zero")
+	}
 	if err := validateEmbeddingConfig(cfg.Embedding); err != nil {
 		return err
 	}
@@ -550,6 +595,18 @@ func validateEmbeddingConfig(cfg embeddingConfig) error {
 	}
 	if cfg.Dimensions <= 0 {
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS must be greater than zero")
+	}
+	if cfg.MaxRows <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS must be greater than zero")
+	}
+	if strings.TrimSpace(cfg.VectorStore) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_VECTOR_STORE is required")
+	}
+	if cfg.RequestTimeout <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if err := model.ValidateEmbeddingStrategy(embeddingStrategyFromConfig(cfg)); err != nil {
+		return fmt.Errorf("feature materializer embedding strategy config is invalid: %w", err)
 	}
 	return nil
 }
@@ -578,7 +635,7 @@ func secondsFromEnv(key, defaultValue string) time.Duration {
 func embeddingStrategyFromConfig(cfg embeddingConfig) model.EmbeddingStrategy {
 	log.Trace("embeddingStrategyFromConfig")
 
-	return model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
+	return model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
 		StrategyVersion:     cfg.StrategyVersion,
 		ExtractorName:       cfg.ExtractorName,
 		ExtractorVersion:    cfg.ExtractorVersion,
@@ -636,6 +693,8 @@ func newPostgresOutbox(database *coreDB.Database, backend string) (messagingConn
 }
 
 func postgresConnectionString(user, password, host, port, dbName, sslMode string, maxConnections int) string {
+	log.Trace("postgresConnnectionString")
+
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
 	q := url.Values{}

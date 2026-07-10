@@ -10,7 +10,7 @@ export PATH := $(GO_BIN):$(PATH)
 
 SERVICE_TEST_DIRS := shared_lib pdf_extractor_lib tenant_service ingestion_service data_registry_service feature_materializer_service data_stream_service inference_service model_registry_service model_serving_service training_service
 
-.PHONY: install install-dev install-all build-all build-query-engine test test-query-engine test-hf start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api test-api-w-hf kafka-clean kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka k8s-validate k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
+.PHONY: install install-dev install-all build-all build-query-engine test test-query-engine test-hf start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api test-api-data-sources test-api-w-hf kafka-clean kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka k8s-validate k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
 
 install: install-all
 
@@ -93,13 +93,29 @@ test-api:
 	cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; \
 	cd "$(CURDIR)" && scripts/stop-servers.sh || true; \
 	cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; \
-	cd "$(CURDIR)" && scripts/start-infra.sh $(ENV); \
+	cd "$(CURDIR)" && BIGHILL_START_DATA_SOURCES=false scripts/start-infra.sh $(ENV); \
 	cd "$(CURDIR)" && scripts/kafka/kafka-clean-topics.sh $(ENV); \
 	cd "$(CURDIR)" && scripts/kafka/kafka-create-topics.sh $(ENV); \
 	cd "$(CURDIR)" && api_gateway/scripts/check-docker.sh; \
 	cd "$(CURDIR)" && CI_TEST_EXCLUDE_SERVICES="$(CI_TEST_EXCLUDE_SERVICES)" scripts/start-servers.sh $(START_MODE) $(ENV); \
 	cd "$(CURDIR)/api_gateway" && ./scripts/run.sh; \
 	$(MAKE) -C "$(CURDIR)/api_gateway" test ENV=$(ENV)
+
+test-api-data-sources:
+	@set -e; \
+	cleanup() { cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; cd "$(CURDIR)" && scripts/stop-data-sources.sh || true; cd "$(CURDIR)" && scripts/stop-servers.sh || true; cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; }; \
+	trap cleanup EXIT; \
+	cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; \
+	cd "$(CURDIR)" && scripts/stop-data-sources.sh || true; \
+	cd "$(CURDIR)" && scripts/stop-servers.sh || true; \
+	cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; \
+	cd "$(CURDIR)" && BIGHILL_START_DATA_SOURCES=false scripts/start-infra.sh $(ENV); \
+	cd "$(CURDIR)" && scripts/kafka/kafka-clean-topics.sh $(ENV); \
+	cd "$(CURDIR)" && scripts/kafka/kafka-create-topics.sh $(ENV); \
+	cd "$(CURDIR)" && api_gateway/scripts/check-docker.sh; \
+	cd "$(CURDIR)" && CI_TEST_EXCLUDE_SERVICES="$(CI_TEST_EXCLUDE_SERVICES)" scripts/start-servers.sh $(START_MODE) $(ENV); \
+	cd "$(CURDIR)/api_gateway" && ./scripts/run.sh; \
+	cd "$(CURDIR)/api_gateway" && API_GATEWAY_RUN_CORE_TESTS=false API_GATEWAY_RUN_DATASOURCE_TESTS=true $(MAKE) test ENV=$(ENV)
 
 test-api-w-hf:
 	@set -e; \
@@ -131,7 +147,7 @@ test-api-w-hf:
 	cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; \
 	cd "$(CURDIR)" && scripts/stop-servers.sh || true; \
 	cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; \
-	cd "$(CURDIR)" && scripts/start-infra.sh $(ENV); \
+	cd "$(CURDIR)" && BIGHILL_START_DATA_SOURCES=false scripts/start-infra.sh $(ENV); \
 	cd "$(CURDIR)" && scripts/kafka/kafka-clean-topics.sh $(ENV); \
 	cd "$(CURDIR)" && scripts/kafka/kafka-create-topics.sh $(ENV); \
 	cd "$(CURDIR)" && api_gateway/scripts/check-docker.sh; \

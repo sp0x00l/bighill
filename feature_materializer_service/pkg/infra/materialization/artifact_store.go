@@ -19,6 +19,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	artifactSchemeLocalPath = ""
+	artifactSchemeS3        = "s3"
+	artifactSchemeFile      = "file"
+	artifactS3URI           = artifactSchemeS3 + "://%s/%s"
+)
+
 type s3Downloader interface {
 	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }
@@ -67,11 +74,11 @@ func (s *ObjectArtifactStore) Read(ctx context.Context, storageLocation string) 
 	}
 
 	switch parsed.Scheme {
-	case "s3":
+	case artifactSchemeS3:
 		return s.readS3(ctx, parsed.Host, strings.TrimPrefix(parsed.Path, "/"))
-	case "file":
+	case artifactSchemeFile:
 		return readFileArtifact(parsed.Path)
-	case "":
+	case artifactSchemeLocalPath:
 		return readFileArtifact(storageLocation)
 	default:
 		return nil, domain.ErrArtifactRead.Extend("unsupported artifact storage scheme " + parsed.Scheme)
@@ -89,7 +96,7 @@ func (s *ObjectArtifactStore) Write(ctx context.Context, key, contentType string
 	if err := s.bucket.Upload(ctx, s.bucketName, key, contentType, bytes.NewReader(body)); err != nil {
 		return "", fmt.Errorf("%w: upload artifact: %w", domain.ErrArtifactWrite, err)
 	}
-	return fmt.Sprintf("s3://%s/%s", s.bucketName, key), nil
+	return fmt.Sprintf(artifactS3URI, s.bucketName, key), nil
 }
 
 func (s *ObjectArtifactStore) readS3(ctx context.Context, bucketName, key string) ([]byte, error) {

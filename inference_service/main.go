@@ -33,6 +33,7 @@ import (
 	serializers "lib/shared_lib/serializer"
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
+	"lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
 
 	log "github.com/sirupsen/logrus"
@@ -56,6 +57,7 @@ type inferenceConfig struct {
 	PreferenceDataset   preferenceDatasetConfig
 	GRPCPort            int
 	HTTPPort            int
+	HTTPServer          httpServerConfig
 	Health              healthConfig
 	Lifecycle           lifecycle.Config
 }
@@ -89,6 +91,12 @@ type preferenceDatasetConfig struct {
 	Limit            int
 	BucketRegion     string
 	UploadPartSizeMB int64
+}
+
+type httpServerConfig struct {
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	IdleTimeout  time.Duration
 }
 
 type healthConfig struct {
@@ -221,7 +229,12 @@ func main() {
 	)
 	grpcService := inferencegrpc.NewInferenceGrpcServer(inferenceUsecase)
 	inferenceDTOAdapter := inferenceadapter.NewInferenceDTOAdapter(serializers.NewJSONSerializer())
-	restService := inferencerest.NewService(inferencerest.NewInferenceHandlers(inferenceUsecase, inferenceDTOAdapter).GetRoutes(), cfg.HTTPPort, serviceName)
+	restService := inferencerest.NewService(
+		inferencerest.NewInferenceHandlers(inferenceUsecase, inferenceDTOAdapter).GetRoutes(),
+		cfg.HTTPPort,
+		serviceName,
+		transport.WithServerTimeouts(cfg.HTTPServer.ReadTimeout, cfg.HTTPServer.WriteTimeout, cfg.HTTPServer.IdleTimeout),
+	)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
@@ -398,6 +411,11 @@ func readInferenceConfig() inferenceConfig {
 		},
 		GRPCPort: env.WithDefaultInt("INFERENCE_SERVICE_API_GRPC_PORT", "7073"),
 		HTTPPort: env.WithDefaultInt("INFERENCE_SERVICE_API_HTTP_PORT", "8087"),
+		HTTPServer: httpServerConfig{
+			ReadTimeout:  secondsFromEnv("INFERENCE_SERVICE_HTTP_READ_TIMEOUT_SECONDS", "30"),
+			WriteTimeout: secondsFromEnv("INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS", "120"),
+			IdleTimeout:  secondsFromEnv("INFERENCE_SERVICE_HTTP_IDLE_TIMEOUT_SECONDS", "120"),
+		},
 		Health: healthConfig{
 			CpuThresholdPercentage:                    env.WithDefaultInt("INFERENCE_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
 			MemFreeThresholdPercent:                   env.WithDefaultInt("INFERENCE_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT", "20"),
@@ -440,6 +458,9 @@ func validateInferenceConfig(cfg inferenceConfig) error {
 		return fmt.Errorf("INFERENCE_SERVICE_RAG_MERGE_STRATEGY=reranker requires INFERENCE_SERVICE_RERANKER_PROVIDER")
 	}
 	if err := validateQueryTransformerConfig(cfg.QueryTransformer); err != nil {
+		return err
+	}
+	if err := validateHTTPServerConfig(cfg.HTTPServer, cfg.Generation); err != nil {
 		return err
 	}
 	if !env.IsDevEnv() && strings.Contains(cfg.PreferenceDataset.URITemplate, "local-dev-bucket") {
@@ -499,6 +520,24 @@ func validateQueryTransformerConfig(cfg queryTransformerConfig) error {
 		}
 	default:
 		return fmt.Errorf("unsupported query transformer provider %q", cfg.Provider)
+	}
+	return nil
+}
+
+func validateHTTPServerConfig(cfg httpServerConfig, generation generationConfig) error {
+	log.Trace("validateHTTPServerConfig")
+
+	if cfg.ReadTimeout <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_HTTP_READ_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.WriteTimeout <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.IdleTimeout <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_HTTP_IDLE_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.WriteTimeout <= generation.RequestTimeout {
+		return fmt.Errorf("INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS must be greater than INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")
 	}
 	return nil
 }

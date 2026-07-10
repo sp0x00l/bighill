@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	dataregistrypb "lib/data_contracts_lib/data_registry"
 	featurepb "lib/data_contracts_lib/feature_materializer"
 	inferencepb "lib/data_contracts_lib/inference"
@@ -353,39 +352,4 @@ func durationEnvOrDefault(name string, fallback time.Duration) time.Duration {
 func sanitizeModelName(repoID string) string {
 	replacer := strings.NewReplacer("/", "-", "_", "-", ".", "-")
 	return strings.Trim(replacer.Replace(strings.ToLower(repoID)), "-")
-}
-
-func doJSONWithTimeout(method, path string, payload any, bearerToken string, requestID uuid.UUID, timeout time.Duration) (int, []byte) {
-	var body io.Reader
-	if payload != nil {
-		payloadBytes, err := json.Marshal(payload)
-		Expect(err).NotTo(HaveOccurred())
-		body = bytes.NewReader(payloadBytes)
-	}
-
-	req, err := http.NewRequest(method, gatewayBaseURL()+path, body)
-	Expect(err).NotTo(HaveOccurred())
-	req.Header.Set("Accept", "application/json")
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if requestID != uuid.Nil {
-		req.Header.Set("X-Request-ID", requestID.String())
-	}
-	if bearerToken != "" {
-		if strings.HasPrefix(strings.ToLower(bearerToken), "bearer ") {
-			req.Header.Set("Authorization", bearerToken)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+bearerToken)
-		}
-	}
-
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
-	Expect(err).NotTo(HaveOccurred())
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	Expect(err).NotTo(HaveOccurred())
-	return resp.StatusCode, respBody
 }

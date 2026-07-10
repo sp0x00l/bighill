@@ -237,9 +237,6 @@ func (u *inferenceUsecase) ReadModel(ctx context.Context, orgID uuid.UUID, model
 func (u *inferenceUsecase) ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error) {
 	log.Trace("InferenceUsecase ListEndpoints")
 
-	if u.endpointRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
-	}
 	ctx = ctxutil.WithOrgID(ctx, orgID)
 	endpoints, err := u.endpointRepository.ListEndpoints(ctx, orgID)
 	if err != nil {
@@ -257,9 +254,6 @@ func (u *inferenceUsecase) ListEndpoints(ctx context.Context, orgID uuid.UUID) (
 func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.EndpointPublication) (*model.PublishedEndpoint, error) {
 	log.Trace("InferenceUsecase PublishEndpoint")
 
-	if u.endpointRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
-	}
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
 	inferenceModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, request.ModelID)
 	if err != nil {
@@ -267,9 +261,6 @@ func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.En
 	}
 	if inferenceModel.OrgID != request.OrgID {
 		return nil, domain.ErrModelNotFound
-	}
-	if len(request.DatasetIDs) == 0 {
-		return nil, domain.ErrValidationFailed.Extend("at least one dataset_id is required")
 	}
 	if err := u.ensureDatasetsExist(ctx, request.OrgID, request.DatasetIDs); err != nil {
 		return nil, err
@@ -299,12 +290,6 @@ func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.En
 func (u *inferenceUsecase) SetEndpointDatasets(ctx context.Context, request model.EndpointDatasetBinding) (*model.PublishedEndpoint, error) {
 	log.Trace("InferenceUsecase SetEndpointDatasets")
 
-	if u.endpointRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
-	}
-	if len(request.DatasetIDs) == 0 {
-		return nil, domain.ErrValidationFailed.Extend("at least one dataset_id is required")
-	}
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
 	if err := u.ensureDatasetsExist(ctx, request.OrgID, request.DatasetIDs); err != nil {
 		return nil, err
@@ -315,9 +300,6 @@ func (u *inferenceUsecase) SetEndpointDatasets(ctx context.Context, request mode
 func (u *inferenceUsecase) SetEndpointMergeStrategy(ctx context.Context, request model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error) {
 	log.Trace("InferenceUsecase SetEndpointMergeStrategy")
 
-	if u.endpointRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
-	}
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
 	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, request.EndpointID)
 	if err != nil {
@@ -337,9 +319,6 @@ func (u *inferenceUsecase) SetEndpointMergeStrategy(ctx context.Context, request
 func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error) {
 	log.Trace("InferenceUsecase GenerateForEndpoint")
 
-	if u.endpointRepository == nil {
-		return nil, domain.ErrValidationFailed.Extend("published endpoint repository is not configured")
-	}
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
 	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, endpointID)
 	if err != nil {
@@ -630,13 +609,7 @@ func (u *inferenceUsecase) generateDatasetIDs(request model.GenerateRequest, end
 
 	if endpoint != nil {
 		datasetIDs := dedupeUUIDs(endpoint.DatasetIDs)
-		if len(datasetIDs) == 0 {
-			return nil, domain.ErrValidationFailed.Extend("published endpoint has no datasets")
-		}
 		return datasetIDs, nil
-	}
-	if request.DatasetID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("dataset_id is required")
 	}
 	return []uuid.UUID{request.DatasetID}, nil
 }
@@ -646,9 +619,6 @@ func (u *inferenceUsecase) readGenerateDatasets(ctx context.Context, orgID uuid.
 
 	datasets := make([]*model.InferenceDataset, 0, len(datasetIDs))
 	for _, datasetID := range datasetIDs {
-		if datasetID == uuid.Nil {
-			return nil, domain.ErrValidationFailed.Extend("dataset_id is required")
-		}
 		dataset, err := u.datasetRepository.ReadDataset(ctx, orgID, datasetID)
 		if err != nil {
 			return nil, err
@@ -944,12 +914,6 @@ func preferenceDatasetID(dataset *model.PreferenceDataset) uuid.UUID {
 func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferenceModel *model.InferenceModel) error {
 	log.Trace("InferenceUsecase upsertEndpointProjection")
 
-	if u.endpointRepository == nil || inferenceModel == nil {
-		return nil
-	}
-	if inferenceModel.OrgID == uuid.Nil || inferenceModel.UserID == uuid.Nil {
-		return domain.ErrValidationFailed.Extend("published endpoint requires org_id and user_id")
-	}
 	if inferenceModel.DatasetID == uuid.Nil {
 		return nil
 	}

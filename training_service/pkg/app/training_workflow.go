@@ -8,6 +8,7 @@ import (
 
 	"training_service/pkg/domain/model"
 
+	log "github.com/sirupsen/logrus"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -186,7 +187,7 @@ func evaluationMetricsMetadata(report model.EvaluationReport) string {
 		ScoreRowsURI:         report.ScoreRowsURI,
 	})
 	if err != nil {
-		panic(fmt.Sprintf("marshal evaluation metrics metadata: %v", err))
+		log.Fatalf("marshal evaluation metrics metadata: %v", err)
 	}
 	return string(raw)
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	serializers "lib/shared_lib/serializer"
+	"lib/shared_lib/uuidutil"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -258,7 +259,7 @@ func (a *dtoAdapter) toDTO(datasetModel *model.Dataset, baseURL string) *Dataset
 		Location:            datasetModel.Location,
 		StorageLocation:     datasetModel.Location,
 		SourceType:          datasetSourceType(datasetModel),
-		SourceConnectorID:   uuidToString(datasetModel.SourceConnectorID),
+		SourceConnectorID:   uuidutil.StringOrEmpty(datasetModel.SourceConnectorID),
 		SourceQuery:         datasetModel.SourceQuery,
 		SourceDatabase:      datasetModel.SourceDatabase,
 		SourceCollection:    datasetModel.SourceCollection,
@@ -273,9 +274,9 @@ func (a *dtoAdapter) toDTO(datasetModel *model.Dataset, baseURL string) *Dataset
 		SchemaMetadata:      json.RawMessage(schemaMetadata),
 		ProcessingState:     datasetModel.ProcessingState.String(),
 		DatasetVersion:      datasetModel.DatasetVersion,
-		RawSnapshotID:       uuidToString(datasetModel.RawSnapshotID),
-		FeatureSnapshotID:   uuidToString(datasetModel.FeatureSnapshotID),
-		EmbeddingSnapshotID: uuidToString(datasetModel.EmbeddingSnapshotID),
+		RawSnapshotID:       uuidutil.StringOrEmpty(datasetModel.RawSnapshotID),
+		FeatureSnapshotID:   uuidutil.StringOrEmpty(datasetModel.FeatureSnapshotID),
+		EmbeddingSnapshotID: uuidutil.StringOrEmpty(datasetModel.EmbeddingSnapshotID),
 		Links: ResourceLinks{
 			Self: Self{
 				Href: fmt.Sprintf("%s/%s", baseURL, datasetModel.ID.String()),
@@ -292,13 +293,4 @@ func datasetSourceType(dataset *model.Dataset) string {
 		return ""
 	}
 	return dataset.SourceType.String()
-}
-
-func uuidToString(id uuid.UUID) string {
-	log.Trace("uuidToString")
-
-	if id == uuid.Nil {
-		return ""
-	}
-	return id.String()
 }

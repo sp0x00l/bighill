@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -62,7 +63,7 @@ func (m MsgType) String() string {
 func MsgTypeFromString(s string) MsgType {
 	msgType, err := MsgTypeFromStringChecked(s)
 	if err != nil {
-		panic(err)
+		log.Fatalf("resolve message type: %v", err)
 	}
 	return msgType
 }

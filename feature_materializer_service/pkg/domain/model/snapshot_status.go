@@ -1,6 +1,9 @@
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type SnapshotStatus int
 
@@ -11,11 +14,20 @@ const (
 )
 
 func (s SnapshotStatus) String() string {
-	return [...]string{"PENDING", "READY", "FAILED"}[s]
+	switch s {
+	case SnapshotStatusPending:
+		return "PENDING"
+	case SnapshotStatusReady:
+		return "READY"
+	case SnapshotStatusFailed:
+		return "FAILED"
+	default:
+		return "UNKNOWN"
+	}
 }
 
 func ToSnapshotStatus(s string) (SnapshotStatus, error) {
-	switch s {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case "PENDING":
 		return SnapshotStatusPending, nil
 	case "READY":

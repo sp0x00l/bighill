@@ -892,9 +892,7 @@ func initRunSalt() {
 
 func uniqueGBPhone() string {
 	phone, err := uniqueGBPhoneFromStub("+447078")
-	if err != nil {
-		panic(err)
-	}
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	return phone
 }
 

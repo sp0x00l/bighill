@@ -24,7 +24,14 @@ run_api_gateway_tests()
     wait_for_api_gateway_ready 120 2 "$BASE_URL"
 
     cd "$GATEWAY_ROOT"
-    ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1 --label-filter='!real-huggingface'
+    if [ "${API_GATEWAY_RUN_CORE_TESTS:-true}" = "true" ]; then
+        ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1 --label-filter='!real-huggingface && !external-datasource'
+    fi
+
+    if [ "${API_GATEWAY_RUN_DATASOURCE_TESTS:-false}" = "true" ]; then
+        "$PROJECT_ROOT/scripts/start-data-sources.sh"
+        ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1 --label-filter='external-datasource'
+    fi
 
     cd "$CURRENT_DIR"
 }

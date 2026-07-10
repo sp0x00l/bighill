@@ -22,7 +22,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const defaultDataFusionBinaryPath = "internal/infra/queryengine/datafusion_query_engine/target/release/datafusion_query_engine"
 const queryEngineIPCHeader = "BHIPC001"
 const queryEngineIPCFooter = "BHIPCEND"
 
@@ -53,7 +52,7 @@ func NewDataFusionQueryEngine(config infra.QueryEngineConfig) (QueryEngine, erro
 
 	binaryPath := strings.TrimSpace(config.BinaryPath)
 	if binaryPath == "" {
-		binaryPath = defaultDataFusionBinaryPath
+		return nil, domainErrors.ErrValidationFailed.Extend("query engine binary path is required")
 	}
 
 	return &dataFusionQueryEngine{

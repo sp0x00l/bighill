@@ -8,6 +8,9 @@ import (
 
 type UploadSessionStatus string
 type UploadResourceType string
+type UploadSource string
+type ModelArtifactType string
+type ModelArtifactFormat string
 
 const (
 	UploadSessionPending  UploadSessionStatus = "PENDING"
@@ -19,6 +22,27 @@ const (
 const (
 	UploadResourceDataFile      UploadResourceType = "DATA_FILE"
 	UploadResourceModelArtifact UploadResourceType = "MODEL_ARTIFACT"
+)
+
+const (
+	UploadSourceUpload      UploadSource = "UPLOAD"
+	UploadSourceHuggingFace UploadSource = "HUGGING_FACE"
+)
+
+const (
+	ModelArtifactTypeBase        ModelArtifactType = "BASE_MODEL"
+	ModelArtifactTypeLoraAdapter ModelArtifactType = "LORA_ADAPTER"
+	ModelArtifactTypeMerged      ModelArtifactType = "MERGED_MODEL"
+)
+
+const (
+	ModelArtifactFormatHFModel         ModelArtifactFormat = "HF_MODEL"
+	ModelArtifactFormatHFPEFTAdapter   ModelArtifactFormat = "HF_PEFT_ADAPTER"
+	ModelArtifactFormatSafetensors     ModelArtifactFormat = "SAFETENSORS"
+	ModelArtifactFormatZIP             ModelArtifactFormat = "ZIP"
+	ModelArtifactFormatGGUF            ModelArtifactFormat = "GGUF"
+	ModelArtifactFormatGGUFModel       ModelArtifactFormat = "GGUF_MODEL"
+	ModelArtifactFormatGGUFLoraAdapter ModelArtifactFormat = "GGUF_LORA_ADAPTER"
 )
 
 type UploadSession struct {

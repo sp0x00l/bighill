@@ -899,7 +899,65 @@ func scanEmbeddingSnapshot(row pgx.Row) (*model.EmbeddingSnapshot, error) {
 	embeddingSnapshot.UserID = uuid.MustParse(userID)
 	embeddingSnapshot.OrgID = uuid.MustParse(orgID)
 	embeddingSnapshot.Status = status
+	normalizeEmbeddingSnapshotStrategy(embeddingSnapshot)
+	if err := validateEmbeddingSnapshotStrategy(embeddingSnapshot); err != nil {
+		return nil, err
+	}
 	return embeddingSnapshot, nil
+}
+
+func normalizeEmbeddingSnapshotStrategy(snapshot *model.EmbeddingSnapshot) {
+	log.Trace("normalizeEmbeddingSnapshotStrategy")
+
+	strategy := model.NormalizeEmbeddingStrategy(model.EmbeddingStrategy{
+		StrategyVersion:     snapshot.StrategyVersion,
+		ExtractorName:       snapshot.ExtractorName,
+		ExtractorVersion:    snapshot.ExtractorVersion,
+		CleanerName:         snapshot.CleanerName,
+		CleanerVersion:      snapshot.CleanerVersion,
+		ChunkerName:         snapshot.ChunkerName,
+		ChunkerVersion:      snapshot.ChunkerVersion,
+		ChunkSize:           snapshot.ChunkSize,
+		ChunkOverlap:        snapshot.ChunkOverlap,
+		EmbeddingProvider:   snapshot.EmbeddingProvider,
+		EmbeddingModel:      snapshot.EmbeddingModel,
+		EmbeddingDimensions: snapshot.EmbeddingDimensions,
+	})
+	snapshot.StrategyVersion = strategy.StrategyVersion
+	snapshot.ExtractorName = strategy.ExtractorName
+	snapshot.ExtractorVersion = strategy.ExtractorVersion
+	snapshot.CleanerName = strategy.CleanerName
+	snapshot.CleanerVersion = strategy.CleanerVersion
+	snapshot.ChunkerName = strategy.ChunkerName
+	snapshot.ChunkerVersion = strategy.ChunkerVersion
+	snapshot.ChunkSize = strategy.ChunkSize
+	snapshot.ChunkOverlap = strategy.ChunkOverlap
+	snapshot.EmbeddingProvider = strategy.EmbeddingProvider
+	snapshot.EmbeddingModel = strategy.EmbeddingModel
+	snapshot.EmbeddingDimensions = strategy.EmbeddingDimensions
+}
+
+func validateEmbeddingSnapshotStrategy(snapshot *model.EmbeddingSnapshot) error {
+	log.Trace("validateEmbeddingSnapshotStrategy")
+
+	err := model.ValidateEmbeddingStrategy(model.EmbeddingStrategy{
+		StrategyVersion:     snapshot.StrategyVersion,
+		ExtractorName:       snapshot.ExtractorName,
+		ExtractorVersion:    snapshot.ExtractorVersion,
+		CleanerName:         snapshot.CleanerName,
+		CleanerVersion:      snapshot.CleanerVersion,
+		ChunkerName:         snapshot.ChunkerName,
+		ChunkerVersion:      snapshot.ChunkerVersion,
+		ChunkSize:           snapshot.ChunkSize,
+		ChunkOverlap:        snapshot.ChunkOverlap,
+		EmbeddingProvider:   snapshot.EmbeddingProvider,
+		EmbeddingModel:      snapshot.EmbeddingModel,
+		EmbeddingDimensions: snapshot.EmbeddingDimensions,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: embedding snapshot strategy is invalid: %w", domain.ErrValidationFailed, err)
+	}
+	return nil
 }
 
 func scanEmbeddingRecordSearchRow(row pgx.Row) (model.EmbeddingRecord, error) {

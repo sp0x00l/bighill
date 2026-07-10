@@ -98,14 +98,48 @@ should_skip_build() {
   return 0
 }
 
+describe_port_owner() {
+  local PORT="$1"
+
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true
+  fi
+}
+
+ensure_service_ports_free() {
+  local ENV="$1"
+  local SERVICE_DIR="$2"
+  local PORT
+  local LABEL
+  local BUSY=false
+
+  while IFS='|' read -r PORT LABEL; do
+    if [ -n "$PORT" ] && nc -z localhost "$PORT" >/dev/null 2>&1; then
+      echo "Error: ${LABEL} port ${PORT} is already in use before starting ${SERVICE_DIR}"
+      describe_port_owner "$PORT"
+      BUSY=true
+    fi
+  done < <(get_service_ports "$ENV" "$PROJECT_ROOT" "$SERVICE_DIR")
+
+  if [ "$BUSY" = "true" ]; then
+    echo "Stop the existing process first, then rerun startup."
+    return 1
+  fi
+
+  return 0
+}
+
 start_all_services() {
   local ENV="$1"
   shift
   local SERVICE_DIRS=("$@")
+  mkdir -p "${PROJECT_ROOT}/tmp"
   
   for SERVICE_DIR in "${SERVICE_DIRS[@]}"; do
     local SERVICE_NAME=$(service_dir_to_binary "$SERVICE_DIR")
     local BINARY="${PROJECT_ROOT}/${SERVICE_DIR}/build/${SERVICE_NAME}"
+    local PID_FILE="${PROJECT_ROOT}/tmp/${SERVICE_NAME}.pid"
+    local LOG_FILE="${PROJECT_ROOT}/tmp/${SERVICE_NAME}.log"
     
     if [ ! -f "$BINARY" ]; then
       echo "Error: Binary not found for ${SERVICE_DIR} at ${BINARY}"
@@ -113,21 +147,63 @@ start_all_services() {
     fi
     
     echo "Starting ${SERVICE_NAME}..."
+    ensure_service_ports_free "$ENV" "$SERVICE_DIR"
     cd "${PROJECT_ROOT}/${SERVICE_DIR}"
     source_service_config "$SERVICE_DIR" "$ENV" "$PROJECT_ROOT"
-    "$BINARY" &
+    nohup "$BINARY" > "$LOG_FILE" 2>&1 &
+    local SERVICE_PID=$!
+    echo "$SERVICE_PID" > "$PID_FILE"
+    echo "${SERVICE_NAME} started with pid ${SERVICE_PID}; logs: ${LOG_FILE}"
   done
   
   cd "$PROJECT_ROOT"
 }
 
+wait_for_service_port() {
+  local PORT="$1"
+  local LABEL="$2"
+  local SERVICE_PID="$3"
+  local RETRIES="${4:-30}"
+  local DELAY="${5:-2}"
+
+  until nc -z localhost "$PORT" >/dev/null 2>&1; do
+    if [ -n "$SERVICE_PID" ] && ! kill -0 "$SERVICE_PID" >/dev/null 2>&1; then
+      echo "Error: ${LABEL} process ${SERVICE_PID} exited before port ${PORT} became available"
+      return 1
+    fi
+
+    RETRIES=$((RETRIES - 1))
+    if [ "$RETRIES" -le 0 ]; then
+      echo "Timeout waiting for $LABEL on port $PORT"
+      return 1
+    fi
+    echo "Waiting for $LABEL on port $PORT... (${RETRIES} retries left)"
+    sleep "$DELAY"
+  done
+
+  if [ -n "$SERVICE_PID" ] && ! kill -0 "$SERVICE_PID" >/dev/null 2>&1; then
+    echo "Error: ${LABEL} process ${SERVICE_PID} exited after port ${PORT} became available"
+    return 1
+  fi
+
+  echo "$LABEL is available on port $PORT"
+}
+
 wait_for_service_ports() {
   local ENV="$1"
   local SERVICE_DIR="$2"
+  local SERVICE_NAME
+  SERVICE_NAME="$(service_dir_to_binary "$SERVICE_DIR")"
+  local PID_FILE="${PROJECT_ROOT}/tmp/${SERVICE_NAME}.pid"
+  local SERVICE_PID=""
+
+  if [ -f "$PID_FILE" ]; then
+    SERVICE_PID="$(cat "$PID_FILE")"
+  fi
 
   while IFS='|' read -r PORT LABEL; do
     if [ -n "$PORT" ]; then
-      wait_for_port "$PORT" "$LABEL"
+      wait_for_service_port "$PORT" "$LABEL" "$SERVICE_PID"
     fi
   done < <(get_service_ports "$ENV" "$PROJECT_ROOT" "$SERVICE_DIR")
 }

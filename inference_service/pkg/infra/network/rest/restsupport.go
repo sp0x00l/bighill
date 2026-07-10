@@ -38,7 +38,7 @@ type Service struct {
 	server *transport.HttpServer
 }
 
-func NewService(routes []Route, port int, name string) *Service {
+func NewService(routes []Route, port int, name string, options ...transport.HttpServerOption) *Service {
 	transportRoutes := make([]transport.Route, 0, len(routes))
 	for _, route := range routes {
 		handler := route.Handler
@@ -62,7 +62,7 @@ func NewService(routes []Route, port int, name string) *Service {
 			},
 		})
 	}
-	return &Service{server: transport.NewHttpServer(otel.Tracer(name), transportRoutes, port, name)}
+	return &Service{server: transport.NewHttpServer(otel.Tracer(name), transportRoutes, port, name, options...)}
 }
 
 func (s *Service) Connect() error {

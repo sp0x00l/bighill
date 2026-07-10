@@ -23,6 +23,15 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
+const (
+	modelUploadContentTypeOctetStream = "application/octet-stream"
+	modelArtifactExtensionSafetensors = ".safetensors"
+	modelArtifactExtensionZip         = ".zip"
+	modelArtifactExtensionGGUF        = ".gguf"
+	huggingFaceGGUFFileName           = "huggingface-model.gguf"
+	huggingFaceSnapshotFileName       = "huggingface-snapshot"
+)
+
 type dataUploadUseCase struct {
 	bucket                 BlobRepositoryAdapter
 	uploadSessions         UploadSessionRepositoryAdapter
@@ -179,7 +188,7 @@ func (u *dataUploadUseCase) InitiateUploadSession(ctx context.Context, request m
 		TableFormat:         strings.TrimSpace(request.TableFormat),
 		CatalogProvider:     strings.TrimSpace(request.CatalogProvider),
 		ProcessingProfile:   strings.TrimSpace(request.ProcessingProfile),
-		Source:              "UPLOAD",
+		Source:              string(model.UploadSourceUpload),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(u.uploadSessionTTL),
 	}
@@ -254,7 +263,7 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 		ModelName:           strings.TrimSpace(request.ModelName),
 		ModelVersion:        strings.TrimSpace(request.ModelVersion),
 		BaseModel:           strings.TrimSpace(request.BaseModel),
-		Source:              "UPLOAD",
+		Source:              string(model.UploadSourceUpload),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(u.uploadSessionTTL),
 	}
@@ -297,11 +306,11 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 	now := time.Now().UTC()
 	artifactFormat := normalizeModelToken(request.ArtifactFormat)
 	if artifactFormat == "" {
-		artifactFormat = "HF_MODEL"
+		artifactFormat = string(model.ModelArtifactFormatHFModel)
 	}
 	artifactType := normalizeModelToken(request.ArtifactType)
 	if artifactType == "" {
-		artifactType = "BASE_MODEL"
+		artifactType = string(model.ModelArtifactTypeBase)
 	}
 	fileName := huggingFaceArtifactFileName(request.HuggingFaceFile, artifactFormat)
 	reservedSession := &model.UploadSession{
@@ -313,13 +322,13 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		ClientNonce:         strings.TrimSpace(request.ClientNonce),
 		FileName:            fileName,
 		DeclaredFormat:      artifactFormat,
-		DeclaredContentType: "application/octet-stream",
+		DeclaredContentType: modelUploadContentTypeOctetStream,
 		Status:              model.UploadSessionPending,
 		ArtifactType:        artifactType,
 		ModelName:           strings.TrimSpace(request.ModelName),
 		ModelVersion:        strings.TrimSpace(request.ModelVersion),
 		BaseModel:           strings.TrimSpace(request.BaseModel),
-		Source:              "HUGGING_FACE",
+		Source:              string(model.UploadSourceHuggingFace),
 		HFRepoID:            strings.TrimSpace(request.RepoID),
 		HFRevision:          strings.TrimSpace(request.Revision),
 		CreatedAt:           now,
@@ -363,7 +372,7 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		FileName:            huggingFaceArtifactFileName(request.HuggingFaceFile, downloaded.ArtifactFormat),
 		StorageLocation:     strings.TrimSpace(downloaded.StorageLocation),
 		DeclaredFormat:      normalizeModelToken(downloaded.ArtifactFormat),
-		DeclaredContentType: "application/octet-stream",
+		DeclaredContentType: modelUploadContentTypeOctetStream,
 		ActualSizeBytes:     downloaded.ArtifactSizeBytes,
 		Checksum:            strings.TrimSpace(downloaded.ArtifactChecksum),
 		Status:              model.UploadSessionPromoted,
@@ -371,7 +380,7 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		ModelName:           strings.TrimSpace(downloaded.ModelName),
 		ModelVersion:        strings.TrimSpace(downloaded.ModelVersion),
 		BaseModel:           strings.TrimSpace(downloaded.BaseModel),
-		Source:              "HUGGING_FACE",
+		Source:              string(model.UploadSourceHuggingFace),
 		SourceURI:           strings.TrimSpace(downloaded.SourceURI),
 		ManifestLocation:    strings.TrimSpace(downloaded.ManifestLocation),
 		HFRepoID:            strings.TrimSpace(downloaded.HFRepoID),
@@ -665,10 +674,13 @@ func validateModelArtifactContents(reader io.ReadSeeker, session *model.UploadSe
 	switch {
 	case isDirectGGUFModelArtifact(session):
 		return domain.ErrValidationFailed.Extend("GGUF model artifacts must be onboarded through the Hugging Face exact-file path so the full file metadata is validated")
-	case normalizeModelToken(session.DeclaredFormat) == "SAFETENSORS" || strings.HasSuffix(strings.ToLower(session.FileName), ".safetensors"):
+	case normalizeModelToken(session.DeclaredFormat) == string(model.ModelArtifactFormatSafetensors) ||
+		strings.HasSuffix(strings.ToLower(session.FileName), modelArtifactExtensionSafetensors):
 		return domain.ErrValidationFailed.Extend("safetensors model artifacts must be uploaded as an archive with model metadata")
-	case normalizeModelToken(session.DeclaredFormat) == "ZIP" || strings.HasSuffix(strings.ToLower(session.FileName), ".zip") ||
-		normalizeModelToken(session.DeclaredFormat) == "HF_MODEL" || normalizeModelToken(session.DeclaredFormat) == "HF_PEFT_ADAPTER":
+	case normalizeModelToken(session.DeclaredFormat) == string(model.ModelArtifactFormatZIP) ||
+		strings.HasSuffix(strings.ToLower(session.FileName), modelArtifactExtensionZip) ||
+		normalizeModelToken(session.DeclaredFormat) == string(model.ModelArtifactFormatHFModel) ||
+		normalizeModelToken(session.DeclaredFormat) == string(model.ModelArtifactFormatHFPEFTAdapter):
 		return validateModelZipArchive(reader, session, objectSize)
 	default:
 		return domain.ErrValidationFailed.Extend("uploaded model artifact format is not positively validated")
@@ -682,8 +694,10 @@ func isDirectGGUFModelArtifact(session *model.UploadSession) bool {
 		return false
 	}
 	format := normalizeModelToken(session.DeclaredFormat)
-	return format == "GGUF" || format == "GGUF_MODEL" || format == "GGUF_LORA_ADAPTER" ||
-		strings.HasSuffix(strings.ToLower(session.FileName), ".gguf")
+	return format == string(model.ModelArtifactFormatGGUF) ||
+		format == string(model.ModelArtifactFormatGGUFModel) ||
+		format == string(model.ModelArtifactFormatGGUFLoraAdapter) ||
+		strings.HasSuffix(strings.ToLower(session.FileName), modelArtifactExtensionGGUF)
 }
 
 func huggingFaceArtifactFileName(huggingFaceFile string, artifactFormat string) string {
@@ -694,10 +708,10 @@ func huggingFaceArtifactFileName(huggingFaceFile string, artifactFormat string) 
 		return fileName
 	}
 	switch normalizeModelToken(artifactFormat) {
-	case "GGUF", "GGUF_MODEL", "GGUF_LORA_ADAPTER":
-		return "huggingface-model.gguf"
+	case string(model.ModelArtifactFormatGGUF), string(model.ModelArtifactFormatGGUFModel), string(model.ModelArtifactFormatGGUFLoraAdapter):
+		return huggingFaceGGUFFileName
 	default:
-		return "huggingface-snapshot"
+		return huggingFaceSnapshotFileName
 	}
 }
 

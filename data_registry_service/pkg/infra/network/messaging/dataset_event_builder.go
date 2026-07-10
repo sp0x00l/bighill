@@ -6,6 +6,7 @@ import (
 	"data_registry_service/pkg/domain/model"
 	datasetpb "lib/data_contracts_lib/data_registry"
 	msgConn "lib/shared_lib/messaging"
+	"lib/shared_lib/uuidutil"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -39,9 +40,9 @@ func (b *DatasetEventBuilder) DatasetUpdatedMessage(dataset *model.Dataset) msgC
 		ProcessingProfile:        dataset.ProcessingProfile.String(),
 		SchemaVersion:            int32(dataset.SchemaVersion),
 		SchemaMetadata:           dataset.SchemaMetadata,
-		RawSnapshotId:            uuidToString(dataset.RawSnapshotID),
-		FeatureSnapshotId:        uuidToString(dataset.FeatureSnapshotID),
-		EmbeddingSnapshotId:      uuidToString(dataset.EmbeddingSnapshotID),
+		RawSnapshotId:            uuidutil.StringOrEmpty(dataset.RawSnapshotID),
+		FeatureSnapshotId:        uuidutil.StringOrEmpty(dataset.FeatureSnapshotID),
+		EmbeddingSnapshotId:      uuidutil.StringOrEmpty(dataset.EmbeddingSnapshotID),
 		VectorStore:              dataset.VectorStore,
 		CollectionName:           dataset.CollectionName,
 		EmbeddingDimensions:      int32(dataset.EmbeddingDimensions),
@@ -54,7 +55,7 @@ func (b *DatasetEventBuilder) DatasetUpdatedMessage(dataset *model.Dataset) msgC
 		EmbeddingProvider:        dataset.EmbeddingProvider,
 		EmbeddingModel:           dataset.EmbeddingModel,
 		SourceType:               datasetSourceType(dataset),
-		SourceConnectorId:        uuidToString(dataset.SourceConnectorID),
+		SourceConnectorId:        uuidutil.StringOrEmpty(dataset.SourceConnectorID),
 		SourceQuery:              dataset.SourceQuery,
 		SourceDatabase:           dataset.SourceDatabase,
 		SourceCollection:         dataset.SourceCollection,
@@ -88,7 +89,7 @@ func (b *DatasetEventBuilder) DatasetCreatedMessage(dataset *model.Dataset) msgC
 		SchemaVersion:     int32(dataset.SchemaVersion),
 		SchemaMetadata:    dataset.SchemaMetadata,
 		SourceType:        datasetSourceType(dataset),
-		SourceConnectorId: uuidToString(dataset.SourceConnectorID),
+		SourceConnectorId: uuidutil.StringOrEmpty(dataset.SourceConnectorID),
 		SourceQuery:       dataset.SourceQuery,
 		SourceDatabase:    dataset.SourceDatabase,
 		SourceCollection:  dataset.SourceCollection,
@@ -123,15 +124,6 @@ func (b *DatasetEventBuilder) DatasetDeletedMessage(datasetID uuid.UUID, userID 
 	}
 }
 
-func uuidToString(id uuid.UUID) string {
-	log.Trace("uuidToString")
-
-	if id == uuid.Nil {
-		return ""
-	}
-	return id.String()
-}
-
 func datasetSourceType(dataset *model.Dataset) string {
 	log.Trace("datasetSourceType")
 
@@ -146,7 +138,7 @@ func mustMarshalDataset(payload proto.Message) []byte {
 
 	out, err := proto.Marshal(payload)
 	if err != nil {
-		panic(err)
+		log.Fatalf("marshal dataset event: %v", err)
 	}
 	return out
 }

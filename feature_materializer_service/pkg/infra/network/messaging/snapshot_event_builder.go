@@ -31,7 +31,7 @@ func (b *snapshotEventBuilder) RawSnapshotReadyMessage(rawSnapshot *model.RawSna
 	if rawSnapshot.MaterializationEventSeq <= 0 {
 		return msgConn.OutboundMessage{}, fmt.Errorf("raw snapshot materialization event sequence is required")
 	}
-	payload := marshalSnapshotEvent(&featurepb.RawSnapshotReadyEvent{
+	payload, err := marshalSnapshotEvent(&featurepb.RawSnapshotReadyEvent{
 		DatasetId:               rawSnapshot.DatasetID.String(),
 		MaterializationEventSeq: rawSnapshot.MaterializationEventSeq,
 		RawSnapshotId:           rawSnapshot.RawSnapshotID.String(),
@@ -46,6 +46,9 @@ func (b *snapshotEventBuilder) RawSnapshotReadyMessage(rawSnapshot *model.RawSna
 		SchemaMetadata:          rawSnapshot.SchemaMetadata,
 		ProcessingProfile:       rawSnapshot.ProcessingProfile.String(),
 	})
+	if err != nil {
+		return msgConn.OutboundMessage{}, fmt.Errorf("marshal raw snapshot ready event: %w", err)
+	}
 	return msgConn.OutboundMessage{
 		Topic: b.topics.FeatureMaterializer,
 		Message: msgConn.Message{
@@ -66,7 +69,7 @@ func (b *snapshotEventBuilder) FeatureSnapshotReadyMessage(featureSnapshot *mode
 	if featureSnapshot.MaterializationEventSeq <= 0 {
 		return msgConn.OutboundMessage{}, fmt.Errorf("feature snapshot materialization event sequence is required")
 	}
-	payload := marshalSnapshotEvent(&featurepb.FeatureSnapshotReadyEvent{
+	payload, err := marshalSnapshotEvent(&featurepb.FeatureSnapshotReadyEvent{
 		DatasetId:               featureSnapshot.DatasetID.String(),
 		MaterializationEventSeq: featureSnapshot.MaterializationEventSeq,
 		RawSnapshotId:           featureSnapshot.RawSnapshotID.String(),
@@ -82,6 +85,9 @@ func (b *snapshotEventBuilder) FeatureSnapshotReadyMessage(featureSnapshot *mode
 		SchemaMetadata:          featureSnapshot.SchemaMetadata,
 		ProcessingProfile:       featureSnapshot.ProcessingProfile.String(),
 	})
+	if err != nil {
+		return msgConn.OutboundMessage{}, fmt.Errorf("marshal feature snapshot ready event: %w", err)
+	}
 	return msgConn.OutboundMessage{
 		Topic: b.topics.FeatureMaterializer,
 		Message: msgConn.Message{
@@ -102,7 +108,7 @@ func (b *snapshotEventBuilder) EmbeddingSnapshotReadyMessage(embeddingSnapshot *
 	if embeddingSnapshot.MaterializationEventSeq <= 0 {
 		return msgConn.OutboundMessage{}, fmt.Errorf("embedding snapshot materialization event sequence is required")
 	}
-	payload := marshalSnapshotEvent(&featurepb.EmbeddingSnapshotReadyEvent{
+	payload, err := marshalSnapshotEvent(&featurepb.EmbeddingSnapshotReadyEvent{
 		DatasetId:               embeddingSnapshot.DatasetID.String(),
 		MaterializationEventSeq: embeddingSnapshot.MaterializationEventSeq,
 		FeatureSnapshotId:       embeddingSnapshot.FeatureSnapshotID.String(),
@@ -121,6 +127,9 @@ func (b *snapshotEventBuilder) EmbeddingSnapshotReadyMessage(embeddingSnapshot *
 		EmbeddingProvider:       embeddingSnapshot.EmbeddingProvider,
 		EmbeddingModel:          embeddingSnapshot.EmbeddingModel,
 	})
+	if err != nil {
+		return msgConn.OutboundMessage{}, fmt.Errorf("marshal embedding snapshot ready event: %w", err)
+	}
 	return msgConn.OutboundMessage{
 		Topic: b.topics.FeatureMaterializer,
 		Message: msgConn.Message{
@@ -132,12 +141,12 @@ func (b *snapshotEventBuilder) EmbeddingSnapshotReadyMessage(embeddingSnapshot *
 	}, nil
 }
 
-func marshalSnapshotEvent(payload proto.Message) []byte {
+func marshalSnapshotEvent(payload proto.Message) ([]byte, error) {
 	log.Trace("marshalSnapshotEvent")
 
 	out, err := proto.Marshal(payload)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return out
+	return out, nil
 }

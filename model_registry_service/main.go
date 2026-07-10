@@ -359,12 +359,18 @@ func newServingObserver(cfg servingConfig, deployer app.ModelServingDeployer, re
 
 	switch cfg.Backend {
 	case "local":
+		if cfg.LocalResyncEvery <= 0 {
+			return nil, fmt.Errorf("MODEL_REGISTRY_SERVICE_SERVING_LOCAL_RESYNC_SECONDS must be greater than zero")
+		}
 		adapter, ok := deployer.(*localserving.Adapter)
 		if !ok {
 			return nil, fmt.Errorf("local serving deployer has unexpected type")
 		}
 		return localserving.NewStatusObserver(adapter, recorder, cfg.LocalResyncEvery)
 	case "kubernetes":
+		if cfg.StatusPollEvery <= 0 {
+			return nil, fmt.Errorf("MODEL_REGISTRY_SERVICE_SERVING_STATUS_POLL_MS must be greater than zero")
+		}
 		adapter, ok := deployer.(*registrykubernetes.ServedModelAdapter)
 		if !ok {
 			return nil, fmt.Errorf("kubernetes serving deployer has unexpected type")

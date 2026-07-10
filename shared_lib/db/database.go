@@ -32,7 +32,7 @@ func InitDatabase(ctx context.Context, dbName, connection string, logs *logrus.L
 func NewDatabase(pool ConnectionPool, dbName string) *Database {
 	logrus.Trace("NewDatabase")
 	if !isSafeDatabaseName(dbName) {
-		panic(fmt.Sprintf("invalid database/schema name %q", dbName))
+		logrus.Fatalf("invalid database/schema name %q", dbName)
 	}
 
 	return &Database{

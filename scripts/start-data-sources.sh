@@ -31,7 +31,10 @@ start_data_sources()
     for SERVICE in "${SERVICES[@]}"; do
         case "$SERVICE" in
             postgres-data-source) wait_for_port 5435 "Postgres data source" 60 2 ;;
-            mysql-data-source)    wait_for_port 3306 "MySQL data source" 60 2 ;;
+            mysql-data-source)
+                wait_for_port 3306 "MySQL data source" 60 2
+                wait_for_mysql_data_source
+                ;;
             mongodb-data-source)  wait_for_port 27017 "MongoDB data source" 60 2 ;;
             clickhouse-data-source)
                 wait_for_port 19000 "ClickHouse data source" 60 2
@@ -68,6 +71,27 @@ wait_for_clickhouse_data_source()
     done
 
     echo "ClickHouse fixture data is ready"
+}
+
+wait_for_mysql_data_source()
+{
+    local RETRIES
+    local DELAY
+
+    RETRIES=60
+    DELAY=2
+
+    until docker exec mysql-data-source mysql -u user -ppassword sakila -e "SELECT count(*) FROM actor" >/dev/null 2>&1; do
+        RETRIES=$((RETRIES - 1))
+        if [ "$RETRIES" -le 0 ]; then
+            echo "Timeout waiting for MySQL fixture data"
+            return 1
+        fi
+        echo "Waiting for MySQL fixture data... (${RETRIES} retries left)"
+        sleep "$DELAY"
+    done
+
+    echo "MySQL fixture data is ready"
 }
 
 start_data_sources "$@"

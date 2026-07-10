@@ -18,7 +18,7 @@ import (
 	"model_serving_service/pkg/app"
 	"model_serving_service/pkg/domain"
 	"model_serving_service/pkg/domain/model"
-	servingk8s "model_serving_service/pkg/infra/network/k8s"
+	servingkubernetes "model_serving_service/pkg/infra/network/k8s"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -471,6 +471,9 @@ func newLocalOllamaTagsTransport(payload string, assert func(*http.Request)) loc
 }
 
 func (t localOllamaTagsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodPost && req.URL.Path == "/api/generate" {
+		return jsonResponse(http.StatusOK, map[string]any{"response": "", "done": true}), nil
+	}
 	if t.assert != nil {
 		t.assert(req)
 	}
@@ -550,6 +553,12 @@ func (t *ollamaCreateTransport) RoundTrip(req *http.Request) (*http.Response, er
 		delete(t.parameters, tag)
 		t.deletedModels = append(t.deletedModels, tag)
 		return jsonResponse(http.StatusOK, map[string]any{"status": "success"}), nil
+	case req.Method == http.MethodPost && req.URL.Path == "/api/generate":
+		var payload map[string]any
+		Expect(json.NewDecoder(req.Body).Decode(&payload)).To(Succeed())
+		Expect(payload).To(HaveKey("model"))
+		Expect(payload).To(HaveKeyWithValue("stream", false))
+		return jsonResponse(http.StatusOK, map[string]any{"response": "", "done": true}), nil
 	default:
 		return jsonResponse(http.StatusNotFound, map[string]any{"error": req.Method + " " + req.URL.Path}), nil
 	}
@@ -695,7 +704,7 @@ var _ = Describe("Store", func() {
 		runtime := newTestRuntime("http://ollama.local")
 		runtime.client = &http.Client{Transport: newLocalOllamaTagsTransport(`{"models":[{"name":"local-user-model:latest"}]}`, nil)}
 		reconciler := app.NewServedModelReconciler(runtime, store)
-		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
 
 		Expect(controller.ProcessOnce(context.Background())).To(Succeed())
 

@@ -57,7 +57,7 @@ spec:
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_TENANT_SUBSCRIBER_TOPIC
-              value: {{ .Values.env.profileSubscriberTopic | quote }}
+              value: {{ .Values.env.tenantSubscriberTopic | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DLQ
               value: {{ .Values.env.dlq | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX
@@ -94,6 +94,8 @@ spec:
               value: {{ .Values.env.embeddingDimensions | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS
               value: {{ .Values.env.embeddingMaxRows | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_VECTOR_STORE
+              value: {{ .Values.env.embeddingVectorStore | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_STRATEGY_VERSION
               value: {{ .Values.env.embeddingStrategyVersion | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_EXTRACTOR_NAME

@@ -65,7 +65,7 @@ func (e *streamingEngineStub) Stream(_ context.Context, _ *flight.Ticket, outStr
 	builder := array.NewRecordBuilder(allocator, e.schema)
 	defer builder.Release()
 	builder.Field(0).(*array.StringBuilder).Append("streamed")
-	record := builder.NewRecord()
+	record := builder.NewRecordBatch()
 	defer record.Release()
 
 	writer := flight.NewRecordWriter(outStream, ipc.WithSchema(e.schema), ipc.WithAllocator(allocator))

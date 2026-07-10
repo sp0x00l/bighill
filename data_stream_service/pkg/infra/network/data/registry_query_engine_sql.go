@@ -26,7 +26,11 @@ func (e *registryQueryEngine) executeMySQL(ctx context.Context, cfg *dataregistr
 	if cfg == nil {
 		return nil, domainErrors.ErrValidationFailed.Extend("source connector does not include mysql config")
 	}
-	return e.executeSQL(ctx, "mysql", mysqlConnectionString(cfg), "mysql", query)
+	dsn, err := mysqlConnectionString(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return e.executeSQL(ctx, "mysql", dsn, "mysql", query)
 }
 
 func (e *registryQueryEngine) executeClickHouse(ctx context.Context, cfg *dataregistrypb.ClickHouseSourceConfig, query string) (*QueryResult, error) {
@@ -35,7 +39,11 @@ func (e *registryQueryEngine) executeClickHouse(ctx context.Context, cfg *datare
 	if cfg == nil {
 		return nil, domainErrors.ErrValidationFailed.Extend("source connector does not include clickhouse config")
 	}
-	return e.executeSQL(ctx, "clickhouse", clickHouseConnectionString(cfg), "clickhouse", query)
+	dsn, err := clickHouseConnectionString(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return e.executeSQL(ctx, "clickhouse", dsn, "clickhouse", query)
 }
 
 func (e *registryQueryEngine) executeOracle(ctx context.Context, cfg *dataregistrypb.OracleSourceConfig, query string) (*QueryResult, error) {
@@ -44,7 +52,11 @@ func (e *registryQueryEngine) executeOracle(ctx context.Context, cfg *dataregist
 	if cfg == nil {
 		return nil, domainErrors.ErrValidationFailed.Extend("source connector does not include oracle config")
 	}
-	return e.executeSQL(ctx, "oracle", oracleConnectionString(cfg), "oracle", query)
+	dsn, err := oracleConnectionString(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return e.executeSQL(ctx, "oracle", dsn, "oracle", query)
 }
 
 func (e *registryQueryEngine) executeSQL(ctx context.Context, driverName, dsn, sourceName, query string) (*QueryResult, error) {
@@ -79,16 +91,20 @@ func (e *registryQueryEngine) executeSQL(ctx context.Context, driverName, dsn, s
 	return result, nil
 }
 
-func mysqlConnectionString(cfg *dataregistrypb.MySQLSourceConfig) string {
+func mysqlConnectionString(cfg *dataregistrypb.MySQLSourceConfig) (string, error) {
 	log.Trace("mysqlConnectionString")
 
 	host := strings.TrimSpace(cfg.GetHostname())
 	if host == "" {
-		host = "localhost"
+		return "", domainErrors.ErrValidationFailed.Extend("mysql source hostname is required")
 	}
 	port := int(cfg.GetPort())
 	if port == 0 {
-		port = 3306
+		return "", domainErrors.ErrValidationFailed.Extend("mysql source port is required")
+	}
+	databaseName := strings.TrimSpace(cfg.GetDatabaseName())
+	if databaseName == "" {
+		return "", domainErrors.ErrValidationFailed.Extend("mysql source database name is required")
 	}
 
 	config := mysql.NewConfig()
@@ -96,25 +112,25 @@ func mysqlConnectionString(cfg *dataregistrypb.MySQLSourceConfig) string {
 	config.Passwd = cfg.GetPassword()
 	config.Net = "tcp"
 	config.Addr = fmt.Sprintf("%s:%d", host, port)
-	config.DBName = cfg.GetDatabaseName()
+	config.DBName = databaseName
 	config.ParseTime = true
-	return config.FormatDSN()
+	return config.FormatDSN(), nil
 }
 
-func clickHouseConnectionString(cfg *dataregistrypb.ClickHouseSourceConfig) string {
+func clickHouseConnectionString(cfg *dataregistrypb.ClickHouseSourceConfig) (string, error) {
 	log.Trace("clickHouseConnectionString")
 
 	host := strings.TrimSpace(cfg.GetHostname())
 	if host == "" {
-		host = "localhost"
+		return "", domainErrors.ErrValidationFailed.Extend("clickhouse source hostname is required")
 	}
 	port := int(cfg.GetPort())
 	if port == 0 {
-		port = 9000
+		return "", domainErrors.ErrValidationFailed.Extend("clickhouse source port is required")
 	}
 	databaseName := strings.TrimSpace(cfg.GetDatabaseName())
 	if databaseName == "" {
-		databaseName = "default"
+		return "", domainErrors.ErrValidationFailed.Extend("clickhouse source database name is required")
 	}
 
 	u := &url.URL{
@@ -127,21 +143,24 @@ func clickHouseConnectionString(cfg *dataregistrypb.ClickHouseSourceConfig) stri
 	q.Set("dial_timeout", "5s")
 	q.Set("read_timeout", "30s")
 	u.RawQuery = q.Encode()
-	return u.String()
+	return u.String(), nil
 }
 
-func oracleConnectionString(cfg *dataregistrypb.OracleSourceConfig) string {
+func oracleConnectionString(cfg *dataregistrypb.OracleSourceConfig) (string, error) {
 	log.Trace("oracleConnectionString")
 
 	host := strings.TrimSpace(cfg.GetHostname())
 	if host == "" {
-		host = "localhost"
+		return "", domainErrors.ErrValidationFailed.Extend("oracle source hostname is required")
 	}
 	port := int(cfg.GetPort())
 	if port == 0 {
-		port = 1521
+		return "", domainErrors.ErrValidationFailed.Extend("oracle source port is required")
 	}
 	instance := strings.Trim(strings.TrimSpace(cfg.GetInstance()), "/")
+	if instance == "" {
+		return "", domainErrors.ErrValidationFailed.Extend("oracle source instance is required")
+	}
 
 	return fmt.Sprintf("oracle://%s:%s@%s:%d/%s",
 		url.QueryEscape(cfg.GetUsername()),
@@ -149,7 +168,7 @@ func oracleConnectionString(cfg *dataregistrypb.OracleSourceConfig) string {
 		host,
 		port,
 		url.PathEscape(instance),
-	)
+	), nil
 }
 
 func (e *registryQueryEngine) sqlRowsToArrow(rows *sql.Rows, sourceName string) (*QueryResult, error) {
@@ -200,7 +219,7 @@ func (e *registryQueryEngine) sqlRowsToArrow(rows *sql.Rows, sourceName string) 
 		}
 	}
 
-	record := builder.NewRecord()
+	record := builder.NewRecordBatch()
 	return &QueryResult{
 		Schema:       schema,
 		Records:      []arrow.Record{record},

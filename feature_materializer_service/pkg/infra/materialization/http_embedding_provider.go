@@ -41,7 +41,7 @@ func NewHTTPEmbeddingProvider(provider, endpoint, model string, dimensions int, 
 	log.Trace("NewHTTPEmbeddingProvider")
 
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		log.Fatalf("NewHTTPEmbeddingProvider: timeout must be greater than zero")
 	}
 	return NewHTTPEmbeddingProviderWithClient(provider, endpoint, model, dimensions, newTracedHTTPClient(timeout))
 }
@@ -50,7 +50,7 @@ func NewHTTPEmbeddingProviderWithClient(provider, endpoint, model string, dimens
 	log.Trace("NewHTTPEmbeddingProviderWithClient")
 
 	if client == nil {
-		client = newTracedHTTPClient(30 * time.Second)
+		log.Fatalf("NewHTTPEmbeddingProviderWithClient: client is required")
 	}
 	return &HTTPEmbeddingProvider{
 		client:     client,

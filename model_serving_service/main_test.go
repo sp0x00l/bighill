@@ -9,7 +9,7 @@ import (
 
 	env "lib/shared_lib/env"
 	"model_serving_service/pkg/domain/model"
-	servingk8s "model_serving_service/pkg/infra/network/k8s"
+	servingkubernetes "model_serving_service/pkg/infra/network/k8s"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -135,7 +135,7 @@ var _ = Describe("model serving health", func() {
 			listed:    []*model.ServedModel{servedModel},
 			latest:    map[string]*model.ServedModel{servedModel.ResourceName: servedModel},
 		}
-		controller := servingk8s.NewServedModelController(store, modelServingFailingReconciler{}, time.Millisecond)
+		controller := servingkubernetes.NewServedModelController(store, modelServingFailingReconciler{}, time.Millisecond)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		done := make(chan error, 1)
@@ -170,7 +170,7 @@ var _ = Describe("model serving health", func() {
 			latest:    map[string]*model.ServedModel{servedModel.ResourceName: servedModel},
 			watcher:   watcher,
 		}
-		controller := servingk8s.NewServedModelController(store, modelServingLoadedReconciler{}, time.Hour)
+		controller := servingkubernetes.NewServedModelController(store, modelServingLoadedReconciler{}, time.Hour)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		done := make(chan error, 1)

@@ -815,6 +815,7 @@ var _ = Describe("SnapshotRepository", func() {
 			activeRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID)
 			activeRow.Status = model.SnapshotStatusReady.String()
 			activeRow.ActiveForRetrieval = true
+			activeRow.EmbeddingProvider = " OLLAMA "
 			poolMock.NextRows = []pgx.Row{activeRow}
 
 			embeddingSnapshot, err := repository.ReadActiveEmbeddingSnapshot(ctx, userID, datasetID)
@@ -822,12 +823,27 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(embeddingSnapshot.EmbeddingSnapshotID).To(Equal(embeddingID))
 			Expect(embeddingSnapshot.ActiveForRetrieval).To(BeTrue())
+			Expect(embeddingSnapshot.EmbeddingProvider).To(Equal("ollama"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("active_for_retrieval = true"))
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("status", model.SnapshotStatusReady.String()))
+		})
+
+		It("rejects active embedding snapshots with invalid strategy metadata at the repository boundary", func() {
+			activeRow := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID)
+			activeRow.Status = model.SnapshotStatusReady.String()
+			activeRow.ActiveForRetrieval = true
+			activeRow.CleanerName = ""
+			poolMock.NextRows = []pgx.Row{activeRow}
+
+			embeddingSnapshot, err := repository.ReadActiveEmbeddingSnapshot(ctx, userID, datasetID)
+
+			Expect(embeddingSnapshot).To(BeNil())
+			Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("cleaner_name is required"))
 		})
 	})
 

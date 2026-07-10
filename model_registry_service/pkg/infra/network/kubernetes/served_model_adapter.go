@@ -126,15 +126,6 @@ func NewServedModelAdapterWithClient(config ServedModelConfig, client dynamic.In
 func NewServedModelStatusObserver(adapter *ServedModelAdapter, recorder app.ServingStatusRecorder, pollInterval time.Duration) (*ServedModelStatusObserver, error) {
 	log.Trace("NewServedModelStatusObserver")
 
-	if adapter == nil {
-		return nil, fmt.Errorf("%w: served model adapter is required", domain.ErrValidationFailed)
-	}
-	if recorder == nil {
-		return nil, fmt.Errorf("%w: serving status recorder is required", domain.ErrValidationFailed)
-	}
-	if pollInterval <= 0 {
-		return nil, fmt.Errorf("%w: served model status poll interval is required", domain.ErrValidationFailed)
-	}
 	return &ServedModelStatusObserver{
 		adapter:      adapter,
 		recorder:     recorder,

@@ -81,6 +81,7 @@ export FEATURE_MATERIALIZER_SERVICE_ARTIFACT_UPLOAD_PART_SIZE_MB=10
 export FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL=bge-small-en-v1.5
 export FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS=384
 export FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS=1000
+export FEATURE_MATERIALIZER_SERVICE_EMBEDDING_VECTOR_STORE=pgvector
 export FEATURE_MATERIALIZER_SERVICE_EMBEDDING_STRATEGY_VERSION=rag-v1
 export FEATURE_MATERIALIZER_SERVICE_EXTRACTOR_NAME=go-document-extractor-suite
 export FEATURE_MATERIALIZER_SERVICE_EXTRACTOR_VERSION=v1
@@ -111,8 +112,5 @@ export FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_SECRET_ACCESS_KEY=polaris_pa
 export FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_REGION=eu-west-1
 export FEATURE_MATERIALIZER_SERVICE_POLARIS_STORAGE_PATH_STYLE=true
 
-# The following are variables set at build time, intended to be used at runtime.
-# They are used to set the version in the build in the binary and is available to the binary main package.
-# It is then is used to identify the service instance in the logs.
-# IMPORTANT: This IDs the K8s deployment instance and is used in the templates.
+
 export FEATURE_MATERIALIZER_SERVICE_BUILD_VERSION=0.0.1

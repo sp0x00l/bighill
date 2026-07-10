@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"lib/shared_lib/authz"
+	"testing"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestProvider(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "API Gateway Auth Provider Suite")
+}
 
 type authProviderMock struct {
 	token  string

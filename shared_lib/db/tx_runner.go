@@ -87,9 +87,13 @@ func (u *UnitOfWork) doOnce(ctx context.Context, fn func(ctx context.Context, tx
 
 	defer func() {
 		if p := recover(); p != nil {
-			sharedtrace.RecordSpanError(span, fmt.Errorf("panic: %v", p))
-			_ = u.rollback(tx)
-			panic(p)
+			panicErr := fmt.Errorf("panic: %v", p)
+			sharedtrace.RecordSpanError(span, panicErr)
+			if rbErr := u.rollback(tx); rbErr != nil && !ignoreRollbackError(rbErr) {
+				err = fmt.Errorf("%w; rollback tx: %v", panicErr, rbErr)
+				return
+			}
+			err = panicErr
 		}
 	}()
 

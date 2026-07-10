@@ -61,6 +61,10 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_OUTBOX_RELAY_BATCH_SIZE")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_API_GRPC_PORT")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_API_HTTP_PORT")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_HTTP_READ_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_HTTP_IDLE_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_BASE_GROUP_ID")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
@@ -117,6 +121,10 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.QueryTransformer.Provider).To(Equal("self_query"))
 		Expect(cfg.QueryTransformer.RequestTimeout).To(Equal(30 * time.Second))
 		Expect(cfg.GRPCPort).To(Equal(7073))
+		Expect(cfg.HTTPPort).To(Equal(8087))
+		Expect(cfg.HTTPServer.ReadTimeout).To(Equal(30 * time.Second))
+		Expect(cfg.HTTPServer.WriteTimeout).To(Equal(120 * time.Second))
+		Expect(cfg.HTTPServer.IdleTimeout).To(Equal(120 * time.Second))
 		Expect(cfg.Health.HealthCheckPort).To(Equal(5059))
 	})
 
@@ -217,6 +225,11 @@ var _ = Describe("runtime ML provider validation", func() {
 				MaxOutputTokens:  128,
 				RAGMergeStrategy: model.RAGMergeStrategyScoreNormalized.String(),
 			},
+			HTTPServer: httpServerConfig{
+				ReadTimeout:  time.Second,
+				WriteTimeout: 2 * time.Second,
+				IdleTimeout:  time.Second,
+			},
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -229,6 +242,11 @@ var _ = Describe("runtime ML provider validation", func() {
 				MaxOutputTokens:  128,
 				RAGMergeStrategy: model.RAGMergeStrategyReranker.String(),
 			},
+			HTTPServer: httpServerConfig{
+				ReadTimeout:  time.Second,
+				WriteTimeout: 2 * time.Second,
+				IdleTimeout:  time.Second,
+			},
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_RAG_MERGE_STRATEGY=reranker requires INFERENCE_SERVICE_RERANKER_PROVIDER")))
@@ -238,6 +256,22 @@ var _ = Describe("runtime ML provider validation", func() {
 		err := validateQueryTransformerConfig(queryTransformerConfig{Provider: "unknown"})
 
 		Expect(err).To(MatchError(ContainSubstring("unsupported query transformer provider")))
+	})
+
+	It("rejects non-positive HTTP server timeouts", func() {
+		err := validateHTTPServerConfig(httpServerConfig{}, generationConfig{RequestTimeout: time.Second})
+
+		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_HTTP_READ_TIMEOUT_SECONDS must be greater than zero")))
+	})
+
+	It("rejects HTTP write timeouts that cannot carry generation responses", func() {
+		err := validateHTTPServerConfig(httpServerConfig{
+			ReadTimeout:  time.Second,
+			WriteTimeout: 60 * time.Second,
+			IdleTimeout:  time.Second,
+		}, generationConfig{RequestTimeout: 60 * time.Second})
+
+		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS must be greater than INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")))
 	})
 })
 

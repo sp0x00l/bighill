@@ -23,9 +23,11 @@ func TestTemporalWorker(t *testing.T) {
 type rawUsecaseStub struct {
 	rawSnapshot *model.RawSnapshot
 	err         error
+	called      bool
 }
 
-func (s rawUsecaseStub) MaterializeRawSnapshot(context.Context, *model.DatasetFile, uuid.UUID) (*model.RawSnapshot, error) {
+func (s *rawUsecaseStub) MaterializeRawSnapshot(context.Context, *model.DatasetFile, uuid.UUID) (*model.RawSnapshot, error) {
+	s.called = true
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -35,9 +37,11 @@ func (s rawUsecaseStub) MaterializeRawSnapshot(context.Context, *model.DatasetFi
 type featureUsecaseStub struct {
 	featureSnapshot *model.FeatureSnapshot
 	err             error
+	called          bool
 }
 
-func (s featureUsecaseStub) BuildFeatureSnapshot(context.Context, uuid.UUID, uuid.UUID) (*model.FeatureSnapshot, error) {
+func (s *featureUsecaseStub) BuildFeatureSnapshot(context.Context, uuid.UUID, uuid.UUID) (*model.FeatureSnapshot, error) {
+	s.called = true
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -47,9 +51,13 @@ func (s featureUsecaseStub) BuildFeatureSnapshot(context.Context, uuid.UUID, uui
 type embeddingUsecaseStub struct {
 	embeddingSnapshot *model.EmbeddingSnapshot
 	err               error
+	called            bool
+	strategy          model.EmbeddingStrategy
 }
 
-func (s embeddingUsecaseStub) MaterializeEmbeddings(context.Context, uuid.UUID, uuid.UUID, model.EmbeddingStrategy) (*model.EmbeddingSnapshot, error) {
+func (s *embeddingUsecaseStub) MaterializeEmbeddings(_ context.Context, _ uuid.UUID, _ uuid.UUID, strategy model.EmbeddingStrategy) (*model.EmbeddingSnapshot, error) {
+	s.called = true
+	s.strategy = strategy
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -59,8 +67,9 @@ func (s embeddingUsecaseStub) MaterializeEmbeddings(context.Context, uuid.UUID, 
 var _ = Describe("MaterializationActivities", func() {
 	It("returns existing raw snapshot records for idempotent activity replays", func() {
 		existing := validRawSnapshot()
+		rawUsecase := &rawUsecaseStub{err: &domain.RawSnapshotAlreadyMaterializedError{Record: existing}}
 		activities := featuretemporal.NewMaterializationActivities(
-			rawUsecaseStub{err: &domain.RawSnapshotAlreadyMaterializedError{Record: existing}},
+			rawUsecase,
 			nil,
 			nil,
 		)
@@ -72,11 +81,13 @@ var _ = Describe("MaterializationActivities", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rawSnapshot).To(Equal(existing))
+		Expect(rawUsecase.called).To(BeTrue())
 	})
 
 	It("returns transient raw snapshot errors for Temporal retry", func() {
 		expectedErr := errors.New("object store unavailable")
-		activities := featuretemporal.NewMaterializationActivities(rawUsecaseStub{err: expectedErr}, nil, nil)
+		rawUsecase := &rawUsecaseStub{err: expectedErr}
+		activities := featuretemporal.NewMaterializationActivities(rawUsecase, nil, nil)
 
 		rawSnapshot, err := activities.MaterializeRawSnapshot(context.Background(), usecase.MaterializeRawSnapshotActivityInput{
 			DatasetFile:    validDatasetFile(),
@@ -85,6 +96,81 @@ var _ = Describe("MaterializationActivities", func() {
 
 		Expect(rawSnapshot).To(BeNil())
 		Expect(errors.Is(err, expectedErr)).To(BeTrue())
+		Expect(rawUsecase.called).To(BeTrue())
+	})
+
+	It("rejects invalid raw snapshot activity input at the Temporal boundary", func() {
+		rawUsecase := &rawUsecaseStub{rawSnapshot: validRawSnapshot()}
+		activities := featuretemporal.NewMaterializationActivities(rawUsecase, nil, nil)
+		input := usecase.MaterializeRawSnapshotActivityInput{
+			DatasetFile:    validDatasetFile(),
+			IdempotencyKey: uuid.New(),
+		}
+		input.DatasetFile.OrgID = uuid.Nil
+
+		rawSnapshot, err := activities.MaterializeRawSnapshot(context.Background(), input)
+
+		Expect(rawSnapshot).To(BeNil())
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("org_id is required"))
+		Expect(rawUsecase.called).To(BeFalse())
+	})
+
+	It("rejects invalid feature snapshot activity input at the Temporal boundary", func() {
+		featureUsecase := &featureUsecaseStub{featureSnapshot: validFeatureSnapshot(uuid.New())}
+		activities := featuretemporal.NewMaterializationActivities(nil, featureUsecase, nil)
+
+		featureSnapshot, err := activities.BuildFeatureSnapshot(context.Background(), usecase.BuildFeatureSnapshotActivityInput{
+			RawSnapshotID:  uuid.Nil,
+			UserID:         uuid.New(),
+			OrgID:          uuid.New(),
+			IdempotencyKey: uuid.New(),
+		})
+
+		Expect(featureSnapshot).To(BeNil())
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("raw_snapshot_id is required"))
+		Expect(featureUsecase.called).To(BeFalse())
+	})
+
+	It("normalizes and validates embedding activity strategy at the Temporal boundary", func() {
+		embeddingUsecase := &embeddingUsecaseStub{embeddingSnapshot: validEmbeddingSnapshot(uuid.New())}
+		activities := featuretemporal.NewMaterializationActivities(nil, nil, embeddingUsecase)
+		featureSnapshotID := uuid.New()
+
+		embeddingSnapshot, err := activities.MaterializeEmbeddings(context.Background(), usecase.MaterializeEmbeddingsActivityInput{
+			FeatureSnapshotID: featureSnapshotID,
+			UserID:            uuid.New(),
+			OrgID:             uuid.New(),
+			IdempotencyKey:    uuid.New(),
+			Strategy: model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
+				EmbeddingProvider: " TEI ",
+				EmbeddingModel:    "bge-small-en-v1.5",
+			}),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(embeddingSnapshot).To(Equal(embeddingUsecase.embeddingSnapshot))
+		Expect(embeddingUsecase.called).To(BeTrue())
+		Expect(embeddingUsecase.strategy.EmbeddingProvider).To(Equal("tei"))
+	})
+
+	It("rejects invalid embedding activity strategy before invoking the usecase", func() {
+		embeddingUsecase := &embeddingUsecaseStub{embeddingSnapshot: validEmbeddingSnapshot(uuid.New())}
+		activities := featuretemporal.NewMaterializationActivities(nil, nil, embeddingUsecase)
+
+		embeddingSnapshot, err := activities.MaterializeEmbeddings(context.Background(), usecase.MaterializeEmbeddingsActivityInput{
+			FeatureSnapshotID: uuid.New(),
+			UserID:            uuid.New(),
+			OrgID:             uuid.New(),
+			IdempotencyKey:    uuid.New(),
+			Strategy:          model.EmbeddingStrategy{EmbeddingProvider: "tei"},
+		})
+
+		Expect(embeddingSnapshot).To(BeNil())
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("strategy_version is required"))
+		Expect(embeddingUsecase.called).To(BeFalse())
 	})
 })
 

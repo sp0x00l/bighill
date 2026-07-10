@@ -16,6 +16,8 @@ type PreferenceDatasetEventBuilder struct {
 	topic string
 }
 
+const preferenceDatasetReadyDispatchKeyPrefix = "preference_dataset_ready:"
+
 func NewPreferenceDatasetEventBuilder(topic string) *PreferenceDatasetEventBuilder {
 	log.Trace("NewPreferenceDatasetEventBuilder")
 
@@ -52,7 +54,7 @@ func (b *PreferenceDatasetEventBuilder) PreferenceDatasetReadyMessage(dataset *m
 			MsgType:     msgConn.MsgTypePreferenceDatasetReady,
 			Payload:     payload,
 		},
-		DispatchKey: "preference_dataset_ready:" + dataset.PreferenceDatasetID.String(),
+		DispatchKey: preferenceDatasetReadyDispatchKeyPrefix + dataset.PreferenceDatasetID.String(),
 	}
 }
 
@@ -61,7 +63,7 @@ func mustMarshal(payload proto.Message) []byte {
 
 	out, err := proto.Marshal(payload)
 	if err != nil {
-		panic(err)
+		log.Fatalf("marshal preference dataset event: %v", err)
 	}
 	return out
 }

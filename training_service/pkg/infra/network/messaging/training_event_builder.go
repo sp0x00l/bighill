@@ -188,7 +188,7 @@ func marshalTrainingEvent(payload proto.Message) []byte {
 
 	out, err := proto.Marshal(payload)
 	if err != nil {
-		panic(err)
+		log.Fatalf("marshal training event: %v", err)
 	}
 	return out
 }

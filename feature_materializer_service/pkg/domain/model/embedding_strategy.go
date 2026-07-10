@@ -99,20 +99,23 @@ func DefaultEmbeddingStrategy() EmbeddingStrategy {
 
 func ValidateEmbeddingStrategy(strategy EmbeddingStrategy) error {
 	strategy = NormalizeEmbeddingStrategy(strategy)
-	required := map[string]string{
-		"strategy_version":   strategy.StrategyVersion,
-		"extractor_name":     strategy.ExtractorName,
-		"extractor_version":  strategy.ExtractorVersion,
-		"cleaner_name":       strategy.CleanerName,
-		"cleaner_version":    strategy.CleanerVersion,
-		"chunker_name":       strategy.ChunkerName,
-		"chunker_version":    strategy.ChunkerVersion,
-		"embedding_provider": strategy.EmbeddingProvider,
-		"embedding_model":    strategy.EmbeddingModel,
+	required := []struct {
+		name  string
+		value string
+	}{
+		{name: "strategy_version", value: strategy.StrategyVersion},
+		{name: "extractor_name", value: strategy.ExtractorName},
+		{name: "extractor_version", value: strategy.ExtractorVersion},
+		{name: "cleaner_name", value: strategy.CleanerName},
+		{name: "cleaner_version", value: strategy.CleanerVersion},
+		{name: "chunker_name", value: strategy.ChunkerName},
+		{name: "chunker_version", value: strategy.ChunkerVersion},
+		{name: "embedding_provider", value: strategy.EmbeddingProvider},
+		{name: "embedding_model", value: strategy.EmbeddingModel},
 	}
-	for field, value := range required {
-		if value == "" {
-			return fmt.Errorf("%s is required", field)
+	for _, field := range required {
+		if field.value == "" {
+			return fmt.Errorf("%s is required", field.name)
 		}
 	}
 	if strategy.ChunkSize <= 0 {

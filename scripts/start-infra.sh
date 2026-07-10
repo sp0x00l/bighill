@@ -321,7 +321,18 @@ local_start_infra() {
     local_start_temporal
     compose_start_polaris "$PROJECT_ROOT/docker-compose-services.yml"
     local_start_tei
-    "$PROJECT_ROOT/scripts/start-data-sources.sh"
+    case "${BIGHILL_START_DATA_SOURCES:-true}" in
+        true|1|yes|YES)
+            "$PROJECT_ROOT/scripts/start-data-sources.sh"
+            ;;
+        false|0|no|NO)
+            echo "Skipping external datasource fixtures"
+            ;;
+        *)
+            echo "Error: BIGHILL_START_DATA_SOURCES must be true or false"
+            exit 1
+            ;;
+    esac
     wait_for_tei_health 8080 10 1
     check_ollama_health 11434 10 1
 }

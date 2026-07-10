@@ -15,6 +15,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	defaultHuggingFaceRevision = "main"
+	defaultModelContentType    = "application/octet-stream"
+)
+
 type InitiateUploadDTO struct {
 	FileName          string `json:"file_name"           validate:"required"`
 	DeclaredFormat    string `json:"declared_format"`
@@ -136,7 +141,7 @@ func (a *UploadDTOAdapter) FromInitiateModelUploadDTO(
 	}
 	contentType := strings.TrimSpace(dto.ContentType)
 	if contentType == "" {
-		contentType = "application/octet-stream"
+		contentType = defaultModelContentType
 	}
 	if strings.TrimSpace(contentType) == "" {
 		return nil, domainErrors.ErrValidationFailed.Extend("content type is required")
@@ -193,7 +198,7 @@ func (a *UploadDTOAdapter) FromOnboardHuggingFaceModelDTO(ctx context.Context, b
 	}
 	revision := strings.TrimSpace(dto.Revision)
 	if revision == "" {
-		revision = "main"
+		revision = defaultHuggingFaceRevision
 	}
 	return &model.OnboardHuggingFaceModelRequest{
 		ResourceID:      resourceID,
@@ -203,8 +208,8 @@ func (a *UploadDTOAdapter) FromOnboardHuggingFaceModelDTO(ctx context.Context, b
 		RepoID:          dto.RepoID,
 		Revision:        revision,
 		HuggingFaceFile: strings.TrimSpace(dto.HFFile),
-		ArtifactType:    modelArtifactTokenOrDefault(dto.ArtifactType, "BASE_MODEL"),
-		ArtifactFormat:  modelArtifactTokenOrDefault(dto.ArtifactFormat, "HF_MODEL"),
+		ArtifactType:    modelArtifactTokenOrDefault(dto.ArtifactType, string(model.ModelArtifactTypeBase)),
+		ArtifactFormat:  modelArtifactTokenOrDefault(dto.ArtifactFormat, string(model.ModelArtifactFormatHFModel)),
 		ModelName:       dto.ModelName,
 		ModelVersion:    modelVersion,
 		BaseModel:       dto.BaseModel,
@@ -258,7 +263,7 @@ func modelArtifactTokenOrDefault(value string, fallback string) string {
 
 func isSupportedModelArtifactType(value string) bool {
 	switch normalizeModelArtifactToken(value) {
-	case "BASE_MODEL", "LORA_ADAPTER", "MERGED_MODEL":
+	case string(model.ModelArtifactTypeBase), string(model.ModelArtifactTypeLoraAdapter), string(model.ModelArtifactTypeMerged):
 		return true
 	default:
 		return false
@@ -267,7 +272,13 @@ func isSupportedModelArtifactType(value string) bool {
 
 func isSupportedModelArtifactFormat(value string) bool {
 	switch normalizeModelArtifactToken(value) {
-	case "HF_MODEL", "HF_PEFT_ADAPTER", "SAFETENSORS", "GGUF", "GGUF_MODEL", "GGUF_LORA_ADAPTER", "ZIP":
+	case string(model.ModelArtifactFormatHFModel),
+		string(model.ModelArtifactFormatHFPEFTAdapter),
+		string(model.ModelArtifactFormatSafetensors),
+		string(model.ModelArtifactFormatGGUF),
+		string(model.ModelArtifactFormatGGUFModel),
+		string(model.ModelArtifactFormatGGUFLoraAdapter),
+		string(model.ModelArtifactFormatZIP):
 		return true
 	default:
 		return false

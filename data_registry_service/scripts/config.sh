@@ -58,8 +58,4 @@ export DATA_REGISTRY_SERVICE_POLARIS_STORAGE_ENDPOINT=${DATA_REGISTRY_SERVICE_PO
 export DATA_REGISTRY_SERVICE_POLARIS_STORAGE_PATH_STYLE=true
 export DATA_REGISTRY_SERVICE_POLARIS_TIMEOUT_SECONDS=${DATA_REGISTRY_SERVICE_POLARIS_TIMEOUT_SECONDS:-15}
 
-# The following are variables set at build time, intended to be used at runtime.
-# They are used to set the version in the build in the binary and is available to the binary main package.
-# It is then used to identify the service instance.
-# IMPORTANT: This IDs the K8s deployment instance and is used in the templates.
 export DATA_REGISTRY_SERVICE_BUILD_VERSION=0.0.1

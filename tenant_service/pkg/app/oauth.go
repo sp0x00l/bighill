@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -50,6 +51,8 @@ type OAuthSessionResult struct {
 }
 
 func (u *profilesUseCase) CreateOAuthAuthorization(ctx context.Context, provider string, req OAuthAuthorizeRequest) (result *OAuthAuthorizeResult, err error) {
+	log.Trace("profilesUseCase CreateOAuthAuthorization")
+
 	provider = normalizeOAuthProvider(provider)
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.create_oauth_authorization",
 		attribute.String("provider", provider),
@@ -84,6 +87,8 @@ func (u *profilesUseCase) CreateOAuthAuthorization(ctx context.Context, provider
 }
 
 func (u *profilesUseCase) CreateOAuthSession(ctx context.Context, provider string, req OAuthSessionRequest) (result *OAuthSessionResult, err error) {
+	log.Trace("profilesUseCase CreateOAuthSession")
+
 	provider = normalizeOAuthProvider(provider)
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.create_oauth_session",
 		attribute.String("provider", provider),
@@ -163,6 +168,8 @@ func (u *profilesUseCase) CreateOAuthSession(ctx context.Context, provider strin
 }
 
 func (u *profilesUseCase) findOrCreateOAuthProfile(ctx context.Context, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, bool, error) {
+	log.Trace("profilesUseCase findOrCreateOAuthProfile")
+
 	userID, err := u.profilesRepository.ReadProfileIDByEmail(ctx, identity.Email)
 	switch {
 	case err == nil:
@@ -179,6 +186,8 @@ func (u *profilesUseCase) findOrCreateOAuthProfile(ctx context.Context, identity
 }
 
 func (u *profilesUseCase) findOrCreateOAuthProfileTx(ctx context.Context, tx pgx.Tx, identity domain.OAuthIdentity, passwordHash string) (uuid.UUID, bool, error) {
+	log.Trace("profilesUseCase findOrCreateOAuthProfileTx")
+
 	userID, err := u.profilesRepository.ReadProfileIDByEmail(ctx, identity.Email)
 	switch {
 	case err == nil:
@@ -195,6 +204,8 @@ func (u *profilesUseCase) findOrCreateOAuthProfileTx(ctx context.Context, tx pgx
 }
 
 func (u *profilesUseCase) createOAuthSession(ctx context.Context, provider string, userID uuid.UUID, isNewUser bool) (*OAuthSessionResult, error) {
+	log.Trace("profilesUseCase createOAuthSession")
+
 	membership, err := u.profilesRepository.ReadDefaultMembership(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -221,10 +232,14 @@ func (u *profilesUseCase) createOAuthSession(ctx context.Context, provider strin
 }
 
 func normalizeOAuthProvider(provider string) string {
+	log.Trace("normalizeOAuthProvider")
+
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
 func matchesCodeChallenge(codeVerifier, expectedCodeChallenge string) bool {
+	log.Trace("matchesCodeChallenge")
+
 	if codeVerifier == "" || expectedCodeChallenge == "" {
 		return false
 	}
@@ -234,6 +249,8 @@ func matchesCodeChallenge(codeVerifier, expectedCodeChallenge string) bool {
 }
 
 func generateSessionSecret() string {
+	log.Trace("generateSessionSecret")
+
 	// OAuth state/code secrets are bearer nonces, not database row IDs.
 	return uuid.NewString() + uuid.NewString()
 }

@@ -50,7 +50,7 @@ func parseSourceQueryCommand(command string) (*sourceQueryCommand, error) {
 		return nil, streamdomain.ErrValidationFailed.Extend("registry query command requires sourceConnectorId")
 	}
 	if query.SourceType == streamdomain.SourceTypeUnknown {
-		query.SourceType = streamdomain.SourceTypePostgres
+		return nil, streamdomain.ErrValidationFailed.Extend("registry query command requires sourceType")
 	}
 	if !sourceTypeSupportsRegistryQuery(query.SourceType) {
 		return nil, streamdomain.ErrValidationFailed.Extend(fmt.Sprintf("unsupported source type %q for registry query engine", query.SourceType.String()))

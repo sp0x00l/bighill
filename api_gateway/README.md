@@ -25,6 +25,10 @@ The gateway is intentionally thin: it does not own domain state. Profile, data r
 
 Run the root infra and services first, then start the gateway through the existing scripts. The gateway tests live under `api_gateway/test` and are normally exercised from the root `make test` flow.
 
+`make test-api` runs the core API workflows without starting the external datasource fixtures. Use
+`make test-api-data-sources` to run the datasource-backed API specs separately when you want to test
+the local Postgres/MySQL/ClickHouse datasource stack.
+
 The RAG e2e specs require a local Ollama generation model in `/api/tags`. The test selects an
 available generation tag and sends it through the model upload/onboarding API as the fixture
 `base_model`.

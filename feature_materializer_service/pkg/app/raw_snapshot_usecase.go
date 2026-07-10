@@ -41,15 +41,6 @@ func NewRawSnapshotUsecase(repo RawSnapshotRepository, unitOfWork SnapshotUnitOf
 func (u *rawSnapshotUsecase) MaterializeRawSnapshot(ctx context.Context, datasetFile *model.DatasetFile, idempotencyKey uuid.UUID) (out *model.RawSnapshot, err error) {
 	log.Trace("RawSnapshotUsecase MaterializeRawSnapshot")
 
-	if datasetFile == nil {
-		return nil, domain.ErrValidationFailed.Extend("dataset file is required")
-	}
-	if datasetFile.UserID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("user_id is required")
-	}
-	if datasetFile.OrgID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("org_id is required")
-	}
 	ctx = ctxutil.WithActorOrg(ctx, datasetFile.UserID, datasetFile.OrgID)
 	ctx, span := startFeatureMaterializerSpan(ctx, "feature_materializer_service/app", "raw_snapshot.materialize",
 		attribute.String("dataset_id", datasetFile.DatasetID.String()),

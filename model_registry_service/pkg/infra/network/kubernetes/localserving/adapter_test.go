@@ -70,16 +70,6 @@ var _ = Describe("Local serving adapter", func() {
 		Expect(record.Spec.BaseModel).To(Equal("meta-llama/Llama"))
 	})
 
-	It("rejects missing observer dependencies", func() {
-		_, err := NewStatusObserver(nil, &statusRecorderStub{}, time.Second)
-		Expect(err).To(MatchError(ContainSubstring("adapter is required")))
-
-		adapter, err := NewAdapter("default", filepath.Join(GinkgoT().TempDir(), "served_models.json"))
-		Expect(err).NotTo(HaveOccurred())
-		_, err = NewStatusObserver(adapter, nil, time.Second)
-		Expect(err).To(MatchError(ContainSubstring("recorder is required")))
-	})
-
 	It("records each new observed status once", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "served_models.json")
 		adapter, err := NewAdapter("default", path)

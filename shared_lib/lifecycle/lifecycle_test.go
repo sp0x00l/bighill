@@ -232,7 +232,9 @@ var _ = Describe("Supervisor", func() {
 		component := lifecycle.NewFuncComponent(lifecycle.ComponentConfig{
 			Name: "panic",
 			Start: func(context.Context) error {
-				panic("boom")
+				values := []string{}
+				_ = values[0]
+				return nil
 			},
 			Close: func() error {
 				close(closed)
@@ -243,7 +245,7 @@ var _ = Describe("Supervisor", func() {
 
 		err := supervisor.Run(context.Background(), make(chan os.Signal))
 
-		Expect(err).To(MatchError(ContainSubstring("lifecycle component panic: boom")))
+		Expect(err).To(MatchError(ContainSubstring("lifecycle component panic: runtime error: index out of range")))
 		Eventually(closed).Should(BeClosed())
 	})
 })

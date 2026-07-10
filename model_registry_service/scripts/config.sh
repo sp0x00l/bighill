@@ -7,12 +7,18 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED=true
     export MODEL_REGISTRY_SERVICE_SERVING_BACKEND=local
+    export MODEL_REGISTRY_SERVICE_DLQ=http://localhost:4566/model-registry-dev-env-queue/
+    export MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH=$BIGHILL_ROOT/tmp/local_served_models/served_models.json
 elif [ "$1" = "staging" ]; then
     export MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED=true
     export MODEL_REGISTRY_SERVICE_SERVING_BACKEND=kubernetes
+    export MODEL_REGISTRY_SERVICE_DLQ=
+    export MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH=
 elif [ "$1" = "prod" ]; then
     export MODEL_REGISTRY_SERVICE_SERVING_RECONCILIATION_ENABLED=true
     export MODEL_REGISTRY_SERVICE_SERVING_BACKEND=kubernetes
+    export MODEL_REGISTRY_SERVICE_DLQ=
+    export MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH=
 else
     echo "Error: Invalid environment provided to model_registry_service config"
     echo "Usage: './config.sh [local-dev|cicd|staging|prod]'"
@@ -31,13 +37,11 @@ export MODEL_REGISTRY_SERVICE_TOPIC=model_registry
 export MODEL_REGISTRY_SERVICE_TRAINING_SUBSCRIBER_TOPIC=training
 export MODEL_REGISTRY_SERVICE_INGESTION_SUBSCRIBER_TOPIC=ingestion
 export MODEL_REGISTRY_SERVICE_TENANT_SUBSCRIBER_TOPIC=tenant
-export MODEL_REGISTRY_SERVICE_DLQ=http://localhost:4566/model-registry-dev-env-queue/
 export MODEL_REGISTRY_SERVICE_OUTBOX=postgres
 export MODEL_REGISTRY_SERVICE_OUTBOX_RELAY_POLL_MS=250
 export MODEL_REGISTRY_SERVICE_OUTBOX_RELAY_BATCH_SIZE=100
 export MODEL_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS=2000
 export MODEL_REGISTRY_SERVICE_SERVING_NAMESPACE=default
-export MODEL_REGISTRY_SERVICE_SERVING_LOCAL_STORE_PATH=$BIGHILL_ROOT/tmp/local_served_models/served_models.json
 export MODEL_REGISTRY_SERVICE_SERVING_LOCAL_RESYNC_SECONDS=30
 export MODEL_REGISTRY_SERVICE_SERVING_CRD_GROUP=serving.bighill.io
 export MODEL_REGISTRY_SERVICE_SERVING_CRD_VERSION=v1alpha1

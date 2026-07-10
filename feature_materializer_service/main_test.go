@@ -63,6 +63,7 @@ var _ = Describe("readMaterializerConfig", func() {
 		Expect(cfg.TenantTopic).To(Equal("tenant"))
 		Expect(cfg.Temporal.ConnectTimeout).To(Equal(60 * time.Second))
 		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(time.Second))
+		Expect(cfg.Embedding.VectorStore).To(Equal("pgvector"))
 	})
 
 	It("allows service-specific Temporal connection retry overrides", func() {

@@ -142,6 +142,7 @@ func NewProfilesUseCase(deps ProfilesUseCaseDeps, cfg ProfilesUseCaseConfig, opt
 
 func (u *profilesUseCase) ReplaceHuggingFaceToken(ctx context.Context, userID uuid.UUID, token string) (err error) {
 	log.Trace("profilesUseCase ReplaceHuggingFaceToken")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.replace_huggingface_token",
 		attribute.String("user_id", userID.String()),
 	)
@@ -162,6 +163,7 @@ func (u *profilesUseCase) ReplaceHuggingFaceToken(ctx context.Context, userID uu
 
 func (u *profilesUseCase) CreateProfile(ctx context.Context, profileAccount *domain.ProfileAccount, idempotencyKey uuid.UUID) (err error) {
 	log.Trace("profilesUseCase CreateProfile")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.create_profile",
 		attribute.String("email", profileAccount.Email),
 		attribute.String("idempotency_key", idempotencyKey.String()),
@@ -190,6 +192,7 @@ func (u *profilesUseCase) CreateProfile(ctx context.Context, profileAccount *dom
 
 func (u *profilesUseCase) ReplaceProfile(ctx context.Context, userID uuid.UUID, profile *domain.Profile) (updatedProfile *domain.Profile, err error) {
 	log.Trace("profilesUseCase ReplaceProfile")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.replace_profile",
 		attribute.String("user_id", userID.String()),
 	)
@@ -208,6 +211,7 @@ func (u *profilesUseCase) ReplaceProfile(ctx context.Context, userID uuid.UUID, 
 
 func (u *profilesUseCase) ReadProfile(ctx context.Context, userID uuid.UUID) (profile *domain.Profile, err error) {
 	log.Trace("profilesUseCase ReadProfile")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.read_profile",
 		attribute.String("user_id", userID.String()),
 	)
@@ -218,6 +222,7 @@ func (u *profilesUseCase) ReadProfile(ctx context.Context, userID uuid.UUID) (pr
 
 func (u *profilesUseCase) DeleteProfile(ctx context.Context, userID uuid.UUID) (err error) {
 	log.Trace("profilesUseCase DeleteProfile")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.delete_profile",
 		attribute.String("user_id", userID.String()),
 	)
@@ -233,6 +238,7 @@ func (u *profilesUseCase) DeleteProfile(ctx context.Context, userID uuid.UUID) (
 
 func (u *profilesUseCase) ReplacePassword(ctx context.Context, userID uuid.UUID, newPassword string) (err error) {
 	log.Trace("profilesUseCase ReplacePassword")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.replace_password",
 		attribute.String("user_id", userID.String()),
 	)
@@ -259,6 +265,7 @@ func (u *profilesUseCase) ReplacePassword(ctx context.Context, userID uuid.UUID,
 
 func (u *profilesUseCase) VerifyPassword(ctx context.Context, email, password string) (authToken string, err error) {
 	log.Trace("profilesUseCase VerifyPassword")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.verify_password",
 		attribute.String("email", email),
 	)
@@ -301,6 +308,7 @@ func (u *profilesUseCase) VerifyPassword(ctx context.Context, email, password st
 
 func (u *profilesUseCase) VerifyEmail(ctx context.Context, token string) (err error) {
 	log.Trace("profilesUseCase VerifyEmail")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.verify_email")
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
@@ -315,6 +323,7 @@ func (u *profilesUseCase) VerifyEmail(ctx context.Context, token string) (err er
 
 func (u *profilesUseCase) Logout(ctx context.Context, sessionID string) (err error) {
 	log.Trace("profilesUseCase Logout")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "profile.logout")
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
@@ -328,6 +337,7 @@ func (u *profilesUseCase) Logout(ctx context.Context, sessionID string) (err err
 
 func (u *profilesUseCase) ReadCurrentOrganization(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID) (organization *domain.Organization, membership *domain.OrganizationMembership, err error) {
 	log.Trace("profilesUseCase ReadCurrentOrganization")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "org.read_current",
 		attribute.String("user_id", actorUserID.String()),
 		attribute.String("org_id", orgID.String()),
@@ -347,6 +357,7 @@ func (u *profilesUseCase) ReadCurrentOrganization(ctx context.Context, actorUser
 
 func (u *profilesUseCase) ListOrganizationMembers(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID) (memberships []*domain.OrganizationMembership, err error) {
 	log.Trace("profilesUseCase ListOrganizationMembers")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "org.list_members",
 		attribute.String("user_id", actorUserID.String()),
 		attribute.String("org_id", orgID.String()),
@@ -361,6 +372,7 @@ func (u *profilesUseCase) ListOrganizationMembers(ctx context.Context, actorUser
 
 func (u *profilesUseCase) UpsertOrganizationMember(ctx context.Context, actorUserID uuid.UUID, membership *domain.OrganizationMembership) (updated *domain.OrganizationMembership, err error) {
 	log.Trace("profilesUseCase UpsertOrganizationMember")
+
 	var attrs []attribute.KeyValue
 	if membership != nil {
 		attrs = append(attrs,
@@ -396,6 +408,7 @@ func (u *profilesUseCase) UpsertOrganizationMember(ctx context.Context, actorUse
 
 func (u *profilesUseCase) DeleteOrganizationMember(ctx context.Context, actorUserID uuid.UUID, orgID uuid.UUID, memberUserID uuid.UUID) (err error) {
 	log.Trace("profilesUseCase DeleteOrganizationMember")
+
 	ctx, span := usecasetrace.StartSpan(ctx, "tenant_service/app", "org.delete_member",
 		attribute.String("actor_user_id", actorUserID.String()),
 		attribute.String("org_id", orgID.String()),

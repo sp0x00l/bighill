@@ -1,4 +1,4 @@
-package k8s_test
+package kubernetes_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"model_serving_service/pkg/domain/model"
-	servingk8s "model_serving_service/pkg/infra/network/k8s"
+	servingkubernetes "model_serving_service/pkg/infra/network/k8s"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -26,7 +26,7 @@ var _ = Describe("ServedModelController serialization", func() {
 			latest:    map[string]*model.ServedModel{resourceName: latest},
 		}
 		reconciler := &controllerReconcilerStub{}
-		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
 
 		_, err := controller.ProcessSnapshot(context.Background())
 
@@ -43,7 +43,7 @@ var _ = Describe("ServedModelController serialization", func() {
 			latest:    map[string]*model.ServedModel{resourceName: servedModel},
 		}
 		reconciler := &controllerReconcilerStub{delay: 20 * time.Millisecond}
-		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond)
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
 
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -78,7 +78,7 @@ var _ = Describe("ServedModelController serialization", func() {
 			},
 		}
 		reconciler := &controllerReconcilerStub{delay: 20 * time.Millisecond}
-		controller := servingk8s.NewServedModelController(store, reconciler, time.Millisecond, servingk8s.WithSharedRuntimeSerialization(true))
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond, servingkubernetes.WithSharedRuntimeSerialization(true))
 
 		var wg sync.WaitGroup
 		wg.Add(2)

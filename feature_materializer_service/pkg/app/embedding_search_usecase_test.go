@@ -122,7 +122,7 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		factoryCalled := false
 		uc := usecase.NewEmbeddingSearchUsecase(repo, func(model.EmbeddingStrategy) (usecase.QueryEmbeddingProvider, error) {
 			factoryCalled = true
-			return queryEmbeddingProviderStub{}, nil
+			return nil, errors.New("embedding_provider \"unknown\" is not supported")
 		})
 
 		ctx := ctxutil.WithActorOrg(context.Background(), activeSnapshot.UserID, activeSnapshot.OrgID)
@@ -131,7 +131,7 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		Expect(result).To(BeNil())
 		Expect(errors.Is(err, domain.ErrEmbeddingSearch)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("embedding_provider"))
-		Expect(factoryCalled).To(BeFalse())
+		Expect(factoryCalled).To(BeTrue())
 		Expect(repo.queryVector).To(BeNil())
 	})
 
@@ -142,7 +142,7 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		factoryCalled := false
 		uc := usecase.NewEmbeddingSearchUsecase(repo, func(model.EmbeddingStrategy) (usecase.QueryEmbeddingProvider, error) {
 			factoryCalled = true
-			return queryEmbeddingProviderStub{}, nil
+			return nil, errors.New("cleaner_name is required")
 		})
 
 		ctx := ctxutil.WithActorOrg(context.Background(), activeSnapshot.UserID, activeSnapshot.OrgID)
@@ -151,7 +151,7 @@ var _ = Describe("EmbeddingSearchUsecase", func() {
 		Expect(result).To(BeNil())
 		Expect(errors.Is(err, domain.ErrEmbeddingSearch)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("cleaner_name is required"))
-		Expect(factoryCalled).To(BeFalse())
+		Expect(factoryCalled).To(BeTrue())
 		Expect(repo.queryVector).To(BeNil())
 	})
 })

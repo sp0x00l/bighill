@@ -1,10 +1,39 @@
+<img align="right" width="200" src="logo.png" alt="BigHill logo" />
+
 # BigHill
 
 **A self-hosted platform for building RAG and fine-tuned LLM systems.**
 
-BigHill is an ML platform consisting of a set of Go microservices tied together with Temporal workflows, Kafka events, per-service Postgres databases, pgvector for retrieval, Ray/KubeRay for training jobs, and vLLM-style serving. Python shows up only where it belongs: the GPU batch jobs.
+BigHill is a set of Go microservices tied together with Temporal workflows, Kafka events, per-service
+Postgres databases, pgvector for retrieval, Ray/KubeRay for training jobs, and Kubernetes-backed vLLM
+serving. Python is confined to the GPU batch jobs. It owns the whole lifecycle — data, models,
+inference, feedback, and retraining.
 
-Is **own the whole lifecycle** — data, models, inference, feedback, and retraining.
+---
+
+## Why BigHill?
+
+An LLM project usually begins as a notebook or a single Python app, then stalls the moment it has to
+be real — more than one tenant, an audit trail, a way to retrain on feedback, a gate that stops a
+worse model from shipping, and serving that survives a restart. Retrofitting those is the expensive
+part. BigHill gives you the spine on day one:
+
+- **The whole lifecycle in one system** — ingestion, retrieval, training, evaluation, promotion,
+  serving, and a feedback → DPO retrain loop wired end to end.
+- **Experimentation beyond notebooks** — POST a training run (dataset + source model + profiles) and
+  get back an evaluated, gated model instead of hand-writing training, eval, and serving glue.
+  Content-addressed snapshots skip repeated work, and every run is reproducible and comparable against
+  its champion.
+- **Correct by construction** — service-owned Postgres, a transactional outbox so an event never
+  outruns its state, and a promotion gate that won't serve a model that regresses against its
+  champion.
+- **Multi-tenant and auditable from the start** — every dataset, embedding, prompt, response, and
+  model version is attributable to a tenant.
+- **Laptop to Kubernetes on one contract** — the same provider contract across local-dev, CI,
+  staging, and prod.
+
+It's a strong starting point when what you're building *is* a RAG or fine-tuning platform. It's the
+wrong one for a quick chatbot or for non-LLM ML — see [When to use it](#when-to-use-it).
 
 ---
 
@@ -18,35 +47,37 @@ data ─▶ registry ─▶ ingestion ─▶ feature materialization ─▶ embe
      ─▶ feedback ─▶ preference datasets ─▶ DPO / retrain
 ```
 
-The design follows the **FTI idea — Feature, Training, Inference** — but built as a real platform
-instead of a single Python app: event-driven, each service owns its own database, and long-running
-work runs as durable workflows. Kubernetes, Ray, and vLLM handle the ML runtime.
+The design follows the **FTI split — Feature, Training, Inference** — as an event-driven platform:
+each service owns its own database, events cross between services, and long-running work runs as
+durable Temporal workflows. Kubernetes, Ray, and vLLM handle the ML runtime; the heavy Python/GPU work
+stays in batch jobs behind clean boundaries.
 
-**Each service owns its state, events cross between services, and workflows coordinate
-the slow steps.** That's a cleaner way to run things than most LLM platforms manage.
-
-> **Heads up:** this is an emerging platform. The infrastructure is solid and well-reviewed, but some
-> pieces (multi-LoRA serving by default, the self-improving DPO loop, the full lakehouse path) are a
-> direction we're building toward, not finished work. See [Where it's headed](#where-its-headed).
+> **Maturity:** the core lifecycle is implemented and covered by end-to-end tests — ingestion,
+> materialization, training, champion/challenger promotion, serving, RAG inference, and the
+> feedback-driven DPO retrain loop all run. The areas still maturing are **multi-LoRA serving**,
+> **deeper evaluation** (Ragas/DeepEval, golden sets, drift), and the **full lakehouse path**
+> (Iceberg / Polaris / Nessie). See [Where it's headed](#where-its-headed).
 
 ---
 
 ## What it does
 
-- Registers **datasets and where they come from**.
-- Ingests **dataset files and model artifacts** through presigned upload sessions; data files include PDF, HTML, Markdown, text, JSON, CSV, and Parquet with format detection and validation.
-- Extracts and chunks documents, including proper PDF extraction via `pdf_extractor_lib`.
-- Builds **feature and embedding snapshots**, keyed by content so re-runs don't duplicate work
-  (content-addressed idempotency).
+- Registers **datasets and their sources**.
+- Ingests **dataset files and model artifacts** through presigned upload sessions; data files include
+  PDF, HTML, Markdown, text, JSON, CSV, and Parquet, with format detection and validation.
+- Extracts and chunks documents, including PDF extraction via `pdf_extractor_lib`.
+- Builds **feature and embedding snapshots**, content-addressed so re-runs don't duplicate work.
 - Stores and searches vectors with **pgvector** (vectors and metadata live together in Postgres).
-- Serves **RAG inference**: retrieval, reranking, query rewriting, prompt packing, generation, and a
-  full audit trail of every request.
+- Serves **RAG inference** across **one or more datasets per endpoint**, with a configurable merge
+  strategy (`reranker` or `score_normalized`): retrieval, reranking, query rewriting, prompt packing,
+  generation, and a full audit trail of every request.
 - Captures **feedback** and turns it into **preference datasets** for alignment.
 - Runs **SFT and DPO training** on Ray/KubeRay using Axolotl-style recipes.
-- **Evaluates models and gates promotion** through the model registry.
-- **Reconciles serving** through a Kubernetes serving layer, heading toward vLLM / multi-LoRA.
+- **Evaluates models and gates promotion** through the model registry (absolute floors +
+  no-regression-vs-champion + evidence).
+- **Reconciles serving** through a Kubernetes serving layer to vLLM.
 - Uses **Kafka events** and a **Postgres outbox** to keep services consistent without coupling them.
-- Comes with **local dev, Docker Compose, Helm, VS Code wiring, and end-to-end tests**.
+- Ships with **local dev, Docker Compose, Helm, VS Code wiring, and end-to-end tests**.
 
 ---
 
@@ -56,116 +87,63 @@ Two short design docs cover the load-bearing choices — read these first:
 
 - **[ADR-0001 — Open Lakehouse Query Stack](docs/adr/0001-open-lakehouse-query-stack.md):** Go owns the
   APIs, metadata, orchestration, events, and observability. The data side uses a vendor-neutral
-  registry and an Arrow/DataFusion query boundary, so **Python never becomes the control plane**.
+  registry and an Arrow/DataFusion query boundary, so Python never becomes the control plane.
 - **[ADR-0002 — Temporal and Event Delivery](docs/adr/0002-temporal-and-event-delivery-boundaries.md):**
   services that own data publish events through a **Postgres outbox** in the same transaction as the
   write, so an event never exists without the state behind it. Training workflows publish from
   Temporal activities. Consumers are built to handle duplicates.
 
 The recurring discipline: **Postgres for each service's state, Kafka for events between services,
-Temporal for durable workflows, and Kubernetes/Ray/vLLM for the ML runtime.** The heavy Python/GPU
-work stays in batch jobs behind clean boundaries.
+Temporal for durable workflows, and Kubernetes/Ray/vLLM for the ML runtime.** Every service uses the
+same hexagonal layering — `pkg/domain` (the model), `pkg/app` (the logic and its interfaces),
+`pkg/infra` (the adapters: DB, messaging, network) — and ships its own Helm chart.
 
 ---
 
 ## Runtime environments
 
-Services read the runtime mode from `ENVIRONMENT`. The repo-standard values used by `config.sh`
-files and Helm values are `local-dev`, `cicd`, `staging`, and `prod`; services trim and uppercase the
-value internally before comparing it as `LOCAL-DEV`, `CICD`, `STAGING`, or `PROD`. Unset or unknown
-values are not treated as dev. `env.IsDevEnv()` is true only for `local-dev` and `cicd`, so staging
-and prod share the same fail-closed behavior.
+Services read the runtime mode from `ENVIRONMENT`. The repo-standard values are `local-dev`, `cicd`,
+`staging`, and `prod` (trimmed and uppercased internally before comparison). Unset or unknown values
+are **not** treated as dev and fail closed. `env.IsDevEnv()` is true only for `local-dev` and `cicd`,
+so staging and prod share the same fail-closed behavior.
 
 | Environment | `IsDevEnv()` | Runtime provider contract | Storage policy | Failure behavior |
 |-------------|--------------|---------------------------|----------------|------------------|
-| `local-dev` | true | Local-compatible generation, TEI-compatible embeddings, TEI-compatible reranking | `local-dev-bucket` is allowed | Missing provider names, endpoints, or models fail service startup |
-| `cicd` | true | Same provider contracts as local, backed by test-owned protocol-compatible services where needed | Test-local buckets are allowed | Missing provider names, endpoints, or models fail service startup |
-| `staging` | false | Production-parity generation, embeddings, and reranking | `local-dev-bucket` is rejected | Same fail-closed startup policy as prod |
-| `prod` | false | Production generation, embeddings, and reranking | `local-dev-bucket` is rejected | Same fail-closed startup policy as staging |
+| `local-dev` | true | Local-compatible generation, TEI-compatible embeddings/reranking | `local-dev-bucket` allowed | Missing provider names/endpoints/models fail startup |
+| `cicd` | true | Same contracts as local, backed by test-owned protocol-compatible services | Test-local buckets allowed | Same fail-closed startup policy |
+| `staging` | false | Production-parity generation, embeddings, reranking | `local-dev-bucket` rejected | Same fail-closed startup policy |
+| `prod` | false | Production generation, embeddings, reranking | `local-dev-bucket` rejected | Same fail-closed startup policy |
 
-The provider contract is the same across environments: model records carry `serving_protocol`,
+The provider contract is identical across environments: model records carry `serving_protocol`,
 `serving_target`, and `serving_model`, and `inference_service` dispatches to the matching generation
-adapter from that recorded state. What changes by environment is how that serving state is produced.
-
-`INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS` is the hard output cap passed to the configured
-self-hosted generation runtime. It must be a positive integer. Staging is configured to `256`, which
-is enough for the current RAG/API e2e responses and keeps non-streaming local-compatible runtimes from
-running until the HTTP timeout. Raise it deliberately, for example to `512`, only for workloads that
-need longer generated answers.
-
-For local and CI service-script runs, `model_serving_service` uses
-`MODEL_SERVING_SERVICE_BACKEND=local`. That backend uses the shared local served-model store instead
-of Kubernetes resources. For base/shared models, it verifies that the requested Ollama tag is present
-through `/api/tags`; when the tag is available, it records `serving_protocol=OLLAMA_GENERATE`, the
-Ollama endpoint as `serving_target`, and the tag as `serving_model`. `inference_service` then calls
-Ollama's `/api/generate` endpoint. In this path, Ollama is the local model runtime, not the platform
-serving orchestrator.
-
-The local backend has two honest serving paths. For existing base/shared models it verifies that the
-requested Ollama tag exists and records `serving_protocol=OLLAMA_GENERATE`. For exact GGUF artifacts
-(`GGUF_MODEL` or `GGUF_LORA_ADAPTER`) it validates the GGUF metadata, uploads the artifact through
-Ollama's blob API, creates a deterministic tag through `/api/create`, and records
-`serving_protocol=OPENAI_CHAT_COMPLETIONS` only after `/api/tags` and `/api/show` confirm the model is
-loaded with a chat template and stop parameters. The create path lets Ollama infer the template from
-GGUF metadata first; local serving falls back to explicit templates only for recognized chat formats
-where inference does not produce a usable tag. Raw `HF_PEFT_ADAPTER` directories are not
-local-compatible serving artifacts; local serving rejects them unless they have already been converted
-to a validated `GGUF_LORA_ADAPTER`. Ollama-style embeddings are supported through `/api/embed`, but
-the local default is the TEI-compatible embedding endpoint.
-
-Staging and prod use the Kubernetes-backed serving path. `model_serving_service` reconciles
-`ServedModel` resources into vLLM Deployment/Service resources and records
-`serving_protocol=OPENAI_CHAT_COMPLETIONS` for loaded vLLM runtimes. Base Helm values are
-local-dev oriented but can still default to Kubernetes-backed orchestrators; service scripts select
-the local substitutes. Use environment-specific values when the target is a non-Kubernetes local loop.
+adapter from that recorded state. What changes by environment is how that serving state is produced:
 
 | Orchestrated path | `local-dev` / `cicd` service scripts | `staging` / `prod` |
 |-------------------|--------------------------------------|--------------------|
-| Model serving reconciliation | Local served-model store; no Kubernetes/vLLM required for local loops | Kubernetes `ServedModel` CRD, vLLM Deployment/Service reconciliation |
+| Model serving reconciliation | Local served-model store; no Kubernetes/vLLM required | Kubernetes `ServedModel` CRD, vLLM Deployment/Service reconciliation |
 | Model registry serving backend | Local served-model backend | Kubernetes `ServedModel` backend |
 | Training execution | Direct Ray Jobs API | KubeRay job creation from Temporal activities |
 | Hugging Face model downloads | Local command execution | Kubernetes Job execution |
 
-### Model-family serving boundary
+Two operational limits are worth calling out:
 
-BigHill is model-family agnostic only inside the supported serving runtimes and protocols. Llama,
-Mistral, Qwen, DeepSeek, Gemma, and similar open model families are carried as model data
-(`base_model`, `serving_model`, artifact URI, adapter URI), not as new service enums.
+- `INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS` is the hard output cap. Local/CI use `24` to keep
+  CPU-bound Ollama e2e calls inside the generation timeout; staging/prod use `256`. Raise it
+  deliberately only for workloads that need longer answers.
+- `INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS` **must exceed**
+  `INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS` — otherwise the gateway sees an EOF even
+  though generation finishes in the inference handler.
 
-The hard limitation is the serving protocol and runtime implementation boundary:
+The API e2e suite is split for local capacity. `make test-api` runs the core gateway/service workflows
+without loading the external datasource fixtures. Run `make test-api-data-sources` when you explicitly
+want the datasource stack and the `external-datasource` API specs.
 
-- supported generation protocols today are `OPENAI_CHAT_COMPLETIONS` and `OLLAMA_GENERATE`;
-- adding another model family should not require schema or code changes if it can run on one of
-  those protocol/runtime implementations;
-- adding a new wire protocol does require a DB enum update, Go enum update, provisioning
-  implementation, inference adapter registration, and tests;
-- the local service-script backend loads exact GGUF artifacts into Ollama through blob-backed
-  `/api/create`; raw `HF_PEFT_ADAPTER` artifacts are rejected unless represented as validated
-  `GGUF_LORA_ADAPTER` artifacts.
-
-**Instruct-vs-base and chat templates (a correctness trap when onboarding GGUF).** When a GGUF
-model is provisioned into local Ollama for `OPENAI_CHAT_COMPLETIONS`, the runtime must have a usable
-chat template for that created tag. BigHill enforces this as a provisioning precondition: full GGUF
-chat models must contain `tokenizer.chat_template`, the runtime refuses `LOADED` unless `/api/show`
-returns a non-empty Ollama-compatible template and stop parameters for the served tag, and raw
-Hugging Face/Jinja templates are rejected if they show up in the created Ollama model. Hugging
-Face/Jinja chat templates are a metadata precondition, not a Modelfile payload. Local serving lets
-Ollama infer the chat template first and falls back only for recognized formats: Llama 3,
-ChatML/Qwen-style, Mistral/Mixtral Instruct, Gemma, Phi, and Llama 2 chat. Unsupported templates
-fail closed. Two failure modes are specifically blocked because they otherwise return HTTP 200 with a
-non-empty answer:
-
-- **Base (non-Instruct) model.** A base completion model (e.g. `Meta-Llama-3-8B`, as opposed to
-  `Meta-Llama-3-8B-Instruct`) will happily emit tokens through the chat endpoint, but it does not
-  follow instructions — it continues text. RAG answers are semantically wrong.
-- **No `TEMPLATE` in the Modelfile.** A bare `FROM <gguf>` Modelfile with no `TEMPLATE`/stop
-  parameters serves the weights without the family's chat formatting, so prompts are assembled
-  incorrectly even for an Instruct model.
-
-Either case produces *garbage that passes* if the guard lives only in a generation assertion. The
-guard therefore lives in provisioning, not in the e2e output text. When onboarding GGUF for chat
-inference, use the **Instruct** build of the model family. Model-family agnostic does **not** mean
-template-agnostic — the chat template is part of correct provisioning, not an optional extra.
+Serving detail (the local Ollama backend, GGUF onboarding, and the model-family / chat-template
+boundary) lives in [`model_serving_service/README.md`](model_serving_service/README.md). One trap is
+load-bearing enough to surface here: **model-family agnostic does not mean template-agnostic.** A base
+(non-Instruct) model, or a GGUF served without its chat template, returns HTTP 200 with a fluent but
+wrong answer. BigHill enforces the chat template as a **provisioning precondition** (not an output
+assertion) so these fail closed; when onboarding GGUF for chat inference, use the **Instruct** build.
 
 ---
 
@@ -174,8 +152,7 @@ template-agnostic — the chat template is part of correct provisioning, not an 
 This is the main path from a user logging in to a self-improving model serving inference. Solid
 arrows (`──▶`) are **synchronous** calls (HTTP through the gateway, gRPC, Temporal activities);
 dashed arrows (`⤍`) are **asynchronous events** delivered over Kafka via each service's Postgres
-outbox (so an event never exists without the state behind it). Event names are the real message
-types from `data_contracts` / `shared_lib/messaging`.
+outbox. Event names are the real message types from `data_contracts` / `shared_lib/messaging`.
 
 ```mermaid
 sequenceDiagram
@@ -258,7 +235,7 @@ sequenceDiagram
     GW->>IF: list safe endpoint projection
     U->>GW: POST /v1/private/inference/endpoints/{endpoint_id}/generations
     GW->>IF: generate from endpoint (trusted X-User-ID / X-Org-ID)
-    IF->>FM: vector search (pgvector)
+    IF->>FM: vector search across endpoint datasets (pgvector)
     IF->>SV: generate (vLLM)
     IF-->>U: answer + full audit trail
     U->>GW: POST /v1/private/inference/feedback
@@ -283,7 +260,7 @@ sequenceDiagram
    and writes vectors to **pgvector** — content-addressed, so re-runs don't duplicate work. When the
    snapshot is materialized, `data_registry` publishes `dataset_updated`.
 4. **Onboard / select a base model.** Base models are uploaded through `ingestion_service` and
-   registered in `model_registry` (`model_artifact_ingested`); the UI lists trainable models via
+   registered in `model_registry` (`model_artifact_ingested`); trainable models are listed via
    `GET /v1/private/models` (org-scoped: shared bases plus your own).
 5. **Trigger training.** Training is **user intent, not a hidden default** — a researcher POSTs the
    dataset, the source model, and named profiles to `POST /v1/private/training-runs`.
@@ -296,19 +273,22 @@ sequenceDiagram
 7. **Promotion gate.** `model_registry` records the new model as a **CANDIDATE** — it is *not* served
    yet — and asks `training_service` for a promotion report (Deepchecks / Evidently). The gate then
    compares the candidate against the current **champion** for that lineage (absolute floors +
-   no-regression + evidence). It promotes to `EVALUATED` or rejects to `FAILED`. This is the guard
-   that makes the retrain loop safe.
+   no-regression + evidence), promoting to `EVALUATED` or rejecting to `FAILED`. This is the guard
+   that keeps the retrain loop safe.
 8. **Serve.** On promotion, `model_registry` records serving intent; `model_serving` reconciles a
    vLLM deployment and reports back until the model is `READY / LOADED` — at which point it becomes
-   the new champion. Inference services learn the ready model via `model_updated`.
+   the new champion. Inference learns the ready model via `model_updated`.
 9. **Consumer inference + feedback loop.** Consumers list safe endpoint projections with
-   `GET /v1/private/inference/endpoints`, invoke with
-   `POST /v1/private/inference/endpoints/{endpoint_id}/generations`, and submit feedback with
-   `POST /v1/private/inference/feedback`. Request bodies carry query controls only; `user_id`,
-   `org_id`, `model_id`, and `dataset_id` are resolved from the trusted token/header context and the
-   published endpoint. Captured feedback becomes a preference dataset; `preference_dataset_ready`
-   kicks off **automatic DPO retraining** (the source model resolved from lineage, not config), which
-   re-enters step 6 and closes the self-improving loop.
+   `GET /v1/private/inference/endpoints` and invoke with
+   `POST /v1/private/inference/endpoints/{endpoint_id}/generations`. Request bodies carry query
+   controls only; `user_id`, `org_id`, `model_id`, and the endpoint's **dataset set** and **merge
+   strategy** are resolved from the trusted token/header context and the published endpoint —
+   retrieval fans out across every ready dataset and merges the results. Endpoints are published and
+   configured explicitly with `POST /v1/private/inference/endpoints`,
+   `PUT /v1/private/inference/endpoints/{endpoint_id}/datasets`, and
+   `PUT /v1/private/inference/endpoints/{endpoint_id}/merge-strategy`. Captured feedback becomes a
+   preference dataset; `preference_dataset_ready` starts a **DPO retrain** (the source model resolved
+   from lineage, not config), which re-enters step 6 and closes the loop.
 
 ---
 
@@ -333,10 +313,6 @@ sequenceDiagram
 | `infra/`, `database/`, `scripts/` | Infra manifests, DB, tooling |
 | `docs/adr/` | Design docs |
 
-Every service uses the same hexagonal layering (ports and adapters) — `pkg/domain` (the model),
-`pkg/app` (the logic and its interfaces), `pkg/infra` (the adapters: DB, messaging, network) — and
-ships its own Helm chart.
-
 ---
 
 ## Getting started
@@ -359,70 +335,29 @@ make stop             # tear it all down
 
 ---
 
-## Who it's for
+## When to use it
 
-Use BigHill if you want to **own an LLM platform** instead of gluing a prototype together. It's a good
-fit when you care about:
+BigHill fits when you want to run an LLM platform yourself and care about repeatable
+data-to-model pipelines, auditability (datasets, embeddings, prompts, responses, feedback, model
+versions), independently scaling services, event boundaries instead of shared databases, multi-tenant
+model and adapter lifecycles, and RAG + fine-tuning + feedback-driven improvement in one system, with
+a path from a laptop to Kubernetes.
 
-- Repeatable **data-to-model pipelines**.
-- **Auditability** — datasets, embeddings, prompts, responses, feedback, and model versions.
-- **Services that scale independently**.
-- **Events instead of shared databases** between components.
-- **Self-hosting** instead of SaaS lock-in.
-- **Multi-tenant** model and adapter lifecycles.
-- **RAG + fine-tuning + feedback-driven improvement** in one system.
-- A path **from your laptop to Kubernetes**.
-
-It's **not the right tool** if you just want a quick chatbot — LangChain, LlamaIndex, Haystack, or a
-managed RAG service will get you there far faster. BigHill is heavier on purpose: it's meant to sit
-*under* many systems.
-
----
-
-## How it compares
-
-**LangChain / LlamaIndex / Haystack** are application frameworks. BigHill is a platform — it owns
-ingestion, registry, workflows, serving state, model promotion, feedback, and training. More serious
-operationally, and heavier.
-
-**ZenML / Kubeflow / Metaflow / Dagster / Airflow** focus on orchestration or ML pipelines. BigHill
-uses Temporal + Kafka/outbox wrapped in real services. Cleaner event boundaries than most pipeline
-tools; less mature on UI and ecosystem.
-
-**SageMaker / Vertex AI / Azure ML** are managed. BigHill is the self-hosted version — more control,
-less lock-in, and you carry more of the ops.
-
-**MLflow** is mostly tracking, registry, and artifacts. BigHill has registry concepts too, plus the
-whole event/workflow/data/serving/inference platform around them. MLflow is more mature for experiment
-tracking; this is broader.
-
-**Qdrant / Pinecone / Weaviate** are vector databases. BigHill uses pgvector, which keeps vectors and
-metadata in one Postgres for easy consistency. It won't beat a dedicated vector DB on every feature or
-on scale, but it's pragmatic and easy to reason about.
-
-**KServe / Seldon / BentoML / Ray Serve** are serving platforms. BigHill is growing its own serving
-reconciliation around vLLM / multi-LoRA. The direction is right; the mature platforms have more
-battle-tested autoscaling, routing, and rollout. It should probably learn from (or adopt) KServe's
-`ServingRuntime` / `ServedModel` split over time.
-
-**Databricks / Snowflake / lakehouse platforms** — BigHill has a lakehouse *direction* (Arrow /
-DataFusion / Iceberg) but isn't a full lakehouse yet, and it's aimed at the LLM lifecycle rather than
-general analytics.
+It's **not** the right tool for a quick chatbot — LangChain, LlamaIndex, Haystack, or a managed RAG
+service will get you there faster. BigHill is heavier on purpose: it's meant to sit *under* many
+systems rather than be one. Compared to managed platforms (SageMaker / Vertex / Azure ML) it trades
+convenience for control and self-hosting; compared to application frameworks it owns far more of the
+lifecycle (ingestion, registry, workflows, serving state, promotion, feedback, training).
 
 ---
 
 ## Where it's headed
 
-The main next step is to **close the loop and make it self-improving:**
+The core serve → feedback → preference data → DPO → eval → promote → serve loop is wired end to end.
+The next work is depth and reliability, not first light:
 
-```
-serve ─▶ capture feedback ─▶ export preference data ─▶ DPO ─▶ eval ─▶ promote ─▶ serve
-```
-
-After that:
-
-- Make the **DPO / feedback loop boringly reliable**, proven end to end — including a held-out
-  train/eval split so a new model only gets promoted if it actually beats the one it came from.
+- Make the **DPO / feedback loop boringly reliable** and proven, including held-out train/eval splits
+  so a new model is only promoted when it actually beats the one it came from.
 - **Better evaluation:** Ragas / DeepEval, pairwise preference eval, golden sets, drift checks.
 - **Mature multi-LoRA serving** so one base model can serve many tenant adapters cheaply.
 - **Better RAG:** structure-aware chunking, hybrid BM25 + vector search, self-querying, HyDE, query
@@ -436,7 +371,8 @@ After that:
 
 ## Bottom line
 
-BigHill is an **emerging** self-hosted platform for RAG, fine-tuning, evaluation, serving, and feedback-driven improvement, with service-owned state, an outbox, Temporal, Kafka, explicit contracts, clean boundaries.
-Next to the big commercial platforms it's less polished, but pretty complete, it just takes more work to run. Next to lightweight frameworks it's a far more complete system and easy to extend.
-
-Bighill **owns the full lifecycle of data, models, inference, feedback, and retraining.**
+BigHill is a self-hosted platform for RAG, fine-tuning, evaluation, serving, and feedback-driven
+improvement, built on service-owned state, a Postgres outbox, Temporal, Kafka, and explicit contracts.
+It takes more to run than a lightweight framework and is less polished than the big commercial
+platforms, but it owns the full lifecycle of data, models, inference, feedback, and retraining in one
+system that's meant to be extended.

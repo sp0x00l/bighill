@@ -131,6 +131,12 @@ spec:
               value: {{ .Values.service.grpcPort | quote }}
             - name: INFERENCE_SERVICE_API_HTTP_PORT
               value: {{ .Values.service.httpPort | quote }}
+            - name: INFERENCE_SERVICE_HTTP_READ_TIMEOUT_SECONDS
+              value: {{ .Values.env.httpReadTimeoutSeconds | quote }}
+            - name: INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS
+              value: {{ .Values.env.httpWriteTimeoutSeconds | quote }}
+            - name: INFERENCE_SERVICE_HTTP_IDLE_TIMEOUT_SECONDS
+              value: {{ .Values.env.httpIdleTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS
               value: {{ .Values.env.featureMaterializerGrpcAddress | quote }}
             - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_DIAL_TIMEOUT_MS

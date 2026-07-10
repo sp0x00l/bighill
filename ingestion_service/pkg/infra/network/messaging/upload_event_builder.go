@@ -18,6 +18,14 @@ type UploadEventBuilder struct {
 	topic string
 }
 
+const (
+	datasetFileUploadedDispatchKeyPrefix   = "dataset_file_uploaded:"
+	modelArtifactIngestedDispatchKeyPrefix = "model_artifact_ingested:"
+	uploadSourceType                       = "upload"
+	defaultModelArtifactSource             = "UPLOAD"
+	modelArtifactSourceMetadataFormat      = `{"upload_id":%q,"file_name":%q,"content_type":%q,"manifest_location":%q,"hf_repo_id":%q,"hf_revision":%q,"hf_commit_sha":%q}`
+)
+
 func NewUploadEventBuilder(topic string) *UploadEventBuilder {
 	log.Trace("NewUploadEventBuilder")
 
@@ -39,7 +47,7 @@ func (b *UploadEventBuilder) DatasetFileUploadedMessage(session *model.UploadSes
 		TableFormat:       session.TableFormat,
 		CatalogProvider:   session.CatalogProvider,
 		ProcessingProfile: session.ProcessingProfile,
-		SourceType:        "upload",
+		SourceType:        uploadSourceType,
 	})
 	return msgConn.OutboundMessage{
 		Topic: b.topic,
@@ -48,7 +56,7 @@ func (b *UploadEventBuilder) DatasetFileUploadedMessage(session *model.UploadSes
 			MsgType:     msgConn.MsgTypeDatasetFileUploaded,
 			Payload:     payload,
 		},
-		DispatchKey: "dataset_file_uploaded:" + session.UploadID.String(),
+		DispatchKey: datasetFileUploadedDispatchKeyPrefix + session.UploadID.String(),
 	}
 }
 
@@ -56,7 +64,7 @@ func (b *UploadEventBuilder) ModelArtifactIngestedMessage(session *model.UploadS
 	log.Trace("UploadEventBuilder ModelArtifactIngestedMessage")
 
 	sourceMetadata := fmt.Sprintf(
-		`{"upload_id":%q,"file_name":%q,"content_type":%q,"manifest_location":%q,"hf_repo_id":%q,"hf_revision":%q,"hf_commit_sha":%q}`,
+		modelArtifactSourceMetadataFormat,
 		session.UploadID.String(),
 		session.FileName,
 		session.DeclaredContentType,
@@ -97,7 +105,7 @@ func (b *UploadEventBuilder) ModelArtifactIngestedMessage(session *model.UploadS
 			MsgType:     msgConn.MsgTypeModelArtifactIngested,
 			Payload:     payload,
 		},
-		DispatchKey: "model_artifact_ingested:" + session.UploadID.String(),
+		DispatchKey: modelArtifactIngestedDispatchKeyPrefix + session.UploadID.String(),
 	}
 }
 
@@ -105,7 +113,7 @@ func sourceOrDefault(value string) string {
 	log.Trace("sourceOrDefault")
 
 	if value == "" {
-		return "UPLOAD"
+		return defaultModelArtifactSource
 	}
 	return value
 }
@@ -115,7 +123,7 @@ func mustMarshalUpload(payload proto.Message) []byte {
 
 	out, err := proto.Marshal(payload)
 	if err != nil {
-		panic(err)
+		log.Fatalf("marshal upload event: %v", err)
 	}
 	return out
 }

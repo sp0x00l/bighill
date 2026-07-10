@@ -62,6 +62,16 @@ var _ = Describe("DataFusion query engine adapter", func() {
 		Expect(err).To(MatchError(ContainSubstring("unsupported query engine mode")))
 	})
 
+	It("rejects missing query engine binary path instead of defaulting it", func() {
+		engine, err := data.NewDataFusionQueryEngine(infra.QueryEngineConfig{
+			DataRoot:   GinkgoT().TempDir(),
+			TimeoutSec: 5,
+		})
+
+		Expect(engine).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("query engine binary path is required")))
+	})
+
 	It("rejects query results without the IPC footer", func() {
 		tmpDir := GinkgoT().TempDir()
 		ipcPath := filepath.Join(tmpDir, "result.arrow")
@@ -166,7 +176,7 @@ func buildRawArrowIPC() []byte {
 
 	builder.Field(0).(*array.StringBuilder).AppendValues([]string{"age", "score"}, nil)
 	builder.Field(1).(*array.Int64Builder).AppendValues([]int64{42, 9001}, nil)
-	record := builder.NewRecord()
+	record := builder.NewRecordBatch()
 	defer record.Release()
 
 	var output bytes.Buffer

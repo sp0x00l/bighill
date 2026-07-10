@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	defaultVectorStore      = "pgvector"
 	chunkerGoTokenWindow    = "go-token-window"
 	chunkerGoStructureAware = "go-structure-aware-token-window"
 )
@@ -45,11 +44,12 @@ func NewEmbeddingWriter(store ArtifactStore, provider EmbeddingProvider, chunker
 			chunker = unsupportedChunker{name: strategy.ChunkerName}
 		}
 	}
+	vectorStore = strings.TrimSpace(vectorStore)
 	if vectorStore == "" {
-		vectorStore = defaultVectorStore
+		log.Fatalf("NewEmbeddingWriter: vector store is required")
 	}
 	if maxRows <= 0 {
-		maxRows = 1000
+		log.Fatalf("NewEmbeddingWriter: max rows must be greater than zero")
 	}
 	return &EmbeddingWriter{
 		store:       store,

@@ -33,4 +33,6 @@ Local and CI use the same runtime contract as staging and production: generation
 
 Self-query retrieval uses the same served model record as the inference request. There is no separately configured query-transformer model, endpoint, or protocol.
 
-`INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS` caps generated answer length for every self-hosted runtime adapter. Staging currently uses `256`, which is enough for the RAG/API e2e answers and prevents non-streaming local Ollama calls from running until the HTTP request timeout. Increase it deliberately, for example to `512`, only for workloads that need longer generated responses.
+`INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS` caps generated answer length for every self-hosted runtime adapter. Local-dev and CI use `24` so CPU-bound Ollama e2e calls stay inside the configured generation timeout. Staging and production use `256`, which is enough for the RAG/API responses. Increase it deliberately, for example to `512`, only for workloads that need longer generated responses.
+
+`INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS` must be greater than `INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS`. Generation can legitimately occupy the whole generation timeout, and a shorter HTTP write timeout closes the response stream before the handler can write the completed answer.

@@ -33,6 +33,7 @@ const (
 	ollamaShowPath                = "/api/show"
 	ollamaCreatePath              = "/api/create"
 	ollamaDeletePath              = "/api/delete"
+	ollamaGeneratePath            = "/api/generate"
 	ollamaBlobPath                = "/api/blobs/"
 	maxOllamaModelNameLength      = 64
 )
@@ -138,10 +139,11 @@ func (r *Runtime) EnsureServedModel(ctx context.Context, servedModel *model.Serv
 	if isGGUFArtifact(servedModel.ArtifactFormat) {
 		return r.ensureGGUFServedModel(ctx, servedModel, servingTarget)
 	}
-	if strings.EqualFold(strings.TrimSpace(servedModel.ModelKind), modelKindBase) {
-		if err := r.ensureOllamaTag(ctx, servingTarget, servingModel); err != nil {
-			return nil, err
-		}
+	if err := r.ensureOllamaTag(ctx, servingTarget, servingModel); err != nil {
+		return nil, err
+	}
+	if err := r.warmOllamaModel(ctx, servingTarget, servingModel); err != nil {
+		return nil, err
 	}
 	return &model.ServingRuntimeState{
 		Ready:           true,
@@ -170,6 +172,9 @@ func (r *Runtime) ensureGGUFServedModel(ctx context.Context, servedModel *model.
 	servingModel := deterministicServingTag(servedModel, checksum)
 	if err := r.ensureOllamaTag(ctx, servingTarget, servingModel); err == nil {
 		if err := r.ensureOllamaChatModel(ctx, servingTarget, servingModel); err != nil {
+			return nil, err
+		}
+		if err := r.warmOllamaModel(ctx, servingTarget, servingModel); err != nil {
 			return nil, err
 		}
 		return &model.ServingRuntimeState{
@@ -229,6 +234,9 @@ func (r *Runtime) ensureGGUFServedModel(ctx context.Context, servedModel *model.
 		if err := r.ensureOllamaChatModel(ctx, servingTarget, servingModel); err != nil {
 			return nil, err
 		}
+	}
+	if err := r.warmOllamaModel(ctx, servingTarget, servingModel); err != nil {
+		return nil, err
 	}
 	return &model.ServingRuntimeState{
 		Ready:           true,
@@ -858,6 +866,38 @@ func (r *Runtime) ensureOllamaTag(ctx context.Context, endpoint string, tag stri
 		}
 	}
 	return domain.ErrValidationFailed.Extend(fmt.Sprintf("local ollama model %q is not available; run `ollama pull %s`", tag, tag))
+}
+
+func (r *Runtime) warmOllamaModel(ctx context.Context, endpoint string, tag string) error {
+	log.Trace("localserving Runtime warmOllamaModel")
+
+	body, err := json.Marshal(map[string]any{
+		"model":      strings.TrimSpace(tag),
+		"prompt":     " ",
+		"stream":     false,
+		"keep_alive": "10m",
+		"options": map[string]any{
+			"num_predict": 1,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(endpoint, "/")+ollamaGeneratePath, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("%w: build ollama warm-up request: %w", domain.ErrValidationFailed, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: warm local ollama model %q: %w", domain.ErrValidationFailed, tag, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return domain.ErrValidationFailed.Extend(fmt.Sprintf("ollama warm-up for model %q returned status %d: %s", tag, resp.StatusCode, strings.TrimSpace(string(raw))))
+	}
+	return nil
 }
 
 func normalizedOllamaTag(tag string) string {

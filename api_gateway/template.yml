@@ -17,6 +17,9 @@ Parameters:
   BighillApiFunctionTimeout:
     Type: Number
     Default: 30
+  BighillAuthFunctionTimeout:
+    Type: Number
+    Default: 30
   BighillApiHttpClientTimeoutSeconds:
     Type: Number
     Default: 10
@@ -134,6 +137,7 @@ Resources:
       CodeUri: !Ref BigHillAuthCodeUri
       Handler: bootstrap
       Runtime: provided.al2
+      Timeout: !Ref BighillAuthFunctionTimeout
       Architectures:
         - arm64
       VpcConfig: !If

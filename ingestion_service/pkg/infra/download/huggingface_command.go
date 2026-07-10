@@ -17,6 +17,44 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	huggingFaceCommandTraceNew              = "NewHuggingFaceCommandDownloader"
+	huggingFaceCommandTraceDownload         = "HuggingFaceCommandDownloader DownloadHuggingFaceModel"
+	huggingFaceCommandTraceProviderError    = "providerErrorFromCommandStderr"
+	huggingFaceCommandTraceEnvKeysTrimmed   = "HuggingFaceJobEnvKeys trimmed"
+	huggingFaceCommandTraceCommandEnv       = "HuggingFaceJobEnvKeys commandEnv"
+	huggingFaceCommandTraceEnvValues        = "HuggingFaceJobEnvKeys envValues"
+	huggingFaceCommandTraceResultToArtifact = "downloadResultToArtifact"
+	huggingFaceCommandTraceValidateResult   = "validateDownloadResult"
+
+	huggingFaceProviderName              = "Hugging Face"
+	huggingFaceJSONPayloadPrefix         = "{"
+	huggingFaceLineSeparator             = "\n"
+	huggingFaceEnvAssignmentSeparator    = "="
+	huggingFaceOutputURITrailingPathPart = "/"
+
+	huggingFaceFieldResourceID       = "resource_id"
+	huggingFaceFieldStorageLocation  = "storage_location"
+	huggingFaceFieldManifestLocation = "manifest_location"
+	huggingFaceFieldArtifactType     = "artifact_type"
+	huggingFaceFieldArtifactFormat   = "artifact_format"
+	huggingFaceFieldArtifactChecksum = "artifact_checksum"
+	huggingFaceFieldModelName        = "model_name"
+	huggingFaceFieldModelVersion     = "model_version"
+	huggingFaceFieldBaseModel        = "base_model"
+	huggingFaceFieldSourceURI        = "source_uri"
+	huggingFaceFieldHFRepoID         = "hf_repo_id"
+	huggingFaceFieldHFRevision       = "hf_revision"
+	huggingFaceFieldHFCommitSHA      = "hf_commit_sha"
+
+	huggingFaceDownloadCommandFailedMessage = "hugging face download command failed"
+	huggingFaceDownloadParseResultMessage   = "parse hugging face download result"
+	huggingFaceInvalidResourceIDMessage     = "download result resource_id is invalid"
+	huggingFaceRequiredFieldMessage         = "hugging face manifest field is required: "
+	huggingFaceArtifactSizeMessage          = "hugging face manifest artifact_size_bytes must be greater than zero"
+	huggingFaceModelVersionMessage          = "hugging face manifest model_version must be a positive integer"
+)
+
 type HuggingFaceCommandDownloader struct {
 	command          []string
 	workingDirectory string
@@ -74,19 +112,19 @@ type huggingFaceCommandError struct {
 }
 
 func NewHuggingFaceCommandDownloader(config HuggingFaceCommandDownloaderConfig) (*HuggingFaceCommandDownloader, error) {
-	log.Trace("NewHuggingFaceCommandDownloader")
+	log.Trace(huggingFaceCommandTraceNew)
 
 	return &HuggingFaceCommandDownloader{
 		command:          strings.Fields(config.Command),
 		workingDirectory: strings.TrimSpace(config.WorkingDirectory),
-		outputURI:        strings.TrimRight(strings.TrimSpace(config.OutputURI), "/"),
+		outputURI:        strings.TrimRight(strings.TrimSpace(config.OutputURI), huggingFaceOutputURITrailingPathPart),
 		timeout:          config.Timeout,
 		envKeys:          config.EnvKeys.trimmed(),
 	}, nil
 }
 
 func (d *HuggingFaceCommandDownloader) DownloadHuggingFaceModel(ctx context.Context, request model.OnboardHuggingFaceModelRequest) (*model.OnboardedModelArtifact, error) {
-	log.Trace("HuggingFaceCommandDownloader DownloadHuggingFaceModel")
+	log.Trace(huggingFaceCommandTraceDownload)
 
 	runResult, err := processrunner.Run(ctx, processrunner.Command{
 		Name:    d.command[0],
@@ -99,22 +137,22 @@ func (d *HuggingFaceCommandDownloader) DownloadHuggingFaceModel(ctx context.Cont
 		if providerErr, ok := providerErrorFromCommandStderr(runResult.Stderr); ok {
 			return nil, providerErr
 		}
-		return nil, fmt.Errorf("%w: hugging face download command failed: %w: %s", domain.ErrValidationFailed, err, strings.TrimSpace(runResult.Stderr))
+		return nil, fmt.Errorf("%w: %s: %w: %s", domain.ErrValidationFailed, huggingFaceDownloadCommandFailedMessage, err, strings.TrimSpace(runResult.Stderr))
 	}
 	var downloadResult huggingFaceDownloadResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(runResult.Stdout))), &downloadResult); err != nil {
-		return nil, fmt.Errorf("%w: parse hugging face download result: %w", domain.ErrValidationFailed, err)
+		return nil, fmt.Errorf("%w: %s: %w", domain.ErrValidationFailed, huggingFaceDownloadParseResultMessage, err)
 	}
 	return downloadResultToArtifact(request, downloadResult)
 }
 
 func providerErrorFromCommandStderr(stderr string) (*domain.ExternalProviderError, bool) {
-	log.Trace("providerErrorFromCommandStderr")
+	log.Trace(huggingFaceCommandTraceProviderError)
 
-	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	lines := strings.Split(strings.TrimSpace(stderr), huggingFaceLineSeparator)
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
-		if line == "" || !strings.HasPrefix(line, "{") {
+		if line == "" || !strings.HasPrefix(line, huggingFaceJSONPayloadPrefix) {
 			continue
 		}
 		var payload huggingFaceCommandError
@@ -126,7 +164,7 @@ func providerErrorFromCommandStderr(stderr string) (*domain.ExternalProviderErro
 		}
 		provider := strings.TrimSpace(payload.Provider)
 		if provider == "" {
-			provider = "Hugging Face"
+			provider = huggingFaceProviderName
 		}
 		return &domain.ExternalProviderError{
 			Provider:   provider,
@@ -139,7 +177,7 @@ func providerErrorFromCommandStderr(stderr string) (*domain.ExternalProviderErro
 }
 
 func (k HuggingFaceJobEnvKeys) trimmed() HuggingFaceJobEnvKeys {
-	log.Trace("HuggingFaceJobEnvKeys trimmed")
+	log.Trace(huggingFaceCommandTraceEnvKeysTrimmed)
 
 	return HuggingFaceJobEnvKeys{
 		ResourceID:     strings.TrimSpace(k.ResourceID),
@@ -157,18 +195,18 @@ func (k HuggingFaceJobEnvKeys) trimmed() HuggingFaceJobEnvKeys {
 }
 
 func (k HuggingFaceJobEnvKeys) commandEnv(request model.OnboardHuggingFaceModelRequest, token string, outputURI string) []string {
-	log.Trace("HuggingFaceJobEnvKeys commandEnv")
+	log.Trace(huggingFaceCommandTraceCommandEnv)
 
 	env := k.envValues(request, token, outputURI)
 	out := make([]string, 0, len(env))
 	for key, value := range env {
-		out = append(out, key+"="+value)
+		out = append(out, key+huggingFaceEnvAssignmentSeparator+value)
 	}
 	return out
 }
 
 func (k HuggingFaceJobEnvKeys) envValues(request model.OnboardHuggingFaceModelRequest, token string, outputURI string) map[string]string {
-	log.Trace("HuggingFaceJobEnvKeys envValues")
+	log.Trace(huggingFaceCommandTraceEnvValues)
 
 	keys := k.trimmed()
 	return map[string]string{
@@ -187,7 +225,7 @@ func (k HuggingFaceJobEnvKeys) envValues(request model.OnboardHuggingFaceModelRe
 }
 
 func downloadResultToArtifact(request model.OnboardHuggingFaceModelRequest, result huggingFaceDownloadResult) (*model.OnboardedModelArtifact, error) {
-	log.Trace("downloadResultToArtifact")
+	log.Trace(huggingFaceCommandTraceResultToArtifact)
 
 	if err := validateDownloadResult(result); err != nil {
 		return nil, err
@@ -195,7 +233,7 @@ func downloadResultToArtifact(request model.OnboardHuggingFaceModelRequest, resu
 	resourceID := request.ResourceID
 	parsed, err := uuid.Parse(strings.TrimSpace(result.ResourceID))
 	if err != nil {
-		return nil, fmt.Errorf("%w: download result resource_id is invalid: %w", domain.ErrValidationFailed, err)
+		return nil, fmt.Errorf("%w: %s: %w", domain.ErrValidationFailed, huggingFaceInvalidResourceIDMessage, err)
 	}
 	resourceID = parsed
 	return &model.OnboardedModelArtifact{
@@ -217,34 +255,34 @@ func downloadResultToArtifact(request model.OnboardHuggingFaceModelRequest, resu
 }
 
 func validateDownloadResult(result huggingFaceDownloadResult) error {
-	log.Trace("validateDownloadResult")
+	log.Trace(huggingFaceCommandTraceValidateResult)
 
 	required := map[string]string{
-		"resource_id":       result.ResourceID,
-		"storage_location":  result.StorageLocation,
-		"manifest_location": result.ManifestLocation,
-		"artifact_type":     result.ArtifactType,
-		"artifact_format":   result.ArtifactFormat,
-		"artifact_checksum": result.ArtifactChecksum,
-		"model_name":        result.ModelName,
-		"model_version":     result.ModelVersion,
-		"base_model":        result.BaseModel,
-		"source_uri":        result.SourceURI,
-		"hf_repo_id":        result.HFRepoID,
-		"hf_revision":       result.HFRevision,
-		"hf_commit_sha":     result.HFCommitSHA,
+		huggingFaceFieldResourceID:       result.ResourceID,
+		huggingFaceFieldStorageLocation:  result.StorageLocation,
+		huggingFaceFieldManifestLocation: result.ManifestLocation,
+		huggingFaceFieldArtifactType:     result.ArtifactType,
+		huggingFaceFieldArtifactFormat:   result.ArtifactFormat,
+		huggingFaceFieldArtifactChecksum: result.ArtifactChecksum,
+		huggingFaceFieldModelName:        result.ModelName,
+		huggingFaceFieldModelVersion:     result.ModelVersion,
+		huggingFaceFieldBaseModel:        result.BaseModel,
+		huggingFaceFieldSourceURI:        result.SourceURI,
+		huggingFaceFieldHFRepoID:         result.HFRepoID,
+		huggingFaceFieldHFRevision:       result.HFRevision,
+		huggingFaceFieldHFCommitSHA:      result.HFCommitSHA,
 	}
 	for field, value := range required {
 		if strings.TrimSpace(value) == "" {
-			return domain.ErrValidationFailed.Extend("hugging face manifest field is required: " + field)
+			return domain.ErrValidationFailed.Extend(huggingFaceRequiredFieldMessage + field)
 		}
 	}
 	if result.ArtifactSizeBytes <= 0 {
-		return domain.ErrValidationFailed.Extend("hugging face manifest artifact_size_bytes must be greater than zero")
+		return domain.ErrValidationFailed.Extend(huggingFaceArtifactSizeMessage)
 	}
 	version, err := strconv.Atoi(strings.TrimSpace(result.ModelVersion))
 	if err != nil || version <= 0 {
-		return domain.ErrValidationFailed.Extend("hugging face manifest model_version must be a positive integer")
+		return domain.ErrValidationFailed.Extend(huggingFaceModelVersionMessage)
 	}
 	return nil
 }

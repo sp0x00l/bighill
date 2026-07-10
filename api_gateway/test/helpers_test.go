@@ -55,6 +55,10 @@ func gatewayBaseURL() string {
 }
 
 func doJSON(method, path string, payload any, bearerToken string, requestID uuid.UUID) (int, []byte) {
+	return doJSONWithTimeout(method, path, payload, bearerToken, requestID, apiClient.Timeout)
+}
+
+func doJSONWithTimeout(method, path string, payload any, bearerToken string, requestID uuid.UUID, timeout time.Duration) (int, []byte) {
 	var body io.Reader
 	if payload != nil {
 		payloadBytes, err := json.Marshal(payload)
@@ -79,7 +83,8 @@ func doJSON(method, path string, payload any, bearerToken string, requestID uuid
 		}
 	}
 
-	resp, err := apiClient.Do(req)
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
 	Expect(err).NotTo(HaveOccurred())
 	defer resp.Body.Close()
 
@@ -180,7 +185,7 @@ func createVerifiedProfileAndLogin() profileTestUser {
 	orgID, err := uuid.Parse(stringField(currentOrg, "orgId"))
 	Expect(err).NotTo(HaveOccurred())
 
-	return profileTestUser{
+	user := profileTestUser{
 		ID:       userID,
 		OrgID:    orgID,
 		Email:    email,
@@ -188,6 +193,7 @@ func createVerifiedProfileAndLogin() profileTestUser {
 		Phone:    phone,
 		Token:    token,
 	}
+	return user
 }
 
 func newTenantUserCreatedEventCollector() (*kafkaEventCollector[*profilepb.UserCreatedEvent], context.CancelFunc) {
@@ -268,9 +274,7 @@ func initRunSalt() {
 
 func uniqueGBPhone() string {
 	phone, err := uniqueGBPhoneFromStub("+447078")
-	if err != nil {
-		panic(err)
-	}
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	return phone
 }
 

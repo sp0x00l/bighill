@@ -91,6 +91,27 @@ type recordingEmbeddingProcessor struct {
 	selected bool
 }
 
+type recordingEmbeddingProvider struct {
+	dimensions int
+	texts      []string
+}
+
+func (p *recordingEmbeddingProvider) Dimensions() int {
+	return p.dimensions
+}
+
+func (p *recordingEmbeddingProvider) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	p.texts = append([]string(nil), texts...)
+	vectors := make([][]float32, len(texts))
+	for i := range texts {
+		vectors[i] = make([]float32, p.dimensions)
+		for j := range vectors[i] {
+			vectors[i][j] = 1
+		}
+	}
+	return vectors, nil
+}
+
 func (p *recordingEmbeddingProcessor) SupportsEmbeddings(featureSnapshot *model.FeatureSnapshot) bool {
 	return featureSnapshot != nil && featureSnapshot.ProcessingProfile == model.ProcessingProfileTextRAG
 }
@@ -239,6 +260,36 @@ var _ = Describe("Materialization adapters", func() {
 		location, err := store.Write(ctx, "feature-materializer-test/object.csv", "text/csv", data)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(location).To(Equal("s3://local-dev-bucket/feature-materializer-test/object.csv"))
+
+		roundTrip, err := store.Read(ctx, location)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(roundTrip).To(Equal(data))
+	})
+
+	It("reads file URI artifacts and rejects unsupported artifact schemes", func() {
+		ctx := context.Background()
+		store, err := materialization.NewObjectArtifactStore(ctx, "local-dev-bucket", "local-dev", 10*1024*1024)
+		Expect(err).NotTo(HaveOccurred())
+		path := filepath.Join(GinkgoT().TempDir(), "input.txt")
+		Expect(os.WriteFile(path, []byte("hello"), 0600)).To(Succeed())
+
+		data, err := store.Read(ctx, "file://"+path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(Equal("hello"))
+
+		_, err = store.Read(ctx, "ftp://bucket/input.txt")
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrArtifactRead)).To(BeTrue())
+	})
+
+	It("rejects invalid artifact store configuration at construction", func() {
+		_, err := materialization.NewObjectArtifactStore(context.Background(), "", "local-dev", 10*1024*1024)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+
+		_, err = materialization.NewObjectArtifactStore(context.Background(), "local-dev-bucket", "", 10*1024*1024)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
 	})
 
 	It("writes a ready raw snapshot from an uploaded dataset file", func() {
@@ -523,6 +574,32 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(records[1].ChunkIndex).To(Equal(1))
 	})
 
+	It("limits embedding input rows using the configured max rows", func() {
+		ctx := context.Background()
+		store := newMemoryArtifactStore()
+		provider := &recordingEmbeddingProvider{dimensions: 4}
+		strategy := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{
+			EmbeddingProvider:   "tei",
+			EmbeddingModel:      "test-model",
+			EmbeddingDimensions: 4,
+		})
+		writer := materialization.NewEmbeddingWriter(store, provider, nil, strategy, "pgvector", 1)
+		rawArtifact, err := materialization.NormalizeArtifactToParquet(ctx, []byte("title\nIntro\nNext\n"), "text/csv", "csv")
+		Expect(err).NotTo(HaveOccurred())
+		featureSnapshot := validFeatureSnapshot(validRawSnapshot(validDatasetFile()))
+		featureSnapshot.StorageLocation = "s3://local/features/max-rows.parquet"
+		store.objects[featureSnapshot.StorageLocation] = rawArtifact.Data
+		embeddingSnapshot := &model.EmbeddingSnapshot{EmbeddingSnapshotID: uuid.New(), FeatureSnapshotID: featureSnapshot.FeatureSnapshotID}
+
+		result, records, err := writer.MaterializeEmbeddings(ctx, featureSnapshot, embeddingSnapshot)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.EmbeddingCount).To(Equal(int64(1)))
+		Expect(records).To(HaveLen(1))
+		Expect(provider.texts).To(HaveLen(1))
+		Expect(provider.texts[0]).To(Equal("Intro"))
+	})
+
 	It("chunks feature rows with a Go token window", func() {
 		strategy := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", ChunkSize: 3, ChunkOverlap: 1})
 		chunker := materialization.NewTokenWindowChunker(strategy)
@@ -600,6 +677,36 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(errors.Is(err, domain.ErrEmbeddingMaterialize)).To(BeTrue())
 	})
 
+	It("surfaces embedding service response bodies for non-success statuses", func() {
+		provider := materialization.NewHTTPEmbeddingProviderWithClient("tei", "http://embedding-service", "bge-small", 2, &http.Client{
+			Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return embeddingHTTPResponse(http.StatusBadRequest, `{"error":"bad input"}`), nil
+			}),
+			Timeout: time.Second,
+		})
+
+		_, err := provider.Embed(context.Background(), []string{"first"})
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("bad input"))
+		Expect(errors.Is(err, domain.ErrEmbeddingMaterialize)).To(BeTrue())
+	})
+
+	It("rejects unsupported embedding providers at request time", func() {
+		provider := materialization.NewHTTPEmbeddingProviderWithClient("unsupported", "http://embedding-service", "bge-small", 2, &http.Client{
+			Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				Fail("unsupported providers should not issue HTTP requests")
+				return nil, nil
+			}),
+			Timeout: time.Second,
+		})
+
+		_, err := provider.Embed(context.Background(), []string{"first"})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrEmbeddingMaterialize)).To(BeTrue())
+	})
+
 	It("dispatches raw snapshot writes by processing profile", func() {
 		datasetFile := validDatasetFile()
 		datasetFile.ProcessingProfile = model.ProcessingProfileTextRAG
@@ -625,6 +732,18 @@ var _ = Describe("Materialization adapters", func() {
 
 		Expect(err).To(HaveOccurred())
 		Expect(errors.Is(err, domain.ErrEmbeddingMaterialize)).To(BeTrue())
+	})
+
+	It("rejects feature snapshot builds without a matching processor", func() {
+		dispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(nil)
+		rawSnapshot := validRawSnapshot(validDatasetFile())
+		rawSnapshot.ProcessingProfile = model.ProcessingProfileTextRAG
+
+		featureSnapshot, err := dispatcher.BuildFeatureSnapshot(context.Background(), rawSnapshot, validFeatureSnapshot(rawSnapshot))
+
+		Expect(featureSnapshot).To(BeNil())
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, domain.ErrFeatureSnapshotBuild)).To(BeTrue())
 	})
 })
 

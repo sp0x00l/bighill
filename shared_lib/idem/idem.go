@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -29,7 +30,7 @@ func Key(seed uuid.UUID, parts ...string) uuid.UUID {
 func Join(parts ...string) string {
 	for _, part := range parts {
 		if part == "" {
-			panic("idem: empty key part")
+			log.Fatal("idem: empty key part")
 		}
 	}
 	return strings.Join(parts, ":")

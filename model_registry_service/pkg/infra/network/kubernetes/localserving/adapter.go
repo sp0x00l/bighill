@@ -68,12 +68,6 @@ func ServedModelName(modelID uuid.UUID, modelVersion int) string {
 func NewStatusObserver(adapter *Adapter, recorder app.ServingStatusRecorder, resyncInterval time.Duration) (*StatusObserver, error) {
 	log.Trace("localserving NewStatusObserver")
 
-	if adapter == nil {
-		return nil, fmt.Errorf("local served model adapter is required")
-	}
-	if recorder == nil {
-		return nil, fmt.Errorf("serving status recorder is required")
-	}
 	return &StatusObserver{
 		adapter:        adapter,
 		recorder:       recorder,

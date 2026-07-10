@@ -39,7 +39,11 @@ func (e *registryQueryEngine) executeMongo(ctx context.Context, cfg *dataregistr
 		return nil, err
 	}
 
-	clientOptions := options.Client().ApplyURI(mongoConnectionURI(cfg))
+	connectionURI, err := mongoConnectionURI(cfg)
+	if err != nil {
+		return nil, err
+	}
+	clientOptions := options.Client().ApplyURI(connectionURI)
 	if cfg.GetUsername() != "" {
 		clientOptions.SetAuth(options.Credential{
 			AuthSource: cfg.GetAuthDatabase(),
@@ -121,25 +125,25 @@ func mongoSpecFromCommand(query *sourceQueryCommand) (*mongoFindSpec, error) {
 	return spec, nil
 }
 
-func mongoConnectionURI(cfg *dataregistrypb.MongoSourceConfig) string {
+func mongoConnectionURI(cfg *dataregistrypb.MongoSourceConfig) (string, error) {
 	log.Trace("mongoConnectionURI")
 
 	hosts := make([]string, 0, len(cfg.GetHosts()))
 	for _, host := range cfg.GetHosts() {
 		hostname := strings.TrimSpace(host.GetHostname())
 		if hostname == "" {
-			hostname = "localhost"
+			return "", domainErrors.ErrValidationFailed.Extend("mongo source host hostname is required")
 		}
 		port := int(host.GetPort())
 		if port == 0 {
-			port = 27017
+			return "", domainErrors.ErrValidationFailed.Extend("mongo source host port is required")
 		}
 		hosts = append(hosts, fmt.Sprintf("%s:%d", hostname, port))
 	}
 	if len(hosts) == 0 {
-		hosts = append(hosts, "localhost:27017")
+		return "", domainErrors.ErrValidationFailed.Extend("mongo source hosts are required")
 	}
-	return "mongodb://" + strings.Join(hosts, ",")
+	return "mongodb://" + strings.Join(hosts, ","), nil
 }
 
 func (e *registryQueryEngine) mongoDocumentsToArrow(documents []bson.M) (*QueryResult, error) {
@@ -178,7 +182,7 @@ func (e *registryQueryEngine) mongoDocumentsToArrow(documents []bson.M) (*QueryR
 		}
 	}
 
-	record := builder.NewRecord()
+	record := builder.NewRecordBatch()
 	return &QueryResult{
 		Schema:       schema,
 		Records:      []arrow.Record{record},

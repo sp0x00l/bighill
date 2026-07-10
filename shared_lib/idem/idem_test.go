@@ -1,6 +1,8 @@
 package idem
 
 import (
+	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/google/uuid"
@@ -26,6 +28,19 @@ var _ = Describe("Idempotency keys", func() {
 	})
 
 	It("rejects empty parts", func() {
-		Expect(func() { Join(Outbox, "") }).To(Panic())
+		if os.Getenv("BIGHILL_IDEM_EMPTY_PART_FATAL_TEST") == "1" {
+			Join(Outbox, "")
+			return
+		}
+
+		cmd := exec.Command(os.Args[0], "-test.run=TestIdem")
+		cmd.Env = append(os.Environ(), "BIGHILL_IDEM_EMPTY_PART_FATAL_TEST=1")
+
+		err := cmd.Run()
+
+		Expect(err).To(HaveOccurred())
+		exitErr, ok := err.(*exec.ExitError)
+		Expect(ok).To(BeTrue())
+		Expect(exitErr.ExitCode()).NotTo(Equal(0))
 	})
 })

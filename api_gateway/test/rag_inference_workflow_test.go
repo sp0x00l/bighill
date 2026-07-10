@@ -32,6 +32,7 @@ const (
 	defaultInferenceGRPCAddress = "localhost:7073"
 	ragE2EGenerateCallTimeout   = 90 * time.Second
 	ragE2EGenerateWaitTimeout   = 3 * time.Minute
+	ragE2EModelPollTimeout      = 5 * time.Second
 )
 
 var ragE2EBaseModelTag string
@@ -423,7 +424,7 @@ func replaceHuggingFaceToken(user profileTestUser, token string) {
 func assertModelSelectable(user profileTestUser, modelID uuid.UUID, source string, name string) map[string]any {
 	var selected map[string]any
 	Eventually(func(g Gomega) {
-		status, body := doJSON(http.MethodGet, "/v1/private/models/"+modelID.String(), nil, user.Token, uuid.Nil)
+		status, body := doJSONWithTimeout(http.MethodGet, "/v1/private/models/"+modelID.String(), nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
 		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 		selected = decodeObject(body)
 		g.Expect(selected).To(SatisfyAll(
@@ -437,7 +438,7 @@ func assertModelSelectable(user profileTestUser, modelID uuid.UUID, source strin
 			HaveKeyWithValue("name", name),
 		))
 
-		status, body = doJSON(http.MethodGet, "/v1/private/models?source="+source+"&kind=BASE&status=READY&limit=25&page=1", nil, user.Token, uuid.Nil)
+		status, body = doJSONWithTimeout(http.MethodGet, "/v1/private/models?source="+source+"&kind=BASE&status=READY&limit=25&page=1", nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
 		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 		list := decodeObject(body)
 		resources, ok := list["resources"].([]any)

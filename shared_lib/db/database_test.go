@@ -270,12 +270,13 @@ var _ = Describe("UnitOfWork", func() {
 		canceledCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		Expect(func() {
-			_ = uow.Do(canceledCtx, func(ctx context.Context, tx pgx.Tx) error {
-				panic("boom")
-			})
-		}).To(PanicWith("boom"))
+		err := uow.Do(canceledCtx, func(ctx context.Context, tx pgx.Tx) error {
+			values := []string{}
+			_ = values[0]
+			return nil
+		})
 
+		Expect(err).To(MatchError(ContainSubstring("panic: runtime error: index out of range")))
 		Expect(pool.RollbackCalled).To(BeTrue())
 		Expect(pool.RollbackContextErr).To(BeNil())
 	})

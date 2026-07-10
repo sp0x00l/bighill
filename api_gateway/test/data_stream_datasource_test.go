@@ -50,7 +50,7 @@ const (
 	mongoDataSourceAuthDatabase    = "admin"
 )
 
-var _ = Describe("Data Stream datasource query", Ordered, func() {
+var _ = Describe("Data Stream datasource query", Label("external-datasource"), Ordered, func() {
 	var (
 		user profileTestUser
 	)

@@ -266,7 +266,7 @@ func lakehouseRawArrowIPC() []byte {
 
 	builder.Field(0).(*array.StringBuilder).AppendValues([]string{"Metropolis", "Solaris"}, nil)
 	builder.Field(1).(*array.Int64Builder).AppendValues([]int64{1927, 1972}, nil)
-	record := builder.NewRecord()
+	record := builder.NewRecordBatch()
 	defer record.Release()
 
 	var output bytes.Buffer

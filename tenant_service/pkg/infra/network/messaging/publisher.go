@@ -49,7 +49,7 @@ func (b *UserEventBuilder) UserCreatedMessage(profileAccount *domain.ProfileAcco
 	log.Trace("UserEventBuilder UserCreatedMessage")
 
 	if profileAccount == nil || profileAccount.ID == uuid.Nil {
-		panic("invalid arguments to build user created event")
+		log.Fatal("invalid arguments to build user created event")
 	}
 	payload := mustMarshalProfileEvent(&profileeventpb.UserCreatedEvent{
 		UserId:                     profileAccount.ID.String(),
@@ -74,7 +74,7 @@ func (b *UserEventBuilder) UserUpdatedMessage(profile *domain.Profile) shared.Ou
 	log.Trace("UserEventBuilder UserUpdatedMessage")
 
 	if profile == nil || profile.ID == uuid.Nil {
-		panic("invalid arguments to build user updated event")
+		log.Fatal("invalid arguments to build user updated event")
 	}
 	payload := mustMarshalProfileEvent(&profileeventpb.UserUpdatedEvent{
 		UserId:                     profile.ID.String(),
@@ -101,7 +101,7 @@ func (b *UserEventBuilder) UserDeletedMessage(userID uuid.UUID) shared.OutboundM
 	log.Trace("UserEventBuilder UserDeletedMessage")
 
 	if userID == uuid.Nil {
-		panic("invalid arguments to build user deleted event")
+		log.Fatal("invalid arguments to build user deleted event")
 	}
 	payload := mustMarshalProfileEvent(&profileeventpb.UserDeletedEvent{
 		UserId: userID.String(),
@@ -152,7 +152,7 @@ func mustMarshalProfileEvent(payload proto.Message) []byte {
 
 	out, err := proto.Marshal(payload)
 	if err != nil {
-		panic(err)
+		log.Fatalf("marshal profile event: %v", err)
 	}
 	return out
 }

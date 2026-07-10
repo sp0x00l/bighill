@@ -70,7 +70,7 @@ func MustNewPostgresOutbox(pool postgresOutboxPool, schema string, table string)
 
 	outbox, err := NewPostgresOutbox(pool, schema, table)
 	if err != nil {
-		panic(err)
+		log.Fatalf("create postgres outbox: %v", err)
 	}
 	return outbox
 }

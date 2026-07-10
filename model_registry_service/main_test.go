@@ -98,4 +98,22 @@ var _ = Describe("readModelRegistryConfig", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(deployer).NotTo(BeNil())
 	})
+
+	It("rejects invalid local serving observer intervals at startup wiring", func() {
+		_, err := newServingObserver(servingConfig{
+			Backend:          "local",
+			LocalResyncEvery: 0,
+		}, nil, nil)
+
+		Expect(err).To(MatchError(ContainSubstring("MODEL_REGISTRY_SERVICE_SERVING_LOCAL_RESYNC_SECONDS must be greater than zero")))
+	})
+
+	It("rejects invalid Kubernetes serving observer intervals at startup wiring", func() {
+		_, err := newServingObserver(servingConfig{
+			Backend:         "kubernetes",
+			StatusPollEvery: 0,
+		}, nil, nil)
+
+		Expect(err).To(MatchError(ContainSubstring("MODEL_REGISTRY_SERVICE_SERVING_STATUS_POLL_MS must be greater than zero")))
+	})
 })

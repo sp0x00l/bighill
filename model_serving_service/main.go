@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"model_serving_service/pkg/app"
-	servingk8s "model_serving_service/pkg/infra/network/k8s"
+	servingkubernetes "model_serving_service/pkg/infra/network/k8s"
 	localserving "model_serving_service/pkg/infra/network/localserving"
 
 	env "lib/shared_lib/env"
@@ -91,7 +91,7 @@ func main() {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create serving backend")
 	}
 	reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
-	controller := servingk8s.NewServedModelController(store, reconciler, cfg.PollEvery, servingk8s.WithSharedRuntimeSerialization(cfg.Runtime.MultiTenant))
+	controller := servingkubernetes.NewServedModelController(store, reconciler, cfg.PollEvery, servingkubernetes.WithSharedRuntimeSerialization(cfg.Runtime.MultiTenant))
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck()
@@ -170,7 +170,7 @@ func defaultLocalStorePath() string {
 	return filepath.Join(os.TempDir(), "bighill", "local_served_models", "served_models.json")
 }
 
-func newServingBackend(cfg modelServingConfig) (servingk8s.ServedModelRepository, app.ServingRuntime, error) {
+func newServingBackend(cfg modelServingConfig) (servingkubernetes.ServedModelRepository, app.ServingRuntime, error) {
 	log.Trace("newServingBackend")
 
 	switch cfg.Backend {
@@ -190,11 +190,11 @@ func newServingBackend(cfg modelServingConfig) (servingk8s.ServedModelRepository
 		}
 		return store, runtimeAdapter, nil
 	case "kubernetes":
-		client, err := servingk8s.NewDynamicClient()
+		client, err := servingkubernetes.NewDynamicClient()
 		if err != nil {
 			return nil, nil, err
 		}
-		store, err := servingk8s.NewServedModelStore(servingk8s.ServedModelStoreConfig{
+		store, err := servingkubernetes.NewServedModelStore(servingkubernetes.ServedModelStoreConfig{
 			Namespace: cfg.Namespace,
 			Group:     cfg.ServedModel.Group,
 			Version:   cfg.ServedModel.Version,
@@ -203,7 +203,7 @@ func newServingBackend(cfg modelServingConfig) (servingk8s.ServedModelRepository
 		if err != nil {
 			return nil, nil, err
 		}
-		runtimeAdapter, err := servingk8s.NewVLLMRuntime(servingk8s.VLLMRuntimeConfig{
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(servingkubernetes.VLLMRuntimeConfig{
 			Namespace:       cfg.Namespace,
 			Image:           cfg.Runtime.Image,
 			ImagePullPolicy: cfg.Runtime.ImagePullPolicy,
@@ -247,7 +247,7 @@ type modelServingHealthServer struct {
 	ready  atomic.Bool
 }
 
-func newModelServingHealthServer(port int, readiness *coreHealthCheck.Monitor, controller *servingk8s.ServedModelController, maxSilence time.Duration) *modelServingHealthServer {
+func newModelServingHealthServer(port int, readiness *coreHealthCheck.Monitor, controller *servingkubernetes.ServedModelController, maxSilence time.Duration) *modelServingHealthServer {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := readiness.Check(r.Context()); err != nil {
@@ -303,13 +303,13 @@ func (s *modelServingHealthServer) Ready() bool {
 	return s.ready.Load()
 }
 
-func servedModelControllerReadinessCheck(controller *servingk8s.ServedModelController, maxSilence time.Duration) func(context.Context, coreHealthCheck.HealthCheckConfig) error {
+func servedModelControllerReadinessCheck(controller *servingkubernetes.ServedModelController, maxSilence time.Duration) func(context.Context, coreHealthCheck.HealthCheckConfig) error {
 	return func(ctx context.Context, _ coreHealthCheck.HealthCheckConfig) error {
 		return checkServedModelController(ctx, controller, maxSilence)
 	}
 }
 
-func checkServedModelController(ctx context.Context, controller *servingk8s.ServedModelController, maxSilence time.Duration) error {
+func checkServedModelController(ctx context.Context, controller *servingkubernetes.ServedModelController, maxSilence time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

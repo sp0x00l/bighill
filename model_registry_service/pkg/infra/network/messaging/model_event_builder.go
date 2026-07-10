@@ -125,7 +125,7 @@ func mustMarshal(payload proto.Message) []byte {
 
 	out, err := proto.Marshal(payload)
 	if err != nil {
-		panic(err)
+		log.Fatalf("marshal model event: %v", err)
 	}
 	return out
 }

@@ -56,6 +56,12 @@ variable "bighill_api_function_timeout" {
   default     = 60
 }
 
+variable "bighill_auth_function_timeout" {
+  description = "Timeout (seconds) for BigHillAuthFunction"
+  type        = number
+  default     = 30
+}
+
 variable "bighill_api_http_client_timeout_seconds" {
   description = "HTTP client timeout (seconds) for backend calls"
   type        = number
