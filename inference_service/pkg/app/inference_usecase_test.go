@@ -311,14 +311,24 @@ func (s *queryTransformerStub) TransformQuery(ctx context.Context, request model
 var _ = Describe("InferenceUsecase", func() {
 	It("records a complete model update", func() {
 		repository := &inferenceModelRepositoryStub{}
-		uc := app.NewInferenceUsecase(repository)
+		endpointRepository := &publishedEndpointRepositoryStub{}
+		uc := app.NewInferenceUsecase(
+			repository,
+			app.WithPublishedEndpointRepository(endpointRepository),
+		)
 		idempotencyKey := uuid.New()
+		inferenceModel := validInferenceModel()
 
-		recorded, err := uc.RecordModelUpdated(context.Background(), validInferenceModel(), idempotencyKey)
+		recorded, err := uc.RecordModelUpdated(context.Background(), inferenceModel, idempotencyKey)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(recorded.ModelID).To(Equal(repository.upsertedModel.ModelID))
 		Expect(repository.idempotencyKey).To(Equal(idempotencyKey))
+		Expect(endpointRepository.upserted).NotTo(BeNil())
+		Expect(endpointRepository.upserted.OrgID).To(Equal(inferenceModel.OrgID))
+		Expect(endpointRepository.upserted.ModelID).To(Equal(inferenceModel.ModelID))
+		Expect(endpointRepository.upserted.DatasetIDs).To(Equal([]uuid.UUID{inferenceModel.DatasetID}))
+		Expect(endpointRepository.upserted.Status).To(Equal(model.PublishedEndpointStatusReady))
 	})
 
 	It("does not grant system context when a model update is missing actor and org", func() {
@@ -327,6 +337,7 @@ var _ = Describe("InferenceUsecase", func() {
 		inferenceModel := validInferenceModel()
 		inferenceModel.UserID = uuid.Nil
 		inferenceModel.OrgID = uuid.Nil
+		inferenceModel.DatasetID = uuid.Nil
 
 		recorded, err := uc.RecordModelUpdated(context.Background(), inferenceModel, uuid.New())
 
