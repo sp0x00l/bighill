@@ -52,6 +52,7 @@ func (b *TrainingEventBuilder) ModelTrainingCompletedMessage(result *model.Train
 		ServingLoadStatus: result.ServingLoadStatus,
 		UserId:            userID.String(),
 		OrgId:             orgID.String(),
+		AdapterRank:       int32(result.AdapterRank),
 	})
 	return msgConn.OutboundMessage{
 		Topic: b.topic,

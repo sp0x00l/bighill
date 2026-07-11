@@ -203,6 +203,7 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 		ArtifactChecksum:  strings.TrimSpace(payload.GetArtifactChecksum()),
 		ArtifactSizeBytes: payload.GetArtifactSizeBytes(),
 		AdapterURI:        strings.TrimSpace(payload.GetAdapterUri()),
+		AdapterRank:       int(payload.GetAdapterRank()),
 		ServingTarget:     strings.TrimSpace(payload.GetServingTarget()),
 		ServingModel:      strings.TrimSpace(payload.GetServingModel()),
 		ServingProtocol:   servingProtocol,

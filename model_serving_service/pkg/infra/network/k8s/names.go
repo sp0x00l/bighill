@@ -11,6 +11,7 @@ import (
 
 	servedmodelstore "lib/shared_lib/servedmodel"
 
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,7 +27,30 @@ func WorkloadName(servedModel *model.ServedModel) string {
 func SharedRuntimeWorkloadName(servedModel *model.ServedModel) string {
 	log.Trace("SharedRuntimeWorkloadName")
 
-	return dns1123NameWithHash("served-runtime", servedModel.BaseModel)
+	return BaseRuntimeResourceName(servedModel.BaseModel, RuntimePoolKey(servedModel))
+}
+
+func RuntimePoolKey(servedModel *model.ServedModel) string {
+	log.Trace("RuntimePoolKey")
+
+	if servedModel != nil && servedModel.UsesDedicatedRuntimePool() && servedModel.OrgID != uuid.Nil {
+		return servedModel.OrgID.String()
+	}
+	if servedModel == nil {
+		return ""
+	}
+	return strings.TrimSpace(servedModel.BaseModel)
+}
+
+func BaseRuntimeResourceName(baseModel string, poolKey string) string {
+	log.Trace("BaseRuntimeResourceName")
+
+	key := strings.TrimSpace(poolKey)
+	source := strings.TrimSpace(baseModel)
+	if key != "" && key != source {
+		source = source + "-" + key
+	}
+	return dns1123NameWithHash("served-runtime", source)
 }
 
 func ServingModelName(servedModel *model.ServedModel) string {

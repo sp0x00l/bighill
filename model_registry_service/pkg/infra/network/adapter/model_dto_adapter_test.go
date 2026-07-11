@@ -45,6 +45,7 @@ var _ = Describe("ModelDTOAdapter", func() {
 			ArtifactChecksum:   "sha256:abc",
 			ArtifactSizeBytes:  2048,
 			AdapterURI:         "s3://bucket/models/model-1/adapter.gguf",
+			AdapterRank:        16,
 			ServingTarget:      "local",
 			ServingModel:       "bighill-trained-rag-model-v7-abc",
 			ServingProtocol:    model.ServingProtocolOpenAIChatCompletions,
@@ -80,6 +81,7 @@ var _ = Describe("ModelDTOAdapter", func() {
 		Expect(dto.ArtifactChecksum).To(Equal(record.ArtifactChecksum))
 		Expect(dto.ArtifactSizeBytes).To(Equal(record.ArtifactSizeBytes))
 		Expect(dto.AdapterURI).To(Equal(record.AdapterURI))
+		Expect(dto.AdapterRank).To(Equal(record.AdapterRank))
 		Expect(dto.ServingTarget).To(Equal(record.ServingTarget))
 		Expect(dto.ServingModel).To(Equal(record.ServingModel))
 		Expect(dto.ServingProtocol).To(Equal(record.ServingProtocol.String()))

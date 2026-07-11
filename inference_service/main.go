@@ -15,6 +15,7 @@ import (
 	"inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
 	"inference_service/pkg/infra/generation"
+	inferencemodelserving "inference_service/pkg/infra/modelserving"
 	inferenceadapter "inference_service/pkg/infra/network/adapter"
 	inferencegrpc "inference_service/pkg/infra/network/grpc"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
@@ -54,6 +55,7 @@ type inferenceConfig struct {
 	Generation          generationConfig
 	Reranker            rerankerConfig
 	QueryTransformer    queryTransformerConfig
+	ModelServing        modelServingConfig
 	PreferenceDataset   preferenceDatasetConfig
 	GRPCPort            int
 	HTTPPort            int
@@ -82,6 +84,13 @@ type rerankerConfig struct {
 type queryTransformerConfig struct {
 	Provider       string
 	RequestTimeout time.Duration
+}
+
+type modelServingConfig struct {
+	Endpoint       string
+	RequestTimeout time.Duration
+	LoadTimeout    time.Duration
+	PollInterval   time.Duration
 }
 
 type preferenceDatasetConfig struct {
@@ -217,6 +226,16 @@ func main() {
 			app.WithQueryTransformer(queryTransformer),
 			app.WithQueryTransformerTimeout(cfg.QueryTransformer.RequestTimeout),
 		)
+	}
+	if strings.TrimSpace(cfg.ModelServing.Endpoint) != "" {
+		loadTrigger, err := inferencemodelserving.NewHTTPLoadTrigger(inferencemodelserving.LoadTriggerConfig{
+			Endpoint:       cfg.ModelServing.Endpoint,
+			RequestTimeout: cfg.ModelServing.RequestTimeout,
+		})
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatal("unable to create model serving load trigger")
+		}
+		inferenceOptions = append(inferenceOptions, app.WithModelServingLoadTrigger(loadTrigger, cfg.ModelServing.LoadTimeout, cfg.ModelServing.PollInterval))
 	}
 	preferenceDatasetWriter := inferencepreference.NewS3ObjectDatasetWriter(cancelCtx, cfg.PreferenceDataset.BucketRegion, cfg.PreferenceDataset.UploadPartSizeMB*1024*1024)
 	if preferenceDatasetWriter == nil {
@@ -401,6 +420,12 @@ func readInferenceConfig() inferenceConfig {
 			Provider:       env.WithDefaultString("INFERENCE_SERVICE_QUERY_TRANSFORMER_PROVIDER", ""),
 			RequestTimeout: secondsFromEnv("INFERENCE_SERVICE_QUERY_TRANSFORMER_REQUEST_TIMEOUT_SECONDS", "30"),
 		},
+		ModelServing: modelServingConfig{
+			Endpoint:       env.WithDefaultString("INFERENCE_SERVICE_MODEL_SERVING_ENDPOINT", ""),
+			RequestTimeout: secondsFromEnv("INFERENCE_SERVICE_MODEL_SERVING_REQUEST_TIMEOUT_SECONDS", "5"),
+			LoadTimeout:    secondsFromEnv("INFERENCE_SERVICE_MODEL_SERVING_LOAD_TIMEOUT_SECONDS", "60"),
+			PollInterval:   time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_MODEL_SERVING_LOAD_POLL_MS", "1000")) * time.Millisecond,
+		},
 		PreferenceDataset: preferenceDatasetConfig{
 			ExportEnabled:    preferenceDatasetExportEnabled,
 			URITemplate:      preferenceDatasetURITemplate,
@@ -458,6 +483,9 @@ func validateInferenceConfig(cfg inferenceConfig) error {
 		return fmt.Errorf("INFERENCE_SERVICE_RAG_MERGE_STRATEGY=reranker requires INFERENCE_SERVICE_RERANKER_PROVIDER")
 	}
 	if err := validateQueryTransformerConfig(cfg.QueryTransformer); err != nil {
+		return err
+	}
+	if err := validateModelServingConfig(cfg.ModelServing); err != nil {
 		return err
 	}
 	if err := validateHTTPServerConfig(cfg.HTTPServer, cfg.Generation); err != nil {
@@ -520,6 +548,24 @@ func validateQueryTransformerConfig(cfg queryTransformerConfig) error {
 		}
 	default:
 		return fmt.Errorf("unsupported query transformer provider %q", cfg.Provider)
+	}
+	return nil
+}
+
+func validateModelServingConfig(cfg modelServingConfig) error {
+	log.Trace("validateModelServingConfig")
+
+	if strings.TrimSpace(cfg.Endpoint) == "" {
+		return nil
+	}
+	if cfg.RequestTimeout <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_MODEL_SERVING_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.LoadTimeout <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_MODEL_SERVING_LOAD_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.PollInterval <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_MODEL_SERVING_LOAD_POLL_MS must be greater than zero")
 	}
 	return nil
 }

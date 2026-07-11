@@ -133,8 +133,8 @@ var _ = Describe("Runtime", func() {
 		}
 	})
 
-	It("does not default non-base models to the base model", func() {
-		_, err := newTestRuntime("http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{
+	It("fails closed instead of defaulting fine-tuned models to the base model", func() {
+		state, err := newTestRuntime("http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{
 			ModelID:      uuid.New(),
 			ModelKind:    "FINE_TUNED",
 			Name:         "fine-tune",
@@ -142,8 +142,26 @@ var _ = Describe("Runtime", func() {
 			BaseModel:    "local-test-model:latest",
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("serving model is required for non-base local served models")))
-		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeFalse())
+		Expect(state.Failed).To(BeTrue())
+		Expect(state.FailureReason).To(ContainSubstring("fine-tuned model has no adapter URI"))
+	})
+
+	It("fails closed when a local fine-tuned adapter rank is unknown", func() {
+		state, err := newTestRuntime("http://ollama.local").EnsureServedModel(context.Background(), &model.ServedModel{
+			ModelID:      uuid.New(),
+			ModelKind:    "FINE_TUNED",
+			Name:         "fine-tune",
+			ModelVersion: 1,
+			BaseModel:    "local-test-model:latest",
+			AdapterURI:   "s3://bucket/adapter.gguf",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeFalse())
+		Expect(state.Failed).To(BeTrue())
+		Expect(state.FailureReason).To(ContainSubstring("unknown adapter rank"))
 	})
 
 	It("rejects base models that are not loaded in local Ollama", func() {

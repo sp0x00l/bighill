@@ -48,6 +48,7 @@ var _ = Describe("UploadEventBuilder", func() {
 			ModelName:           "movie-ranker",
 			ModelVersion:        "1",
 			BaseModel:           "llama3",
+			AdapterRank:         16,
 			SourceURI:           "hf://repo/model",
 			HFRepoID:            "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF",
 			HFRevision:          "main",
@@ -109,6 +110,7 @@ var _ = Describe("UploadEventBuilder", func() {
 		Expect(event.ModelName).To(Equal("movie-ranker"))
 		Expect(event.ModelVersion).To(Equal("1"))
 		Expect(event.BaseModel).To(Equal("llama3"))
+		Expect(event.AdapterRank).To(Equal(int32(16)))
 		Expect(event.HfRepoId).To(Equal(session.HFRepoID))
 		Expect(event.HfRevision).To(Equal("main"))
 		Expect(event.HfCommitSha).To(Equal("abc123"))

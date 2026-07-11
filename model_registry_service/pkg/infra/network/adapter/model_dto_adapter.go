@@ -28,6 +28,7 @@ type ModelDTO struct {
 	ArtifactChecksum   string        `json:"artifact_checksum,omitempty"`
 	ArtifactSizeBytes  int64         `json:"artifact_size_bytes"`
 	AdapterURI         string        `json:"adapter_uri,omitempty"`
+	AdapterRank        int           `json:"adapter_rank,omitempty"`
 	ServingTarget      string        `json:"serving_target,omitempty"`
 	ServingModel       string        `json:"serving_model,omitempty"`
 	ServingProtocol    string        `json:"serving_protocol,omitempty"`
@@ -104,6 +105,7 @@ func (a *modelDTOAdapter) toDTO(modelRecord *model.Model, baseURL string) *Model
 		ArtifactChecksum:   modelRecord.ArtifactChecksum,
 		ArtifactSizeBytes:  modelRecord.ArtifactSizeBytes,
 		AdapterURI:         modelRecord.AdapterURI,
+		AdapterRank:        modelRecord.AdapterRank,
 		ServingTarget:      modelRecord.ServingTarget,
 		ServingModel:       modelRecord.ServingModel,
 		ServingProtocol:    modelRecord.ServingProtocol.String(),

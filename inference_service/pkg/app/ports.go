@@ -73,3 +73,7 @@ type PromptBuilder interface {
 type GenerationAdapter interface {
 	Generate(ctx context.Context, request model.GenerationRequest) (string, error)
 }
+
+type ModelServingLoadTrigger interface {
+	TriggerModelLoad(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) error
+}

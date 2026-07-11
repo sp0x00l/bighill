@@ -12,6 +12,7 @@ import (
 
 type ServedModelReconciler interface {
 	Reconcile(ctx context.Context, servedModel *model.ServedModel) (*model.ServedModelStatus, error)
+	Delete(ctx context.Context, servedModel *model.ServedModel) error
 }
 
 type servedModelReconciler struct {
@@ -63,4 +64,14 @@ func (r *servedModelReconciler) Reconcile(ctx context.Context, servedModel *mode
 		ReadyReplicas:      state.ReadyReplicas,
 	}
 	return status, r.statusWriter.UpdateStatus(ctx, servedModel.ResourceName, status)
+}
+
+func (r *servedModelReconciler) Delete(ctx context.Context, servedModel *model.ServedModel) error {
+	log.Trace("ServedModelReconciler Delete")
+
+	deletionRuntime, ok := r.runtime.(ServingRuntimeDeletion)
+	if !ok {
+		return nil
+	}
+	return deletionRuntime.DeleteServedModel(ctx, servedModel)
 }

@@ -93,6 +93,71 @@ exit 1
 		Expect(providerErr.Code).To(Equal("GATED_REPO"))
 		Expect(providerErr.Error()).To(ContainSubstring("Hugging Face returned 403 (GATED_REPO)"))
 	})
+
+	It("maps derived Hugging Face PEFT adapter rank from the command manifest", func() {
+		dir := GinkgoT().TempDir()
+		script := filepath.Join(dir, "hf-download")
+		Expect(os.WriteFile(script, []byte(`#!/usr/bin/env sh
+printf '{"resource_id":"%s","storage_location":"s3://bucket/models/%s/snapshot","manifest_location":"s3://bucket/models/%s/manifest.json","artifact_type":"LORA_ADAPTER","artifact_format":"HF_PEFT_ADAPTER","artifact_size_bytes":12,"artifact_checksum":"sha256:test","model_name":"adapter","model_version":"1","base_model":"meta-llama/Llama","adapter_rank":16,"source_uri":"https://huggingface.co/org/adapter","hf_repo_id":"org/adapter","hf_revision":"main","hf_commit_sha":"abc"}' "$INGESTION_SERVICE_MODEL_RESOURCE_ID" "$INGESTION_SERVICE_MODEL_RESOURCE_ID" "$INGESTION_SERVICE_MODEL_RESOURCE_ID"
+`), 0o755)).To(Succeed())
+		resourceID := uuid.New()
+		downloader, err := download.NewHuggingFaceCommandDownloader(download.HuggingFaceCommandDownloaderConfig{
+			Command:   script,
+			OutputURI: "s3://bucket/models",
+			Timeout:   10 * time.Second,
+			EnvKeys:   testHuggingFaceJobEnvKeys(),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := downloader.DownloadHuggingFaceModel(context.Background(), model.OnboardHuggingFaceModelRequest{
+			ResourceID:       resourceID,
+			RepoID:           "org/adapter",
+			Revision:         "main",
+			ModelName:        "adapter",
+			ModelVersion:     "1",
+			BaseModel:        "meta-llama/Llama",
+			AdapterRank:      16,
+			ArtifactType:     "LORA_ADAPTER",
+			ArtifactFormat:   "HF_PEFT_ADAPTER",
+			HuggingFaceToken: "hf-token",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.ResourceID).To(Equal(resourceID))
+		Expect(result.ArtifactType).To(Equal("LORA_ADAPTER"))
+		Expect(result.ArtifactFormat).To(Equal("HF_PEFT_ADAPTER"))
+		Expect(result.AdapterRank).To(Equal(16))
+	})
+
+	It("rejects a Hugging Face manifest adapter rank that conflicts with the request", func() {
+		dir := GinkgoT().TempDir()
+		script := filepath.Join(dir, "hf-download")
+		Expect(os.WriteFile(script, []byte(`#!/usr/bin/env sh
+printf '{"resource_id":"%s","storage_location":"s3://bucket/models/%s/snapshot","manifest_location":"s3://bucket/models/%s/manifest.json","artifact_type":"LORA_ADAPTER","artifact_format":"HF_PEFT_ADAPTER","artifact_size_bytes":12,"artifact_checksum":"sha256:test","model_name":"adapter","model_version":"1","base_model":"meta-llama/Llama","adapter_rank":8,"source_uri":"https://huggingface.co/org/adapter","hf_repo_id":"org/adapter","hf_revision":"main","hf_commit_sha":"abc"}' "$INGESTION_SERVICE_MODEL_RESOURCE_ID" "$INGESTION_SERVICE_MODEL_RESOURCE_ID" "$INGESTION_SERVICE_MODEL_RESOURCE_ID"
+`), 0o755)).To(Succeed())
+		downloader, err := download.NewHuggingFaceCommandDownloader(download.HuggingFaceCommandDownloaderConfig{
+			Command:   script,
+			OutputURI: "s3://bucket/models",
+			Timeout:   10 * time.Second,
+			EnvKeys:   testHuggingFaceJobEnvKeys(),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = downloader.DownloadHuggingFaceModel(context.Background(), model.OnboardHuggingFaceModelRequest{
+			ResourceID:       uuid.New(),
+			RepoID:           "org/adapter",
+			Revision:         "main",
+			ModelName:        "adapter",
+			ModelVersion:     "1",
+			BaseModel:        "meta-llama/Llama",
+			AdapterRank:      16,
+			ArtifactType:     "LORA_ADAPTER",
+			ArtifactFormat:   "HF_PEFT_ADAPTER",
+			HuggingFaceToken: "hf-token",
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("adapter_rank does not match request")))
+	})
 })
 
 func testHuggingFaceJobEnvKeys() download.HuggingFaceJobEnvKeys {

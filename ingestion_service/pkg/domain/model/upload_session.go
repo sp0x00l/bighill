@@ -72,6 +72,7 @@ type UploadSession struct {
 	ModelName           string
 	ModelVersion        string
 	BaseModel           string
+	AdapterRank         int
 	Source              string
 	SourceURI           string
 	ManifestLocation    string
@@ -124,6 +125,7 @@ type InitiateModelUploadSessionRequest struct {
 	ModelName           string
 	ModelVersion        string
 	BaseModel           string
+	AdapterRank         int
 }
 
 type OnboardHuggingFaceModelRequest struct {
@@ -138,6 +140,7 @@ type OnboardHuggingFaceModelRequest struct {
 	ModelName        string
 	ModelVersion     string
 	BaseModel        string
+	AdapterRank      int
 	ArtifactType     string
 	ArtifactFormat   string
 	HuggingFaceToken string
@@ -154,6 +157,7 @@ type OnboardedModelArtifact struct {
 	ModelName         string
 	ModelVersion      string
 	BaseModel         string
+	AdapterRank       int
 	SourceURI         string
 	HFRepoID          string
 	HFRevision        string

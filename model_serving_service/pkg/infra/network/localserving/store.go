@@ -142,6 +142,10 @@ func recordToServedModel(record localstore.Record) (*model.ServedModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid local served model id: %w", domain.ErrValidationFailed, err)
 	}
+	orgID, err := parseOptionalUUID(record.Spec.OrgID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid local org id: %w", domain.ErrValidationFailed, err)
+	}
 	trainingRunID, err := parseOptionalUUID(record.Spec.TrainingRunID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid local training run id: %w", domain.ErrValidationFailed, err)
@@ -163,6 +167,7 @@ func recordToServedModel(record localstore.Record) (*model.ServedModel, error) {
 		Namespace:        record.Namespace,
 		Generation:       record.Generation,
 		ModelID:          modelID,
+		OrgID:            orgID,
 		TrainingRunID:    trainingRunID,
 		DatasetID:        datasetID,
 		ModelKind:        record.Spec.ModelKind,
@@ -173,6 +178,9 @@ func recordToServedModel(record localstore.Record) (*model.ServedModel, error) {
 		ArtifactFormat:   record.Spec.ArtifactFormat,
 		ArtifactChecksum: record.Spec.ArtifactChecksum,
 		AdapterURI:       record.Spec.AdapterURI,
+		AdapterRank:      record.Spec.AdapterRank,
+		RuntimeIsolation: record.Spec.RuntimeIsolation,
+		Pinned:           record.Spec.Pinned,
 		ServingTarget:    record.Spec.ServingTarget,
 		ServingModel:     record.Spec.ServingModel,
 		ServingProtocol:  servingProtocol,
@@ -251,6 +259,7 @@ func recordToObject(record localstore.Record) *unstructured.Unstructured {
 		"kind":       "ServedModel",
 		"spec": map[string]any{
 			"modelID":          record.Spec.ModelID,
+			"orgID":            record.Spec.OrgID,
 			"trainingRunID":    record.Spec.TrainingRunID,
 			"datasetID":        record.Spec.DatasetID,
 			"modelKind":        record.Spec.ModelKind,
@@ -261,6 +270,9 @@ func recordToObject(record localstore.Record) *unstructured.Unstructured {
 			"artifactFormat":   record.Spec.ArtifactFormat,
 			"artifactChecksum": record.Spec.ArtifactChecksum,
 			"adapterURI":       record.Spec.AdapterURI,
+			"adapterRank":      int64(record.Spec.AdapterRank),
+			"runtimeIsolation": record.Spec.RuntimeIsolation,
+			"pinned":           record.Spec.Pinned,
 			"servingTarget":    record.Spec.ServingTarget,
 			"servingModel":     record.Spec.ServingModel,
 			"servingProtocol":  record.Spec.ServingProtocol,

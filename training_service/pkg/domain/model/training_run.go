@@ -152,6 +152,7 @@ type TrainedModelArtifact struct {
 	ArtifactChecksum  string
 	ArtifactSizeBytes int64
 	AdapterURI        string
+	AdapterRank       int
 	ServingTarget     string
 	ServingModel      string
 	ServingLoadStatus string
@@ -198,6 +199,7 @@ type TrainingJobSpec struct {
 	TrainingProfile        TrainingProfile
 	ModelURI               string
 	AdapterURI             string
+	AdapterRank            int
 	ServingTarget          string
 	ServingModel           string
 	ServingLoadStatus      string
@@ -269,6 +271,7 @@ type TrainingRunResult struct {
 	ArtifactChecksum  string
 	ArtifactSizeBytes int64
 	AdapterURI        string
+	AdapterRank       int
 	ServingTarget     string
 	ServingModel      string
 	ServingLoadStatus string

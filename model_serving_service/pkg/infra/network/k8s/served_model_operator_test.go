@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -44,6 +45,7 @@ var _ = Describe("ServedModelStore", func() {
 		Expect(servedModels[0].ModelID).To(Equal(validServedModel().ModelID))
 		Expect(servedModels[0].BaseModel).To(Equal("mistral-7b"))
 		Expect(servedModels[0].AdapterURI).To(Equal("s3://models/run-1"))
+		Expect(servedModels[0].AdapterRank).To(Equal(16))
 	})
 
 	It("writes ServedModel status", func() {
@@ -147,11 +149,138 @@ var _ = Describe("ServedModelStore", func() {
 	})
 })
 
+var _ = Describe("BaseRuntimeStore", func() {
+	It("creates and reuses BaseRuntime resources by base model and pool key", func() {
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		store, err := servingkubernetes.NewBaseRuntimeStore(baseRuntimeStoreConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		spec := &model.BaseRuntime{
+			BaseModel:   "mistral-7b",
+			PoolKey:     "mistral-7b",
+			MaxLoras:    8,
+			MaxLoraRank: 16,
+			GPU:         "1",
+			Image:       "vllm/vllm-openai:v-test",
+		}
+
+		first, err := store.FindOrCreate(context.Background(), spec)
+		Expect(err).NotTo(HaveOccurred())
+		second, err := store.FindOrCreate(context.Background(), spec)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(first.ResourceName).To(Equal(servingkubernetes.BaseRuntimeResourceName("mistral-7b", "mistral-7b")))
+		Expect(second.ResourceName).To(Equal(first.ResourceName))
+		obj, err := client.Resource(baseRuntimeGVR()).Namespace("default").Get(context.Background(), first.ResourceName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(obj.GetName()).To(Equal(first.ResourceName))
+		maxLoras, _, _ := unstructured.NestedInt64(obj.Object, "spec", "maxLoras")
+		maxRank, _, _ := unstructured.NestedInt64(obj.Object, "spec", "maxLoraRank")
+		Expect(maxLoras).To(Equal(int64(8)))
+		Expect(maxRank).To(Equal(int64(16)))
+	})
+
+	It("writes BaseRuntime status", func() {
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		store, err := servingkubernetes.NewBaseRuntimeStore(baseRuntimeStoreConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		baseRuntime, err := store.FindOrCreate(context.Background(), &model.BaseRuntime{
+			BaseModel:   "mistral-7b",
+			PoolKey:     "mistral-7b",
+			MaxLoras:    8,
+			MaxLoraRank: 16,
+			GPU:         "1",
+			Image:       "vllm/vllm-openai:v-test",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(store.UpdateStatus(context.Background(), baseRuntime.ResourceName, "http://runtime.default.svc.cluster.local:8000", "Ready", 1)).To(Succeed())
+
+		obj, err := client.Resource(baseRuntimeGVR()).Namespace("default").Get(context.Background(), baseRuntime.ResourceName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		endpoint, _, _ := unstructured.NestedString(obj.Object, "status", "endpoint")
+		phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
+		readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
+		Expect(endpoint).To(Equal("http://runtime.default.svc.cluster.local:8000"))
+		Expect(phase).To(Equal("Ready"))
+		Expect(readyReplicas).To(Equal(int64(1)))
+	})
+
+	It("records and removes loaded adapters in BaseRuntime status", func() {
+		now := time.Date(2026, 7, 11, 14, 0, 0, 0, time.UTC)
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		store, err := servingkubernetes.NewBaseRuntimeStore(baseRuntimeStoreConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		baseRuntime, err := store.FindOrCreate(context.Background(), &model.BaseRuntime{
+			BaseModel:   "mistral-7b",
+			PoolKey:     "mistral-7b",
+			MaxLoras:    8,
+			MaxLoraRank: 16,
+			GPU:         "1",
+			Image:       "vllm/vllm-openai:v-test",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		adapter := model.BaseRuntimeLoadedAdapter{
+			ServingModel:            "ranker-v1",
+			ServedModelResourceName: "served-model-ranker",
+			ModelID:                 uuid.MustParse("4f4b8258-f9af-49f8-b5a8-f84d75891f3b"),
+			ObservedGeneration:      7,
+			LastUsedAt:              now,
+			Pinned:                  true,
+		}
+
+		Expect(store.RecordAdapterLoaded(context.Background(), baseRuntime.ResourceName, adapter)).To(Succeed())
+		read, err := store.Read(context.Background(), baseRuntime.ResourceName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(read.LoadedAdapters).To(HaveLen(1))
+		Expect(read.LoadedAdapters[0]).To(Equal(adapter))
+
+		Expect(store.RemoveLoadedAdapter(context.Background(), baseRuntime.ResourceName, "ranker-v1")).To(Succeed())
+		read, err = store.Read(context.Background(), baseRuntime.ResourceName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(read.LoadedAdapters).To(BeEmpty())
+	})
+
+	It("updates mutable BaseRuntime spec without changing existing capacity", func() {
+		resourceName := servingkubernetes.BaseRuntimeResourceName("mistral-7b", "mistral-7b")
+		existing := baseRuntimeCR(resourceName, 1)
+		Expect(unstructured.SetNestedField(existing.Object, int64(4), "spec", "maxLoras")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, int64(8), "spec", "maxLoraRank")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, "old-gpu", "spec", "gpu")).To(Succeed())
+		Expect(unstructured.SetNestedField(existing.Object, "vllm/vllm-openai:old", "spec", "image")).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), existing)
+		store, err := servingkubernetes.NewBaseRuntimeStore(baseRuntimeStoreConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+
+		updated, err := store.FindOrCreate(context.Background(), &model.BaseRuntime{
+			BaseModel:   "mistral-7b",
+			PoolKey:     "mistral-7b",
+			MaxLoras:    8,
+			MaxLoraRank: 16,
+			GPU:         "1",
+			Image:       "vllm/vllm-openai:v-test",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.MaxLoras).To(Equal(4))
+		Expect(updated.MaxLoraRank).To(Equal(8))
+		Expect(updated.GPU).To(Equal("1"))
+		Expect(updated.Image).To(Equal("vllm/vllm-openai:v-test"))
+		obj, err := client.Resource(baseRuntimeGVR()).Namespace("default").Get(context.Background(), resourceName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		maxLoras, _, _ := unstructured.NestedInt64(obj.Object, "spec", "maxLoras")
+		maxRank, _, _ := unstructured.NestedInt64(obj.Object, "spec", "maxLoraRank")
+		image, _, _ := unstructured.NestedString(obj.Object, "spec", "image")
+		Expect(maxLoras).To(Equal(int64(4)))
+		Expect(maxRank).To(Equal(int64(8)))
+		Expect(image).To(Equal("vllm/vllm-openai:v-test"))
+	})
+})
+
 var _ = Describe("VLLMRuntime", func() {
 	It("creates a vLLM deployment and service for a ServedModel", func() {
 		servedModel := validServedModel()
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(client), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -159,16 +288,33 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(state.Ready).To(BeFalse())
 		Expect(state.ServingModel).To(Equal("ranker-v1"))
-		Expect(state.ServingTarget).To(Equal("http://served-model-4f4b8258-f9af-49f8-b5a8-f84d75891f3b.default.svc.cluster.local:8000"))
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		Expect(state.ServingTarget).To(Equal("http://" + sharedWorkloadName + ".default.svc.cluster.local:8000"))
 		Expect(state.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
-		deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingkubernetes.WorkloadName(servedModel), metav1.GetOptions{})
+		deployment, err := client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
 		container := containers[0].(map[string]any)
 		Expect(container["image"]).To(Equal("vllm/vllm-openai:v-test"))
 		Expect(container["args"]).To(ContainElement("--enable-lora"))
-		Expect(container["args"]).To(ContainElement("ranker-v1=s3://models/run-1"))
-		service, err := client.Resource(serviceGVR()).Namespace("default").Get(context.Background(), servingkubernetes.WorkloadName(servedModel), metav1.GetOptions{})
+		Expect(container["args"]).To(ContainElement("--max-loras"))
+		Expect(container["args"]).To(ContainElement("8"))
+		Expect(container["args"]).To(ContainElement("--max-lora-rank"))
+		Expect(container["args"]).To(ContainElement("16"))
+		Expect(container["args"]).NotTo(ContainElement("--lora-modules"))
+		env, ok := container["env"].([]any)
+		Expect(ok).To(BeTrue())
+		Expect(env).To(ContainElement(SatisfyAll(
+			HaveKeyWithValue("name", "VLLM_ALLOW_RUNTIME_LORA_UPDATING"),
+			HaveKeyWithValue("value", "1"),
+		)))
+		baseRuntime, err := client.Resource(baseRuntimeGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		poolKey, _, _ := unstructured.NestedString(baseRuntime.Object, "spec", "poolKey")
+		maxLoras, _, _ := unstructured.NestedInt64(baseRuntime.Object, "spec", "maxLoras")
+		Expect(poolKey).To(Equal(servedModel.BaseModel))
+		Expect(maxLoras).To(Equal(int64(8)))
+		service, err := client.Resource(serviceGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		ports, _, _ := unstructured.NestedSlice(service.Object, "spec", "ports")
 		Expect(ports[0].(map[string]any)["port"]).To(Equal(int64(8000)))
@@ -188,9 +334,10 @@ var _ = Describe("VLLMRuntime", func() {
 			servedModel.ModelID = uuid.New()
 			servedModel.ResourceName = ""
 			servedModel.BaseModel = baseModel
+			servedModel.ModelKind = "BASE"
 			servedModel.AdapterURI = ""
 			client := fake.NewSimpleDynamicClient(runtime.NewScheme())
-			runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
+			runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(client), client)
 			Expect(err).NotTo(HaveOccurred())
 
 			state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -208,14 +355,13 @@ var _ = Describe("VLLMRuntime", func() {
 		}
 	})
 
-	It("uses a shared base runtime and dynamically loads adapters in multi-tenant mode", func() {
+	It("uses a shared base runtime and dynamically loads adapters by default", func() {
 		servedModel := validServedModel()
 		servedModel.ServingTarget = "http://vllm.test"
 		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), readyDeploymentWithName(sharedWorkloadName), serviceObjectWithName(sharedWorkloadName))
 		loadRequests := 0
-		config := runtimeConfig()
-		config.MultiTenant = true
+		config := runtimeConfig(client)
 		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			switch {
 			case req.Method == http.MethodGet && req.URL.Path == "/v1/models" && loadRequests == 0:
@@ -249,16 +395,173 @@ var _ = Describe("VLLMRuntime", func() {
 		container := containers[0].(map[string]any)
 		Expect(container["args"]).To(ContainElement("--enable-lora"))
 		Expect(container["args"]).NotTo(ContainElement("--lora-modules"))
+		baseRuntime, err := client.Resource(baseRuntimeGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		loadedAdapters, _, _ := unstructured.NestedSlice(baseRuntime.Object, "status", "loadedAdapters")
+		Expect(loadedAdapters).To(HaveLen(1))
+		Expect(loadedAdapters[0]).To(SatisfyAll(
+			HaveKeyWithValue("servingModel", "ranker-v1"),
+			HaveKeyWithValue("servedModelResourceName", servedModel.ResourceName),
+			HaveKeyWithValue("modelID", servedModel.ModelID.String()),
+		))
 	})
 
-	It("does not mark a multi-tenant adapter failed when vLLM reports it is already loaded", func() {
+	It("evicts the least recently used unpinned adapter before loading a new adapter", func() {
+		servedModel := validServedModel()
+		servedModel.ServingTarget = "http://vllm.test"
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		victim := validServedModel()
+		victim.ResourceName = "served-model-victim"
+		victim.ModelID = uuid.MustParse("d84d7589-f3ba-4f4b-8258-f9af49f8b5a8")
+		victim.ServingModel = "victim-v1"
+		victimCR := servedModelCR(victim)
+		Expect(unstructured.SetNestedField(victimCR.Object, "LOADED", "status", "servingLoadStatus")).To(Succeed())
+		Expect(unstructured.SetNestedField(victimCR.Object, "http://vllm.test", "status", "servingTarget")).To(Succeed())
+		Expect(unstructured.SetNestedField(victimCR.Object, "victim-v1", "status", "servingModel")).To(Succeed())
+		Expect(unstructured.SetNestedField(victimCR.Object, "OPENAI_CHAT_COMPLETIONS", "status", "servingProtocol")).To(Succeed())
+		baseRuntime := baseRuntimeCR(sharedWorkloadName, 3)
+		Expect(unstructured.SetNestedField(baseRuntime.Object, int64(1), "spec", "maxLoras")).To(Succeed())
+		Expect(setLoadedAdapters(baseRuntime, []map[string]any{{
+			"servingModel":            "victim-v1",
+			"servedModelResourceName": victim.ResourceName,
+			"modelID":                 victim.ModelID.String(),
+			"observedGeneration":      victim.Generation,
+			"lastUsedAt":              "2026-07-11T12:00:00Z",
+			"pinned":                  false,
+		}})).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), baseRuntime, readyDeploymentWithName(sharedWorkloadName), serviceObjectWithName(sharedWorkloadName), victimCR)
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		unloaded := false
+		loaded := false
+		config := runtimeConfig(client)
+		config.ServedModelStatusWriter = store
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/models" && !loaded:
+				return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"}]}`), nil
+			case req.Method == http.MethodPost && req.URL.Path == "/v1/unload_lora_adapter":
+				raw, err := io.ReadAll(req.Body)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(raw)).To(MatchJSON(`{"lora_name":"victim-v1"}`))
+				unloaded = true
+				return jsonResponse(req, `{}`), nil
+			case req.Method == http.MethodPost && req.URL.Path == "/v1/load_lora_adapter":
+				Expect(unloaded).To(BeTrue())
+				loaded = true
+				return jsonResponse(req, `{}`), nil
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/models" && loaded:
+				return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"},{"id":"ranker-v1"}]}`), nil
+			default:
+				return nil, stderrors.New("unexpected vllm request " + req.Method + " " + req.URL.Path)
+			}
+		})}
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeTrue())
+		Expect(unloaded).To(BeTrue())
+		victimUpdated, err := client.Resource(servedModelGVR()).Namespace("default").Get(context.Background(), victim.ResourceName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		statusRaw, _, _ := unstructured.NestedString(victimUpdated.Object, "status", "servingLoadStatus")
+		failureReason, _, _ := unstructured.NestedString(victimUpdated.Object, "status", "failureReason")
+		Expect(statusRaw).To(Equal("NOT_LOADED"))
+		Expect(failureReason).To(Equal("capacity_evicted"))
+		updatedBaseRuntime, err := client.Resource(baseRuntimeGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		loadedAdapters, _, _ := unstructured.NestedSlice(updatedBaseRuntime.Object, "status", "loadedAdapters")
+		Expect(loadedAdapters).To(HaveLen(1))
+		Expect(loadedAdapters[0]).To(HaveKeyWithValue("servingModel", "ranker-v1"))
+	})
+
+	It("fails closed when a full base runtime has only pinned adapters", func() {
+		servedModel := validServedModel()
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		baseRuntime := baseRuntimeCR(sharedWorkloadName, 3)
+		Expect(unstructured.SetNestedField(baseRuntime.Object, int64(1), "spec", "maxLoras")).To(Succeed())
+		Expect(setLoadedAdapters(baseRuntime, []map[string]any{{
+			"servingModel":            "pinned-v1",
+			"servedModelResourceName": "served-model-pinned",
+			"modelID":                 uuid.NewString(),
+			"observedGeneration":      int64(1),
+			"lastUsedAt":              "2026-07-11T12:00:00Z",
+			"pinned":                  true,
+		}})).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), baseRuntime, readyDeploymentWithName(sharedWorkloadName), serviceObjectWithName(sharedWorkloadName))
+		config := runtimeConfig(client)
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet && req.URL.Path == "/v1/models" {
+				return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"}]}`), nil
+			}
+			Fail("vLLM load/unload must not be called when all adapters are pinned")
+			return nil, nil
+		})}
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeFalse())
+		Expect(state.Failed).To(BeTrue())
+		Expect(state.FailureReason).To(ContainSubstring("base runtime at capacity"))
+	})
+
+	It("unloads an adapter when a shared ServedModel is deleted", func() {
+		servedModel := validServedModel()
+		servedModel.ServingTarget = "http://vllm.test"
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		baseRuntime := baseRuntimeCR(sharedWorkloadName, 3)
+		Expect(unstructured.SetNestedField(baseRuntime.Object, "http://vllm.test", "status", "endpoint")).To(Succeed())
+		Expect(setLoadedAdapters(baseRuntime, []map[string]any{{
+			"servingModel":            "ranker-v1",
+			"servedModelResourceName": servedModel.ResourceName,
+			"modelID":                 servedModel.ModelID.String(),
+			"observedGeneration":      servedModel.Generation,
+			"lastUsedAt":              "2026-07-11T12:00:00Z",
+			"pinned":                  false,
+		}})).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), baseRuntime)
+		unloaded := false
+		config := runtimeConfig(client)
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			Expect(req.Method).To(Equal(http.MethodPost))
+			Expect(req.URL.Path).To(Equal("/v1/unload_lora_adapter"))
+			unloaded = true
+			return jsonResponse(req, `{}`), nil
+		})}
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(runtimeAdapter.DeleteServedModel(context.Background(), servedModel)).To(Succeed())
+
+		Expect(unloaded).To(BeTrue())
+		updatedBaseRuntime, err := client.Resource(baseRuntimeGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		loadedAdapters, _, _ := unstructured.NestedSlice(updatedBaseRuntime.Object, "status", "loadedAdapters")
+		Expect(loadedAdapters).To(BeEmpty())
+	})
+
+	It("uses an org-scoped pool key for dedicated runtime isolation", func() {
+		shared := validServedModel()
+		dedicated := validServedModel()
+		dedicated.RuntimeIsolation = model.RuntimeIsolationDedicated
+
+		Expect(servingkubernetes.RuntimePoolKey(shared)).To(Equal(shared.BaseModel))
+		Expect(servingkubernetes.RuntimePoolKey(dedicated)).To(Equal(dedicated.OrgID.String()))
+		Expect(servingkubernetes.SharedRuntimeWorkloadName(dedicated)).NotTo(Equal(servingkubernetes.SharedRuntimeWorkloadName(shared)))
+	})
+
+	It("does not mark an adapter failed when vLLM reports it is already loaded", func() {
 		servedModel := validServedModel()
 		servedModel.ServingTarget = "http://vllm.test"
 		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), readyDeploymentWithName(sharedWorkloadName), serviceObjectWithName(sharedWorkloadName))
 		loadRequests := 0
-		config := runtimeConfig()
-		config.MultiTenant = true
+		config := runtimeConfig(client)
 		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			switch {
 			case req.Method == http.MethodGet && req.URL.Path == "/v1/models":
@@ -287,7 +590,7 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(loadRequests).To(Equal(1))
 	})
 
-	It("shares one workload for versions of the same base model when multi-tenant mode is enabled", func() {
+	It("shares one workload for adapter versions of the same base model by default", func() {
 		v1 := validServedModel()
 		v2 := validServedModel()
 		v1.ResourceName = ""
@@ -315,10 +618,11 @@ var _ = Describe("VLLMRuntime", func() {
 	It("reports loaded when the vLLM deployment is ready", func() {
 		servedModel := validServedModel()
 		servedModel.ServingTarget = "http://vllm.test"
-		deployment := readyDeployment(servedModel)
-		service := serviceObject(servedModel)
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		deployment := readyDeploymentWithName(sharedWorkloadName)
+		service := serviceObjectWithName(sharedWorkloadName)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels(client, "ranker-v1"), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -332,10 +636,24 @@ var _ = Describe("VLLMRuntime", func() {
 	It("does not report loaded when vLLM does not list the adapter model", func() {
 		servedModel := validServedModel()
 		servedModel.ServingTarget = "http://vllm.test"
-		deployment := readyDeployment(servedModel)
-		service := serviceObject(servedModel)
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		deployment := readyDeploymentWithName(sharedWorkloadName)
+		service := serviceObjectWithName(sharedWorkloadName)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels("base-model"), client)
+		loadRequests := 0
+		config := runtimeConfig(client)
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/models":
+				return jsonResponse(req, `{"data":[{"id":"base-model"}]}`), nil
+			case req.Method == http.MethodPost && req.URL.Path == "/v1/load_lora_adapter":
+				loadRequests++
+				return jsonResponse(req, `{}`), nil
+			default:
+				return nil, stderrors.New("unexpected vllm request " + req.Method + " " + req.URL.Path)
+			}
+		})}
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -344,14 +662,16 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(state.Ready).To(BeFalse())
 		Expect(state.Failed).To(BeFalse())
 		Expect(state.FailureReason).To(ContainSubstring("not listed by vllm"))
+		Expect(loadRequests).To(Equal(1))
 	})
 
 	It("reports failed when the vLLM deployment exceeds its progress deadline", func() {
 		servedModel := validServedModel()
-		deployment := failedDeployment(servedModel)
-		service := serviceObject(servedModel)
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		deployment := failedDeploymentWithName(sharedWorkloadName)
+		service := serviceObjectWithName(sharedWorkloadName)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(client), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -364,20 +684,21 @@ var _ = Describe("VLLMRuntime", func() {
 
 	It("preserves allocated Service cluster IP fields across updates", func() {
 		servedModel := validServedModel()
-		deployment := readyDeployment(servedModel)
-		service := serviceObject(servedModel)
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		deployment := readyDeploymentWithName(sharedWorkloadName)
+		service := serviceObjectWithName(sharedWorkloadName)
 		Expect(unstructured.SetNestedField(service.Object, "10.0.0.10", "spec", "clusterIP")).To(Succeed())
 		Expect(unstructured.SetNestedStringSlice(service.Object, []string{"10.0.0.10"}, "spec", "clusterIPs")).To(Succeed())
 		Expect(unstructured.SetNestedStringSlice(service.Object, []string{"IPv4"}, "spec", "ipFamilies")).To(Succeed())
 		Expect(unstructured.SetNestedField(service.Object, "SingleStack", "spec", "ipFamilyPolicy")).To(Succeed())
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels(client, "ranker-v1"), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		_, err = runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
 
 		Expect(err).NotTo(HaveOccurred())
-		updated, err := client.Resource(serviceGVR()).Namespace("default").Get(context.Background(), servingkubernetes.WorkloadName(servedModel), metav1.GetOptions{})
+		updated, err := client.Resource(serviceGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		clusterIP, _, _ := unstructured.NestedString(updated.Object, "spec", "clusterIP")
 		clusterIPs, _, _ := unstructured.NestedStringSlice(updated.Object, "spec", "clusterIPs")
@@ -389,14 +710,15 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(ipFamilyPolicy).To(Equal("SingleStack"))
 	})
 
-	It("serves a base model without LoRA arguments when an adapter uri is missing", func() {
+	It("serves a base model without LoRA arguments", func() {
 		servedModel := validServedModel()
+		servedModel.ModelKind = "BASE"
 		servedModel.AdapterURI = ""
 		servedModel.ServingTarget = "http://vllm.test"
 		deployment := readyDeployment(servedModel)
 		service := serviceObject(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), deployment, service)
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels("ranker-v1"), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfigWithModels(client, "ranker-v1"), client)
 		Expect(err).NotTo(HaveOccurred())
 
 		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
@@ -411,6 +733,107 @@ var _ = Describe("VLLMRuntime", func() {
 		Expect(container["args"]).NotTo(ContainElement("--enable-lora"))
 		Expect(container["args"]).NotTo(ContainElement("--lora-modules"))
 	})
+
+	It("fails closed when a fine-tuned model has no adapter uri", func() {
+		servedModel := validServedModel()
+		servedModel.AdapterURI = ""
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(client), client)
+		Expect(err).NotTo(HaveOccurred())
+
+		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeFalse())
+		Expect(state.Failed).To(BeTrue())
+		Expect(state.FailureReason).To(ContainSubstring("fine-tuned model has no adapter URI"))
+	})
+
+	It("fails closed when adapter rank is unknown", func() {
+		servedModel := validServedModel()
+		servedModel.AdapterRank = 0
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		config := runtimeConfigWithModels(client, "base-mistral-7b")
+		loadRequests := 0
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost && req.URL.Path == "/v1/load_lora_adapter" {
+				loadRequests++
+			}
+			return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"}]}`), nil
+		})}
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeFalse())
+		Expect(state.Failed).To(BeTrue())
+		Expect(state.FailureReason).To(ContainSubstring("unknown adapter rank"))
+		Expect(loadRequests).To(Equal(0))
+		_, err = client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingkubernetes.SharedRuntimeWorkloadName(servedModel), metav1.GetOptions{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("fails closed when adapter rank exceeds the configured max", func() {
+		servedModel := validServedModel()
+		servedModel.AdapterRank = 32
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
+		config := runtimeConfigWithModels(client, "base-mistral-7b")
+		loadRequests := 0
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost && req.URL.Path == "/v1/load_lora_adapter" {
+				loadRequests++
+			}
+			return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"}]}`), nil
+		})}
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeFalse())
+		Expect(state.Failed).To(BeTrue())
+		Expect(state.FailureReason).To(ContainSubstring("adapter rank 32 exceeds max lora rank 16"))
+		Expect(loadRequests).To(Equal(0))
+		_, err = client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), servingkubernetes.SharedRuntimeWorkloadName(servedModel), metav1.GetOptions{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("fails closed when adapter rank exceeds an existing base runtime limit", func() {
+		servedModel := validServedModel()
+		servedModel.AdapterRank = 12
+		sharedWorkloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)
+		baseRuntime := baseRuntimeCR(sharedWorkloadName, 3)
+		Expect(unstructured.SetNestedField(baseRuntime.Object, int64(8), "spec", "maxLoraRank")).To(Succeed())
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), baseRuntime)
+		config := runtimeConfigWithModels(client, "base-mistral-7b")
+		config.MaxLoraRank = 16
+		loadRequests := 0
+		config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost && req.URL.Path == "/v1/load_lora_adapter" {
+				loadRequests++
+			}
+			return jsonResponse(req, `{"data":[{"id":"base-mistral-7b"}]}`), nil
+		})}
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(config, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		state, err := runtimeAdapter.EnsureServedModel(context.Background(), servedModel)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Ready).To(BeFalse())
+		Expect(state.Failed).To(BeTrue())
+		Expect(state.FailureReason).To(ContainSubstring("adapter rank 12 exceeds max lora rank 8"))
+		Expect(loadRequests).To(Equal(0))
+		_, err = client.Resource(deploymentGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		updatedBaseRuntime, err := client.Resource(baseRuntimeGVR()).Namespace("default").Get(context.Background(), sharedWorkloadName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		maxRank, _, _ := unstructured.NestedInt64(updatedBaseRuntime.Object, "spec", "maxLoraRank")
+		Expect(maxRank).To(Equal(int64(8)))
+	})
 })
 
 var _ = Describe("ServedModelController", func() {
@@ -418,7 +841,7 @@ var _ = Describe("ServedModelController", func() {
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), servedModelCR(validServedModel()))
 		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(client), client)
 		Expect(err).NotTo(HaveOccurred())
 		reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
 		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
@@ -437,7 +860,7 @@ var _ = Describe("ServedModelController", func() {
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), obj)
 		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(client), client)
 		Expect(err).NotTo(HaveOccurred())
 		reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
 		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
@@ -453,13 +876,34 @@ var _ = Describe("ServedModelController", func() {
 		Expect(statusRaw).To(Equal("NOT_LOADED"))
 	})
 
+	It("requeues served models when BaseRuntime spec generation changes", func() {
+		servedModel := validServedModel()
+		client := fake.NewSimpleDynamicClient(runtime.NewScheme(), servedModelCR(servedModel))
+		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
+		Expect(err).NotTo(HaveOccurred())
+		reconciler := &countingReconciler{}
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
+		baseRuntime := baseRuntimeCR(servingkubernetes.SharedRuntimeWorkloadName(servedModel), 7)
+
+		Expect(controller.ProcessBaseRuntimeWatchEvent(context.Background(), watch.Event{
+			Type:   watch.Modified,
+			Object: baseRuntime,
+		})).To(Succeed())
+		Expect(controller.ProcessBaseRuntimeWatchEvent(context.Background(), watch.Event{
+			Type:   watch.Modified,
+			Object: baseRuntime,
+		})).To(Succeed())
+
+		Expect(reconciler.calls).To(Equal(1))
+	})
+
 	It("does not requeue a served model that has already been deleted from the store", func() {
 		servedModel := validServedModel()
 		obj := servedModelCR(servedModel)
 		client := fake.NewSimpleDynamicClient(runtime.NewScheme())
 		store, err := servingkubernetes.NewServedModelStore(storeConfig(), client)
 		Expect(err).NotTo(HaveOccurred())
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(), client)
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(runtimeConfig(client), client)
 		Expect(err).NotTo(HaveOccurred())
 		reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
 		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
@@ -477,6 +921,25 @@ var _ = Describe("ServedModelController", func() {
 
 })
 
+type countingReconciler struct {
+	calls int
+}
+
+func (r *countingReconciler) Reconcile(_ context.Context, servedModel *model.ServedModel) (*model.ServedModelStatus, error) {
+	r.calls++
+	return &model.ServedModelStatus{
+		ServingLoadStatus:  model.ModelLoadStatusNotLoaded,
+		ServingTarget:      servedModel.ServingTarget,
+		ServingModel:       servedModel.ServingModel,
+		ServingProtocol:    servedModel.ServingProtocol,
+		ObservedGeneration: servedModel.Generation,
+	}, nil
+}
+
+func (r *countingReconciler) Delete(context.Context, *model.ServedModel) error {
+	return nil
+}
+
 func storeConfig() servingkubernetes.ServedModelStoreConfig {
 	return servingkubernetes.ServedModelStoreConfig{
 		Namespace: "default",
@@ -486,23 +949,37 @@ func storeConfig() servingkubernetes.ServedModelStoreConfig {
 	}
 }
 
-func runtimeConfig() servingkubernetes.VLLMRuntimeConfig {
-	return servingkubernetes.VLLMRuntimeConfig{
-		Namespace:       "default",
-		Image:           "vllm/vllm-openai:v-test",
-		ImagePullPolicy: "IfNotPresent",
-		Replicas:        1,
-		Port:            8000,
-		CPU:             "1",
-		Memory:          "4Gi",
-		GPUResource:     "nvidia.com/gpu",
-		GPU:             "1",
-		RequestTimeout:  time.Second,
+func baseRuntimeStoreConfig() servingkubernetes.BaseRuntimeStoreConfig {
+	return servingkubernetes.BaseRuntimeStoreConfig{
+		Namespace: "default",
+		Group:     "serving.bighill.io",
+		Version:   "v1alpha1",
+		Resource:  "baseruntimes",
 	}
 }
 
-func runtimeConfigWithModels(modelIDs ...string) servingkubernetes.VLLMRuntimeConfig {
-	config := runtimeConfig()
+func runtimeConfig(client dynamic.Interface) servingkubernetes.VLLMRuntimeConfig {
+	baseRuntimeStore, err := servingkubernetes.NewBaseRuntimeStore(baseRuntimeStoreConfig(), client)
+	Expect(err).NotTo(HaveOccurred())
+	return servingkubernetes.VLLMRuntimeConfig{
+		Namespace:        "default",
+		Image:            "vllm/vllm-openai:v-test",
+		ImagePullPolicy:  "IfNotPresent",
+		Replicas:         1,
+		Port:             8000,
+		CPU:              "1",
+		Memory:           "4Gi",
+		GPUResource:      "nvidia.com/gpu",
+		GPU:              "1",
+		MaxLoras:         8,
+		MaxLoraRank:      16,
+		RequestTimeout:   time.Second,
+		BaseRuntimeStore: baseRuntimeStore,
+	}
+}
+
+func runtimeConfigWithModels(client dynamic.Interface, modelIDs ...string) servingkubernetes.VLLMRuntimeConfig {
+	config := runtimeConfig(client)
 	config.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		Expect(req.URL.Path).To(Equal("/v1/models"))
 		models := make([]string, 0, len(modelIDs))
@@ -541,6 +1018,7 @@ func validServedModel() *model.ServedModel {
 		Namespace:     "default",
 		Generation:    7,
 		ModelID:       uuid.MustParse("4f4b8258-f9af-49f8-b5a8-f84d75891f3b"),
+		OrgID:         uuid.MustParse("f7e1f9d9-0777-4a6e-801a-a432901f2522"),
 		TrainingRunID: uuid.MustParse("76b4da89-7fdb-459a-a842-9f866152efad"),
 		DatasetID:     uuid.MustParse("6629d88a-05af-411e-8439-7497620e41df"),
 		ModelKind:     "FINE_TUNED",
@@ -548,6 +1026,7 @@ func validServedModel() *model.ServedModel {
 		ModelVersion:  1,
 		BaseModel:     "mistral-7b",
 		AdapterURI:    "s3://models/run-1",
+		AdapterRank:   16,
 		ServingModel:  "ranker-v1",
 	}
 }
@@ -561,19 +1040,50 @@ func servedModelCR(servedModel *model.ServedModel) *unstructured.Unstructured {
 			"namespace": "default",
 		},
 		"spec": map[string]any{
-			"modelID":       servedModel.ModelID.String(),
-			"trainingRunID": servedModel.TrainingRunID.String(),
-			"datasetID":     servedModel.DatasetID.String(),
-			"modelKind":     servedModel.ModelKind,
-			"name":          servedModel.Name,
-			"modelVersion":  int64(servedModel.ModelVersion),
-			"baseModel":     servedModel.BaseModel,
-			"adapterURI":    servedModel.AdapterURI,
-			"servingModel":  servedModel.ServingModel,
+			"modelID":          servedModel.ModelID.String(),
+			"orgID":            servedModel.OrgID.String(),
+			"trainingRunID":    servedModel.TrainingRunID.String(),
+			"datasetID":        servedModel.DatasetID.String(),
+			"modelKind":        servedModel.ModelKind,
+			"name":             servedModel.Name,
+			"modelVersion":     int64(servedModel.ModelVersion),
+			"baseModel":        servedModel.BaseModel,
+			"adapterURI":       servedModel.AdapterURI,
+			"adapterRank":      int64(servedModel.AdapterRank),
+			"runtimeIsolation": servedModel.RuntimeIsolation,
+			"pinned":           servedModel.Pinned,
+			"servingModel":     servedModel.ServingModel,
 		},
 	}}
 	obj.SetGeneration(servedModel.Generation)
 	return obj
+}
+
+func baseRuntimeCR(resourceName string, generation int64) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "serving.bighill.io/v1alpha1",
+		"kind":       "BaseRuntime",
+		"metadata": map[string]any{
+			"name":      resourceName,
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"baseModel":   "mistral-7b",
+			"poolKey":     "mistral-7b",
+			"maxLoras":    int64(8),
+			"maxLoraRank": int64(16),
+		},
+	}}
+	obj.SetGeneration(generation)
+	return obj
+}
+
+func setLoadedAdapters(obj *unstructured.Unstructured, adapters []map[string]any) error {
+	raw := make([]any, 0, len(adapters))
+	for _, adapter := range adapters {
+		raw = append(raw, adapter)
+	}
+	return unstructured.SetNestedSlice(obj.Object, raw, "status", "loadedAdapters")
 }
 
 func readyDeployment(servedModel *model.ServedModel) *unstructured.Unstructured {
@@ -598,11 +1108,15 @@ func readyDeploymentWithName(name string) *unstructured.Unstructured {
 }
 
 func failedDeployment(servedModel *model.ServedModel) *unstructured.Unstructured {
+	return failedDeploymentWithName(servingkubernetes.WorkloadName(servedModel))
+}
+
+func failedDeploymentWithName(name string) *unstructured.Unstructured {
 	deployment := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
 		"metadata": map[string]any{
-			"name":      servingkubernetes.WorkloadName(servedModel),
+			"name":      name,
 			"namespace": "default",
 		},
 		"status": map[string]any{
@@ -638,6 +1152,10 @@ func serviceObjectWithName(name string) *unstructured.Unstructured {
 
 func servedModelGVR() schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: "serving.bighill.io", Version: "v1alpha1", Resource: "servedmodels"}
+}
+
+func baseRuntimeGVR() schema.GroupVersionResource {
+	return schema.GroupVersionResource{Group: "serving.bighill.io", Version: "v1alpha1", Resource: "baseruntimes"}
 }
 
 func deploymentGVR() schema.GroupVersionResource {

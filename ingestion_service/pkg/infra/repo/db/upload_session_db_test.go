@@ -166,6 +166,7 @@ var _ = Describe("Upload session DAO helpers", func() {
 			"",
 			"",
 			"",
+			16,
 			"UPLOAD",
 			"",
 			"",
@@ -183,6 +184,7 @@ var _ = Describe("Upload session DAO helpers", func() {
 		Expect(session.UserID).To(Equal(userID))
 		Expect(session.OrgID).To(Equal(orgID))
 		Expect(session.Status).To(Equal(model.UploadSessionPromoted))
+		Expect(session.AdapterRank).To(Equal(16))
 	})
 
 	It("returns scan errors for corrupt upload session rows", func() {

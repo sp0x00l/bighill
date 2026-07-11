@@ -30,6 +30,8 @@ spec:
               properties:
                 modelID:
                   type: string
+                orgID:
+                  type: string
                 trainingRunID:
                   type: string
                 datasetID:
@@ -48,6 +50,13 @@ spec:
                   type: string
                 adapterURI:
                   type: string
+                adapterRank:
+                  type: integer
+                runtimeIsolation:
+                  type: string
+                  enum: ["", "SHARED", "DEDICATED"]
+                pinned:
+                  type: boolean
                 servingTarget:
                   type: string
                 servingModel:

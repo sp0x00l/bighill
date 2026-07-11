@@ -29,6 +29,7 @@ const (
 	servedModelObjectSpec       = "spec"
 	servedModelObjectStatus     = "status"
 	servedModelSpecModelID      = "modelID"
+	servedModelSpecOrgID        = "orgID"
 	servedModelSpecTrainingID   = "trainingRunID"
 	servedModelSpecDatasetID    = "datasetID"
 	servedModelSpecKind         = "modelKind"
@@ -39,6 +40,9 @@ const (
 	servedModelSpecArtifactFmt  = "artifactFormat"
 	servedModelSpecChecksum     = "artifactChecksum"
 	servedModelSpecAdapterURI   = "adapterURI"
+	servedModelSpecAdapterRank  = "adapterRank"
+	servedModelSpecIsolation    = "runtimeIsolation"
+	servedModelSpecPinned       = "pinned"
 	servedModelSpecTarget       = "servingTarget"
 	servedModelSpecModel        = "servingModel"
 	servedModelSpecProtocol     = "servingProtocol"
@@ -192,6 +196,10 @@ func (a servedModelDTOAdapter) FromObject(obj *unstructured.Unstructured) (*mode
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid model id: %w", domain.ErrValidationFailed, err)
 	}
+	orgID, err := parseOptionalUUID(specString(obj, servedModelSpecOrgID))
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid org id: %w", domain.ErrValidationFailed, err)
+	}
 	trainingRunID, err := parseOptionalUUID(specString(obj, servedModelSpecTrainingID))
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid training run id: %w", domain.ErrValidationFailed, err)
@@ -201,6 +209,8 @@ func (a servedModelDTOAdapter) FromObject(obj *unstructured.Unstructured) (*mode
 		return nil, fmt.Errorf("%w: invalid dataset id: %w", domain.ErrValidationFailed, err)
 	}
 	modelVersion, _, _ := unstructured.NestedInt64(obj.Object, servedModelObjectSpec, servedModelSpecVersion)
+	adapterRank, _, _ := unstructured.NestedInt64(obj.Object, servedModelObjectSpec, servedModelSpecAdapterRank)
+	pinned, _, _ := unstructured.NestedBool(obj.Object, servedModelObjectSpec, servedModelSpecPinned)
 	status, err := a.StatusFromObject(obj)
 	if err != nil {
 		return nil, err
@@ -214,6 +224,7 @@ func (a servedModelDTOAdapter) FromObject(obj *unstructured.Unstructured) (*mode
 		Namespace:        a.namespace,
 		Generation:       obj.GetGeneration(),
 		ModelID:          modelID,
+		OrgID:            orgID,
 		TrainingRunID:    trainingRunID,
 		DatasetID:        datasetID,
 		ModelKind:        specString(obj, servedModelSpecKind),
@@ -224,6 +235,9 @@ func (a servedModelDTOAdapter) FromObject(obj *unstructured.Unstructured) (*mode
 		ArtifactFormat:   specString(obj, servedModelSpecArtifactFmt),
 		ArtifactChecksum: specString(obj, servedModelSpecChecksum),
 		AdapterURI:       specString(obj, servedModelSpecAdapterURI),
+		AdapterRank:      int(adapterRank),
+		RuntimeIsolation: specString(obj, servedModelSpecIsolation),
+		Pinned:           pinned,
 		ServingTarget:    specString(obj, servedModelSpecTarget),
 		ServingModel:     specString(obj, servedModelSpecModel),
 		ServingProtocol:  servingProtocol,

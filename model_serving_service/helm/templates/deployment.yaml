@@ -67,14 +67,24 @@ spec:
               value: {{ .Values.env.servedModelCrdVersion | quote }}
             - name: MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_RESOURCE
               value: {{ .Values.env.servedModelCrdResource | quote }}
+            - name: MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_GROUP
+              value: {{ .Values.env.baseRuntimeCrdGroup | quote }}
+            - name: MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_VERSION
+              value: {{ .Values.env.baseRuntimeCrdVersion | quote }}
+            - name: MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_RESOURCE
+              value: {{ .Values.env.baseRuntimeCrdResource | quote }}
             - name: MODEL_SERVING_SERVICE_VLLM_IMAGE
               value: {{ .Values.env.vllmImage | quote }}
             - name: MODEL_SERVING_SERVICE_VLLM_IMAGE_PULL_POLICY
               value: {{ .Values.env.vllmImagePullPolicy | quote }}
             - name: MODEL_SERVING_SERVICE_VLLM_SERVICE_ACCOUNT
               value: {{ .Values.env.vllmServiceAccount | quote }}
-            - name: MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED
-              value: {{ .Values.env.vllmMultiTenantEnabled | quote }}
+            - name: MODEL_SERVING_SERVICE_VLLM_FORCE_DEDICATED_ADAPTERS
+              value: {{ .Values.env.vllmForceDedicatedAdapters | quote }}
+            - name: MODEL_SERVING_SERVICE_VLLM_MAX_LORAS
+              value: {{ .Values.env.vllmMaxLoras | quote }}
+            - name: MODEL_SERVING_SERVICE_VLLM_MAX_LORA_RANK
+              value: {{ .Values.env.vllmMaxLoraRank | quote }}
             - name: MODEL_SERVING_SERVICE_VLLM_REPLICAS
               value: {{ .Values.env.vllmReplicas | quote }}
             - name: MODEL_SERVING_SERVICE_VLLM_PORT

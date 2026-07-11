@@ -96,6 +96,7 @@ func TrainModelWorkflow(ctx workflow.Context, request model.TrainingRunRequest) 
 		ArtifactChecksum:  artifact.ArtifactChecksum,
 		ArtifactSizeBytes: artifact.ArtifactSizeBytes,
 		AdapterURI:        artifact.AdapterURI,
+		AdapterRank:       artifact.AdapterRank,
 		ServingTarget:     artifact.ServingTarget,
 		ServingModel:      artifact.ServingModel,
 		ServingLoadStatus: artifact.ServingLoadStatus,

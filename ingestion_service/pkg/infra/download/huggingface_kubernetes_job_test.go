@@ -94,6 +94,63 @@ var _ = Describe("HuggingFaceKubernetesJobDownloader", func() {
 		Expect(env["INGESTION_SERVICE_HUGGINGFACE_TOKEN"].(map[string]any)["value"]).To(Equal("hf-token"))
 	})
 
+	It("maps PEFT adapter rank from the object-store manifest", func() {
+		resourceID := uuid.New()
+		manifest := map[string]any{
+			"resource_id":         resourceID.String(),
+			"storage_location":    "s3://bucket/models/" + resourceID.String() + "/snapshot",
+			"manifest_location":   "s3://bucket/models/" + resourceID.String() + "/manifest.json",
+			"artifact_type":       "LORA_ADAPTER",
+			"artifact_format":     "HF_PEFT_ADAPTER",
+			"artifact_size_bytes": float64(12),
+			"artifact_checksum":   "sha256:test",
+			"model_name":          "adapter",
+			"model_version":       "1",
+			"base_model":          "meta-llama/Llama",
+			"adapter_rank":        float64(16),
+			"source_uri":          "https://huggingface.co/org/adapter",
+			"hf_repo_id":          "org/adapter",
+			"hf_revision":         "main",
+			"hf_commit_sha":       "abc",
+		}
+		manifestBytes, err := json.Marshal(manifest)
+		Expect(err).NotTo(HaveOccurred())
+		reader := &stubModelManifestReader{data: manifestBytes}
+		client := fake.NewSimpleDynamicClient(kruntime.NewScheme())
+		var created *unstructured.Unstructured
+		client.PrependReactor("create", "jobs", func(action ktesting.Action) (bool, kruntime.Object, error) {
+			created = action.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
+			return false, nil, nil
+		})
+		client.PrependReactor("get", "jobs", func(action ktesting.Action) (bool, kruntime.Object, error) {
+			Expect(created).NotTo(BeNil())
+			obj := created.DeepCopy()
+			Expect(unstructured.SetNestedField(obj.Object, int64(1), "status", "succeeded")).To(Succeed())
+			return true, obj, nil
+		})
+		downloader, err := download.NewHuggingFaceKubernetesJobDownloaderWithClient(testKubernetesDownloaderConfig(time.Millisecond, time.Second), reader, client)
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := downloader.DownloadHuggingFaceModel(context.Background(), model.OnboardHuggingFaceModelRequest{
+			ResourceID:       resourceID,
+			RepoID:           "org/adapter",
+			Revision:         "main",
+			ModelName:        "adapter",
+			ModelVersion:     "1",
+			BaseModel:        "meta-llama/Llama",
+			AdapterRank:      16,
+			ArtifactType:     "LORA_ADAPTER",
+			ArtifactFormat:   "HF_PEFT_ADAPTER",
+			HuggingFaceToken: "hf-token",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.ResourceID).To(Equal(resourceID))
+		Expect(result.AdapterRank).To(Equal(16))
+		Expect(result.ArtifactType).To(Equal("LORA_ADAPTER"))
+		Expect(result.ArtifactFormat).To(Equal("HF_PEFT_ADAPTER"))
+	})
+
 	It("deletes the Kubernetes Job when the download times out", func() {
 		resourceID := uuid.New()
 		reader := &stubModelManifestReader{}

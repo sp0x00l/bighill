@@ -43,6 +43,7 @@ func (a *Adapter) EnsureServedModel(ctx context.Context, registeredModel *model.
 
 	return a.store.UpsertSpec(ServedModelName(registeredModel.ModelID, registeredModel.ModelVersion), a.namespace, localstore.Spec{
 		ModelID:          registeredModel.ModelID.String(),
+		OrgID:            registeredModel.OrgID.String(),
 		TrainingRunID:    registeredModel.TrainingRunID.String(),
 		DatasetID:        registeredModel.DatasetID.String(),
 		ModelKind:        registeredModel.ModelKind.String(),
@@ -53,6 +54,7 @@ func (a *Adapter) EnsureServedModel(ctx context.Context, registeredModel *model.
 		ArtifactFormat:   registeredModel.ArtifactFormat,
 		ArtifactChecksum: registeredModel.ArtifactChecksum,
 		AdapterURI:       registeredModel.AdapterURI,
+		AdapterRank:      registeredModel.AdapterRank,
 		ServingTarget:    registeredModel.ServingTarget,
 		ServingModel:     registeredModel.ServingModel,
 		ServingProtocol:  registeredModel.ServingProtocol.String(),

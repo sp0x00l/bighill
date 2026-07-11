@@ -90,6 +90,7 @@ func (b *UploadEventBuilder) ModelArtifactIngestedMessage(session *model.UploadS
 		ModelName:         session.ModelName,
 		ModelVersion:      session.ModelVersion,
 		BaseModel:         session.BaseModel,
+		AdapterRank:       int32(session.AdapterRank),
 		ContentType:       session.DeclaredContentType,
 		SourceUri:         session.SourceURI,
 		HfRepoId:          session.HFRepoID,

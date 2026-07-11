@@ -571,6 +571,7 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(sessions.completed.ResourceType).To(Equal(model.UploadResourceModelArtifact))
 		Expect(sessions.completed.ResourceID).To(Equal(resourceID))
 		Expect(sessions.completed.DatasetID).To(Equal(datasetID))
+		Expect(sessions.completed.AdapterRank).To(Equal(16))
 		Expect(sessions.completed.Checksum).To(Equal(sha256String(object)))
 		Expect(unitOfWork.messages).To(HaveLen(1))
 		Expect(unitOfWork.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypeModelArtifactIngested))
@@ -580,6 +581,47 @@ var _ = Describe("DataUploadUseCase", func() {
 		Expect(event.DatasetId).To(Equal(datasetID.String()))
 		Expect(event.UserId).To(Equal(sessions.readSession.UserID.String()))
 		Expect(event.OrgId).To(Equal(sessions.readSession.OrgID.String()))
+		Expect(event.AdapterRank).To(Equal(int32(16)))
+		Expect(repo.deleted).To(BeTrue())
+	})
+
+	It("rejects a staged LoRA adapter archive when adapter_config rank is missing", func() {
+		object := loraArchiveObjectWithConfig(`{"peft_type":"LORA"}`)
+		repo := &stubBlobRepository{headInfo: &model.ObjectInfo{
+			Size:        int64(len(object)),
+			ContentType: "application/zip",
+			Checksum:    "model-checksum",
+		}, object: object}
+		sessions := &stubUploadSessionRepository{readSession: &model.UploadSession{
+			UploadID:            uuid.New(),
+			ResourceType:        model.UploadResourceModelArtifact,
+			ResourceID:          uuid.New(),
+			DatasetID:           uuid.New(),
+			UserID:              uuid.New(),
+			OrgID:               uuid.New(),
+			StagingKey:          "staging/model_artifact/adapter.zip",
+			FinalKey:            "models/artifacts/adapter.zip",
+			DeclaredFormat:      "zip",
+			DeclaredContentType: "application/zip",
+			DeclaredSizeBytes:   int64(len(object)),
+			Status:              model.UploadSessionPending,
+			ExpiresAt:           time.Now().Add(time.Minute),
+			ArtifactType:        "LORA_ADAPTER",
+			ModelName:           "movie-twin",
+			ModelVersion:        "1",
+			BaseModel:           "meta-llama/Llama-3.1-8B",
+		}}
+		uc := usecase.NewDataUploadUseCase(repo,
+			usecase.WithUploadSessionRepository(sessions),
+			usecase.WithUploadSessionUnitOfWork(&stubUploadSessionUnitOfWork{}, uploadEventBuilder()),
+			usecase.WithUploadFileDetector(stubDetector{format: "unsupported"}),
+			usecase.WithUploadPolicy(8192, time.Minute, 512),
+		)
+
+		_, err := uc.CompleteModelUploadSession(context.Background(), model.CompleteUploadSessionRequest{UploadID: sessions.readSession.UploadID, UserID: sessions.readSession.UserID, OrgID: sessions.readSession.OrgID})
+
+		Expect(err).To(MatchError(domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json r is required")))
+		Expect(sessions.rejected).To(BeTrue())
 		Expect(repo.deleted).To(BeTrue())
 	})
 
@@ -855,9 +897,13 @@ func safetensorsObject() []byte {
 }
 
 func loraArchiveObject() []byte {
+	return loraArchiveObjectWithConfig(`{"peft_type":"LORA","r":16}`)
+}
+
+func loraArchiveObjectWithConfig(adapterConfig string) []byte {
 	var buf bytes.Buffer
 	writer := zip.NewWriter(&buf)
-	addZipFile(writer, "adapter_config.json", []byte(`{"peft_type":"LORA"}`))
+	addZipFile(writer, "adapter_config.json", []byte(adapterConfig))
 	addZipFile(writer, "adapter_model.safetensors", safetensorsObject())
 	Expect(writer.Close()).To(Succeed())
 	return buf.Bytes()

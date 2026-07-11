@@ -231,6 +231,7 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 		TrainingProfile:        trainingProfile,
 		ModelURI:               modelURI,
 		AdapterURI:             modelURI,
+		AdapterRank:            trainingProfile.LoRAR,
 		ServingTarget:          a.servingTarget,
 		ServingModel:           servingModel,
 	})
@@ -254,6 +255,7 @@ func (a *TrainingActivities) trainingJobSpec(prepared model.PreparedTrainingData
 		TrainingProfile:        trainingProfile,
 		ModelURI:               modelURI,
 		AdapterURI:             modelURI,
+		AdapterRank:            trainingProfile.LoRAR,
 		ServingTarget:          a.servingTarget,
 		ServingModel:           servingModel,
 		ServingLoadStatus:      a.servingLoadStatus,
@@ -275,6 +277,9 @@ func applyServingMetadata(artifact *model.TrainedModelArtifact, spec model.Train
 	}
 	if strings.TrimSpace(artifact.AdapterURI) == "" {
 		artifact.AdapterURI = spec.AdapterURI
+	}
+	if artifact.AdapterRank == 0 {
+		artifact.AdapterRank = spec.AdapterRank
 	}
 	if strings.TrimSpace(artifact.ServingTarget) == "" {
 		artifact.ServingTarget = spec.ServingTarget

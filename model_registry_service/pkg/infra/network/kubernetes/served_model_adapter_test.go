@@ -40,10 +40,12 @@ var _ = Describe("ServedModelAdapter", func() {
 		modelID, _, _ := unstructured.NestedString(obj.Object, "spec", "modelID")
 		modelKind, _, _ := unstructured.NestedString(obj.Object, "spec", "modelKind")
 		adapterURI, _, _ := unstructured.NestedString(obj.Object, "spec", "adapterURI")
+		adapterRank, _, _ := unstructured.NestedInt64(obj.Object, "spec", "adapterRank")
 		servingTarget, _, _ := unstructured.NestedString(obj.Object, "spec", "servingTarget")
 		Expect(modelID).To(Equal(modelRecord.ModelID.String()))
 		Expect(modelKind).To(Equal(modelRecord.ModelKind.String()))
 		Expect(adapterURI).To(Equal(modelRecord.AdapterURI))
+		Expect(adapterRank).To(Equal(int64(modelRecord.AdapterRank)))
 		Expect(servingTarget).To(Equal(modelRecord.ServingTarget))
 	})
 
@@ -235,6 +237,7 @@ func validRegistryModel() *model.Model {
 		ArtifactChecksum:  "sha256:abc",
 		ArtifactSizeBytes: 123,
 		AdapterURI:        "s3://models/run",
+		AdapterRank:       16,
 		ServingTarget:     "vllm-local",
 		ServingModel:      "movie-ranker-v1",
 		ServingLoadStatus: model.ModelLoadStatusNotLoaded,
@@ -254,6 +257,7 @@ func servedModelObject(modelRecord *model.Model) *unstructured.Unstructured {
 			"modelID":       modelRecord.ModelID.String(),
 			"modelKind":     modelRecord.ModelKind.String(),
 			"adapterURI":    modelRecord.AdapterURI,
+			"adapterRank":   int64(modelRecord.AdapterRank),
 			"servingTarget": modelRecord.ServingTarget,
 			"servingModel":  modelRecord.ServingModel,
 		},

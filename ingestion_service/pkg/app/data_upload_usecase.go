@@ -1,10 +1,13 @@
 package app
 
 import (
+	"bytes"
+	"compress/flate"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -30,6 +33,12 @@ const (
 	modelArtifactExtensionGGUF        = ".gguf"
 	huggingFaceGGUFFileName           = "huggingface-model.gguf"
 	huggingFaceSnapshotFileName       = "huggingface-snapshot"
+	zipEndOfCentralDirectorySignature = 0x06054b50
+	zipCentralDirectorySignature      = 0x02014b50
+	zipLocalFileHeaderSignature       = 0x04034b50
+	zipCompressionStored              = 0
+	zipCompressionDeflate             = 8
+	maxAdapterConfigBytes             = 1024 * 1024
 )
 
 type dataUploadUseCase struct {
@@ -263,6 +272,7 @@ func (u *dataUploadUseCase) InitiateModelUploadSession(ctx context.Context, requ
 		ModelName:           strings.TrimSpace(request.ModelName),
 		ModelVersion:        strings.TrimSpace(request.ModelVersion),
 		BaseModel:           strings.TrimSpace(request.BaseModel),
+		AdapterRank:         request.AdapterRank,
 		Source:              string(model.UploadSourceUpload),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(u.uploadSessionTTL),
@@ -328,6 +338,7 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		ModelName:           strings.TrimSpace(request.ModelName),
 		ModelVersion:        strings.TrimSpace(request.ModelVersion),
 		BaseModel:           strings.TrimSpace(request.BaseModel),
+		AdapterRank:         request.AdapterRank,
 		Source:              string(model.UploadSourceHuggingFace),
 		HFRepoID:            strings.TrimSpace(request.RepoID),
 		HFRevision:          strings.TrimSpace(request.Revision),
@@ -361,6 +372,9 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 	if downloaded.ResourceID != request.ResourceID {
 		return nil, fmt.Errorf("downloaded model resource id does not match request")
 	}
+	if downloaded.AdapterRank == 0 {
+		downloaded.AdapterRank = request.AdapterRank
+	}
 	session = &model.UploadSession{
 		UploadID:            reservedSession.UploadID,
 		ResourceType:        model.UploadResourceModelArtifact,
@@ -380,6 +394,7 @@ func (u *dataUploadUseCase) OnboardHuggingFaceModel(ctx context.Context, request
 		ModelName:           strings.TrimSpace(downloaded.ModelName),
 		ModelVersion:        strings.TrimSpace(downloaded.ModelVersion),
 		BaseModel:           strings.TrimSpace(downloaded.BaseModel),
+		AdapterRank:         downloaded.AdapterRank,
 		Source:              string(model.UploadSourceHuggingFace),
 		SourceURI:           strings.TrimSpace(downloaded.SourceURI),
 		ManifestLocation:    strings.TrimSpace(downloaded.ManifestLocation),
@@ -462,10 +477,19 @@ func (u *dataUploadUseCase) completeUploadSession(ctx context.Context, request m
 		if err != nil {
 			return nil, err
 		}
-		if err := validateModelArtifactContents(validationReader, session, info.Size); err != nil {
+		adapterRank, err := validateModelArtifactContents(ctx, u.bucket, validationReader, session, info.Size)
+		if err != nil {
 			u.logRejectUploadSessionFailure(ctx, session)
 			u.logDeleteStagedObjectFailure(ctx, session)
 			return nil, err
+		}
+		if adapterRank > 0 {
+			if session.AdapterRank > 0 && session.AdapterRank != adapterRank {
+				u.logRejectUploadSessionFailure(ctx, session)
+				u.logDeleteStagedObjectFailure(ctx, session)
+				return nil, domain.ErrValidationFailed.Extend("adapter_rank does not match adapter_config r")
+			}
+			session.AdapterRank = adapterRank
 		}
 	} else {
 		return nil, domain.ErrValidationFailed.Extend("upload resource type is not supported")
@@ -668,22 +692,22 @@ func (u *dataUploadUseCase) stagedObjectChecksum(ctx context.Context, session *m
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func validateModelArtifactContents(reader io.ReadSeeker, session *model.UploadSession, objectSize int64) error {
+func validateModelArtifactContents(ctx context.Context, bucket BlobRepositoryAdapter, reader io.ReadSeeker, session *model.UploadSession, objectSize int64) (int, error) {
 	log.Trace("validateModelArtifactContents")
 
 	switch {
 	case isDirectGGUFModelArtifact(session):
-		return domain.ErrValidationFailed.Extend("GGUF model artifacts must be onboarded through the Hugging Face exact-file path so the full file metadata is validated")
+		return 0, domain.ErrValidationFailed.Extend("GGUF model artifacts must be onboarded through the Hugging Face exact-file path so the full file metadata is validated")
 	case normalizeModelToken(session.DeclaredFormat) == string(model.ModelArtifactFormatSafetensors) ||
 		strings.HasSuffix(strings.ToLower(session.FileName), modelArtifactExtensionSafetensors):
-		return domain.ErrValidationFailed.Extend("safetensors model artifacts must be uploaded as an archive with model metadata")
+		return 0, domain.ErrValidationFailed.Extend("safetensors model artifacts must be uploaded as an archive with model metadata")
 	case normalizeModelToken(session.DeclaredFormat) == string(model.ModelArtifactFormatZIP) ||
 		strings.HasSuffix(strings.ToLower(session.FileName), modelArtifactExtensionZip) ||
 		normalizeModelToken(session.DeclaredFormat) == string(model.ModelArtifactFormatHFModel) ||
 		normalizeModelToken(session.DeclaredFormat) == string(model.ModelArtifactFormatHFPEFTAdapter):
-		return validateModelZipArchive(reader, session, objectSize)
+		return validateModelZipArchive(ctx, bucket, reader, session, objectSize)
 	default:
-		return domain.ErrValidationFailed.Extend("uploaded model artifact format is not positively validated")
+		return 0, domain.ErrValidationFailed.Extend("uploaded model artifact format is not positively validated")
 	}
 }
 
@@ -715,42 +739,56 @@ func huggingFaceArtifactFileName(huggingFaceFile string, artifactFormat string) 
 	}
 }
 
-func validateModelZipArchive(reader io.ReadSeeker, session *model.UploadSession, objectSize int64) error {
+func validateModelZipArchive(ctx context.Context, bucket BlobRepositoryAdapter, reader io.ReadSeeker, session *model.UploadSession, objectSize int64) (int, error) {
 	log.Trace("validateModelZipArchive")
 
-	names, err := readZipCentralDirectoryNames(reader, objectSize)
+	entries, err := readZipCentralDirectoryEntries(reader, objectSize)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	hasConfig := false
-	hasAdapterConfig := false
 	hasWeights := false
-	for _, name := range names {
-		lower := strings.ToLower(strings.TrimPrefix(name, "./"))
+	var adapterConfig *zipCentralDirectoryEntry
+	for i := range entries {
+		entry := entries[i]
+		lower := strings.ToLower(strings.TrimPrefix(entry.Name, "./"))
 		switch {
 		case lower == "config.json" || strings.HasSuffix(lower, "/config.json"):
 			hasConfig = true
 		case lower == "adapter_config.json" || strings.HasSuffix(lower, "/adapter_config.json"):
-			hasAdapterConfig = true
+			adapterConfig = &entries[i]
 		case strings.HasSuffix(lower, ".safetensors") || lower == "model.safetensors.index.json" || strings.HasSuffix(lower, "/model.safetensors.index.json"):
 			hasWeights = true
 		}
 	}
 	switch normalizeModelToken(session.ArtifactType) {
 	case "LORA_ADAPTER":
-		if !hasAdapterConfig || !hasWeights {
-			return domain.ErrValidationFailed.Extend("uploaded LoRA archive must contain adapter_config.json and safetensors weights")
+		if adapterConfig == nil || !hasWeights {
+			return 0, domain.ErrValidationFailed.Extend("uploaded LoRA archive must contain adapter_config.json and safetensors weights")
 		}
+		adapterRank, err := readPeftAdapterRank(ctx, bucket, session, adapterConfig)
+		if err != nil {
+			return 0, err
+		}
+		return adapterRank, nil
 	default:
 		if !hasConfig || !hasWeights {
-			return domain.ErrValidationFailed.Extend("uploaded model archive must contain config.json and safetensors weights")
+			return 0, domain.ErrValidationFailed.Extend("uploaded model archive must contain config.json and safetensors weights")
 		}
 	}
-	return nil
+	return 0, nil
 }
 
-func readZipCentralDirectoryNames(reader io.ReadSeeker, objectSize int64) ([]string, error) {
-	log.Trace("readZipCentralDirectoryNames")
+type zipCentralDirectoryEntry struct {
+	Name              string
+	CompressionMethod uint16
+	CompressedSize    int64
+	UncompressedSize  int64
+	LocalHeaderOffset int64
+}
+
+func readZipCentralDirectoryEntries(reader io.ReadSeeker, objectSize int64) ([]zipCentralDirectoryEntry, error) {
+	log.Trace("readZipCentralDirectoryEntries")
 
 	if objectSize < 22 {
 		return nil, domain.ErrValidationFailed.Extend("uploaded zip model is too small")
@@ -765,7 +803,7 @@ func readZipCentralDirectoryNames(reader io.ReadSeeker, objectSize int64) ([]str
 	}
 	eocd := -1
 	for i := len(tail) - 22; i >= 0; i-- {
-		if binary.LittleEndian.Uint32(tail[i:i+4]) == 0x06054b50 {
+		if binary.LittleEndian.Uint32(tail[i:i+4]) == zipEndOfCentralDirectorySignature {
 			eocd = i
 			break
 		}
@@ -788,27 +826,102 @@ func readZipCentralDirectoryNames(reader io.ReadSeeker, objectSize int64) ([]str
 		return nil, domain.ErrValidationFailed.Extend("uploaded model archive central directory is invalid")
 	}
 	central := tail[start:end]
-	names := []string{}
+	entries := []zipCentralDirectoryEntry{}
 	for offset := 0; offset+46 <= len(central); {
-		if binary.LittleEndian.Uint32(central[offset:offset+4]) != 0x02014b50 {
+		if binary.LittleEndian.Uint32(central[offset:offset+4]) != zipCentralDirectorySignature {
 			return nil, domain.ErrValidationFailed.Extend("uploaded model archive central directory entry is invalid")
 		}
+		method := binary.LittleEndian.Uint16(central[offset+10 : offset+12])
+		compressedSize := int64(binary.LittleEndian.Uint32(central[offset+20 : offset+24]))
+		uncompressedSize := int64(binary.LittleEndian.Uint32(central[offset+24 : offset+28]))
 		nameLen := int(binary.LittleEndian.Uint16(central[offset+28 : offset+30]))
 		extraLen := int(binary.LittleEndian.Uint16(central[offset+30 : offset+32]))
 		commentLen := int(binary.LittleEndian.Uint16(central[offset+32 : offset+34]))
+		localHeaderOffset := int64(binary.LittleEndian.Uint32(central[offset+42 : offset+46]))
 		nameStart := offset + 46
 		nameEnd := nameStart + nameLen
 		next := nameEnd + extraLen + commentLen
 		if nameLen <= 0 || nameEnd > len(central) || next > len(central) {
 			return nil, domain.ErrValidationFailed.Extend("uploaded model archive central directory entry is truncated")
 		}
-		names = append(names, string(central[nameStart:nameEnd]))
+		entries = append(entries, zipCentralDirectoryEntry{
+			Name:              string(central[nameStart:nameEnd]),
+			CompressionMethod: method,
+			CompressedSize:    compressedSize,
+			UncompressedSize:  uncompressedSize,
+			LocalHeaderOffset: localHeaderOffset,
+		})
 		offset = next
 	}
-	if len(names) == 0 {
+	if len(entries) == 0 {
 		return nil, domain.ErrValidationFailed.Extend("uploaded model archive is empty")
 	}
-	return names, nil
+	return entries, nil
+}
+
+func readPeftAdapterRank(ctx context.Context, bucket BlobRepositoryAdapter, session *model.UploadSession, entry *zipCentralDirectoryEntry) (int, error) {
+	log.Trace("readPeftAdapterRank")
+
+	if entry == nil {
+		return 0, domain.ErrValidationFailed.Extend("uploaded LoRA archive must contain adapter_config.json")
+	}
+	if entry.CompressedSize <= 0 || entry.CompressedSize > maxAdapterConfigBytes ||
+		entry.UncompressedSize <= 0 || entry.UncompressedSize > maxAdapterConfigBytes {
+		return 0, domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json is too large")
+	}
+	header, err := bucket.ReadStagingRange(ctx, session, entry.LocalHeaderOffset, 30)
+	if err != nil {
+		return 0, fmt.Errorf("read uploaded LoRA adapter_config header: %w", err)
+	}
+	if len(header) != 30 || binary.LittleEndian.Uint32(header[:4]) != zipLocalFileHeaderSignature {
+		return 0, domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json header is invalid")
+	}
+	nameLen := int64(binary.LittleEndian.Uint16(header[26:28]))
+	extraLen := int64(binary.LittleEndian.Uint16(header[28:30]))
+	payloadOffset := entry.LocalHeaderOffset + 30 + nameLen + extraLen
+	compressedPayload, err := bucket.ReadStagingRange(ctx, session, payloadOffset, entry.CompressedSize)
+	if err != nil {
+		return 0, fmt.Errorf("read uploaded LoRA adapter_config.json: %w", err)
+	}
+	if int64(len(compressedPayload)) != entry.CompressedSize {
+		return 0, domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json is truncated")
+	}
+	payload, err := unzipEntryPayload(entry, compressedPayload)
+	if err != nil {
+		return 0, err
+	}
+	var adapterConfig struct {
+		Rank int `json:"r"`
+	}
+	if err := json.Unmarshal(payload, &adapterConfig); err != nil {
+		return 0, domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json is invalid")
+	}
+	if adapterConfig.Rank <= 0 {
+		return 0, domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json r is required")
+	}
+	return adapterConfig.Rank, nil
+}
+
+func unzipEntryPayload(entry *zipCentralDirectoryEntry, compressedPayload []byte) ([]byte, error) {
+	log.Trace("unzipEntryPayload")
+
+	switch entry.CompressionMethod {
+	case zipCompressionStored:
+		return compressedPayload, nil
+	case zipCompressionDeflate:
+		reader := flate.NewReader(bytes.NewReader(compressedPayload))
+		defer reader.Close()
+		payload, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json is invalid")
+		}
+		if int64(len(payload)) != entry.UncompressedSize {
+			return nil, domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json is truncated")
+		}
+		return payload, nil
+	default:
+		return nil, domain.ErrValidationFailed.Extend("uploaded LoRA adapter_config.json uses an unsupported compression method")
+	}
 }
 
 func normalizeModelToken(value string) string {

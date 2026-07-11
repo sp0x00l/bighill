@@ -21,6 +21,7 @@ import (
 
 type Spec struct {
 	ModelID          string `json:"model_id"`
+	OrgID            string `json:"org_id"`
 	TrainingRunID    string `json:"training_run_id"`
 	DatasetID        string `json:"dataset_id"`
 	ModelKind        string `json:"model_kind"`
@@ -31,6 +32,9 @@ type Spec struct {
 	ArtifactFormat   string `json:"artifact_format"`
 	ArtifactChecksum string `json:"artifact_checksum"`
 	AdapterURI       string `json:"adapter_uri"`
+	AdapterRank      int    `json:"adapter_rank"`
+	RuntimeIsolation string `json:"runtime_isolation"`
+	Pinned           bool   `json:"pinned"`
 	ServingTarget    string `json:"serving_target"`
 	ServingModel     string `json:"serving_model"`
 	ServingProtocol  string `json:"serving_protocol"`

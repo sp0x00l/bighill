@@ -47,4 +47,5 @@ message ModelArtifactIngestedEvent {
   string source_metadata = 21;
   string dataset_id = 22;
   string org_id = 23;
+  int32 adapter_rank = 24;
 }

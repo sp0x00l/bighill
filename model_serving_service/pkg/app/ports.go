@@ -10,6 +10,10 @@ type ServingRuntime interface {
 	EnsureServedModel(ctx context.Context, servedModel *model.ServedModel) (*model.ServingRuntimeState, error)
 }
 
+type ServingRuntimeDeletion interface {
+	DeleteServedModel(ctx context.Context, servedModel *model.ServedModel) error
+}
+
 type ServedModelStatusWriter interface {
 	UpdateStatus(ctx context.Context, resourceName string, status *model.ServedModelStatus) error
 }

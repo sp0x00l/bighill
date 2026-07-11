@@ -90,6 +90,20 @@ def validate_snapshot(snapshot_dir: Path) -> None:
         raise RuntimeError("downloaded Hugging Face model is missing safetensors weights")
 
 
+def validate_peft_adapter_snapshot(snapshot_dir: Path) -> int:
+    files = {p.relative_to(snapshot_dir).as_posix() for p in snapshot_dir.rglob("*") if p.is_file()}
+    if "adapter_config.json" not in files:
+        raise RuntimeError("downloaded Hugging Face PEFT adapter is missing adapter_config.json")
+    has_weights = any(path.endswith(".safetensors") for path in files)
+    if not has_weights:
+        raise RuntimeError("downloaded Hugging Face PEFT adapter is missing safetensors weights")
+    config = json.loads((snapshot_dir / "adapter_config.json").read_text(encoding="utf-8"))
+    rank = int(config.get("r") or 0)
+    if rank <= 0:
+        raise RuntimeError("downloaded Hugging Face PEFT adapter_config.json r is required")
+    return rank
+
+
 def validate_gguf_file(path: Path, *, require_chat_template: bool) -> None:
     from bighill_model_artifacts.gguf import inspect_gguf
 
@@ -112,6 +126,10 @@ def is_gguf_file(file_name: str) -> bool:
 
 def is_gguf_format(artifact_format: str) -> bool:
     return normalize_token(artifact_format) in {"GGUF", "GGUF_MODEL", "GGUF_LORA_ADAPTER"}
+
+
+def is_peft_adapter(*, artifact_type: str, artifact_format: str) -> bool:
+    return normalize_token(artifact_type) == "LORA_ADAPTER" or normalize_token(artifact_format) == "HF_PEFT_ADAPTER"
 
 
 def normalize_token(value: str) -> str:
@@ -186,6 +204,8 @@ def run() -> None:
     artifact_format_env = os.environ.get("INGESTION_SERVICE_MODEL_ARTIFACT_FORMAT", "").strip()
     artifact_format = artifact_format_env or "HF_MODEL"
     hf_file = optional_env("INGESTION_SERVICE_HUGGINGFACE_FILE")
+    if not artifact_format_env and not hf_file and normalize_token(artifact_type) == "LORA_ADAPTER":
+        artifact_format = "HF_PEFT_ADAPTER"
     if hf_file:
         artifact_format = infer_exact_file_artifact_format(
             artifact_type=artifact_type,
@@ -210,6 +230,7 @@ def run() -> None:
         else:
             downloaded_file = None
             snapshot_path = Path(snapshot_download(repo_id=repo_id, revision=revision, token=token, local_dir=local_dir))
+        adapter_rank = 0
         if hf_file:
             if downloaded_file is None:
                 raise RuntimeError("downloaded Hugging Face file path was not resolved")
@@ -220,7 +241,10 @@ def run() -> None:
             artifact_uri = f"{output_root}/{resource_id}/{Path(hf_file).name}"
             artifact = storage.upload_file(downloaded_file, artifact_uri, storage_config)
         else:
-            validate_snapshot(snapshot_path)
+            if is_peft_adapter(artifact_type=artifact_type, artifact_format=artifact_format):
+                adapter_rank = validate_peft_adapter_snapshot(snapshot_path)
+            else:
+                validate_snapshot(snapshot_path)
             artifact_uri = f"{output_root}/{resource_id}/snapshot"
             artifact = storage.upload_directory(snapshot_path, artifact_uri, storage_config)
         manifest_uri = f"{output_root}/{resource_id}/manifest.json"
@@ -235,6 +259,7 @@ def run() -> None:
             "model_name": model_name,
             "model_version": model_version,
             "base_model": base_model,
+            "adapter_rank": adapter_rank,
             "source_uri": f"https://huggingface.co/{repo_id}",
             "hf_repo_id": repo_id,
             "hf_revision": revision,

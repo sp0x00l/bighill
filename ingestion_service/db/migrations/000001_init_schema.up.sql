@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS bighill_ingestion_db.upload_sessions (
     model_name text NOT NULL DEFAULT '',
     model_version text NOT NULL DEFAULT '',
     base_model text NOT NULL DEFAULT '',
+    adapter_rank integer NOT NULL DEFAULT 0,
     source model_source_enum NOT NULL DEFAULT 'UPLOAD',
     source_uri text NOT NULL DEFAULT '',
     manifest_location text NOT NULL DEFAULT '',

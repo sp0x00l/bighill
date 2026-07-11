@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"model_serving_service/pkg/app"
+	"model_serving_service/pkg/domain/model"
 	servingkubernetes "model_serving_service/pkg/infra/network/k8s"
 	localserving "model_serving_service/pkg/infra/network/localserving"
 
@@ -22,6 +24,7 @@ import (
 	logs "lib/shared_lib/logs"
 	trace "lib/shared_lib/trace"
 
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -34,6 +37,7 @@ type modelServingConfig struct {
 	Backend     string
 	LocalStore  string
 	ServedModel servedModelConfig
+	BaseRuntime baseRuntimeConfig
 	Runtime     runtimeConfig
 	Health      healthConfig
 	Lifecycle   lifecycle.Config
@@ -45,11 +49,19 @@ type servedModelConfig struct {
 	Resource string
 }
 
+type baseRuntimeConfig struct {
+	Group    string
+	Version  string
+	Resource string
+}
+
 type runtimeConfig struct {
 	Image               string
 	ImagePullPolicy     string
 	ServiceAccount      string
-	MultiTenant         bool
+	ForceDedicated      bool
+	MaxLoras            int
+	MaxLoraRank         int
 	Replicas            int32
 	Port                int32
 	CPU                 string
@@ -86,17 +98,21 @@ func main() {
 	log.Trace(fmt.Sprintf("starting the %s service", serviceName))
 	traceShutdown := trace.Init(cancelCtx, serviceName, Version)
 
-	store, runtimeAdapter, err := newServingBackend(cfg)
+	store, runtimeAdapter, baseRuntimeStore, err := newServingBackend(cfg)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create serving backend")
 	}
 	reconciler := app.NewServedModelReconciler(runtimeAdapter, store)
-	controller := servingkubernetes.NewServedModelController(store, reconciler, cfg.PollEvery, servingkubernetes.WithSharedRuntimeSerialization(cfg.Runtime.MultiTenant))
+	controllerOptions := []servingkubernetes.ServedModelControllerOption{}
+	if baseRuntimeStore != nil {
+		controllerOptions = append(controllerOptions, servingkubernetes.WithBaseRuntimeStore(baseRuntimeStore))
+	}
+	controller := servingkubernetes.NewServedModelController(store, reconciler, cfg.PollEvery, controllerOptions...)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithMemoryCheck()
 	healthCheck = healthCheck.Register("served_model_controller", servedModelControllerReadinessCheck(controller, cfg.Health.ControllerMaxSilence))
-	healthServer := newModelServingHealthServer(cfg.Health.HealthCheckPort, healthCheck, controller, cfg.Health.ControllerMaxSilence)
+	healthServer := newModelServingHealthServer(cfg.Health.HealthCheckPort, healthCheck, controller, store, cfg.Health.ControllerMaxSilence)
 	supervisor := lifecycle.NewSupervisorWithConfig(cfg.Lifecycle,
 		lifecycle.CloserComponent("model-serving-observability", func() error {
 			traceShutdown()
@@ -131,11 +147,18 @@ func readModelServingConfig() modelServingConfig {
 			Version:  env.WithDefaultString("MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_VERSION", "v1alpha1"),
 			Resource: env.WithDefaultString("MODEL_SERVING_SERVICE_SERVED_MODEL_CRD_RESOURCE", "servedmodels"),
 		},
+		BaseRuntime: baseRuntimeConfig{
+			Group:    env.WithDefaultString("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_GROUP", "serving.bighill.io"),
+			Version:  env.WithDefaultString("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_VERSION", "v1alpha1"),
+			Resource: env.WithDefaultString("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_RESOURCE", "baseruntimes"),
+		},
 		Runtime: runtimeConfig{
 			Image:               env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_IMAGE", "vllm/vllm-openai:latest"),
 			ImagePullPolicy:     env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_IMAGE_PULL_POLICY", "IfNotPresent"),
 			ServiceAccount:      env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_SERVICE_ACCOUNT", ""),
-			MultiTenant:         env.WithDefaultBool("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED", false),
+			ForceDedicated:      env.WithDefaultBool("MODEL_SERVING_SERVICE_VLLM_FORCE_DEDICATED_ADAPTERS", false),
+			MaxLoras:            env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_MAX_LORAS", "8"),
+			MaxLoraRank:         env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_MAX_LORA_RANK", "16"),
 			Replicas:            int32(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_REPLICAS", "1")),
 			Port:                int32(env.WithDefaultInt("MODEL_SERVING_SERVICE_VLLM_PORT", "8000")),
 			CPU:                 env.WithDefaultString("MODEL_SERVING_SERVICE_VLLM_CPU", "1"),
@@ -170,14 +193,14 @@ func defaultLocalStorePath() string {
 	return filepath.Join(os.TempDir(), "bighill", "local_served_models", "served_models.json")
 }
 
-func newServingBackend(cfg modelServingConfig) (servingkubernetes.ServedModelRepository, app.ServingRuntime, error) {
+func newServingBackend(cfg modelServingConfig) (servingkubernetes.ServedModelRepository, app.ServingRuntime, servingkubernetes.BaseRuntimeRepository, error) {
 	log.Trace("newServingBackend")
 
 	switch cfg.Backend {
 	case "local":
 		store, err := localserving.NewStore(cfg.Namespace, cfg.LocalStore)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		runtimeAdapter, err := localserving.NewRuntime(cfg.Namespace, cfg.Runtime.Port, cfg.Runtime.LocalOllamaEndpoint,
 			localserving.WithArtifactCache(cfg.Runtime.LocalArtifactCache),
@@ -186,13 +209,13 @@ func newServingBackend(cfg modelServingConfig) (servingkubernetes.ServedModelRep
 			localserving.WithCreateTimeout(cfg.Runtime.OllamaCreateTimeout),
 		)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		return store, runtimeAdapter, nil
+		return store, runtimeAdapter, nil, nil
 	case "kubernetes":
 		client, err := servingkubernetes.NewDynamicClient()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		store, err := servingkubernetes.NewServedModelStore(servingkubernetes.ServedModelStoreConfig{
 			Namespace: cfg.Namespace,
@@ -201,28 +224,41 @@ func newServingBackend(cfg modelServingConfig) (servingkubernetes.ServedModelRep
 			Resource:  cfg.ServedModel.Resource,
 		}, client)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(servingkubernetes.VLLMRuntimeConfig{
-			Namespace:       cfg.Namespace,
-			Image:           cfg.Runtime.Image,
-			ImagePullPolicy: cfg.Runtime.ImagePullPolicy,
-			ServiceAccount:  cfg.Runtime.ServiceAccount,
-			MultiTenant:     cfg.Runtime.MultiTenant,
-			Replicas:        cfg.Runtime.Replicas,
-			Port:            cfg.Runtime.Port,
-			CPU:             cfg.Runtime.CPU,
-			Memory:          cfg.Runtime.Memory,
-			GPUResource:     cfg.Runtime.GPUResource,
-			GPU:             cfg.Runtime.GPU,
-			RequestTimeout:  cfg.Runtime.RequestTimeout,
+		baseRuntimeStore, err := servingkubernetes.NewBaseRuntimeStore(servingkubernetes.BaseRuntimeStoreConfig{
+			Namespace: cfg.Namespace,
+			Group:     cfg.BaseRuntime.Group,
+			Version:   cfg.BaseRuntime.Version,
+			Resource:  cfg.BaseRuntime.Resource,
 		}, client)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		return store, runtimeAdapter, nil
+		runtimeAdapter, err := servingkubernetes.NewVLLMRuntime(servingkubernetes.VLLMRuntimeConfig{
+			Namespace:               cfg.Namespace,
+			Image:                   cfg.Runtime.Image,
+			ImagePullPolicy:         cfg.Runtime.ImagePullPolicy,
+			ServiceAccount:          cfg.Runtime.ServiceAccount,
+			ForceDedicated:          cfg.Runtime.ForceDedicated,
+			MaxLoras:                cfg.Runtime.MaxLoras,
+			MaxLoraRank:             cfg.Runtime.MaxLoraRank,
+			Replicas:                cfg.Runtime.Replicas,
+			Port:                    cfg.Runtime.Port,
+			CPU:                     cfg.Runtime.CPU,
+			Memory:                  cfg.Runtime.Memory,
+			GPUResource:             cfg.Runtime.GPUResource,
+			GPU:                     cfg.Runtime.GPU,
+			RequestTimeout:          cfg.Runtime.RequestTimeout,
+			BaseRuntimeStore:        baseRuntimeStore,
+			ServedModelStatusWriter: store,
+		}, client)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return store, runtimeAdapter, baseRuntimeStore, nil
 	default:
-		return nil, nil, fmt.Errorf("unsupported model serving backend %q", cfg.Backend)
+		return nil, nil, nil, fmt.Errorf("unsupported model serving backend %q", cfg.Backend)
 	}
 }
 
@@ -247,7 +283,7 @@ type modelServingHealthServer struct {
 	ready  atomic.Bool
 }
 
-func newModelServingHealthServer(port int, readiness *coreHealthCheck.Monitor, controller *servingkubernetes.ServedModelController, maxSilence time.Duration) *modelServingHealthServer {
+func newModelServingHealthServer(port int, readiness *coreHealthCheck.Monitor, controller *servingkubernetes.ServedModelController, store servingkubernetes.ServedModelRepository, maxSilence time.Duration) *modelServingHealthServer {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if err := readiness.Check(r.Context()); err != nil {
@@ -267,10 +303,69 @@ func newModelServingHealthServer(port int, readiness *coreHealthCheck.Monitor, c
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/v1/private/served-models/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/load") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		modelIDRaw := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/private/served-models/"), "/load")
+		modelID, err := uuid.Parse(strings.Trim(modelIDRaw, "/"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, "invalid model id")
+			return
+		}
+		if err := triggerServedModelLoad(r.Context(), store, modelID); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		w.Write([]byte("accepted"))
+	})
 	return &modelServingHealthServer{server: &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
 	}}
+}
+
+func triggerServedModelLoad(ctx context.Context, store servingkubernetes.ServedModelRepository, modelID uuid.UUID) error {
+	log.Trace("triggerServedModelLoad")
+
+	servedModels, _, err := store.ListWithResourceVersion(ctx)
+	if err != nil {
+		return err
+	}
+	for _, servedModel := range servedModels {
+		if servedModel.ModelID != modelID {
+			continue
+		}
+		status := &model.ServedModelStatus{
+			ServingLoadStatus:  model.ModelLoadStatusNotLoaded,
+			ServingTarget:      servingField(servedModel.Status, servedModel.ServingTarget, func(s *model.ServedModelStatus) string { return s.ServingTarget }),
+			ServingModel:       servingField(servedModel.Status, servedModel.ServingModel, func(s *model.ServedModelStatus) string { return s.ServingModel }),
+			ServingProtocol:    servedModel.ServingProtocol,
+			FailureReason:      "",
+			ObservedGeneration: servedModel.Generation,
+		}
+		if servedModel.Status != nil && servedModel.Status.ServingProtocol.String() != "" {
+			status.ServingProtocol = servedModel.Status.ServingProtocol
+		}
+		return store.UpdateStatus(ctx, servedModel.ResourceName, status)
+	}
+	return fmt.Errorf("served model %s not found", modelID)
+}
+
+func servingField(status *model.ServedModelStatus, fallback string, read func(*model.ServedModelStatus) string) string {
+	log.Trace("servingField")
+
+	if status == nil {
+		return fallback
+	}
+	if value := strings.TrimSpace(read(status)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func (s *modelServingHealthServer) Connect() error {

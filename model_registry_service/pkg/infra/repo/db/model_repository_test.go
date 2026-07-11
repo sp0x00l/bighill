@@ -224,6 +224,7 @@ type modelRow struct {
 	ArtifactChecksum   string
 	ArtifactSizeBytes  int64
 	AdapterURI         string
+	AdapterRank        int
 	ServingTarget      string
 	ServingModel       string
 	ServingProtocol    string
@@ -255,17 +256,18 @@ func (r modelRow) Scan(dest ...any) error {
 	*(dest[14].(*string)) = r.ArtifactChecksum
 	*(dest[15].(*int64)) = r.ArtifactSizeBytes
 	*(dest[16].(*string)) = r.AdapterURI
-	*(dest[17].(*string)) = r.ServingTarget
-	*(dest[18].(*string)) = r.ServingModel
-	*(dest[19].(*string)) = r.ServingProtocol
-	*(dest[20].(*string)) = r.ServingLoadStatus
-	*(dest[21].(*string)) = r.MetricsMetadata
-	*(dest[22].(*string)) = r.PromotionReportURI
-	*(dest[23].(*string)) = r.PromotionDeltas
-	*(dest[24].(*string)) = r.PromotionDecision
-	*(dest[25].(*string)) = r.PromotionReason
-	*(dest[26].(*string)) = r.Status
-	*(dest[27].(*string)) = r.FailureReason
+	*(dest[17].(*int)) = r.AdapterRank
+	*(dest[18].(*string)) = r.ServingTarget
+	*(dest[19].(*string)) = r.ServingModel
+	*(dest[20].(*string)) = r.ServingProtocol
+	*(dest[21].(*string)) = r.ServingLoadStatus
+	*(dest[22].(*string)) = r.MetricsMetadata
+	*(dest[23].(*string)) = r.PromotionReportURI
+	*(dest[24].(*string)) = r.PromotionDeltas
+	*(dest[25].(*string)) = r.PromotionDecision
+	*(dest[26].(*string)) = r.PromotionReason
+	*(dest[27].(*string)) = r.Status
+	*(dest[28].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -313,6 +315,7 @@ var _ = Describe("ModelRepository", func() {
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
 			AdapterURI:        "s3://local-dev-bucket/models/run",
+			AdapterRank:       16,
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v7",
 			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
@@ -357,6 +360,7 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("model_version", registered.ModelVersion))
 			Expect(args).To(HaveKeyWithValue("artifact_format", registered.ArtifactFormat))
 			Expect(args).To(HaveKeyWithValue("adapter_uri", registered.AdapterURI))
+			Expect(args).To(HaveKeyWithValue("adapter_rank", registered.AdapterRank))
 			Expect(args).To(HaveKeyWithValue("serving_target", registered.ServingTarget))
 			Expect(args).To(HaveKeyWithValue("serving_model", registered.ServingModel))
 			Expect(args).To(HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()))
@@ -620,6 +624,7 @@ func newModelRow(modelRecord *model.Model) modelRow {
 		ArtifactChecksum:   modelRecord.ArtifactChecksum,
 		ArtifactSizeBytes:  modelRecord.ArtifactSizeBytes,
 		AdapterURI:         modelRecord.AdapterURI,
+		AdapterRank:        modelRecord.AdapterRank,
 		ServingTarget:      modelRecord.ServingTarget,
 		ServingModel:       modelRecord.ServingModel,
 		ServingProtocol:    modelRecord.ServingProtocol.String(),

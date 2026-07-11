@@ -45,7 +45,7 @@ func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel
 		model_id, user_id, org_id, idempotency_key, training_run_id, dataset_id, model_kind, source, source_uri, source_metadata,
 		name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
-		adapter_uri, serving_target, serving_model, serving_protocol, serving_load_status,
+		adapter_uri, adapter_rank, serving_target, serving_model, serving_protocol, serving_load_status,
 		metrics_metadata, promotion_report_uri, promotion_deltas, promotion_decision, promotion_reason, status, failure_reason
 	)
 		SELECT
@@ -55,7 +55,7 @@ func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel
 		@idempotency_key, @training_run_id, @dataset_id, @model_kind::model_kind_enum, @source::model_source_enum, @source_uri, @source_metadata::jsonb,
 		@name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
-		@adapter_uri, @serving_target, @serving_model, NULLIF(@serving_protocol, '')::serving_protocol_enum, @serving_load_status::model_load_status_enum,
+		@adapter_uri, @adapter_rank, @serving_target, @serving_model, NULLIF(@serving_protocol, '')::serving_protocol_enum, @serving_load_status::model_load_status_enum,
 		@metrics_metadata::jsonb, @promotion_report_uri, @promotion_deltas::jsonb, NULLIF(@promotion_decision, '')::promotion_decision_enum, @promotion_reason, @status::model_status_enum, @failure_reason
 	FROM tenant_projection
 	RETURNING ` + modelColumns()
@@ -295,6 +295,7 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 		"artifact_checksum":    registeredModel.ArtifactChecksum,
 		"artifact_size_bytes":  registeredModel.ArtifactSizeBytes,
 		"adapter_uri":          registeredModel.AdapterURI,
+		"adapter_rank":         registeredModel.AdapterRank,
 		"serving_target":       registeredModel.ServingTarget,
 		"serving_model":        registeredModel.ServingModel,
 		"serving_protocol":     registeredModel.ServingProtocol.String(),
@@ -356,7 +357,7 @@ func modelColumns() string {
 	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(org_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
 		model_kind::text, source::text, source_uri, source_metadata::text, name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
-		adapter_uri, serving_target, serving_model, COALESCE(serving_protocol::text, ''), serving_load_status::text,
+		adapter_uri, adapter_rank, serving_target, serving_model, COALESCE(serving_protocol::text, ''), serving_load_status::text,
 		metrics_metadata::text, promotion_report_uri, promotion_deltas::text, COALESCE(promotion_decision::text, ''), promotion_reason, status::text, failure_reason`
 }
 
@@ -401,6 +402,7 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 		&modelRecord.ArtifactChecksum,
 		&modelRecord.ArtifactSizeBytes,
 		&modelRecord.AdapterURI,
+		&modelRecord.AdapterRank,
 		&modelRecord.ServingTarget,
 		&modelRecord.ServingModel,
 		&servingProtocolRaw,

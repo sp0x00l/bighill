@@ -20,6 +20,7 @@ type Model struct {
 	ArtifactChecksum   string
 	ArtifactSizeBytes  int64
 	AdapterURI         string
+	AdapterRank        int
 	ServingTarget      string
 	ServingModel       string
 	ServingProtocol    ServingProtocol

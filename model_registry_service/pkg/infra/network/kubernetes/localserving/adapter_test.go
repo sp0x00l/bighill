@@ -54,6 +54,7 @@ var _ = Describe("Local serving adapter", func() {
 			ArtifactFormat:    "HF_MODEL",
 			ArtifactChecksum:  "sha256",
 			AdapterURI:        "s3://bucket/adapter",
+			AdapterRank:       16,
 			ServingTarget:     "http://runtime",
 			ServingModel:      "llama",
 			ServingLoadStatus: model.ModelLoadStatusNotLoaded,
@@ -68,6 +69,7 @@ var _ = Describe("Local serving adapter", func() {
 		Expect(record.Spec.DatasetID).To(Equal(datasetID.String()))
 		Expect(record.Spec.ModelKind).To(Equal(model.ModelKindBase.String()))
 		Expect(record.Spec.BaseModel).To(Equal("meta-llama/Llama"))
+		Expect(record.Spec.AdapterRank).To(Equal(16))
 	})
 
 	It("records each new observed status once", func() {

@@ -40,6 +40,7 @@ type InitiateModelUploadDTO struct {
 	ModelName         string `json:"model_name"          validate:"required"`
 	ModelVersion      string `json:"model_version"       validate:"required,model_version"`
 	BaseModel         string `json:"base_model"          validate:"required"`
+	AdapterRank       int    `json:"adapter_rank"        validate:"omitempty,gt=0"`
 }
 
 type OnboardHuggingFaceModelDTO struct {
@@ -52,6 +53,7 @@ type OnboardHuggingFaceModelDTO struct {
 	ModelName      string `json:"model_name"    validate:"required"`
 	ModelVersion   string `json:"model_version" validate:"required,model_version"`
 	BaseModel      string `json:"base_model"    validate:"required"`
+	AdapterRank    int    `json:"adapter_rank"  validate:"omitempty,gt=0"`
 	ArtifactType   string `json:"artifact_type"   validate:"omitempty,model_artifact_type"`
 	ArtifactFormat string `json:"artifact_format" validate:"omitempty,model_artifact_format"`
 }
@@ -174,6 +176,7 @@ func (a *UploadDTOAdapter) FromInitiateModelUploadDTO(
 		ModelName:           dto.ModelName,
 		ModelVersion:        modelVersion,
 		BaseModel:           dto.BaseModel,
+		AdapterRank:         dto.AdapterRank,
 	}, nil
 }
 
@@ -213,6 +216,7 @@ func (a *UploadDTOAdapter) FromOnboardHuggingFaceModelDTO(ctx context.Context, b
 		ModelName:       dto.ModelName,
 		ModelVersion:    modelVersion,
 		BaseModel:       dto.BaseModel,
+		AdapterRank:     dto.AdapterRank,
 	}, nil
 }
 

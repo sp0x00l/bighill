@@ -403,6 +403,7 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			ModelName:         "movie-adapter",
 			ModelVersion:      "2",
 			BaseModel:         "mistral-7b",
+			AdapterRank:       16,
 		})).To(Succeed())
 
 		adapterModel, err := models.ReadByID(ctxutil.WithActorOrg(ctx, userID, orgID), artifactID)
@@ -411,9 +412,12 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		Expect(adapterModel.DatasetID).To(Equal(datasetID))
 		Expect(adapterModel.AdapterURI).To(Equal("s3://local-dev-bucket/models/adapter"))
 
-		err = listener.Handle(ctx, uuid.New(), &ingestionpb.ModelArtifactIngestedEvent{
-			ArtifactId:        uuid.NewString(),
+		badArtifactID := uuid.New()
+		err = listener.Handle(ctx, badArtifactID, &ingestionpb.ModelArtifactIngestedEvent{
+			ArtifactId:        badArtifactID.String(),
 			UploadId:          uuid.NewString(),
+			UserId:            "not-a-user-id",
+			OrgId:             "not-an-org-id",
 			Source:            "upload",
 			StorageLocation:   "s3://local-dev-bucket/models/bad",
 			ArtifactType:      "LORA_ADAPTER",
@@ -423,8 +427,10 @@ var _ = Describe("Model registry integration", Ordered, func() {
 			ModelName:         "bad-adapter",
 			ModelVersion:      "2",
 			BaseModel:         "mistral-7b",
+			AdapterRank:       16,
 		})
 		Expect(err).To(HaveOccurred())
+		Expect(err).To(MatchError(ContainSubstring("user_id")))
 		Expect(sharedmessaging.IsNonRetryable(err)).To(BeTrue())
 	})
 

@@ -31,11 +31,13 @@ func TestApp(t *testing.T) {
 
 type inferenceModelRepositoryStub struct {
 	model          *model.InferenceModel
+	models         []*model.InferenceModel
 	upsertedModel  *model.InferenceModel
 	upsertCtx      context.Context
 	idempotencyKey uuid.UUID
 	readUserID     uuid.UUID
 	readID         uuid.UUID
+	readCount      int
 	err            error
 }
 
@@ -54,6 +56,14 @@ func (s *inferenceModelRepositoryStub) ReadByID(_ context.Context, userID uuid.U
 	s.readID = modelID
 	if s.err != nil {
 		return nil, s.err
+	}
+	if len(s.models) > 0 {
+		index := s.readCount
+		if index >= len(s.models) {
+			index = len(s.models) - 1
+		}
+		s.readCount++
+		return s.models[index], nil
 	}
 	return s.model, nil
 }
@@ -170,6 +180,20 @@ func (s *generationAdapterStub) Generate(_ context.Context, request model.Genera
 		return s.answer, nil
 	}
 	return "generated answer", nil
+}
+
+type modelServingLoadTriggerStub struct {
+	orgID   uuid.UUID
+	modelID uuid.UUID
+	calls   int
+	err     error
+}
+
+func (s *modelServingLoadTriggerStub) TriggerModelLoad(_ context.Context, orgID uuid.UUID, modelID uuid.UUID) error {
+	s.orgID = orgID
+	s.modelID = modelID
+	s.calls++
+	return s.err
 }
 
 type inferenceRequestRepositoryStub struct {
@@ -1275,6 +1299,64 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(errors.Is(err, domain.ErrModelNotReady)).To(BeTrue())
 		Expect(requestRepository.request).NotTo(BeNil())
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
+	})
+
+	It("triggers a cold model load and generates after the model registry projects loaded status", func() {
+		dataset := validInferenceDataset()
+		notLoadedModel := validInferenceModel()
+		notLoadedModel.UserID = dataset.UserID
+		notLoadedModel.OrgID = dataset.OrgID
+		notLoadedModel.DatasetID = dataset.DatasetID
+		notLoadedModel.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		loadedModel := *notLoadedModel
+		loadedModel.ServingLoadStatus = model.ModelLoadStatusLoaded
+		modelRepository := &inferenceModelRepositoryStub{models: []*model.InferenceModel{notLoadedModel, &loadedModel}}
+		requestRepository := &inferenceRequestRepositoryStub{}
+		trigger := &modelServingLoadTriggerStub{}
+		retrieval := &retrievalClientStub{contexts: []model.RetrievedContext{{
+			EmbeddingRecordID:   uuid.New(),
+			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
+			DatasetID:           dataset.DatasetID,
+			ChunkIndex:          1,
+			SourceText:          "reloaded adapter context",
+			Similarity:          0.91,
+		}}}
+		generator := &generationAdapterStub{answer: "generated after reload"}
+		promptStrategy := testPromptStrategy()
+		uc := app.NewInferenceUsecase(
+			modelRepository,
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{dataset: dataset}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithRetrievalClient(retrieval),
+			app.WithModelServingLoadTrigger(trigger, 250*time.Millisecond, time.Millisecond),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
+			app.WithPromptStrategy(promptStrategy),
+			app.WithContextPacker(app.NewContextWindowPacker(promptStrategy)),
+			app.WithPromptBuilder(app.NewDefaultPromptBuilder(promptStrategy)),
+		)
+
+		response, err := uc.Generate(context.Background(), model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			DatasetID: dataset.DatasetID,
+			ModelID:   notLoadedModel.ModelID,
+			QueryText: "query",
+			TopK:      4,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(trigger.calls).To(Equal(1))
+		Expect(trigger.orgID).To(Equal(dataset.OrgID))
+		Expect(trigger.modelID).To(Equal(notLoadedModel.ModelID))
+		Expect(modelRepository.readCount).To(Equal(2))
+		Expect(response.Answer).To(Equal("generated after reload"))
+		Expect(response.GenerationModel).To(Equal(loadedModel.ServingModel))
+		Expect(generator.request.Model.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
 	})
 
 	It("rejects generation when the model belongs to a different dataset", func() {

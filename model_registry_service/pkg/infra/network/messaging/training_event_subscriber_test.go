@@ -124,6 +124,7 @@ var _ = Describe("Training event listeners", func() {
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
 			AdapterUri:        "s3://local-dev-bucket/models/run",
+			AdapterRank:       16,
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v4",
 			ServingLoadStatus: "LOADED",
@@ -140,6 +141,7 @@ var _ = Describe("Training event listeners", func() {
 		Expect(uc.completedModel.ModelVersion).To(Equal(4))
 		Expect(uc.completedModel.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/run"))
 		Expect(uc.completedModel.AdapterURI).To(Equal("s3://local-dev-bucket/models/run"))
+		Expect(uc.completedModel.AdapterRank).To(Equal(16))
 		Expect(uc.completedModel.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 	})
 
@@ -315,6 +317,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 			ModelName:         "movie-adapter",
 			ModelVersion:      "2",
 			BaseModel:         "mistral-7b",
+			AdapterRank:       16,
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -323,6 +326,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 		Expect(uc.ingestedModel.ModelKind).To(Equal(model.ModelKindFineTuned))
 		Expect(uc.ingestedModel.DatasetID).To(Equal(datasetID))
 		Expect(uc.ingestedModel.AdapterURI).To(Equal("s3://local-dev-bucket/models/artifacts/adapter"))
+		Expect(uc.ingestedModel.AdapterRank).To(Equal(16))
 		Expect(uc.ingestedModel.ModelVersion).To(Equal(2))
 	})
 
@@ -375,6 +379,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 			ModelName:         "movie-adapter",
 			ModelVersion:      "2",
 			BaseModel:         "mistral-7b",
+			AdapterRank:       16,
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("user_id required")))
@@ -400,6 +405,7 @@ var _ = Describe("Model artifact ingested listener", func() {
 			ModelName:         "movie-adapter",
 			ModelVersion:      "2",
 			BaseModel:         "mistral-7b",
+			AdapterRank:       16,
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("org_id required")))

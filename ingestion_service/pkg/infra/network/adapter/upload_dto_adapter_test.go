@@ -41,7 +41,8 @@ var _ = Describe("UploadDTOAdapter", func() {
 			"client_nonce":"model-retry-1",
 			"model_name":"movie-twin",
 			"model_version":"v3",
-			"base_model":"meta-llama/Llama-3.1-8B"
+			"base_model":"meta-llama/Llama-3.1-8B",
+			"adapter_rank":16
 		}`), userID, 1024)
 
 		Expect(err).NotTo(HaveOccurred())
@@ -52,6 +53,7 @@ var _ = Describe("UploadDTOAdapter", func() {
 		Expect(request.ArtifactFormat).To(Equal("SAFETENSORS"))
 		Expect(request.DeclaredContentType).To(Equal("application/octet-stream"))
 		Expect(request.ModelVersion).To(Equal("3"))
+		Expect(request.AdapterRank).To(Equal(16))
 	})
 
 	It("maps Hugging Face onboarding DTOs to base model requests", func() {

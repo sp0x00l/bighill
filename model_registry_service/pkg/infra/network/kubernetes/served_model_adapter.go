@@ -53,6 +53,7 @@ const (
 	servedModelLabelModelID   = "bighill.io/model-id"
 
 	servedModelSpecModelID     = "modelID"
+	servedModelSpecOrgID       = "orgID"
 	servedModelSpecTrainingID  = "trainingRunID"
 	servedModelSpecDatasetID   = "datasetID"
 	servedModelSpecKind        = "modelKind"
@@ -63,6 +64,9 @@ const (
 	servedModelSpecArtifactFmt = "artifactFormat"
 	servedModelSpecChecksum    = "artifactChecksum"
 	servedModelSpecAdapterURI  = "adapterURI"
+	servedModelSpecAdapterRank = "adapterRank"
+	servedModelSpecIsolation   = "runtimeIsolation"
+	servedModelSpecPinned      = "pinned"
 	servedModelSpecTarget      = "servingTarget"
 	servedModelSpecModel       = "servingModel"
 	servedModelSpecProtocol    = "servingProtocol"
@@ -293,6 +297,7 @@ func (a *ServedModelAdapter) servedModelObject(name string, registeredModel *mod
 		},
 		servedModelObjectSpec: map[string]any{
 			servedModelSpecModelID:     registeredModel.ModelID.String(),
+			servedModelSpecOrgID:       uuidutil.StringOrEmpty(registeredModel.OrgID),
 			servedModelSpecTrainingID:  uuidutil.StringOrEmpty(registeredModel.TrainingRunID),
 			servedModelSpecDatasetID:   uuidutil.StringOrEmpty(registeredModel.DatasetID),
 			servedModelSpecKind:        registeredModel.ModelKind.String(),
@@ -303,6 +308,9 @@ func (a *ServedModelAdapter) servedModelObject(name string, registeredModel *mod
 			servedModelSpecArtifactFmt: registeredModel.ArtifactFormat,
 			servedModelSpecChecksum:    registeredModel.ArtifactChecksum,
 			servedModelSpecAdapterURI:  registeredModel.AdapterURI,
+			servedModelSpecAdapterRank: int64(registeredModel.AdapterRank),
+			servedModelSpecIsolation:   "",
+			servedModelSpecPinned:      false,
 			servedModelSpecTarget:      registeredModel.ServingTarget,
 			servedModelSpecModel:       registeredModel.ServingModel,
 			servedModelSpecProtocol:    registeredModel.ServingProtocol.String(),

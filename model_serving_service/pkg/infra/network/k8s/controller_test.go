@@ -78,7 +78,7 @@ var _ = Describe("ServedModelController serialization", func() {
 			},
 		}
 		reconciler := &controllerReconcilerStub{delay: 20 * time.Millisecond}
-		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond, servingkubernetes.WithSharedRuntimeSerialization(true))
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
 
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -154,16 +154,23 @@ func (r *controllerReconcilerStub) Reconcile(_ context.Context, servedModel *mod
 	return &model.ServedModelStatus{ServingLoadStatus: model.ModelLoadStatusLoaded}, nil
 }
 
+func (r *controllerReconcilerStub) Delete(context.Context, *model.ServedModel) error {
+	return nil
+}
+
 func controllerServedModel(resourceName string, adapterURI string) *model.ServedModel {
 	return &model.ServedModel{
 		ResourceName: resourceName,
 		Namespace:    "default",
 		Generation:   1,
 		ModelID:      uuid.MustParse("4f4b8258-f9af-49f8-b5a8-f84d75891f3b"),
+		OrgID:        uuid.MustParse("6629d88a-05af-411e-8439-7497620e41df"),
+		ModelKind:    "FINE_TUNED",
 		Name:         "ranker",
 		ModelVersion: 1,
 		BaseModel:    "mistral",
 		AdapterURI:   adapterURI,
+		AdapterRank:  16,
 	}
 }
 
@@ -178,10 +185,13 @@ func controllerServedModelObject(servedModel *model.ServedModel) *unstructured.U
 		},
 		"spec": map[string]any{
 			"modelID":      servedModel.ModelID.String(),
+			"orgID":        servedModel.OrgID.String(),
+			"modelKind":    servedModel.ModelKind,
 			"modelVersion": int64(servedModel.ModelVersion),
 			"name":         servedModel.Name,
 			"baseModel":    servedModel.BaseModel,
 			"adapterURI":   servedModel.AdapterURI,
+			"adapterRank":  int64(servedModel.AdapterRank),
 		},
 	}}
 	obj.SetGeneration(servedModel.Generation)

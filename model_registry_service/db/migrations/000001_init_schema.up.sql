@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     artifact_checksum text NOT NULL,
     artifact_size_bytes bigint NOT NULL,
     adapter_uri text NOT NULL DEFAULT '',
+    adapter_rank integer NOT NULL DEFAULT 0,
     serving_target text NOT NULL DEFAULT '',
     serving_model text NOT NULL DEFAULT '',
     serving_protocol serving_protocol_enum,

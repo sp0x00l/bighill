@@ -33,6 +33,7 @@ message ModelTrainingCompletedEvent {
   string serving_load_status = 19;
   string org_id = 20;
   string serving_protocol = 21;
+  int32 adapter_rank = 22;
 }
 
 message ModelTrainingFailedEvent {

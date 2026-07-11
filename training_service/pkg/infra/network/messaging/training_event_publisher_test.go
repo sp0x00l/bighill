@@ -55,6 +55,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 			ArtifactChecksum:  "sha256:abc",
 			ArtifactSizeBytes: 128,
 			AdapterURI:        "s3://local-dev-bucket/models/run",
+			AdapterRank:       16,
 			ServingTarget:     "vllm-local",
 			ServingModel:      "movie-ranker-v4",
 			ServingLoadStatus: "LOADED",
@@ -76,6 +77,7 @@ var _ = Describe("TrainingEventPublisher", func() {
 		Expect(event.ModelName).To(Equal("movie-ranker"))
 		Expect(event.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/run"))
 		Expect(event.AdapterUri).To(Equal("s3://local-dev-bucket/models/run"))
+		Expect(event.AdapterRank).To(Equal(int32(16)))
 		Expect(event.ServingTarget).To(Equal("vllm-local"))
 		Expect(event.ServingModel).To(Equal("movie-ranker-v4"))
 		Expect(event.ServingLoadStatus).To(Equal("LOADED"))

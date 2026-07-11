@@ -42,6 +42,7 @@ const (
 	huggingFaceFieldModelName        = "model_name"
 	huggingFaceFieldModelVersion     = "model_version"
 	huggingFaceFieldBaseModel        = "base_model"
+	huggingFaceFieldAdapterRank      = "adapter_rank"
 	huggingFaceFieldSourceURI        = "source_uri"
 	huggingFaceFieldHFRepoID         = "hf_repo_id"
 	huggingFaceFieldHFRevision       = "hf_revision"
@@ -53,6 +54,7 @@ const (
 	huggingFaceRequiredFieldMessage         = "hugging face manifest field is required: "
 	huggingFaceArtifactSizeMessage          = "hugging face manifest artifact_size_bytes must be greater than zero"
 	huggingFaceModelVersionMessage          = "hugging face manifest model_version must be a positive integer"
+	huggingFaceAdapterRankMismatchMessage   = "hugging face manifest adapter_rank does not match request"
 )
 
 type HuggingFaceCommandDownloader struct {
@@ -96,6 +98,7 @@ type huggingFaceDownloadResult struct {
 	ModelName         string `json:"model_name"`
 	ModelVersion      string `json:"model_version"`
 	BaseModel         string `json:"base_model"`
+	AdapterRank       int    `json:"adapter_rank"`
 	SourceURI         string `json:"source_uri"`
 	HFRepoID          string `json:"hf_repo_id"`
 	HFRevision        string `json:"hf_revision"`
@@ -236,6 +239,13 @@ func downloadResultToArtifact(request model.OnboardHuggingFaceModelRequest, resu
 		return nil, fmt.Errorf("%w: %s: %w", domain.ErrValidationFailed, huggingFaceInvalidResourceIDMessage, err)
 	}
 	resourceID = parsed
+	adapterRank := result.AdapterRank
+	if adapterRank > 0 && request.AdapterRank > 0 && adapterRank != request.AdapterRank {
+		return nil, domain.ErrValidationFailed.Extend(huggingFaceAdapterRankMismatchMessage)
+	}
+	if adapterRank == 0 {
+		adapterRank = request.AdapterRank
+	}
 	return &model.OnboardedModelArtifact{
 		ResourceID:        resourceID,
 		StorageLocation:   strings.TrimSpace(result.StorageLocation),
@@ -247,6 +257,7 @@ func downloadResultToArtifact(request model.OnboardHuggingFaceModelRequest, resu
 		ModelName:         strings.TrimSpace(result.ModelName),
 		ModelVersion:      strings.TrimSpace(result.ModelVersion),
 		BaseModel:         strings.TrimSpace(result.BaseModel),
+		AdapterRank:       adapterRank,
 		SourceURI:         strings.TrimSpace(result.SourceURI),
 		HFRepoID:          strings.TrimSpace(result.HFRepoID),
 		HFRevision:        strings.TrimSpace(result.HFRevision),

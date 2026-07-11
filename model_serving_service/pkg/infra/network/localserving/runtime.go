@@ -25,6 +25,7 @@ import (
 
 const (
 	modelKindBase                 = "BASE"
+	modelKindFineTuned            = "FINE_TUNED"
 	artifactFormatGGUFModel       = "GGUF_MODEL"
 	artifactFormatGGUFLoRAAdapter = "GGUF_LORA_ADAPTER"
 	legacyArtifactFormatGGUF      = "GGUF"
@@ -120,6 +121,22 @@ func (r *Runtime) EnsureServedModel(ctx context.Context, servedModel *model.Serv
 
 	if strings.TrimSpace(servedModel.BaseModel) == "" {
 		return nil, domain.ErrValidationFailed.Extend("base model is required")
+	}
+	if strings.EqualFold(strings.TrimSpace(servedModel.ModelKind), modelKindFineTuned) && strings.TrimSpace(servedModel.AdapterURI) == "" {
+		return &model.ServingRuntimeState{
+			Failed:          true,
+			ServingProtocol: model.ServingProtocolOpenAIChatCompletions,
+			FailureReason:   "fine-tuned model has no adapter URI",
+			ReadyReplicas:   1,
+		}, nil
+	}
+	if servedModel.IsAdapter() && servedModel.AdapterRank <= 0 {
+		return &model.ServingRuntimeState{
+			Failed:          true,
+			ServingProtocol: model.ServingProtocolOpenAIChatCompletions,
+			FailureReason:   "unknown adapter rank",
+			ReadyReplicas:   1,
+		}, nil
 	}
 	servingModel := strings.TrimSpace(servedModel.ServingModel)
 	if servingModel == "" {

@@ -79,6 +79,49 @@ class ModelOnboardTests(unittest.TestCase):
             manifest_path = local_s3 / "bucket" / "models" / "huggingface" / payload["resource_id"] / "manifest.json"
             self.assertTrue(manifest_path.is_file())
 
+    def test_main_derives_peft_adapter_rank_and_writes_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_s3 = root / "local_s3"
+
+            def fake_snapshot_download(*, repo_id: str, revision: str, token: str, local_dir: Path) -> str:
+                self.assertEqual(repo_id, "org/adapter")
+                self.assertEqual(revision, "main")
+                self.assertEqual(token, "hf_test")
+                local_dir.mkdir(parents=True)
+                (local_dir / "adapter_config.json").write_text('{"peft_type":"LORA","r":16}', encoding="utf-8")
+                (local_dir / "adapter_model.safetensors").write_bytes(b"adapter-weights")
+                return str(local_dir)
+
+            with EnvPatch(
+                {
+                    "BIGHILL_LOCAL_S3_STORAGE_DIR": str(local_s3),
+                    "TRAINING_ARTIFACT_BUCKET_REGION": "eu-west-1",
+                    "INGESTION_SERVICE_MODEL_RESOURCE_ID": "22222222-2222-2222-2222-222222222222",
+                    "INGESTION_SERVICE_MODEL_NAME": "adapter-test",
+                    "INGESTION_SERVICE_MODEL_VERSION": "1",
+                    "INGESTION_SERVICE_MODEL_BASE_MODEL": "org/base",
+                    "INGESTION_SERVICE_MODEL_ARTIFACT_TYPE": "LORA_ADAPTER",
+                    "INGESTION_SERVICE_HUGGINGFACE_REPO_ID": "org/adapter",
+                    "INGESTION_SERVICE_HUGGINGFACE_REVISION": "main",
+                    "INGESTION_SERVICE_HUGGINGFACE_TOKEN": "hf_test",
+                    "INGESTION_SERVICE_HUGGINGFACE_OUTPUT_URI": "s3://bucket/models/huggingface",
+                }
+            ), mock.patch.object(model_onboard, "validate_login", return_value="test-user"), mock.patch.object(
+                model_onboard, "resolve_commit_sha", return_value="resolvedabc123"
+            ), mock.patch.object(
+                model_onboard, "snapshot_download", side_effect=fake_snapshot_download
+            ), mock.patch("builtins.print") as printed:
+                model_onboard.main()
+
+            payload = json.loads(printed.call_args.args[0])
+            self.assertEqual(payload["artifact_type"], "LORA_ADAPTER")
+            self.assertEqual(payload["artifact_format"], "HF_PEFT_ADAPTER")
+            self.assertEqual(payload["adapter_rank"], 16)
+            manifest_path = local_s3 / "bucket" / "models" / "huggingface" / payload["resource_id"] / "manifest.json"
+            self.assertTrue(manifest_path.is_file())
+            self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8"))["adapter_rank"], 16)
+
     def test_main_downloads_exact_gguf_file_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

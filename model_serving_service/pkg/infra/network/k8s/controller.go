@@ -24,15 +24,21 @@ type ServedModelRepository interface {
 	UpdateStatus(ctx context.Context, resourceName string, status *model.ServedModelStatus) error
 }
 
+type BaseRuntimeRepository interface {
+	ListWithResourceVersion(ctx context.Context) ([]*model.BaseRuntime, string, error)
+	Watch(ctx context.Context, resourceVersion string) (watch.Interface, error)
+}
+
 type ServedModelController struct {
 	store                  ServedModelRepository
+	baseRuntimeStore       BaseRuntimeRepository
 	reconciler             app.ServedModelReconciler
 	pollInterval           time.Duration
-	serializeSharedRuntime bool
 	mu                     sync.Mutex
 	pending                map[string]struct{}
 	retries                map[string]int
 	resources              map[string]bool
+	baseRuntimeGenerations map[string]int64
 	locks                  sync.Map
 	healthMu               sync.RWMutex
 	health                 ControllerHealth
@@ -52,29 +58,28 @@ type ControllerHealth struct {
 
 type ServedModelControllerOption func(*ServedModelController)
 
-func WithSharedRuntimeSerialization(enabled bool) ServedModelControllerOption {
-	log.Trace("WithSharedRuntimeSerialization")
+func WithBaseRuntimeStore(store BaseRuntimeRepository) ServedModelControllerOption {
+	log.Trace("WithBaseRuntimeStore")
 
 	return func(c *ServedModelController) {
-		c.serializeSharedRuntime = enabled
+		c.baseRuntimeStore = store
 	}
 }
 
-func NewServedModelController(store ServedModelRepository, reconciler app.ServedModelReconciler, pollInterval time.Duration, opts ...ServedModelControllerOption) *ServedModelController {
+func NewServedModelController(store ServedModelRepository, reconciler app.ServedModelReconciler, pollInterval time.Duration, options ...ServedModelControllerOption) *ServedModelController {
 	log.Trace("NewServedModelController")
 
 	controller := &ServedModelController{
-		store:        store,
-		reconciler:   reconciler,
-		pollInterval: pollInterval,
-		pending:      map[string]struct{}{},
-		retries:      map[string]int{},
-		resources:    map[string]bool{},
+		store:                  store,
+		reconciler:             reconciler,
+		pollInterval:           pollInterval,
+		pending:                map[string]struct{}{},
+		retries:                map[string]int{},
+		resources:              map[string]bool{},
+		baseRuntimeGenerations: map[string]int64{},
 	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(controller)
-		}
+	for _, option := range options {
+		option(controller)
 	}
 	return controller
 }
@@ -83,6 +88,9 @@ func (c *ServedModelController) Start(ctx context.Context) error {
 	log.Trace("ServedModelController Start")
 
 	c.markStarted()
+	if c.baseRuntimeStore != nil {
+		go c.watchBaseRuntimes(ctx)
+	}
 	reconnectAttempts := 0
 	for {
 		resourceVersion, err := c.processSnapshot(ctx, true)
@@ -112,6 +120,125 @@ func (c *ServedModelController) Start(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+func (c *ServedModelController) watchBaseRuntimes(ctx context.Context) {
+	log.Trace("ServedModelController watchBaseRuntimes")
+
+	reconnectAttempts := 0
+	for {
+		resourceVersion, err := c.processBaseRuntimeSnapshot(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			c.markError(err)
+			log.WithContext(ctx).WithError(err).Error("base runtime snapshot failed")
+			reconnectAttempts++
+			if err := sleepContext(ctx, backoffDelay(c.pollInterval, reconnectAttempts)); err != nil {
+				return
+			}
+			continue
+		}
+		if err := c.watchBaseRuntimeEvents(ctx, resourceVersion); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			c.markError(err)
+			log.WithContext(ctx).WithError(err).Error("base runtime watch failed")
+			reconnectAttempts++
+		} else {
+			reconnectAttempts = 0
+		}
+		if err := sleepContext(ctx, reconnectDelay(c.pollInterval)); err != nil {
+			return
+		}
+	}
+}
+
+func (c *ServedModelController) processBaseRuntimeSnapshot(ctx context.Context) (string, error) {
+	log.Trace("ServedModelController processBaseRuntimeSnapshot")
+
+	baseRuntimes, resourceVersion, err := c.baseRuntimeStore.ListWithResourceVersion(ctx)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, baseRuntime := range baseRuntimes {
+		c.baseRuntimeGenerations[baseRuntime.ResourceName] = baseRuntime.Generation
+	}
+	return resourceVersion, nil
+}
+
+func (c *ServedModelController) watchBaseRuntimeEvents(ctx context.Context, resourceVersion string) error {
+	log.Trace("ServedModelController watchBaseRuntimeEvents")
+
+	watcher, err := c.baseRuntimeStore.Watch(ctx, resourceVersion)
+	if err != nil {
+		return err
+	}
+	defer watcher.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				return nil
+			}
+			if err := c.ProcessBaseRuntimeWatchEvent(ctx, event); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return err
+				}
+				log.WithContext(ctx).WithError(err).Error("base runtime event failed")
+			}
+		}
+	}
+}
+
+func (c *ServedModelController) ProcessBaseRuntimeWatchEvent(ctx context.Context, event watch.Event) error {
+	log.Trace("ServedModelController ProcessBaseRuntimeWatchEvent")
+
+	switch event.Type {
+	case watch.Added, watch.Modified:
+		obj, ok := event.Object.(*unstructured.Unstructured)
+		if !ok {
+			return domain.ErrModelServe.Extend("base runtime watch event object is not unstructured")
+		}
+		if !c.rememberBaseRuntimeGeneration(obj.GetName(), obj.GetGeneration()) {
+			return nil
+		}
+		_, err := c.processSnapshot(ctx, true)
+		return err
+	case watch.Deleted:
+		if obj, ok := event.Object.(*unstructured.Unstructured); ok {
+			c.mu.Lock()
+			delete(c.baseRuntimeGenerations, obj.GetName())
+			c.mu.Unlock()
+		}
+		_, err := c.processSnapshot(ctx, true)
+		return err
+	case watch.Bookmark:
+		return nil
+	case watch.Error:
+		err := domain.ErrModelServe.Extend("base runtime watch returned an error event")
+		c.markError(err)
+		return err
+	}
+	return nil
+}
+
+func (c *ServedModelController) rememberBaseRuntimeGeneration(resourceName string, generation int64) bool {
+	log.Trace("ServedModelController rememberBaseRuntimeGeneration")
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if existing, ok := c.baseRuntimeGenerations[resourceName]; ok && existing == generation {
+		return false
+	}
+	c.baseRuntimeGenerations[resourceName] = generation
+	return true
 }
 
 func (c *ServedModelController) Watch(ctx context.Context, resourceVersion string) error {
@@ -197,6 +324,13 @@ func (c *ServedModelController) processWatchEvent(ctx context.Context, event wat
 		c.markActivity()
 		if event.Type == watch.Deleted {
 			if obj, ok := event.Object.(*unstructured.Unstructured); ok {
+				servedModel, err := servedModelDTOAdapter{namespace: c.store.Namespace()}.FromObject(obj)
+				if err == nil {
+					if deleteErr := c.reconciler.Delete(ctx, servedModel); deleteErr != nil {
+						c.markError(deleteErr)
+						log.WithContext(ctx).WithError(deleteErr).WithField("served_model", obj.GetName()).Error("served model delete reconciliation failed")
+					}
+				}
 				c.markResourceDeleted(obj.GetName())
 			}
 		}
@@ -229,7 +363,7 @@ func (c *ServedModelController) processResource(ctx context.Context, resourceNam
 		return
 	}
 	var runtimeLock *sync.Mutex
-	if c.serializeSharedRuntime {
+	if servedModel.IsAdapter() {
 		runtimeLock = c.resourceLock(sharedRuntimeLockKey(servedModel))
 		runtimeLock.Lock()
 		defer runtimeLock.Unlock()
@@ -384,6 +518,9 @@ func statusNeedsReconcile(status *model.ServedModelStatus) bool {
 
 	if status == nil {
 		return true
+	}
+	if status.ServingLoadStatus == model.ModelLoadStatusNotLoaded && status.FailureReason == model.NotLoadedReasonCapacityEvicted {
+		return false
 	}
 	return status.ServingLoadStatus == model.ModelLoadStatusNotLoaded || status.ServingLoadStatus == model.ModelLoadStatusFailed
 }

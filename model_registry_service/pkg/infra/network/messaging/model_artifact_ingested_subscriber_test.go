@@ -84,6 +84,7 @@ var _ = Describe("Model artifact ingested listener mapping and error policy", fu
 	It("maps LoRA adapter artifacts to fine-tuned records with adapter URI", func() {
 		event := validArtifactEvent("upload", "LORA_ADAPTER")
 		event.ArtifactFormat = "HF_PEFT_ADAPTER"
+		event.AdapterRank = 16
 
 		err := listener.Handle(context.Background(), artifactID, event)
 
@@ -91,6 +92,18 @@ var _ = Describe("Model artifact ingested listener mapping and error policy", fu
 		Expect(uc.ingestedModel.ModelKind).To(Equal(model.ModelKindFineTuned))
 		Expect(uc.ingestedModel.Source).To(Equal(model.ModelSourceUpload))
 		Expect(uc.ingestedModel.AdapterURI).To(Equal(event.StorageLocation))
+		Expect(uc.ingestedModel.AdapterRank).To(Equal(16))
+	})
+
+	It("marks LoRA adapter artifacts without rank as non-retryable", func() {
+		event := validArtifactEvent("upload", "LORA_ADAPTER")
+		event.ArtifactFormat = "HF_PEFT_ADAPTER"
+
+		err := listener.Handle(context.Background(), artifactID, event)
+
+		Expect(err).To(MatchError(ContainSubstring("adapter rank is required")))
+		Expect(shared.IsNonRetryable(err)).To(BeTrue())
+		Expect(uc.ingestedModel).To(BeNil())
 	})
 
 	It("maps merged model artifacts to fine-tuned records without adapter URI", func() {

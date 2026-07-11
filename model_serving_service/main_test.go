@@ -36,8 +36,13 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_POLL_MS")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_BACKEND")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_LOCAL_STORE_PATH")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_GROUP")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_VERSION")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_RESOURCE")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_IMAGE")).To(Succeed())
-		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_FORCE_DEDICATED_ADAPTERS")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_MAX_LORAS")).To(Succeed())
+		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_MAX_LORA_RANK")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT")).To(Succeed())
 		Expect(os.Unsetenv("MODEL_SERVING_SERVICE_LOCAL_ARTIFACT_CACHE_DIR")).To(Succeed())
@@ -61,8 +66,13 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(cfg.ServedModel.Group).To(Equal("serving.bighill.io"))
 		Expect(cfg.ServedModel.Version).To(Equal("v1alpha1"))
 		Expect(cfg.ServedModel.Resource).To(Equal("servedmodels"))
+		Expect(cfg.BaseRuntime.Group).To(Equal("serving.bighill.io"))
+		Expect(cfg.BaseRuntime.Version).To(Equal("v1alpha1"))
+		Expect(cfg.BaseRuntime.Resource).To(Equal("baseruntimes"))
 		Expect(cfg.Runtime.Image).To(Equal("vllm/vllm-openai:latest"))
-		Expect(cfg.Runtime.MultiTenant).To(BeFalse())
+		Expect(cfg.Runtime.ForceDedicated).To(BeFalse())
+		Expect(cfg.Runtime.MaxLoras).To(Equal(8))
+		Expect(cfg.Runtime.MaxLoraRank).To(Equal(16))
 		Expect(cfg.Runtime.RequestTimeout.String()).To(Equal("5s"))
 		Expect(cfg.Runtime.Port).To(Equal(int32(8000)))
 		Expect(cfg.Runtime.LocalOllamaEndpoint).To(Equal("http://localhost:11434"))
@@ -83,8 +93,13 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_POLL_MS", "2500")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_BACKEND", "kubernetes")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_LOCAL_STORE_PATH", "/tmp/served-models.json")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_GROUP", "serving.test")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_VERSION", "v1beta1")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_BASE_RUNTIME_CRD_RESOURCE", "baseruntimepools")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_IMAGE", "vllm/vllm-openai:v1")).To(Succeed())
-		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_MULTI_TENANT_ENABLED", "true")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_FORCE_DEDICATED_ADAPTERS", "true")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_MAX_LORAS", "12")).To(Succeed())
+		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_MAX_LORA_RANK", "32")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_VLLM_REQUEST_TIMEOUT_MS", "2500")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT", "http://ollama.local")).To(Succeed())
 		Expect(os.Setenv("MODEL_SERVING_SERVICE_LOCAL_ARTIFACT_CACHE_DIR", "/tmp/model-artifacts")).To(Succeed())
@@ -103,8 +118,13 @@ var _ = Describe("readModelServingConfig", func() {
 		Expect(cfg.PollEvery.String()).To(Equal("2.5s"))
 		Expect(cfg.Backend).To(Equal("kubernetes"))
 		Expect(cfg.LocalStore).To(Equal("/tmp/served-models.json"))
+		Expect(cfg.BaseRuntime.Group).To(Equal("serving.test"))
+		Expect(cfg.BaseRuntime.Version).To(Equal("v1beta1"))
+		Expect(cfg.BaseRuntime.Resource).To(Equal("baseruntimepools"))
 		Expect(cfg.Runtime.Image).To(Equal("vllm/vllm-openai:v1"))
-		Expect(cfg.Runtime.MultiTenant).To(BeTrue())
+		Expect(cfg.Runtime.ForceDedicated).To(BeTrue())
+		Expect(cfg.Runtime.MaxLoras).To(Equal(12))
+		Expect(cfg.Runtime.MaxLoraRank).To(Equal(32))
 		Expect(cfg.Runtime.RequestTimeout.String()).To(Equal("2.5s"))
 		Expect(cfg.Runtime.LocalOllamaEndpoint).To(Equal("http://ollama.local"))
 		Expect(cfg.Runtime.LocalArtifactCache).To(Equal("/tmp/model-artifacts"))
@@ -119,11 +139,12 @@ var _ = Describe("readModelServingConfig", func() {
 		cfg.LocalStore = GinkgoT().TempDir() + "/served_models.json"
 		Expect(os.Setenv("KUBECONFIG", "/does/not/exist")).To(Succeed())
 
-		store, runtimeAdapter, err := newServingBackend(cfg)
+		store, runtimeAdapter, baseRuntimeStore, err := newServingBackend(cfg)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(store).NotTo(BeNil())
 		Expect(runtimeAdapter).NotTo(BeNil())
+		Expect(baseRuntimeStore).To(BeNil())
 	})
 })
 
@@ -195,13 +216,44 @@ var _ = Describe("model serving health", func() {
 		watcher.Stop()
 		Eventually(done).Should(Receive())
 	})
+
+	It("marks an evicted served model loadable when a cold load is triggered", func() {
+		servedModel := modelServingHealthServedModel("served-model-evicted")
+		servedModel.ServingTarget = "http://vllm.test"
+		servedModel.ServingModel = "ranker-v1"
+		servedModel.ServingProtocol = model.ServingProtocolOpenAIChatCompletions
+		servedModel.Status = &model.ServedModelStatus{
+			ServingLoadStatus: model.ModelLoadStatusNotLoaded,
+			ServingTarget:     "http://runtime.test",
+			ServingModel:      "ranker-v1",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
+			FailureReason:     model.NotLoadedReasonCapacityEvicted,
+		}
+		store := &modelServingHealthStore{
+			namespace: "default",
+			listed:    []*model.ServedModel{servedModel},
+			latest:    map[string]*model.ServedModel{servedModel.ResourceName: servedModel},
+		}
+
+		err := triggerServedModelLoad(context.Background(), store, servedModel.ModelID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(store.updatedResourceName).To(Equal(servedModel.ResourceName))
+		Expect(store.updatedStatus.ServingLoadStatus).To(Equal(model.ModelLoadStatusNotLoaded))
+		Expect(store.updatedStatus.FailureReason).To(BeEmpty())
+		Expect(store.updatedStatus.ServingTarget).To(Equal("http://runtime.test"))
+		Expect(store.updatedStatus.ServingModel).To(Equal("ranker-v1"))
+		Expect(store.updatedStatus.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
+	})
 })
 
 type modelServingHealthStore struct {
-	namespace string
-	listed    []*model.ServedModel
-	latest    map[string]*model.ServedModel
-	watcher   watch.Interface
+	namespace           string
+	listed              []*model.ServedModel
+	latest              map[string]*model.ServedModel
+	watcher             watch.Interface
+	updatedResourceName string
+	updatedStatus       *model.ServedModelStatus
 }
 
 func (s *modelServingHealthStore) Namespace() string {
@@ -223,7 +275,9 @@ func (s *modelServingHealthStore) Watch(context.Context, string) (watch.Interfac
 	return watch.NewEmptyWatch(), nil
 }
 
-func (s *modelServingHealthStore) UpdateStatus(context.Context, string, *model.ServedModelStatus) error {
+func (s *modelServingHealthStore) UpdateStatus(_ context.Context, resourceName string, status *model.ServedModelStatus) error {
+	s.updatedResourceName = resourceName
+	s.updatedStatus = status
 	return nil
 }
 
@@ -233,6 +287,10 @@ func (modelServingFailingReconciler) Reconcile(context.Context, *model.ServedMod
 	return nil, errors.New("forced reconcile failure")
 }
 
+func (modelServingFailingReconciler) Delete(context.Context, *model.ServedModel) error {
+	return nil
+}
+
 type modelServingLoadedReconciler struct{}
 
 func (modelServingLoadedReconciler) Reconcile(_ context.Context, servedModel *model.ServedModel) (*model.ServedModelStatus, error) {
@@ -240,6 +298,10 @@ func (modelServingLoadedReconciler) Reconcile(_ context.Context, servedModel *mo
 		ServingLoadStatus:  model.ModelLoadStatusLoaded,
 		ObservedGeneration: servedModel.Generation,
 	}, nil
+}
+
+func (modelServingLoadedReconciler) Delete(context.Context, *model.ServedModel) error {
+	return nil
 }
 
 func modelServingHealthServedModel(resourceName string) *model.ServedModel {

@@ -105,13 +105,19 @@ func artifactIngestedEventToModel(resourceKey uuid.UUID, payload *ingestionpb.Mo
 	artifactType = strings.ToUpper(strings.ReplaceAll(artifactType, "-", "_"))
 	modelKind := model.ModelKindBase
 	adapterURI := ""
+	adapterRank := int(payload.GetAdapterRank())
 	switch artifactType {
 	case "BASE_MODEL", "GGUF":
+		adapterRank = 0
 	case "LORA_ADAPTER":
+		if adapterRank <= 0 {
+			return nil, uuid.Nil, fmt.Errorf("adapter rank is required")
+		}
 		modelKind = model.ModelKindFineTuned
 		adapterURI = artifactLocation
 	case "MERGED_MODEL":
 		modelKind = model.ModelKindFineTuned
+		adapterRank = 0
 	default:
 		return nil, uuid.Nil, fmt.Errorf("artifact type is invalid")
 	}
@@ -144,6 +150,7 @@ func artifactIngestedEventToModel(resourceKey uuid.UUID, payload *ingestionpb.Mo
 		ArtifactChecksum:  strings.TrimSpace(payload.GetArtifactChecksum()),
 		ArtifactSizeBytes: payload.GetArtifactSizeBytes(),
 		AdapterURI:        adapterURI,
+		AdapterRank:       adapterRank,
 		ServingLoadStatus: model.ModelLoadStatusNotLoaded,
 		MetricsMetadata:   "{}",
 	}

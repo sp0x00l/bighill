@@ -50,6 +50,9 @@ type inferenceUsecase struct {
 	reranker                  Reranker
 	promptBuilder             PromptBuilder
 	generationAdapters        map[string]GenerationAdapter
+	modelServingLoadTrigger   ModelServingLoadTrigger
+	modelServingLoadTimeout   time.Duration
+	modelServingLoadPoll      time.Duration
 	preferenceDatasetWriter   PreferenceDatasetWriter
 	promptStrategy            model.PromptStrategy
 	queryTransformerTimeout   time.Duration
@@ -185,6 +188,16 @@ func WithGenerationAdapters(adapters map[string]GenerationAdapter) InferenceOpti
 
 	return func(u *inferenceUsecase) {
 		u.generationAdapters = adapters
+	}
+}
+
+func WithModelServingLoadTrigger(trigger ModelServingLoadTrigger, timeout time.Duration, pollInterval time.Duration) InferenceOption {
+	log.Trace("WithModelServingLoadTrigger")
+
+	return func(u *inferenceUsecase) {
+		u.modelServingLoadTrigger = trigger
+		u.modelServingLoadTimeout = timeout
+		u.modelServingLoadPoll = pollInterval
 	}
 }
 
@@ -454,8 +467,12 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	if inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
-		err = domain.ErrModelNotReady.Extend("model is not loaded by serving layer")
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		inferenceModel, err = u.ensureServingModelLoaded(ctx, request.OrgID, inferenceModel)
+		if err != nil {
+			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+		}
+		generationProtocol = strings.TrimSpace(inferenceModel.ServingProtocol.String())
+		generationModel = strings.TrimSpace(inferenceModel.ServingModel)
 	}
 	if generationProtocol == "" {
 		err = domain.ErrModelNotReady.Extend("serving protocol is required")
@@ -612,6 +629,47 @@ func (u *inferenceUsecase) generateDatasetIDs(request model.GenerateRequest, end
 		return datasetIDs, nil
 	}
 	return []uuid.UUID{request.DatasetID}, nil
+}
+
+func (u *inferenceUsecase) ensureServingModelLoaded(ctx context.Context, orgID uuid.UUID, inferenceModel *model.InferenceModel) (*model.InferenceModel, error) {
+	log.Trace("InferenceUsecase ensureServingModelLoaded")
+
+	if inferenceModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
+		return inferenceModel, nil
+	}
+	if inferenceModel.ServingLoadStatus != model.ModelLoadStatusNotLoaded || u.modelServingLoadTrigger == nil {
+		return inferenceModel, domain.ErrModelNotReady.Extend("model is not loaded by serving layer")
+	}
+	if err := u.modelServingLoadTrigger.TriggerModelLoad(ctx, orgID, inferenceModel.ModelID); err != nil {
+		return inferenceModel, domain.ErrModelNotReady.Extend(fmt.Sprintf("model serving load trigger failed: %s", err.Error()))
+	}
+	if u.modelServingLoadTimeout <= 0 || u.modelServingLoadPoll <= 0 {
+		return inferenceModel, domain.ErrModelNotReady.Extend("model serving load timing is not configured")
+	}
+	deadline := time.NewTimer(u.modelServingLoadTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(u.modelServingLoadPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return inferenceModel, ctx.Err()
+		case <-deadline.C:
+			return inferenceModel, domain.ErrModelNotReady.Extend("model serving load timed out")
+		case <-ticker.C:
+			latest, err := u.modelRepository.ReadByID(ctx, orgID, inferenceModel.ModelID)
+			if err != nil {
+				return inferenceModel, err
+			}
+			inferenceModel = latest
+			switch inferenceModel.ServingLoadStatus {
+			case model.ModelLoadStatusLoaded:
+				return inferenceModel, nil
+			case model.ModelLoadStatusFailed:
+				return inferenceModel, domain.ErrModelNotReady.Extend("model serving load failed")
+			}
+		}
+	}
 }
 
 func (u *inferenceUsecase) readGenerateDatasets(ctx context.Context, orgID uuid.UUID, datasetIDs []uuid.UUID) ([]*model.InferenceDataset, error) {

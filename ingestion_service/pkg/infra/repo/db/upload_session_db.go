@@ -47,14 +47,14 @@ func (db *UploadSessionDB) CreateUploadSession(ctx context.Context, tx pgx.Tx, s
 		upload_id, resource_type, resource_id, dataset_id, user_id, org_id, client_nonce, file_name, staging_key, final_key,
 		declared_format, declared_content_type, declared_size_bytes, status,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile,
-		artifact_type, model_name, model_version, base_model,
+		artifact_type, model_name, model_version, base_model, adapter_rank,
 		source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
 		created_at, expires_at
 	) VALUES (
 		COALESCE(@upload_id, uuid_generate_v4()), @resource_type::upload_resource_type_enum, COALESCE(@resource_id, uuid_generate_v4()), @dataset_id, @user_id, @org_id, @client_nonce, @file_name, @staging_key, @final_key,
 		@declared_format, @declared_content_type, @declared_size_bytes, @status::upload_session_status_enum,
 		@table_namespace, @table_name, NULLIF(@table_format, '')::table_format_enum, NULLIF(@catalog_provider, '')::catalog_provider_enum, NULLIF(@processing_profile, '')::processing_profile_enum,
-		@artifact_type, @model_name, @model_version, @base_model,
+		@artifact_type, @model_name, @model_version, @base_model, @adapter_rank,
 		@source::model_source_enum, @source_uri, @manifest_location, @hf_repo_id, @hf_revision, @hf_commit_sha,
 		@created_at, @expires_at
 	)
@@ -103,6 +103,7 @@ func (db *UploadSessionDB) PromoteUploadSession(ctx context.Context, tx pgx.Tx, 
 		storage_location = @storage_location,
 		actual_size_bytes = @actual_size_bytes,
 		checksum = @checksum,
+		adapter_rank = @adapter_rank,
 		status = 'PROMOTED'::upload_session_status_enum,
 		updated_at = now()
 		WHERE upload_id = @upload_id AND org_id = @org_id AND status = 'PENDING'
@@ -161,11 +162,11 @@ func (db *UploadSessionDB) RecordUploadedFile(ctx context.Context, tx pgx.Tx, up
 	query := `INSERT INTO ` + db.Name + `.upload_sessions (
 		upload_id, resource_type, resource_id, dataset_id, user_id, org_id, file_name, storage_location, declared_format,
 		declared_content_type, status, table_namespace, table_name, table_format,
-		catalog_provider, processing_profile, artifact_type, model_name, model_version, base_model, created_at, expires_at
+		catalog_provider, processing_profile, artifact_type, model_name, model_version, base_model, adapter_rank, created_at, expires_at
 	) VALUES (
 		COALESCE(@upload_id, uuid_generate_v4()), @resource_type::upload_resource_type_enum, @resource_id, @dataset_id, @user_id, @org_id, @file_name, @storage_location, @declared_format,
 		@declared_content_type, 'PROMOTED'::upload_session_status_enum, @table_namespace, @table_name, @table_format::table_format_enum,
-		@catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @artifact_type, @model_name, @model_version, @base_model, now(), now()
+		@catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @artifact_type, @model_name, @model_version, @base_model, @adapter_rank, now(), now()
 	)
 	ON CONFLICT (upload_id) DO UPDATE SET upload_id = EXCLUDED.upload_id
 	RETURNING ` + uploadSessionColumns()
@@ -195,13 +196,13 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, tx pgx.Tx, s
 		upload_id, resource_type, resource_id, dataset_id, user_id, org_id, client_nonce, file_name, storage_location,
 		declared_format, declared_content_type, declared_size_bytes, actual_size_bytes, checksum, status,
 		table_namespace, table_name, table_format, catalog_provider, processing_profile,
-		artifact_type, model_name, model_version, base_model,
+		artifact_type, model_name, model_version, base_model, adapter_rank,
 		source, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha, created_at, expires_at
 	) VALUES (
 		COALESCE(@upload_id, uuid_generate_v4()), @resource_type::upload_resource_type_enum, COALESCE(@resource_id, uuid_generate_v4()), @dataset_id, @user_id, @org_id, @client_nonce, @file_name, @storage_location,
 		@declared_format, @declared_content_type, @declared_size_bytes, @actual_size_bytes, @checksum, 'PROMOTED'::upload_session_status_enum,
 		@table_namespace, @table_name, NULLIF(@table_format, '')::table_format_enum, NULLIF(@catalog_provider, '')::catalog_provider_enum, NULLIF(@processing_profile, '')::processing_profile_enum,
-		@artifact_type, @model_name, @model_version, @base_model,
+		@artifact_type, @model_name, @model_version, @base_model, @adapter_rank,
 		@source::model_source_enum, @source_uri, @manifest_location, @hf_repo_id, @hf_revision, @hf_commit_sha, @created_at, @expires_at
 	)
 	ON CONFLICT (upload_id) DO UPDATE SET
@@ -228,6 +229,7 @@ func (db *UploadSessionDB) RecordModelArtifact(ctx context.Context, tx pgx.Tx, s
 		model_name = EXCLUDED.model_name,
 		model_version = EXCLUDED.model_version,
 		base_model = EXCLUDED.base_model,
+		adapter_rank = EXCLUDED.adapter_rank,
 		source = EXCLUDED.source,
 		source_uri = EXCLUDED.source_uri,
 		manifest_location = EXCLUDED.manifest_location,
@@ -317,6 +319,7 @@ func uploadSessionDAO(session *model.UploadSession) pgx.NamedArgs {
 		"model_name":            session.ModelName,
 		"model_version":         session.ModelVersion,
 		"base_model":            session.BaseModel,
+		"adapter_rank":          session.AdapterRank,
 		"source":                session.Source,
 		"source_uri":            session.SourceURI,
 		"manifest_location":     session.ManifestLocation,
@@ -344,7 +347,7 @@ func uploadSessionColumns() string {
 		declared_size_bytes, actual_size_bytes, checksum, status::text, table_namespace, table_name,
 		COALESCE(table_format::text, ''), COALESCE(catalog_provider::text, ''), COALESCE(processing_profile::text, ''),
 		artifact_type, model_name, model_version,
-			base_model, source::text, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
+			base_model, adapter_rank, source::text, source_uri, manifest_location, hf_repo_id, hf_revision, hf_commit_sha,
 		created_at, expires_at`
 }
 
@@ -380,6 +383,7 @@ func scanUploadSession(row pgx.Row) (*model.UploadSession, error) {
 		&session.ModelName,
 		&session.ModelVersion,
 		&session.BaseModel,
+		&session.AdapterRank,
 		&session.Source,
 		&session.SourceURI,
 		&session.ManifestLocation,
