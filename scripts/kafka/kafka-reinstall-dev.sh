@@ -19,7 +19,7 @@ install_kafka()
         # this creates the etc/kafka/server.properties
         # and var/lib/kraft-combined-logs
         mv $(brew --prefix)/etc/kafka/kraft/server.properties $(brew --prefix)/etc/kafka/server.properties
-        kafka-storage format -t $(kafka-storage random-uuid) -c $(brew --prefix)/etc/kafka/server.properties
+        kafka-storage format --standalone -t $(kafka-storage random-uuid) -c $(brew --prefix)/etc/kafka/server.properties --ignore-formatted
     fi
 }
 

@@ -227,7 +227,7 @@ install_kafka()
     fi
 
     if [ -f "$SERVER_CONFIG" ]; then
-        kafka-storage format -t "$(kafka-storage random-uuid)" -c "$SERVER_CONFIG" --ignore-formatted
+        kafka-storage format --standalone -t "$(kafka-storage random-uuid)" -c "$SERVER_CONFIG" --ignore-formatted
     fi
 }
 

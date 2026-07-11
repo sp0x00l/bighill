@@ -179,7 +179,7 @@ docker-build-intel:
 	@scripts/docker-build.sh $(ENV) amd64 full $(EXCLUDE)
 
 docker-clean:
-	@scripts/docker-clean.sh
+	@scripts/docker/docker-clean.sh
 
 docker-start:
 	@api_gateway/scripts/local-template.sh
