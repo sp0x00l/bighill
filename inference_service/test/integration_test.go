@@ -63,6 +63,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 
 		models = repo.NewInferenceModelRepository(database)
 		datasets = repo.NewInferenceDatasetRepository(database)
+		endpoints := repo.NewPublishedEndpointRepository(database)
 		requests := repo.NewInferenceRequestRepository(database)
 		feedbacks := repo.NewInferenceFeedbackRepository(database)
 		promptStrategy := model.PromptStrategy{
@@ -74,9 +75,10 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		modelsUse = app.NewInferenceUsecase(
 			models,
 			app.WithInferenceDatasetRepository(datasets),
+			app.WithPublishedEndpointRepository(endpoints),
 			app.WithInferenceRequestRepository(requests),
 			app.WithInferenceFeedbackRepository(feedbacks),
-			app.WithInferenceUnitOfWork(shareduow.New(database.Pool), inferencemessaging.NewPreferenceDatasetEventBuilder("inference")),
+			app.WithInferenceUnitOfWork(shareduow.New(database.Pool)),
 			app.WithRetrievalClient(&integrationRetrievalClient{}),
 			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
 				model.ServingProtocolOpenAIChatCompletions.String(): integrationGenerationAdapter{},
@@ -521,7 +523,19 @@ func (r *rerankIntegrationReranker) Rerank(_ context.Context, _ string, candidat
 }
 
 func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"preference_dataset_snapshots", "preference_examples", "inference_feedback", "inference_requests", "inference_models", "inference_datasets", "tenants"} {
+	for _, table := range []string{
+		"lineage_eval_examples",
+		"lineage_eval_sets",
+		"preference_dataset_snapshots",
+		"preference_examples",
+		"inference_feedback",
+		"inference_requests",
+		"published_endpoint_datasets",
+		"published_inference_endpoints",
+		"inference_models",
+		"inference_datasets",
+		"tenants",
+	} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}

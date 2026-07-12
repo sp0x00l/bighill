@@ -18,6 +18,7 @@ import (
 
 const (
 	pathTrainingRuns      = "/v1/training-runs"
+	pathDPOTrainingRuns   = "/v1/training-runs/dpo"
 	pathTrainingRunStatus = "/v1/training-runs/{trainingRunId}"
 )
 
@@ -41,6 +42,12 @@ func (h *TrainingHandlers) GetRoutes() []Route {
 			Handler:  h.StartTrainingRun,
 			Method:   http.MethodPost,
 			SpanName: "start-training-run",
+		},
+		{
+			Path:     pathDPOTrainingRuns,
+			Handler:  h.StartDPOTrainingRun,
+			Method:   http.MethodPost,
+			SpanName: "start-dpo-training-run",
 		},
 		{
 			Path:     pathTrainingRunStatus,
@@ -85,6 +92,48 @@ func (h *TrainingHandlers) StartTrainingRun(ctx context.Context, req *http.Reque
 			return nil, ErrBadGateway().Wrap(err).WithMessage(err.Error())
 		}
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to start training run")
+	}
+	payload, err := h.adapter.ToStartTrainingRunDTO(ctx, result)
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode training run response")
+	}
+	return NewResponseWithPayload(http.StatusAccepted, payload), nil
+}
+
+func (h *TrainingHandlers) StartDPOTrainingRun(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("TrainingHandlers StartDPOTrainingRun")
+
+	userID, err := transport.ReadUserIDHeader(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User ID is required")
+	}
+	orgID, err := transport.ReadOrgIDHeader(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Org ID is required")
+	}
+	idempotencyKey, err := transport.ReadIdempotencyIDHeader(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("X-Request-ID is required")
+	}
+	body, err := transport.ReadReqBody(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
+	}
+	command, err := h.adapter.FromDPOTrainingRunDTO(ctx, body)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid DPO training run request")
+	}
+	command.IdempotencyKey = idempotencyKey
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
+	result, err := h.usecase.StartDPOTrainingRun(ctx, command)
+	if err != nil {
+		if errors.Is(err, domain.ErrValidationFailed) {
+			return nil, ErrBadRequest().Wrap(err).WithMessage(err.Error())
+		}
+		if errors.Is(err, domain.ErrDependencyFailed) {
+			return nil, ErrBadGateway().Wrap(err).WithMessage(err.Error())
+		}
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to start DPO training run")
 	}
 	payload, err := h.adapter.ToStartTrainingRunDTO(ctx, result)
 	if err != nil {

@@ -40,3 +40,7 @@ type DatasetResolver interface {
 type ModelResolver interface {
 	ResolveTrainableModel(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, modelID uuid.UUID) (model.SourceModelRef, error)
 }
+
+type PreferenceDatasetResolver interface {
+	ResolvePreferenceDataset(ctx context.Context, userID uuid.UUID, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (model.PreferenceDatasetRef, error)
+}

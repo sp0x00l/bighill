@@ -8,6 +8,3 @@ const (
 	ModelKindFineTuned = sharedDomain.ModelKindFineTuned
 	ModelKindBase      = sharedDomain.ModelKindBase
 )
-
-var ToModelKind = sharedDomain.ToModelKind
-var IsKnownModelKind = sharedDomain.IsKnownModelKind

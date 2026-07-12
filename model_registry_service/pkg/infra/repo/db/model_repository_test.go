@@ -217,6 +217,7 @@ type modelRow struct {
 	SourceURI          string
 	SourceMetadata     string
 	Name               string
+	LineageName        string
 	ModelVersion       int
 	BaseModel          string
 	ArtifactLocation   string
@@ -249,25 +250,26 @@ func (r modelRow) Scan(dest ...any) error {
 	*(dest[7].(*string)) = r.SourceURI
 	*(dest[8].(*string)) = r.SourceMetadata
 	*(dest[9].(*string)) = r.Name
-	*(dest[10].(*int)) = r.ModelVersion
-	*(dest[11].(*string)) = r.BaseModel
-	*(dest[12].(*string)) = r.ArtifactLocation
-	*(dest[13].(*string)) = r.ArtifactFormat
-	*(dest[14].(*string)) = r.ArtifactChecksum
-	*(dest[15].(*int64)) = r.ArtifactSizeBytes
-	*(dest[16].(*string)) = r.AdapterURI
-	*(dest[17].(*int)) = r.AdapterRank
-	*(dest[18].(*string)) = r.ServingTarget
-	*(dest[19].(*string)) = r.ServingModel
-	*(dest[20].(*string)) = r.ServingProtocol
-	*(dest[21].(*string)) = r.ServingLoadStatus
-	*(dest[22].(*string)) = r.MetricsMetadata
-	*(dest[23].(*string)) = r.PromotionReportURI
-	*(dest[24].(*string)) = r.PromotionDeltas
-	*(dest[25].(*string)) = r.PromotionDecision
-	*(dest[26].(*string)) = r.PromotionReason
-	*(dest[27].(*string)) = r.Status
-	*(dest[28].(*string)) = r.FailureReason
+	*(dest[10].(*string)) = r.LineageName
+	*(dest[11].(*int)) = r.ModelVersion
+	*(dest[12].(*string)) = r.BaseModel
+	*(dest[13].(*string)) = r.ArtifactLocation
+	*(dest[14].(*string)) = r.ArtifactFormat
+	*(dest[15].(*string)) = r.ArtifactChecksum
+	*(dest[16].(*int64)) = r.ArtifactSizeBytes
+	*(dest[17].(*string)) = r.AdapterURI
+	*(dest[18].(*int)) = r.AdapterRank
+	*(dest[19].(*string)) = r.ServingTarget
+	*(dest[20].(*string)) = r.ServingModel
+	*(dest[21].(*string)) = r.ServingProtocol
+	*(dest[22].(*string)) = r.ServingLoadStatus
+	*(dest[23].(*string)) = r.MetricsMetadata
+	*(dest[24].(*string)) = r.PromotionReportURI
+	*(dest[25].(*string)) = r.PromotionDeltas
+	*(dest[26].(*string)) = r.PromotionDecision
+	*(dest[27].(*string)) = r.PromotionReason
+	*(dest[28].(*string)) = r.Status
+	*(dest[29].(*string)) = r.FailureReason
 	return nil
 }
 
@@ -308,6 +310,7 @@ var _ = Describe("ModelRepository", func() {
 			Source:            model.ModelSourceTraining,
 			SourceMetadata:    "{}",
 			Name:              "movie-ranker",
+			LineageName:       "movie-ranker",
 			ModelVersion:      7,
 			BaseModel:         "mistral-7b",
 			ArtifactLocation:  "s3://local-dev-bucket/models/run",
@@ -617,6 +620,7 @@ func newModelRow(modelRecord *model.Model) modelRow {
 		SourceURI:          modelRecord.SourceURI,
 		SourceMetadata:     modelRecord.SourceMetadata,
 		Name:               modelRecord.Name,
+		LineageName:        modelRecord.LineageName,
 		ModelVersion:       modelRecord.ModelVersion,
 		BaseModel:          modelRecord.BaseModel,
 		ArtifactLocation:   modelRecord.ArtifactLocation,

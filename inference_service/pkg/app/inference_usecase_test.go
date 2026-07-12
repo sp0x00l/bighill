@@ -11,8 +11,6 @@ import (
 	"inference_service/pkg/app"
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
-	inferencemessaging "inference_service/pkg/infra/network/messaging"
-	inferencepb "lib/data_contracts_lib/inference"
 	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 	shareduow "lib/shared_lib/uow"
@@ -21,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestApp(t *testing.T) {
@@ -258,10 +255,10 @@ func (s *publishedEndpointRepositoryStub) ReadEndpoint(_ context.Context, orgID 
 type inferenceFeedbackRepositoryStub struct {
 	feedback          *model.InferenceFeedback
 	idempotencyKey    uuid.UUID
-	preferenceRequest model.PreferenceDatasetExportRequest
+	preferenceRequest model.PreferenceDatasetBuildRequest
 	preferenceDataset *model.PreferenceDataset
 	recordedSnapshot  *model.PreferenceDataset
-	snapshotRequest   model.PreferenceDatasetExportRequest
+	snapshotRequest   model.PreferenceDatasetBuildRequest
 	err               error
 }
 
@@ -271,27 +268,72 @@ func (s *inferenceFeedbackRepositoryStub) RecordFeedback(_ context.Context, _ pg
 	return feedback, s.err
 }
 
-func (s *inferenceFeedbackRepositoryStub) ReadPreferenceDataset(_ context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+func (s *inferenceFeedbackRepositoryStub) ReadPreferenceDataset(_ context.Context, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
 	s.preferenceRequest = request
 	if s.preferenceDataset != nil {
 		return s.preferenceDataset, s.err
 	}
-	return &model.PreferenceDataset{RequestID: request.RequestID, UserID: request.UserID, DatasetID: request.DatasetID, ModelID: request.ModelID}, s.err
+	return &model.PreferenceDataset{UserID: request.UserID, DatasetID: request.DatasetID, ModelID: request.ModelID}, s.err
 }
 
-func (s *inferenceFeedbackRepositoryStub) RecordPreferenceDatasetSnapshot(_ context.Context, _ pgx.Tx, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+func (s *inferenceFeedbackRepositoryStub) RecordPreferenceDatasetSnapshot(_ context.Context, _ pgx.Tx, dataset *model.PreferenceDataset, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
 	s.recordedSnapshot = dataset
 	s.snapshotRequest = request
 	return dataset, s.err
 }
 
+func (s *inferenceFeedbackRepositoryStub) ReadPreferenceDatasetSnapshot(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*model.PreferenceDataset, error) {
+	if s.preferenceDataset != nil {
+		return s.preferenceDataset, s.err
+	}
+	return nil, s.err
+}
+
+func (s *inferenceFeedbackRepositoryStub) ListPreferenceDatasetSnapshots(_ context.Context, _ uuid.UUID, _ model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error) {
+	if s.preferenceDataset != nil {
+		return []*model.PreferenceDataset{s.preferenceDataset}, s.err
+	}
+	return nil, s.err
+}
+
+type lineageEvalSetRepositoryStub struct {
+	activeEvalSet *model.LineageEvalSet
+	readOrgID     uuid.UUID
+	readLineage   string
+	frozenSet     *model.LineageEvalSet
+	frozenIDs     []uuid.UUID
+	curatedSet    *model.LineageEvalSet
+	curatedIDs    []uuid.UUID
+	err           error
+}
+
+func (s *lineageEvalSetRepositoryStub) ReadActiveEvalSet(_ context.Context, orgID uuid.UUID, lineageName string) (*model.LineageEvalSet, error) {
+	s.readOrgID = orgID
+	s.readLineage = lineageName
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.activeEvalSet == nil {
+		return nil, domain.ErrEvalSetNotFound
+	}
+	return s.activeEvalSet, nil
+}
+
+func (s *lineageEvalSetRepositoryStub) FreezeEvalSet(_ context.Context, _ pgx.Tx, evalSet *model.LineageEvalSet, exampleIDs []uuid.UUID) (*model.LineageEvalSet, error) {
+	s.frozenSet = evalSet
+	s.frozenIDs = append([]uuid.UUID(nil), exampleIDs...)
+	return evalSet, s.err
+}
+
+func (s *lineageEvalSetRepositoryStub) RegisterCuratedEvalSet(_ context.Context, _ pgx.Tx, evalSet *model.LineageEvalSet, exampleIDs []uuid.UUID) (*model.LineageEvalSet, error) {
+	s.curatedSet = evalSet
+	s.curatedIDs = append([]uuid.UUID(nil), exampleIDs...)
+	return evalSet, s.err
+}
+
 type inferenceUnitOfWorkStub struct {
 	messages []msgConn.OutboundMessage
 	err      error
-}
-
-func preferenceEventBuilder() app.PreferenceDatasetEventBuilder {
-	return inferencemessaging.NewPreferenceDatasetEventBuilder("inference")
 }
 
 func (s *inferenceUnitOfWorkStub) Do(ctx context.Context, fn shareduow.TxFunc) error {
@@ -405,7 +447,7 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
-			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
 		)
 		idempotencyKey := uuid.New()
 		feedback := &model.InferenceFeedback{
@@ -437,7 +479,7 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
-			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 
@@ -451,16 +493,15 @@ var _ = Describe("InferenceUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Consistently(func() *model.PreferenceDataset { return writer.dataset }).Should(BeNil())
-		Expect(feedbackRepository.preferenceRequest.RequestID).To(Equal(uuid.Nil))
+		Expect(feedbackRepository.preferenceRequest).To(Equal(model.PreferenceDatasetBuildRequest{}))
 	})
 
-	It("exports a preference dataset when explicitly requested with enough complete pairs", func() {
+	It("builds a preference dataset when explicitly requested with enough complete pairs", func() {
 		requestID := uuid.New()
 		userID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
-			RequestID:              requestID,
 			UserID:                 userID,
 			DatasetID:              datasetID,
 			ModelID:                modelID,
@@ -469,6 +510,8 @@ var _ = Describe("InferenceUsecase", func() {
 			ParentArtifactChecksum: "sha256:parent",
 			ParentAdapterURI:       "s3://models/parent",
 			ParentBaseModel:        "mistral-7b",
+			ParentModelName:        "dpo-" + modelID.String(),
+			ParentLineageName:      "fraud-rag-ranker",
 			ParentModelVersion:     7,
 			Examples: []model.PreferenceExample{{
 				PreferenceExampleID: uuid.New(),
@@ -485,11 +528,10 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
-			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
 			app.WithPreferenceDatasetWriter(writer),
 		)
-		dataset, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
-			RequestID:   requestID,
+		dataset, err := uc.BuildPreferenceDataset(context.Background(), model.PreferenceDatasetBuildRequest{
 			UserID:      userID,
 			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
 			MinExamples: 1,
@@ -498,7 +540,6 @@ var _ = Describe("InferenceUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dataset.Exported).To(BeTrue())
-		Expect(feedbackRepository.preferenceRequest.RequestID).To(Equal(requestID))
 		Expect(feedbackRepository.preferenceRequest.UserID).To(Equal(userID))
 		Expect(feedbackRepository.preferenceRequest.MinExamples).To(Equal(1))
 		Expect(feedbackRepository.preferenceRequest.Limit).To(Equal(100))
@@ -508,13 +549,12 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(writer.dataset.Exported).To(BeTrue())
 	})
 
-	It("records a preference dataset snapshot after export succeeds", func() {
+	It("records a preference dataset snapshot after write succeeds", func() {
 		requestID := uuid.New()
 		userID := uuid.New()
 		datasetID := uuid.New()
 		modelID := uuid.New()
 		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
-			RequestID:              requestID,
 			UserID:                 userID,
 			DatasetID:              datasetID,
 			ModelID:                modelID,
@@ -523,6 +563,8 @@ var _ = Describe("InferenceUsecase", func() {
 			ParentArtifactChecksum: "sha256:parent",
 			ParentAdapterURI:       "s3://models/parent",
 			ParentBaseModel:        "mistral-7b",
+			ParentModelName:        "dpo-" + modelID.String(),
+			ParentLineageName:      "fraud-rag-ranker",
 			ParentModelVersion:     7,
 			Examples: []model.PreferenceExample{{
 				PreferenceExampleID: uuid.New(),
@@ -540,14 +582,13 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
-			app.WithInferenceUnitOfWork(unitOfWork, preferenceEventBuilder()),
+			app.WithInferenceUnitOfWork(unitOfWork),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 
-		_, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
-			RequestID:   requestID,
+		_, err := uc.BuildPreferenceDataset(context.Background(), model.PreferenceDatasetBuildRequest{
 			UserID:      userID,
-			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/{request_id}.jsonl",
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl",
 			MinExamples: 1,
 			Limit:       100,
 		})
@@ -556,7 +597,7 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(feedbackRepository.recordedSnapshot).NotTo(BeNil())
 		Expect(feedbackRepository.recordedSnapshot.PreferenceDatasetID).NotTo(Equal(uuid.Nil))
 		Expect(feedbackRepository.recordedSnapshot.UserID).To(Equal(userID))
-		Expect(feedbackRepository.recordedSnapshot.OutputURI).To(ContainSubstring("s3://local-dev-bucket/preferences/" + datasetID.String() + "/" + requestID.String() + "-"))
+		Expect(feedbackRepository.recordedSnapshot.OutputURI).To(ContainSubstring("s3://local-dev-bucket/preferences/" + datasetID.String() + "/" + feedbackRepository.recordedSnapshot.PreferenceDatasetID.String()))
 		Expect(feedbackRepository.recordedSnapshot.OutputURI).To(HaveSuffix(".jsonl"))
 		Expect(feedbackRepository.recordedSnapshot.EvaluationOutputURI).To(ContainSubstring("-eval.jsonl"))
 		Expect(feedbackRepository.recordedSnapshot.Format).To(Equal("DPO_JSONL"))
@@ -564,24 +605,287 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(feedbackRepository.snapshotRequest.MinExamples).To(Equal(1))
 		Expect(feedbackRepository.snapshotRequest.UserID).To(Equal(userID))
 		Expect(feedbackRepository.snapshotRequest.Limit).To(Equal(100))
-		Expect(unitOfWork.messages).To(HaveLen(1))
-		Expect(unitOfWork.messages[0].Message.MsgType).To(Equal(msgConn.MsgTypePreferenceDatasetReady))
-		var event inferencepb.PreferenceDatasetReadyEvent
-		Expect(proto.Unmarshal(unitOfWork.messages[0].Message.Payload, &event)).To(Succeed())
-		Expect(event.PreferenceDatasetId).To(Equal(feedbackRepository.recordedSnapshot.PreferenceDatasetID.String()))
-		Expect(event.UserId).To(Equal(userID.String()))
-		Expect(event.OutputUri).To(Equal(feedbackRepository.recordedSnapshot.OutputURI))
-		Expect(event.ParentModelKind).To(Equal("FINE_TUNED"))
-		Expect(event.ParentArtifactUri).To(Equal("s3://models/parent-artifact"))
-		Expect(event.ParentArtifactChecksum).To(Equal("sha256:parent"))
-		Expect(event.ParentAdapterUri).To(Equal("s3://models/parent"))
+		Expect(unitOfWork.messages).To(BeEmpty())
+	})
+
+	It("freezes the gen-0 eval split in the preference dataset snapshot transaction", func() {
+		requestID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		evalExampleID := uuid.New()
+		trainExampleID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID:              requestID,
+			UserID:                 userID,
+			OrgID:                  orgID,
+			DatasetID:              datasetID,
+			ModelID:                modelID,
+			ParentModelKind:        model.ModelKindFineTuned,
+			ParentArtifactURI:      "s3://models/parent-artifact",
+			ParentArtifactChecksum: "sha256:parent",
+			ParentAdapterURI:       "s3://models/parent",
+			ParentBaseModel:        "mistral-7b",
+			ParentModelName:        "dpo-" + modelID.String(),
+			ParentLineageName:      "fraud-rag-ranker",
+			ParentModelVersion:     7,
+			Examples: []model.PreferenceExample{{
+				PreferenceExampleID: evalExampleID,
+				RequestID:           requestID,
+				UserID:              userID,
+				OrgID:               orgID,
+				DatasetID:           datasetID,
+				ModelID:             modelID,
+				Split:               "EVAL",
+				PromptText:          "eval prompt",
+				AcceptedAnswer:      "chosen",
+				RejectedAnswer:      "rejected",
+			}, {
+				PreferenceExampleID: trainExampleID,
+				RequestID:           requestID,
+				UserID:              userID,
+				OrgID:               orgID,
+				DatasetID:           datasetID,
+				ModelID:             modelID,
+				Split:               "TRAIN",
+				PromptText:          "train prompt",
+				AcceptedAnswer:      "chosen",
+				RejectedAnswer:      "rejected",
+			}},
+		}}
+		lineageRepository := &lineageEvalSetRepositoryStub{}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithLineageEvalSetRepository(lineageRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
+			app.WithPreferenceDatasetWriter(writer),
+		)
+
+		dataset, err := uc.BuildPreferenceDataset(context.Background(), model.PreferenceDatasetBuildRequest{
+			UserID:      userID,
+			OrgID:       orgID,
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.Exported).To(BeTrue())
+		Expect(lineageRepository.readOrgID).To(Equal(orgID))
+		Expect(lineageRepository.readLineage).To(Equal("fraud-rag-ranker"))
+		Expect(lineageRepository.frozenSet).NotTo(BeNil())
+		Expect(lineageRepository.frozenSet.OrgID).To(Equal(orgID))
+		Expect(lineageRepository.frozenSet.LineageName).To(Equal("fraud-rag-ranker"))
+		Expect(lineageRepository.frozenSet.EvalDatasetURI).To(Equal(feedbackRepository.recordedSnapshot.EvaluationOutputURI))
+		Expect(lineageRepository.frozenSet.Source).To(Equal(model.LineageEvalSetSourceFrozenGen0))
+		Expect(lineageRepository.frozenSet.ExampleCount).To(Equal(1))
+		Expect(lineageRepository.frozenSet.Checksum).To(HavePrefix("sha256:"))
+		Expect(lineageRepository.frozenIDs).To(Equal([]uuid.UUID{evalExampleID}))
+	})
+
+	It("does not freeze a gen-0 eval set when the split has no eval examples", func() {
+		requestID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID:              requestID,
+			UserID:                 userID,
+			OrgID:                  orgID,
+			DatasetID:              datasetID,
+			ModelID:                modelID,
+			ParentModelKind:        model.ModelKindFineTuned,
+			ParentArtifactURI:      "s3://models/parent-artifact",
+			ParentArtifactChecksum: "sha256:parent",
+			ParentAdapterURI:       "s3://models/parent",
+			ParentBaseModel:        "mistral-7b",
+			ParentModelName:        "dpo-" + modelID.String(),
+			ParentLineageName:      "fraud-rag-ranker",
+			ParentModelVersion:     7,
+			Examples: []model.PreferenceExample{{
+				PreferenceExampleID: uuid.New(),
+				RequestID:           requestID,
+				UserID:              userID,
+				OrgID:               orgID,
+				DatasetID:           datasetID,
+				ModelID:             modelID,
+				Split:               "TRAIN",
+				PromptText:          "train prompt",
+				AcceptedAnswer:      "chosen",
+				RejectedAnswer:      "rejected",
+			}},
+		}}
+		lineageRepository := &lineageEvalSetRepositoryStub{}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithLineageEvalSetRepository(lineageRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
+			app.WithPreferenceDatasetWriter(writer),
+		)
+
+		dataset, err := uc.BuildPreferenceDataset(context.Background(), model.PreferenceDatasetBuildRequest{
+			UserID:      userID,
+			OrgID:       orgID,
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.Exported).To(BeTrue())
+		Expect(lineageRepository.readLineage).To(Equal("fraud-rag-ranker"))
+		Expect(lineageRepository.frozenSet).To(BeNil())
+		Expect(feedbackRepository.recordedSnapshot).NotTo(BeNil())
+		Expect(feedbackRepository.recordedSnapshot.EvaluationOutputURI).To(HaveSuffix("-eval.jsonl"))
+	})
+
+	It("reuses an active frozen eval set and routes new examples to train", func() {
+		requestID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID:              requestID,
+			UserID:                 userID,
+			OrgID:                  orgID,
+			DatasetID:              datasetID,
+			ModelID:                modelID,
+			ParentModelKind:        model.ModelKindFineTuned,
+			ParentArtifactURI:      "s3://models/parent-artifact",
+			ParentArtifactChecksum: "sha256:parent",
+			ParentAdapterURI:       "s3://models/parent",
+			ParentBaseModel:        "mistral-7b",
+			ParentModelName:        "dpo-" + modelID.String(),
+			ParentLineageName:      "fraud-rag-ranker",
+			ParentModelVersion:     7,
+			Examples: []model.PreferenceExample{{
+				PreferenceExampleID: uuid.New(),
+				RequestID:           requestID,
+				UserID:              userID,
+				OrgID:               orgID,
+				DatasetID:           datasetID,
+				ModelID:             modelID,
+				Split:               "EVAL",
+				PromptText:          "new prompt",
+				AcceptedAnswer:      "chosen",
+				RejectedAnswer:      "rejected",
+			}},
+		}}
+		lineageRepository := &lineageEvalSetRepositoryStub{activeEvalSet: &model.LineageEvalSet{
+			OrgID:          orgID,
+			LineageName:    "fraud-rag-ranker",
+			Version:        1,
+			EvalDatasetURI: "s3://local-dev-bucket/preferences/frozen-eval.jsonl",
+			Source:         model.LineageEvalSetSourceFrozenGen0,
+			Active:         true,
+		}}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithLineageEvalSetRepository(lineageRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
+			app.WithPreferenceDatasetWriter(writer),
+		)
+
+		dataset, err := uc.BuildPreferenceDataset(context.Background(), model.PreferenceDatasetBuildRequest{
+			UserID:      userID,
+			OrgID:       orgID,
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.PreferenceDatasetID).NotTo(Equal(uuid.Nil))
+		Expect(dataset.IntegrityKey).To(MatchRegexp(`^sha256:[0-9a-f]{64}$`))
+		Expect(dataset.IntegrityKey).NotTo(Equal(dataset.PreferenceDatasetID.String()))
+		Expect(dataset.OutputURI).To(ContainSubstring(dataset.PreferenceDatasetID.String()))
+		Expect(dataset.EvaluationOutputURI).To(Equal("s3://local-dev-bucket/preferences/frozen-eval.jsonl"))
+		Expect(writer.dataset).NotTo(BeNil())
+		Expect(writer.dataset.EvaluationExampleCount()).To(Equal(0))
+		Expect(writer.dataset.TrainingExampleCount()).To(Equal(1))
+		Expect(lineageRepository.frozenSet).To(BeNil())
+		Expect(feedbackRepository.recordedSnapshot.PreferenceDatasetID).To(Equal(dataset.PreferenceDatasetID))
+		Expect(feedbackRepository.recordedSnapshot.IntegrityKey).To(Equal(dataset.IntegrityKey))
+		Expect(feedbackRepository.recordedSnapshot.OutputURI).To(ContainSubstring(dataset.PreferenceDatasetID.String()))
+		Expect(feedbackRepository.recordedSnapshot.EvaluationOutputURI).To(Equal("s3://local-dev-bucket/preferences/frozen-eval.jsonl"))
+	})
+
+	It("reuses a curated eval set when one is active", func() {
+		requestID := uuid.New()
+		userID := uuid.New()
+		orgID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
+			RequestID:              requestID,
+			UserID:                 userID,
+			OrgID:                  orgID,
+			DatasetID:              datasetID,
+			ModelID:                modelID,
+			ParentModelKind:        model.ModelKindBase,
+			ParentArtifactURI:      "s3://models/base",
+			ParentArtifactChecksum: "sha256:base",
+			ParentBaseModel:        "llama3",
+			ParentModelName:        "shared-base",
+			ParentModelVersion:     1,
+			Examples: []model.PreferenceExample{{
+				PreferenceExampleID: uuid.New(),
+				RequestID:           requestID,
+				UserID:              userID,
+				OrgID:               orgID,
+				DatasetID:           datasetID,
+				ModelID:             modelID,
+				Split:               "EVAL",
+				PromptText:          "new prompt",
+				AcceptedAnswer:      "chosen",
+				RejectedAnswer:      "rejected",
+			}},
+		}}
+		lineageRepository := &lineageEvalSetRepositoryStub{activeEvalSet: &model.LineageEvalSet{
+			OrgID:          orgID,
+			LineageName:    "shared-base",
+			Version:        3,
+			EvalDatasetURI: "s3://curated/held-out.jsonl",
+			Source:         model.LineageEvalSetSourceCurated,
+			Active:         true,
+		}}
+		writer := &preferenceDatasetWriterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithInferenceFeedbackRepository(feedbackRepository),
+			app.WithLineageEvalSetRepository(lineageRepository),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
+			app.WithPreferenceDatasetWriter(writer),
+		)
+
+		dataset, err := uc.BuildPreferenceDataset(context.Background(), model.PreferenceDatasetBuildRequest{
+			UserID:      userID,
+			OrgID:       orgID,
+			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/{preference_dataset_id}.jsonl",
+			MinExamples: 1,
+			Limit:       100,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset.EvaluationOutputURI).To(Equal("s3://curated/held-out.jsonl"))
+		Expect(writer.dataset.EvaluationExampleCount()).To(Equal(0))
+		Expect(writer.dataset.TrainingExampleCount()).To(Equal(1))
+		Expect(lineageRepository.readLineage).To(Equal("shared-base"))
+		Expect(lineageRepository.frozenSet).To(BeNil())
 	})
 
 	It("does not write a preference dataset before the configured threshold is met", func() {
-		requestID := uuid.New()
 		userID := uuid.New()
 		feedbackRepository := &inferenceFeedbackRepositoryStub{preferenceDataset: &model.PreferenceDataset{
-			RequestID: requestID,
 			UserID:    userID,
 			DatasetID: uuid.New(),
 			ModelID:   uuid.New(),
@@ -591,12 +895,11 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
-			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 
-		dataset, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
-			RequestID:   requestID,
+		dataset, err := uc.BuildPreferenceDataset(context.Background(), model.PreferenceDatasetBuildRequest{
 			UserID:      userID,
 			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
 			MinExamples: 1,
@@ -640,12 +943,11 @@ var _ = Describe("InferenceUsecase", func() {
 		uc := app.NewInferenceUsecase(
 			&inferenceModelRepositoryStub{},
 			app.WithInferenceFeedbackRepository(feedbackRepository),
-			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}, preferenceEventBuilder()),
+			app.WithInferenceUnitOfWork(&inferenceUnitOfWorkStub{}),
 			app.WithPreferenceDatasetWriter(writer),
 		)
 
-		dataset, err := uc.ExportPreferenceDataset(context.Background(), model.PreferenceDatasetExportRequest{
-			RequestID:   requestID,
+		dataset, err := uc.BuildPreferenceDataset(context.Background(), model.PreferenceDatasetBuildRequest{
 			UserID:      userID,
 			OutputURI:   "s3://local-dev-bucket/preferences/{dataset_id}/preference_dataset.jsonl",
 			MinExamples: 1,

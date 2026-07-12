@@ -27,6 +27,7 @@ type modelDTO struct {
 	OrgID             string `json:"org_id"        validate:"required,uuid"`
 	ModelKind         string `json:"model_kind"    validate:"required"`
 	Name              string `json:"name"          validate:"required"`
+	LineageName       string `json:"lineage_name"`
 	ModelVersion      int    `json:"model_version" validate:"gt=0"`
 	BaseModel         string `json:"base_model"`
 	ArtifactLocation  string `json:"artifact_location" validate:"required"`
@@ -121,6 +122,7 @@ func (a *modelDTOAdapter) FromDTO(ctx context.Context, dto modelDTO, modelID uui
 		OrgID:             dto.OrgID,
 		ModelKind:         dto.ModelKind,
 		Name:              dto.Name,
+		LineageName:       modelLineageName(dto),
 		ModelVersion:      dto.ModelVersion,
 		BaseModel:         dto.BaseModel,
 		ArtifactLocation:  dto.ArtifactLocation,
@@ -129,4 +131,13 @@ func (a *modelDTOAdapter) FromDTO(ctx context.Context, dto modelDTO, modelID uui
 		ServingLoadStatus: dto.ServingLoadStatus,
 		Status:            dto.Status,
 	}, nil
+}
+
+func modelLineageName(dto modelDTO) string {
+	log.Trace("modelLineageName")
+
+	if lineageName := strings.TrimSpace(dto.LineageName); lineageName != "" {
+		return lineageName
+	}
+	return strings.TrimSpace(dto.Name)
 }

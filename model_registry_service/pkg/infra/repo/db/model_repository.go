@@ -11,6 +11,7 @@ import (
 
 	"lib/shared_lib/ctxutil"
 	coreDB "lib/shared_lib/db"
+	sharedDomain "lib/shared_lib/domain"
 	transport "lib/shared_lib/transport"
 
 	"github.com/google/uuid"
@@ -43,7 +44,7 @@ func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel
 	)
 	INSERT INTO ` + r.Name + `.models (
 		model_id, user_id, org_id, idempotency_key, training_run_id, dataset_id, model_kind, source, source_uri, source_metadata,
-		name, model_version, base_model,
+		name, lineage_name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, adapter_rank, serving_target, serving_model, serving_protocol, serving_load_status,
 		metrics_metadata, promotion_report_uri, promotion_deltas, promotion_decision, promotion_reason, status, failure_reason
@@ -53,7 +54,7 @@ func (r *ModelRepository) Create(ctx context.Context, tx pgx.Tx, registeredModel
 		tenant_projection.user_id,
 		@org_id::uuid,
 		@idempotency_key, @training_run_id, @dataset_id, @model_kind::model_kind_enum, @source::model_source_enum, @source_uri, @source_metadata::jsonb,
-		@name, @model_version, @base_model,
+		@name, @lineage_name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @adapter_rank, @serving_target, @serving_model, NULLIF(@serving_protocol, '')::serving_protocol_enum, @serving_load_status::model_load_status_enum,
 		@metrics_metadata::jsonb, @promotion_report_uri, @promotion_deltas::jsonb, NULLIF(@promotion_decision, '')::promotion_decision_enum, @promotion_reason, @status::model_status_enum, @failure_reason
@@ -116,7 +117,7 @@ func (r *ModelRepository) ReadChampion(ctx context.Context, lineage model.Lineag
 
 	query := `SELECT ` + modelColumns() + ` FROM ` + r.Name + `.models
 		WHERE org_id = @org_id
-			AND name = @name
+			AND lineage_name = @name
 			AND status = @status::model_status_enum
 			AND serving_load_status = @serving_load_status::model_load_status_enum
 		ORDER BY model_version DESC, created_at DESC, model_id DESC
@@ -288,6 +289,7 @@ func modelArgs(registeredModel *model.Model, idempotencyKey uuid.UUID) pgx.Named
 		"source_uri":           registeredModel.SourceURI,
 		"source_metadata":      withDefaultJSON(registeredModel.SourceMetadata),
 		"name":                 registeredModel.Name,
+		"lineage_name":         lineageNameForRecord(registeredModel),
 		"model_version":        registeredModel.ModelVersion,
 		"base_model":           registeredModel.BaseModel,
 		"artifact_location":    registeredModel.ArtifactLocation,
@@ -351,11 +353,21 @@ func modelListArgs(ctx context.Context, pagination transport.Pagination, filter 
 	}
 }
 
+func lineageNameForRecord(modelRecord *model.Model) string {
+	log.Trace("lineageNameForRecord")
+
+	lineageName := strings.TrimSpace(modelRecord.LineageName)
+	if lineageName == "" {
+		lineageName = strings.TrimSpace(modelRecord.Name)
+	}
+	return lineageName
+}
+
 func modelColumns() string {
 	log.Trace("modelColumns")
 
 	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(org_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
-		model_kind::text, source::text, source_uri, source_metadata::text, name, model_version, base_model,
+		model_kind::text, source::text, source_uri, source_metadata::text, name, lineage_name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, adapter_rank, serving_target, serving_model, COALESCE(serving_protocol::text, ''), serving_load_status::text,
 		metrics_metadata::text, promotion_report_uri, promotion_deltas::text, COALESCE(promotion_decision::text, ''), promotion_reason, status::text, failure_reason`
@@ -395,6 +407,7 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 		&modelRecord.SourceURI,
 		&modelRecord.SourceMetadata,
 		&modelRecord.Name,
+		&modelRecord.LineageName,
 		&modelRecord.ModelVersion,
 		&modelRecord.BaseModel,
 		&modelRecord.ArtifactLocation,
@@ -442,7 +455,7 @@ func scanModel(row pgx.Row) (*model.Model, error) {
 	if datasetID != "" {
 		modelRecord.DatasetID = uuid.MustParse(datasetID)
 	}
-	modelRecord.ModelKind = model.ToModelKind(modelKindRaw)
+	modelRecord.ModelKind = sharedDomain.ToModelKind(modelKindRaw)
 	modelRecord.Source = model.ToModelSource(modelSourceRaw)
 	modelRecord.Status = status
 	modelRecord.ServingProtocol = servingProtocol

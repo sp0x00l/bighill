@@ -27,17 +27,29 @@ func TestRest(t *testing.T) {
 }
 
 type trainingCommandUsecaseStub struct {
-	command model.StartTrainingRunCommand
-	tenant  uuid.UUID
-	org     uuid.UUID
-	result  *model.TrainingRunStartResult
-	status  *model.TrainingRunStatusResult
-	err     error
-	readErr error
+	command    model.StartTrainingRunCommand
+	dpoCommand model.StartDPOTrainingRunCommand
+	tenant     uuid.UUID
+	org        uuid.UUID
+	result     *model.TrainingRunStartResult
+	status     *model.TrainingRunStatusResult
+	err        error
+	readErr    error
 }
 
 func (s *trainingCommandUsecaseStub) StartTrainingRun(ctx context.Context, command model.StartTrainingRunCommand) (*model.TrainingRunStartResult, error) {
 	s.command = command
+	if tenantID, ok := ctxutil.TenantID(ctx); ok {
+		s.tenant = tenantID
+	}
+	if orgID, ok := ctxutil.OrgID(ctx); ok {
+		s.org = orgID
+	}
+	return s.result, s.err
+}
+
+func (s *trainingCommandUsecaseStub) StartDPOTrainingRun(ctx context.Context, command model.StartDPOTrainingRunCommand) (*model.TrainingRunStartResult, error) {
+	s.dpoCommand = command
 	if tenantID, ok := ctxutil.TenantID(ctx); ok {
 		s.tenant = tenantID
 	}
@@ -97,6 +109,25 @@ var _ = Describe("TrainingHandlers", func() {
 		Expect(usecase.command.IdempotencyKey).To(Equal(requestID))
 		Expect(usecase.command.DatasetID).To(Equal(datasetID))
 		Expect(usecase.command.SourceModelID).To(Equal(modelID))
+		var dto StartTrainingRunResponseDTO
+		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
+		Expect(dto.TrainingRunID).To(Equal(usecase.result.TrainingRunID))
+	})
+
+	It("starts DPO training runs with a preference dataset id", func() {
+		preferenceDatasetID := uuid.New()
+		req := newTrainingRequest(`{"preference_dataset_id":"`+preferenceDatasetID.String()+`","training_profile":"dpo-default@v1","evaluation_profile":"dpo-eval@v1"}`, userID, orgID, requestID)
+
+		res, err := handlers.StartDPOTrainingRun(context.Background(), req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusAccepted))
+		Expect(usecase.tenant).To(Equal(userID))
+		Expect(usecase.org).To(Equal(orgID))
+		Expect(usecase.dpoCommand.IdempotencyKey).To(Equal(requestID))
+		Expect(usecase.dpoCommand.PreferenceDatasetID).To(Equal(preferenceDatasetID))
+		Expect(usecase.dpoCommand.TrainingProfile).To(Equal("dpo-default@v1"))
+		Expect(usecase.dpoCommand.EvaluationProfile).To(Equal("dpo-eval@v1"))
 		var dto StartTrainingRunResponseDTO
 		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
 		Expect(dto.TrainingRunID).To(Equal(usecase.result.TrainingRunID))

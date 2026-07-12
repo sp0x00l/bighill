@@ -108,6 +108,43 @@ var _ = Describe("InferenceDTOAdapter", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
+	It("rejects request-scoped preference dataset output templates", func() {
+		_, err := adapter.FromPreferenceDatasetBuildDTO(context.Background(), []byte(`{
+			"output_uri":"s3://local-dev-bucket/preferences/{request_id}.jsonl",
+			"min_examples":1
+		}`))
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("request_id"))
+	})
+
+	It("serializes preference datasets without a fake lifecycle status", func() {
+		preferenceDatasetID := uuid.New()
+		modelID := uuid.New()
+		payload, err := adapter.ToPreferenceDatasetDTO(context.Background(), &model.PreferenceDataset{
+			PreferenceDatasetID: preferenceDatasetID,
+			ModelID:             modelID,
+			ParentModelKind:     model.ModelKindBase,
+			ParentArtifactURI:   "s3://models/base",
+			ParentBaseModel:     "llama-3",
+			ParentModelName:     "llama-3",
+			ParentModelVersion:  1,
+			OutputURI:           "s3://preferences/train.jsonl",
+			Format:              "DPO_JSONL",
+			EligibilityPolicy:   "complete_rejected_pairs_train_eval_split_v1",
+			IntegrityKey:        "sha256:pref",
+			ExampleTotal:        2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		var dtos []map[string]any
+		Expect(json.Unmarshal(payload, &dtos)).To(Succeed())
+		Expect(dtos).To(HaveLen(1))
+		Expect(dtos[0]).To(HaveKeyWithValue("preference_dataset_id", preferenceDatasetID.String()))
+		Expect(dtos[0]).To(HaveKeyWithValue("integrity_key", "sha256:pref"))
+		Expect(dtos[0]).NotTo(HaveKey("status"))
+	})
+
 	It("serializes safe endpoint projections", func() {
 		endpointID := uuid.New()
 		modelID := uuid.New()

@@ -41,6 +41,7 @@ func (b *ModelEventBuilder) ModelUpdatedMessage(modelRecord *model.Model) msgCon
 		PromotionReportUri: modelRecord.PromotionReportURI,
 		PromotionDeltas:    withDefaultJSON(modelRecord.PromotionDeltas),
 		Name:               modelRecord.Name,
+		LineageName:        lineageName(modelRecord),
 		ModelVersion:       int32(modelRecord.ModelVersion),
 		BaseModel:          modelRecord.BaseModel,
 		ArtifactLocation:   modelRecord.ArtifactLocation,
@@ -109,6 +110,18 @@ func candidateMetricsReportURI(modelRecord *model.Model) string {
 		return ""
 	}
 	return decoded.ReportURI
+}
+
+func lineageName(modelRecord *model.Model) string {
+	log.Trace("lineageName")
+
+	if modelRecord == nil {
+		return ""
+	}
+	if modelRecord.LineageName != "" {
+		return modelRecord.LineageName
+	}
+	return modelRecord.Name
 }
 
 func withDefaultJSON(value string) string {

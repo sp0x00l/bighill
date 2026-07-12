@@ -56,8 +56,8 @@ spec:
               value: {{ .Values.env.temporalConnectTimeoutSeconds | quote }}
             - name: TRAINING_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS
               value: {{ .Values.env.temporalConnectRetryIntervalSeconds | quote }}
-            - name: TRAINING_SERVICE_TRAINING_TRIGGER_ENABLED
-              value: {{ .Values.env.trainingTriggerEnabled | quote }}
+            - name: TRAINING_SERVICE_PROMOTION_REPORT_SUBSCRIBER_ENABLED
+              value: {{ .Values.env.promotionReportSubscriberEnabled | quote }}
             - name: KAFKA_BROKER
               value: {{ .Values.env.kafkaBroker | quote }}
             - name: TRAINING_SERVICE_KAFKA_BASE_GROUP_ID

@@ -51,6 +51,7 @@ type InferenceModel struct {
 	SourceURI         string
 	SourceMetadata    string
 	Name              string
+	LineageName       string
 	ModelVersion      int
 	BaseModel         string
 	ArtifactLocation  string

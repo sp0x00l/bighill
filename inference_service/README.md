@@ -9,9 +9,9 @@ It also exports preference datasets from feedback so the training loop can impro
 ## MLOps / Platform Pieces
 
 - gRPC inference API.
+- REST preference dataset API for explicit feedback export/read workflows.
 - Postgres for local read models, inference request audits, feedback, and preference snapshots.
 - Kafka subscribers for model and dataset update facts.
-- Postgres transactional outbox for preference-dataset-ready facts.
 - RAG retrieval over embedding search.
 - Query transformation/self-query before retrieval.
 - TEI-compatible reranker support.
@@ -24,7 +24,7 @@ It also exports preference datasets from feedback so the training loop can impro
 - Consumes model updates from `model_registry_service`.
 - Consumes dataset updates from `data_registry_service`.
 - Calls `feature_materializer_service` for vector retrieval.
-- Publishes preference dataset facts consumed by `training_service`.
+- Builds preference datasets that `training_service` resolves through a private REST API for DPO runs.
 - Enforces that only registry-approved and serving-loaded models are used.
 
 ## Local Development

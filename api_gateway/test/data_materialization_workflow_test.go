@@ -2,6 +2,7 @@ package test
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,27 +37,30 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		datasetID := stringField(created, "id")
 
 		csv := []byte("title,views\nIntro,10\nNext,20\n")
-		Eventually(func(g Gomega) {
-			status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "movies.csv", csv, user.Token, uuid.New())
-			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		}, 30*time.Second, 1*time.Second).Should(Succeed())
+		Eventually(func() bool {
+			status, _ := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "movies.csv", csv, user.Token, uuid.New())
+			return status == http.StatusCreated
+		}, 30*time.Second, 1*time.Second).Should(BeTrue())
 
-		Eventually(func(g Gomega) {
+		Eventually(func() bool {
 			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
-			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+			if status != http.StatusOK {
+				return false
+			}
 
 			read := decodeObject(body)
-			g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
-			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
-			g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
-			g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
-			g.Expect(read["schemaVersion"]).To(BeNumerically(">=", 1))
-			metadata := schemaMetadataObject(g, read)
-			g.Expect(metadata["source_format"]).To(Equal("csv"))
-			g.Expect(metadata["rows"]).To(BeNumerically("==", 2))
-			expectSchemaField(g, metadata, "title")
-			expectSchemaField(g, metadata, "views")
-		}, 45*time.Second, 1*time.Second).Should(Succeed())
+			metadata, ok := schemaMetadataObjectOK(read)
+			return ok &&
+				read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+				isFeatureParquetLocation(read["storageLocation"]) &&
+				read["tableFormat"] == "PARQUET" &&
+				read["catalogProvider"] == "LOCAL" &&
+				numericAtLeast(read["schemaVersion"], 1) &&
+				metadata["source_format"] == "csv" &&
+				numericEqual(metadata["rows"], 2) &&
+				dataMaterializationSchemaMetadataHasField(metadata, "title") &&
+				dataMaterializationSchemaMetadataHasField(metadata, "views")
+		}, 45*time.Second, 1*time.Second).Should(BeTrue())
 	})
 
 	It("uploads a downloaded open dataset and streams the materialized table through Data Stream Flight", func() {
@@ -78,26 +82,29 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(openDataset).NotTo(BeEmpty())
 
-		Eventually(func(g Gomega) {
-			status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID.String(), "file", "open_iris.csv", openDataset, user.Token, uuid.New())
-			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		}, 30*time.Second, 1*time.Second).Should(Succeed())
+		Eventually(func() bool {
+			status, _ := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID.String(), "file", "open_iris.csv", openDataset, user.Token, uuid.New())
+			return status == http.StatusCreated
+		}, 30*time.Second, 1*time.Second).Should(BeTrue())
 
-		Eventually(func(g Gomega) {
+		Eventually(func() bool {
 			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID.String(), nil, user.Token, uuid.Nil)
-			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+			if status != http.StatusOK {
+				return false
+			}
 
 			read := decodeObject(body)
-			g.Expect(read["processingState"]).To(Equal("FEATURE_MATERIALIZED"))
-			g.Expect(read["tableFormat"]).To(Equal("ICEBERG"))
-			g.Expect(read["catalogProvider"]).To(Equal("POLARIS"))
-			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
-			metadata := schemaMetadataObject(g, read)
-			g.Expect(metadata["source_format"]).To(Equal("csv"))
-			g.Expect(metadata["rows"]).To(BeNumerically("==", 150))
-			expectSchemaField(g, metadata, "sepal_length")
-			expectSchemaField(g, metadata, "species")
-		}, 45*time.Second, 1*time.Second).Should(Succeed())
+			metadata, ok := schemaMetadataObjectOK(read)
+			return ok &&
+				read["processingState"] == "FEATURE_MATERIALIZED" &&
+				read["tableFormat"] == "ICEBERG" &&
+				read["catalogProvider"] == "POLARIS" &&
+				isFeatureParquetLocation(read["storageLocation"]) &&
+				metadata["source_format"] == "csv" &&
+				numericEqual(metadata["rows"], 150) &&
+				dataMaterializationSchemaMetadataHasField(metadata, "sepal_length") &&
+				dataMaterializationSchemaMetadataHasField(metadata, "species")
+		}, 45*time.Second, 1*time.Second).Should(BeTrue())
 
 		commandBytes, err := json.Marshal(map[string]string{
 			"userId":    user.ID.String(),
@@ -107,13 +114,15 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		Eventually(func(g Gomega) {
+		Eventually(func() bool {
 			result := queryFlight(commandBytes)
-			g.Expect(result.RowCount).To(Equal(int64(2)))
-			g.Expect(result.Columns).To(Equal([]string{"species", "sepal_length"}))
-			g.Expect(result.FirstRow["species"]).NotTo(BeEmpty())
-			g.Expect(result.FirstRow["sepal_length"]).To(BeNumerically("==", 7.9))
-		}, 20*time.Second, 1*time.Second).Should(Succeed())
+			return result.RowCount == int64(2) &&
+				len(result.Columns) == 2 &&
+				result.Columns[0] == "species" &&
+				result.Columns[1] == "sepal_length" &&
+				result.FirstRow["species"] != "" &&
+				numericApprox(result.FirstRow["sepal_length"], 7.9)
+		}, 20*time.Second, 1*time.Second).Should(BeTrue())
 	})
 
 	It("materializes a presigned upload session through staging validation and promotion", func() {
@@ -134,7 +143,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		csv := []byte("title,views\nPresigned Intro,30\nPresigned Next,40\n")
 		var uploadID string
 		var fields map[string]any
-		Eventually(func(g Gomega) {
+		Eventually(func() bool {
 			initiatePayload := map[string]any{
 				"file_name":           "presigned-movies.csv",
 				"declared_format":     "csv",
@@ -143,16 +152,18 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 				"client_nonce":        "presigned-" + datasetID,
 			}
 			status, body := doJSON(http.MethodPost, "/v1/private/data/uploads/"+datasetID, initiatePayload, user.Token, uuid.New())
-			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+			if status != http.StatusCreated {
+				return false
+			}
 			initiated := decodeObject(body)
 			uploadID = stringField(initiated, "upload_id")
-			g.Expect(stringField(initiated, "url")).To(Equal("local-s3://local-dev-bucket"))
 			var ok bool
 			fields, ok = initiated["fields"].(map[string]any)
-			g.Expect(ok).To(BeTrue(), "fields: %#v", initiated["fields"])
-			g.Expect(fields).To(HaveKeyWithValue("key", MatchRegexp(`^staging/`)))
-			g.Expect(fields).To(HaveKeyWithValue("Content-Type", "text/csv"))
-		}, 30*time.Second, 1*time.Second).Should(Succeed())
+			return ok &&
+				stringField(initiated, "url") == "local-s3://local-dev-bucket" &&
+				strings.HasPrefix(stringField(fields, "key"), "staging/") &&
+				fields["Content-Type"] == "text/csv"
+		}, 30*time.Second, 1*time.Second).Should(BeTrue())
 
 		writeLocalS3Object("local-dev-bucket", fields["key"].(string), "text/csv", csv)
 
@@ -163,22 +174,25 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		Expect(completed["storage_location"]).To(MatchRegexp(`^s3://local-dev-bucket/raw/`))
 		Expect(completed["actual_size_bytes"]).To(BeNumerically("==", len(csv)))
 
-		Eventually(func(g Gomega) {
+		Eventually(func() bool {
 			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
-			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+			if status != http.StatusOK {
+				return false
+			}
 
 			read := decodeObject(body)
-			g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
-			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
-			g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
-			g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
-			g.Expect(read["schemaVersion"]).To(BeNumerically(">=", 1))
-			metadata := schemaMetadataObject(g, read)
-			g.Expect(metadata["source_format"]).To(Equal("csv"))
-			g.Expect(metadata["rows"]).To(BeNumerically("==", 2))
-			expectSchemaField(g, metadata, "title")
-			expectSchemaField(g, metadata, "views")
-		}, 45*time.Second, 1*time.Second).Should(Succeed())
+			metadata, ok := schemaMetadataObjectOK(read)
+			return ok &&
+				read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+				isFeatureParquetLocation(read["storageLocation"]) &&
+				read["tableFormat"] == "PARQUET" &&
+				read["catalogProvider"] == "LOCAL" &&
+				numericAtLeast(read["schemaVersion"], 1) &&
+				metadata["source_format"] == "csv" &&
+				numericEqual(metadata["rows"], 2) &&
+				dataMaterializationSchemaMetadataHasField(metadata, "title") &&
+				dataMaterializationSchemaMetadataHasField(metadata, "views")
+		}, 45*time.Second, 1*time.Second).Should(BeTrue())
 	})
 
 	It("materializes an uploaded PDF dataset through service-owned Kafka topics", func() {
@@ -199,34 +213,37 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		pdf, err := os.ReadFile("data/example_PDF_1MB.pdf")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pdf).NotTo(BeEmpty())
-		Eventually(func(g Gomega) {
-			status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "example_PDF_1MB.pdf", pdf, user.Token, uuid.New())
-			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		}, 30*time.Second, 1*time.Second).Should(Succeed())
+		Eventually(func() bool {
+			status, _ := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "example_PDF_1MB.pdf", pdf, user.Token, uuid.New())
+			return status == http.StatusCreated
+		}, 30*time.Second, 1*time.Second).Should(BeTrue())
 
-		Eventually(func(g Gomega) {
+		Eventually(func() bool {
 			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
-			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+			if status != http.StatusOK {
+				return false
+			}
 
 			read := decodeObject(body)
-			g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
-			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
-			g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
-			g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
-			g.Expect(read["processingProfile"]).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
-			g.Expect(read["tableNamespace"]).To(Equal("features"))
-			g.Expect(read["tableName"]).To(Equal("pdf_knowledge_upload"))
-			g.Expect(read["schemaVersion"]).To(BeNumerically(">=", 1))
-			metadata := schemaMetadataObject(g, read)
-			g.Expect(metadata["source_format"]).To(Equal("pdf"))
-			g.Expect(metadata["source_page_count"]).To(BeNumerically(">", 0))
-			g.Expect(metadata["extractor_name"]).To(Equal("poppler-cpp-pdf-extractor"))
-			g.Expect(metadata["extractor_version"]).To(Equal("v1"))
-			g.Expect(metadata["cleaner_name"]).To(Equal("go-basic-text-cleaner"))
-			g.Expect(metadata["cleaner_version"]).To(Equal("v1"))
-			g.Expect(metadata["rows"]).To(BeNumerically(">=", 1))
-			expectSchemaField(g, metadata, "source_text")
-		}, 45*time.Second, 1*time.Second).Should(Succeed())
+			metadata, ok := schemaMetadataObjectOK(read)
+			return ok &&
+				read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+				isFeatureParquetLocation(read["storageLocation"]) &&
+				read["tableFormat"] == "PARQUET" &&
+				read["catalogProvider"] == "LOCAL" &&
+				read["processingProfile"] == "TEXT_RAG_PROCESSING_PROFILE" &&
+				read["tableNamespace"] == "features" &&
+				read["tableName"] == "pdf_knowledge_upload" &&
+				numericAtLeast(read["schemaVersion"], 1) &&
+				metadata["source_format"] == "pdf" &&
+				numericGreater(metadata["source_page_count"], 0) &&
+				metadata["extractor_name"] == "poppler-cpp-pdf-extractor" &&
+				metadata["extractor_version"] == "v1" &&
+				metadata["cleaner_name"] == "go-basic-text-cleaner" &&
+				metadata["cleaner_version"] == "v1" &&
+				numericAtLeast(metadata["rows"], 1) &&
+				dataMaterializationSchemaMetadataHasField(metadata, "source_text")
+		}, 45*time.Second, 1*time.Second).Should(BeTrue())
 	})
 
 	It("materializes an uploaded HTML dataset through service-owned Kafka topics", func() {
@@ -245,32 +262,35 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 		datasetID := stringField(created, "id")
 
 		html := []byte("<!doctype html><html><head><title>Ignored title</title><script>alert('x')</script></head><body><main><h1>Guide</h1><p>HTML knowledge content.</p></main></body></html>")
-		Eventually(func(g Gomega) {
-			status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "knowledge.html", html, user.Token, uuid.New())
-			g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		}, 30*time.Second, 1*time.Second).Should(Succeed())
+		Eventually(func() bool {
+			status, _ := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "knowledge.html", html, user.Token, uuid.New())
+			return status == http.StatusCreated
+		}, 30*time.Second, 1*time.Second).Should(BeTrue())
 
-		Eventually(func(g Gomega) {
+		Eventually(func() bool {
 			status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
-			g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+			if status != http.StatusOK {
+				return false
+			}
 
 			read := decodeObject(body)
-			g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
-			g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
-			g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
-			g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
-			g.Expect(read["processingProfile"]).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
-			g.Expect(read["tableName"]).To(Equal("html_knowledge_upload"))
-			g.Expect(read["schemaVersion"]).To(BeNumerically(">=", 1))
-			metadata := schemaMetadataObject(g, read)
-			g.Expect(metadata["source_format"]).To(Equal("html"))
-			g.Expect(metadata["extractor_name"]).To(Equal("go-html-text-extractor"))
-			g.Expect(metadata["extractor_version"]).To(Equal("v1"))
-			g.Expect(metadata["cleaner_name"]).To(Equal("go-basic-text-cleaner"))
-			g.Expect(metadata["cleaner_version"]).To(Equal("v1"))
-			g.Expect(metadata["rows"]).To(BeNumerically(">=", 1))
-			expectSchemaField(g, metadata, "source_text")
-		}, 45*time.Second, 1*time.Second).Should(Succeed())
+			metadata, ok := schemaMetadataObjectOK(read)
+			return ok &&
+				read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+				isFeatureParquetLocation(read["storageLocation"]) &&
+				read["tableFormat"] == "PARQUET" &&
+				read["catalogProvider"] == "LOCAL" &&
+				read["processingProfile"] == "TEXT_RAG_PROCESSING_PROFILE" &&
+				read["tableName"] == "html_knowledge_upload" &&
+				numericAtLeast(read["schemaVersion"], 1) &&
+				metadata["source_format"] == "html" &&
+				metadata["extractor_name"] == "go-html-text-extractor" &&
+				metadata["extractor_version"] == "v1" &&
+				metadata["cleaner_name"] == "go-basic-text-cleaner" &&
+				metadata["cleaner_version"] == "v1" &&
+				numericAtLeast(metadata["rows"], 1) &&
+				dataMaterializationSchemaMetadataHasField(metadata, "source_text")
+		}, 45*time.Second, 1*time.Second).Should(BeTrue())
 	})
 
 	It("rejects uploads for datasets that were not announced by the registry topic", func() {
@@ -282,23 +302,80 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 	})
 })
 
-func schemaMetadataObject(g Gomega, dataset map[string]any) map[string]any {
+func schemaMetadataObject(dataset map[string]any) map[string]any {
 	metadata, ok := dataset["schemaMetadata"].(map[string]any)
-	g.Expect(ok).To(BeTrue(), "schemaMetadata: %#v", dataset["schemaMetadata"])
+	Expect(ok).To(BeTrue(), "schemaMetadata: %#v", dataset["schemaMetadata"])
 	return metadata
 }
 
-func expectSchemaField(g Gomega, metadata map[string]any, fieldName string) {
+func schemaMetadataObjectOK(dataset map[string]any) (map[string]any, bool) {
+	metadata, ok := dataset["schemaMetadata"].(map[string]any)
+	return metadata, ok
+}
+
+func expectSchemaField(metadata map[string]any, fieldName string) {
+	Expect(dataMaterializationSchemaMetadataHasField(metadata, fieldName)).To(BeTrue(), "fields: %#v", metadata["fields"])
+}
+
+func dataMaterializationSchemaMetadataHasField(metadata map[string]any, fieldName string) bool {
 	fields, ok := metadata["fields"].([]any)
-	g.Expect(ok).To(BeTrue(), "fields: %#v", metadata["fields"])
+	if !ok {
+		return false
+	}
 	for _, field := range fields {
 		fieldMap, ok := field.(map[string]any)
-		g.Expect(ok).To(BeTrue(), "field: %#v", field)
-		if fieldMap["name"] == fieldName {
-			return
+		if ok && fieldMap["name"] == fieldName {
+			return true
 		}
 	}
-	g.Expect(fields).To(ContainElement(HaveKeyWithValue("name", fieldName)))
+	return false
+}
+
+func isFeatureParquetLocation(value any) bool {
+	location, ok := value.(string)
+	return ok &&
+		strings.HasPrefix(location, "s3://local-dev-bucket/lakehouse/features/") &&
+		strings.HasSuffix(location, ".parquet")
+}
+
+func numericEqual(value any, expected int64) bool {
+	return numericCompare(value, func(actual float64) bool {
+		return actual == float64(expected)
+	})
+}
+
+func numericAtLeast(value any, expected int64) bool {
+	return numericCompare(value, func(actual float64) bool {
+		return actual >= float64(expected)
+	})
+}
+
+func numericGreater(value any, expected int64) bool {
+	return numericCompare(value, func(actual float64) bool {
+		return actual > float64(expected)
+	})
+}
+
+func numericApprox(value any, expected float64) bool {
+	return numericCompare(value, func(actual float64) bool {
+		return math.Abs(actual-expected) < 0.000001
+	})
+}
+
+func numericCompare(value any, compare func(float64) bool) bool {
+	switch v := value.(type) {
+	case int:
+		return compare(float64(v))
+	case int64:
+		return compare(float64(v))
+	case float64:
+		return compare(v)
+	case json.Number:
+		parsed, err := v.Float64()
+		return err == nil && compare(parsed)
+	default:
+		return false
+	}
 }
 
 func writeLocalS3Object(bucket, key, contentType string, content []byte) {
@@ -309,6 +386,31 @@ func writeLocalS3Object(bucket, key, contentType string, content []byte) {
 	metadata, err := json.Marshal(map[string]string{"content_type": contentType})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(os.WriteFile(objectPath+".metadata.json", metadata, 0600)).To(Succeed())
+}
+
+func readLocalS3ObjectURI(uri string) []byte {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(uri), "s3://")
+	parts := strings.SplitN(trimmed, "/", 2)
+	Expect(parts).To(HaveLen(2), "invalid local s3 uri: %s", uri)
+	root := localS3RepoRoot()
+	objectPath := filepath.Join(root, "tmp", "local_s3_storage", parts[0], filepath.FromSlash(parts[1]))
+	content, err := os.ReadFile(objectPath)
+	Expect(err).NotTo(HaveOccurred())
+	return content
+}
+
+func readLocalS3ObjectURIIfExists(uri string) []byte {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(uri), "s3://")
+	parts := strings.SplitN(trimmed, "/", 2)
+	Expect(parts).To(HaveLen(2), "invalid local s3 uri: %s", uri)
+	root := localS3RepoRoot()
+	objectPath := filepath.Join(root, "tmp", "local_s3_storage", parts[0], filepath.FromSlash(parts[1]))
+	content, err := os.ReadFile(objectPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	Expect(err).NotTo(HaveOccurred())
+	return content
 }
 
 func localS3RepoRoot() string {

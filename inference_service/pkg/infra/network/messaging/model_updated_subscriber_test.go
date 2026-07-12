@@ -72,7 +72,19 @@ func (u *recordingInferenceUsecase) RecordFeedback(context.Context, *model.Infer
 	return nil, nil
 }
 
-func (u *recordingInferenceUsecase) ExportPreferenceDataset(context.Context, model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+func (u *recordingInferenceUsecase) BuildPreferenceDatasetForEndpoint(context.Context, uuid.UUID, model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
+	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) ReadPreferenceDataset(context.Context, uuid.UUID, uuid.UUID) (*model.PreferenceDataset, error) {
+	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) ListPreferenceDatasets(context.Context, uuid.UUID, model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error) {
+	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) BuildPreferenceDataset(context.Context, model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
 	return nil, nil
 }
 

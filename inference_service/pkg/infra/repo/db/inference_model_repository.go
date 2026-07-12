@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
@@ -33,14 +34,14 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 	query := `INSERT INTO ` + r.Name + `.inference_models (
 		model_id, user_id, org_id, training_run_id, dataset_id, idempotency_key,
 		model_kind, source, source_uri, source_metadata,
-		name, model_version, base_model,
+		name, lineage_name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_protocol, serving_load_status,
 		metrics_metadata, status, failure_reason
 	) VALUES (
 		@model_id, @user_id, @org_id, @training_run_id, @dataset_id, @idempotency_key,
 		@model_kind::inference_model_kind_enum, @source::inference_model_source_enum, @source_uri, @source_metadata::jsonb,
-		@name, @model_version, @base_model,
+		@name, @lineage_name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @serving_target, @serving_model, NULLIF(@serving_protocol, '')::serving_protocol_enum, @serving_load_status::inference_model_load_status_enum,
 		@metrics_metadata::jsonb, @status::inference_model_status_enum, @failure_reason
@@ -56,6 +57,7 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 		source_uri = EXCLUDED.source_uri,
 		source_metadata = EXCLUDED.source_metadata,
 		name = EXCLUDED.name,
+		lineage_name = EXCLUDED.lineage_name,
 		model_version = EXCLUDED.model_version,
 		base_model = EXCLUDED.base_model,
 		artifact_location = EXCLUDED.artifact_location,
@@ -106,7 +108,7 @@ func modelColumns() string {
 
 	return `model_id::text, COALESCE(user_id::text, ''), COALESCE(org_id::text, ''), COALESCE(training_run_id::text, ''), COALESCE(dataset_id::text, ''),
 		model_kind::text, source::text, source_uri, source_metadata::text,
-		name, model_version, base_model,
+		name, lineage_name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, COALESCE(serving_protocol::text, ''), serving_load_status::text, metrics_metadata::text,
 		status::text, failure_reason`
@@ -127,6 +129,7 @@ func modelArgs(inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) p
 		"source_uri":          inferenceModel.SourceURI,
 		"source_metadata":     jsonObjectOrDefault(inferenceModel.SourceMetadata),
 		"name":                inferenceModel.Name,
+		"lineage_name":        lineageNameForInferenceModel(inferenceModel),
 		"model_version":       inferenceModel.ModelVersion,
 		"base_model":          inferenceModel.BaseModel,
 		"artifact_location":   inferenceModel.ArtifactLocation,
@@ -142,6 +145,16 @@ func modelArgs(inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) p
 		"status":              inferenceModel.Status.String(),
 		"failure_reason":      inferenceModel.FailureReason,
 	}
+}
+
+func lineageNameForInferenceModel(inferenceModel *model.InferenceModel) string {
+	log.Trace("lineageNameForInferenceModel")
+
+	lineageName := strings.TrimSpace(inferenceModel.LineageName)
+	if lineageName == "" {
+		lineageName = strings.TrimSpace(inferenceModel.Name)
+	}
+	return lineageName
 }
 
 func scanInferenceModel(row pgx.Row) (*model.InferenceModel, error) {
@@ -169,6 +182,7 @@ func scanInferenceModel(row pgx.Row) (*model.InferenceModel, error) {
 		&record.SourceURI,
 		&record.SourceMetadata,
 		&record.Name,
+		&record.LineageName,
 		&record.ModelVersion,
 		&record.BaseModel,
 		&record.ArtifactLocation,

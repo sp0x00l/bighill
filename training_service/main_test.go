@@ -63,7 +63,7 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(os.Unsetenv("TRAINING_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_API_HTTP_PORT")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_HTTP_CLIENT_TIMEOUT_SECONDS")).To(Succeed())
-		Expect(os.Unsetenv("TRAINING_SERVICE_TRAINING_TRIGGER_ENABLED")).To(Succeed())
+		Expect(os.Unsetenv("TRAINING_SERVICE_PROMOTION_REPORT_SUBSCRIBER_ENABLED")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_EVALUATION_PROFILE_NAME")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_EVALUATION_PROFILE")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_DPO_TRAINING_PROFILE_NAME")).To(Succeed())
@@ -108,9 +108,11 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(os.Unsetenv("TRAINING_SERVICE_SERVING_TARGET")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_SERVING_MODEL")).To(Succeed())
 		Expect(os.Unsetenv("TRAINING_SERVICE_SERVING_LOAD_STATUS")).To(Succeed())
+		Expect(os.Unsetenv("TRAINING_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC")).To(Succeed())
 		Expect(os.Setenv("TRAINING_SERVICE_MODEL_URI_PREFIX", "s3://local-dev-bucket/models")).To(Succeed())
 		Expect(os.Setenv("TRAINING_SERVICE_EVALUATION_URI_PREFIX", "s3://local-dev-bucket/evaluations")).To(Succeed())
 		Expect(os.Setenv("TRAINING_SERVICE_PROMOTION_REPORT_URI_PREFIX", "s3://local-dev-bucket/promotion-reports")).To(Succeed())
+		Expect(os.Setenv("TRAINING_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry")).To(Succeed())
 	})
 
 	It("uses local Temporal defaults", func() {
@@ -124,7 +126,7 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(time.Second))
 		Expect(cfg.HTTPPort).To(Equal(8085))
 		Expect(cfg.HTTPClientTimeout).To(Equal(10 * time.Second))
-		Expect(cfg.TrainingTriggerEnabled).To(BeFalse())
+		Expect(cfg.PromotionReportSubscriberEnabled).To(BeFalse())
 		Expect(cfg.Executor.Provider).To(Equal("kuberay"))
 		Expect(cfg.Executor.RayJobsURL).To(Equal("http://localhost:8265"))
 		Expect(cfg.Executor.RayTrainingEntrypoint).To(Equal("python -m training_jobs.train"))
@@ -150,6 +152,7 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(cfg.Executor.ServingTarget).To(Equal(""))
 		Expect(cfg.Executor.ServingModel).To(Equal(""))
 		Expect(cfg.Executor.ServingLoadStatus).To(Equal("NOT_LOADED"))
+		Expect(cfg.Topics.ModelRegistry).To(Equal("model_registry"))
 		Expect(cfg.EvaluationProfileName).To(Equal("ragas-default@v1"))
 		Expect(cfg.EvaluationProfile).To(Equal("smoke"))
 		Expect(cfg.DPOTrainingProfileName).To(Equal("dpo-default@v1"))
@@ -188,12 +191,12 @@ var _ = Describe("readTrainingConfig", func() {
 		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(3 * time.Second))
 	})
 
-	It("allows the training trigger to be enabled explicitly", func() {
-		Expect(os.Setenv("TRAINING_SERVICE_TRAINING_TRIGGER_ENABLED", "true")).To(Succeed())
+	It("allows the promotion report subscriber to be enabled explicitly", func() {
+		Expect(os.Setenv("TRAINING_SERVICE_PROMOTION_REPORT_SUBSCRIBER_ENABLED", "true")).To(Succeed())
 
 		cfg := readTrainingConfig()
 
-		Expect(cfg.TrainingTriggerEnabled).To(BeTrue())
+		Expect(cfg.PromotionReportSubscriberEnabled).To(BeTrue())
 	})
 })
 

@@ -69,16 +69,33 @@ func (s *modelResolverStub) ResolveTrainableModel(_ context.Context, userID uuid
 	return s.ref, s.err
 }
 
+type preferenceDatasetResolverStub struct {
+	userID              uuid.UUID
+	orgID               uuid.UUID
+	preferenceDatasetID uuid.UUID
+	ref                 model.PreferenceDatasetRef
+	err                 error
+}
+
+func (s *preferenceDatasetResolverStub) ResolvePreferenceDataset(_ context.Context, userID uuid.UUID, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (model.PreferenceDatasetRef, error) {
+	s.userID = userID
+	s.orgID = orgID
+	s.preferenceDatasetID = preferenceDatasetID
+	return s.ref, s.err
+}
+
 var _ = Describe("TrainingCommandUsecase", func() {
 	var (
-		userID          uuid.UUID
-		orgID           uuid.UUID
-		datasetID       uuid.UUID
-		sourceModelID   uuid.UUID
-		starter         *commandWorkflowStarterStub
-		datasetResolver *datasetResolverStub
-		modelResolver   *modelResolverStub
-		usecase         app.TrainingCommandUsecase
+		userID             uuid.UUID
+		orgID              uuid.UUID
+		datasetID          uuid.UUID
+		sourceModelID      uuid.UUID
+		preferenceID       uuid.UUID
+		starter            *commandWorkflowStarterStub
+		datasetResolver    *datasetResolverStub
+		modelResolver      *modelResolverStub
+		preferenceResolver *preferenceDatasetResolverStub
+		usecase            app.TrainingCommandUsecase
 	)
 
 	BeforeEach(func() {
@@ -86,10 +103,19 @@ var _ = Describe("TrainingCommandUsecase", func() {
 		orgID = uuid.New()
 		datasetID = uuid.New()
 		sourceModelID = uuid.New()
+		preferenceID = uuid.New()
 		starter = &commandWorkflowStarterStub{}
 		datasetResolver = &datasetResolverStub{ref: materializedDatasetRef(datasetID, userID, orgID)}
 		modelResolver = &modelResolverStub{ref: baseModelRef(sourceModelID)}
-		usecase = app.NewTrainingCommandUsecase(starter, starter, datasetResolver, modelResolver, trainingProfileCatalog())
+		preferenceResolver = &preferenceDatasetResolverStub{ref: preferenceDatasetRef(preferenceID, datasetID, sourceModelID)}
+		usecase = app.NewTrainingCommandUsecase(
+			starter,
+			starter,
+			datasetResolver,
+			modelResolver,
+			trainingProfileCatalog(),
+			app.WithPreferenceDatasetResolver(preferenceResolver),
+		)
 	})
 
 	It("resolves inputs and starts a base-model SFT workflow", func() {
@@ -225,6 +251,41 @@ var _ = Describe("TrainingCommandUsecase", func() {
 		Expect(result.TrainingRunID).To(Equal(trainingRunID.String()))
 		Expect(result.Status).To(Equal("RUNNING"))
 	})
+
+	It("resolves a preference dataset and starts a DPO workflow", func() {
+		result, err := usecase.StartDPOTrainingRun(ctxutil.WithActorOrg(context.Background(), userID, orgID), model.StartDPOTrainingRunCommand{
+			IdempotencyKey:      uuid.New(),
+			PreferenceDatasetID: preferenceID,
+			TrainingProfile:     "dpo-default@v1",
+			EvaluationProfile:   "dpo-eval@v1",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.TrainingRunID).NotTo(BeEmpty())
+		Expect(preferenceResolver.userID).To(Equal(userID))
+		Expect(preferenceResolver.orgID).To(Equal(orgID))
+		Expect(preferenceResolver.preferenceDatasetID).To(Equal(preferenceID))
+		Expect(starter.requests).To(HaveLen(1))
+		request := starter.requests[0]
+		Expect(request.UserID).To(Equal(userID.String()))
+		Expect(request.OrgID).To(Equal(orgID.String()))
+		Expect(request.DatasetID).To(Equal(datasetID.String()))
+		Expect(request.PreferenceDatasetID).To(Equal(preferenceID.String()))
+		Expect(request.PreferenceDatasetURI).To(Equal("s3://preferences/train.jsonl"))
+		Expect(request.SourceModelID).To(Equal(sourceModelID.String()))
+		Expect(request.SourceArtifactURI).To(Equal("s3://models/parent"))
+		Expect(request.SourceArtifactChecksum).To(Equal("sha256:parent"))
+		Expect(request.ParentModelID).To(Equal(sourceModelID.String()))
+		Expect(request.ParentModelVersion).To(Equal("3"))
+		Expect(request.ParentAdapterURI).To(Equal(""))
+		Expect(request.ModelName).To(Equal("dpo-" + sourceModelID.String()))
+		Expect(request.LineageName).To(Equal("citadel-lineage"))
+		Expect(request.ModelVersion).To(Equal("4"))
+		Expect(request.BaseModel).To(Equal("llama-3"))
+		Expect(request.TrainingProfile.Trainer).To(Equal("dpo"))
+		Expect(request.TrainingProfile.PreferenceDatasetURI).To(Equal("s3://preferences/train.jsonl"))
+		Expect(request.EvaluationProfile).To(ContainSubstring(`"dataset_uri":"s3://preferences/eval.jsonl"`))
+	})
 })
 
 func materializedDatasetRef(datasetID uuid.UUID, userID uuid.UUID, orgID uuid.UUID) model.MaterializedDatasetRef {
@@ -266,6 +327,26 @@ func fineTunedModelRef(modelID uuid.UUID) model.SourceModelRef {
 	return ref
 }
 
+func preferenceDatasetRef(preferenceID uuid.UUID, datasetID uuid.UUID, modelID uuid.UUID) model.PreferenceDatasetRef {
+	return model.PreferenceDatasetRef{
+		PreferenceDatasetID:    preferenceID.String(),
+		DatasetID:              datasetID.String(),
+		DatasetIDs:             []string{datasetID.String()},
+		ModelID:                modelID.String(),
+		ParentModelKind:        sharedDomain.ModelKindBase.String(),
+		ParentArtifactURI:      "s3://models/parent",
+		ParentArtifactChecksum: "sha256:parent",
+		ParentBaseModel:        "llama-3",
+		ParentModelName:        "citadel-rag",
+		ParentLineageName:      "citadel-lineage",
+		ParentModelVersion:     3,
+		OutputURI:              "s3://preferences/train.jsonl",
+		EvaluationOutputURI:    "s3://preferences/eval.jsonl",
+		ExampleCount:           4,
+		IntegrityKey:           "sha256:pref",
+	}
+}
+
 func trainingCommandProfile() model.TrainingProfile {
 	return model.TrainingProfile{
 		Name:                      "sft-default@v1",
@@ -284,12 +365,21 @@ func trainingCommandProfile() model.TrainingProfile {
 
 func trainingProfileCatalog() app.TrainingProfileCatalog {
 	return app.NewStaticTrainingProfileCatalog(
-		[]model.TrainingProfile{trainingCommandProfile()},
+		[]model.TrainingProfile{trainingCommandProfile(), dpoTrainingProfile()},
 		"sft-default@v1",
 		map[string]string{
 			"ragas-default@v1": `{"name":"ragas-default","version":"v1"}`,
 			"ragas-default@v2": `{"name":"ragas-default","version":"v2"}`,
+			"dpo-eval@v1":      `{"name":"dpo-eval","version":"v1"}`,
 		},
 		"ragas-default@v1",
 	)
+}
+
+func dpoTrainingProfile() model.TrainingProfile {
+	profile := trainingCommandProfile()
+	profile.Name = "dpo-default@v1"
+	profile.Trainer = "dpo"
+	profile.PreferenceDatasetURI = ""
+	return profile
 }

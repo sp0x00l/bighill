@@ -126,6 +126,7 @@ var _ = Describe("ModelHandlers", func() {
 				"model_kind":"BASE",
 				"source":"HUGGING_FACE",
 				"name":"rag-e2e-huggingface-base",
+				"lineage_name":"",
 				"model_version":1,
 				"base_model":"bighill/rag-e2e-huggingface-base",
 				"artifact_location":"s3://local-dev-bucket/models/huggingface/model/snapshot",

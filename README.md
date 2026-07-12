@@ -240,7 +240,10 @@ sequenceDiagram
     IF-->>U: answer + full audit trail
     U->>GW: POST /v1/private/inference/feedback
     GW->>IF: feedback (rating / preference)
-    IF-->>TR: preference_dataset_ready
+    U->>GW: POST /v1/private/inference/endpoints/{endpoint_id}/preference-datasets
+    GW->>IF: build/read preference dataset
+    U->>GW: POST /v1/private/training-runs/dpo
+    GW->>TR: DPO retrain command
     TR->>RAY: DPO retrain → re-enter step 6
 ```
 
@@ -286,9 +289,12 @@ sequenceDiagram
    retrieval fans out across every ready dataset and merges the results. Endpoints are published and
    configured explicitly with `POST /v1/private/inference/endpoints`,
    `PUT /v1/private/inference/endpoints/{endpoint_id}/datasets`, and
-   `PUT /v1/private/inference/endpoints/{endpoint_id}/merge-strategy`. Captured feedback becomes a
-   preference dataset; `preference_dataset_ready` starts a **DPO retrain** (the source model resolved
-   from lineage, not config), which re-enters step 6 and closes the loop.
+   `PUT /v1/private/inference/endpoints/{endpoint_id}/merge-strategy`. Captured feedback can be
+   written explicitly with `POST /v1/private/inference/endpoints/{endpoint_id}/preference-datasets`
+   and inspected with `GET /v1/private/inference/preference-datasets`. A researcher then starts
+   DPO deliberately with `POST /v1/private/training-runs/dpo` using the selected
+   `preference_dataset_id`; the source model is resolved from the preference dataset lineage, not
+   config, and the run re-enters step 6.
 
 ---
 

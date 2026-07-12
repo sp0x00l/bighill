@@ -34,6 +34,7 @@ message ModelTrainingCompletedEvent {
   string org_id = 20;
   string serving_protocol = 21;
   int32 adapter_rank = 22;
+  string lineage_name = 23;
 }
 
 message ModelTrainingFailedEvent {
@@ -48,6 +49,7 @@ message ModelTrainingFailedEvent {
   string base_model = 9;
   string failure_reason = 10;
   string org_id = 11;
+  string lineage_name = 12;
 }
 
 message PromotionReportReadyEvent {

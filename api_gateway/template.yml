@@ -417,6 +417,14 @@ Resources:
               method.request.header.X-Request-ID: true
             Path: /v1/private/training-runs
             Method: post
+        PostDPOTrainingRun:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            RequestParameters:
+              method.request.header.X-Request-ID: true
+            Path: /v1/private/training-runs/dpo
+            Method: post
         GetTrainingRun:
           Type: Api
           Properties:
@@ -455,6 +463,26 @@ Resources:
               method.request.header.X-Request-ID: true
             Path: /v1/private/inference/endpoints/{endpointId}/generations
             Method: post
+        PostInferenceEndpointPreferenceDataset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            RequestParameters:
+              method.request.header.X-Request-ID: true
+            Path: /v1/private/inference/endpoints/{endpointId}/preference-datasets
+            Method: post
+        GetInferencePreferenceDatasets:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/private/inference/preference-datasets
+            Method: get
+        GetInferencePreferenceDataset:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/private/inference/preference-datasets/{preferenceDatasetId}
+            Method: get
         PostInferenceFeedback:
           Type: Api
           Properties:
@@ -999,6 +1027,26 @@ Resources:
                   Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
               security:
                 - BighillAuthorizer: []
+          /v1/private/training-runs/dpo:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+                - application/json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              parameters:
+                - name: X-Request-ID
+                  in: header
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
           /v1/private/training-runs/{id}:
             get:
               produces:
@@ -1091,6 +1139,59 @@ Resources:
                   type: string
                 - name: X-Request-ID
                   in: header
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/inference/endpoints/{endpointId}/preference-datasets:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+                - application/json
+              produces:
+                - application/vnd.bighill.api-v1+json
+              parameters:
+                - name: endpointId
+                  in: path
+                  required: true
+                  type: string
+                - name: X-Request-ID
+                  in: header
+                  required: true
+                  type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/inference/preference-datasets:
+            get:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/inference/preference-datasets/{preferenceDatasetId}:
+            get:
+              produces:
+                - application/vnd.bighill.api-v1+json
+              parameters:
+                - name: preferenceDatasetId
+                  in: path
                   required: true
                   type: string
               responses: {}

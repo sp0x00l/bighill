@@ -61,6 +61,7 @@ type TrainingRunRequest struct {
 	ParentModelVersion     string
 	ParentAdapterURI       string
 	ModelName              string
+	LineageName            string
 	ModelVersion           string
 	BaseModel              string
 	EvaluationProfile      string
@@ -92,6 +93,13 @@ type StartTrainingRunCommand struct {
 	EvaluationProfile string
 }
 
+type StartDPOTrainingRunCommand struct {
+	IdempotencyKey      uuid.UUID
+	PreferenceDatasetID uuid.UUID
+	TrainingProfile     string
+	EvaluationProfile   string
+}
+
 type TrainingRunStartResult struct {
 	TrainingRunID string
 	StatusURL     string
@@ -120,6 +128,7 @@ type SourceModelRef struct {
 	OrgID             string
 	ModelKind         string
 	Name              string
+	LineageName       string
 	ModelVersion      int
 	BaseModel         string
 	ArtifactLocation  string
@@ -127,6 +136,27 @@ type SourceModelRef struct {
 	AdapterURI        string
 	ServingLoadStatus string
 	Status            string
+}
+
+type PreferenceDatasetRef struct {
+	PreferenceDatasetID    string
+	UserID                 string
+	OrgID                  string
+	DatasetID              string
+	DatasetIDs             []string
+	ModelID                string
+	ParentModelKind        string
+	ParentArtifactURI      string
+	ParentArtifactChecksum string
+	ParentAdapterURI       string
+	ParentBaseModel        string
+	ParentModelName        string
+	ParentLineageName      string
+	ParentModelVersion     int
+	OutputURI              string
+	EvaluationOutputURI    string
+	ExampleCount           int
+	IntegrityKey           string
 }
 
 type ObjectInfo struct {
@@ -265,6 +295,7 @@ type TrainingRunResult struct {
 	ModelID           string
 	ModelURI          string
 	ModelName         string
+	LineageName       string
 	ModelVersion      string
 	BaseModel         string
 	ArtifactFormat    string

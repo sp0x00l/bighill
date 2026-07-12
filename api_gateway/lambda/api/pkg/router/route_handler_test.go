@@ -156,6 +156,7 @@ var _ = Describe("NewRouter", func() {
 			responseWithBody(http.StatusOK, `{"resources":[]}`),
 			responseWithBody(http.StatusOK, `{"id":"model-1"}`),
 			responseWithBody(http.StatusAccepted, `{"training_run_id":"run-1"}`),
+			responseWithBody(http.StatusAccepted, `{"training_run_id":"dpo-run-1"}`),
 		}
 		handler := testRouter(client)
 
@@ -235,6 +236,16 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(trainingResp.StatusCode).To(Equal(http.StatusAccepted))
 
+		dpoTrainingResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodPost,
+			Path:           "/v1/private/training-runs/dpo",
+			Body:           `{"preference_dataset_id":"2ef65f05-dc98-4be8-b952-ff73c84e10f1"}`,
+			Headers:        map[string]string{"Content-Type": "application/json", "X-Request-ID": "request-2"},
+			RequestContext: authorizerContext(authz.PermissionTrainingStart),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dpoTrainingResp.StatusCode).To(Equal(http.StatusAccepted))
+
 		trainingReadResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod:     http.MethodGet,
 			Path:           "/v1/private/training-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
@@ -243,7 +254,7 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(trainingReadResp.StatusCode).To(Equal(http.StatusOK))
 
-		Expect(client.requests).To(HaveLen(9))
+		Expect(client.requests).To(HaveLen(10))
 		Expect(client.requests[0].url).To(Equal("http://data-registry.service/v1/data/registry"))
 		Expect(client.requests[1].url).To(Equal("http://ingestion.service/v1/data/store/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
 		Expect(client.requests[1].body).To(Equal("file-bytes"))
@@ -261,9 +272,14 @@ var _ = Describe("NewRouter", func() {
 		Expect(client.requests[7].headers.Get(testUserHeader)).To(Equal("user-123"))
 		Expect(client.requests[7].headers.Get(testOrgHeader)).To(Equal("org-789"))
 		Expect(client.requests[7].headers.Get(testPermissionsHeader)).To(Equal(authz.EncodeStringSlice([]string{authz.PermissionTrainingStart})))
-		Expect(client.requests[8].url).To(Equal("http://training.service/v1/training-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[8].url).To(Equal("http://training.service/v1/training-runs/dpo"))
+		Expect(client.requests[8].body).To(Equal(`{"preference_dataset_id":"2ef65f05-dc98-4be8-b952-ff73c84e10f1"}`))
+		Expect(client.requests[8].headers.Get("X-Request-ID")).To(Equal("request-2"))
 		Expect(client.requests[8].headers.Get(testUserHeader)).To(Equal("user-123"))
 		Expect(client.requests[8].headers.Get(testOrgHeader)).To(Equal("org-789"))
+		Expect(client.requests[9].url).To(Equal("http://training.service/v1/training-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[9].headers.Get(testUserHeader)).To(Equal("user-123"))
+		Expect(client.requests[9].headers.Get(testOrgHeader)).To(Equal("org-789"))
 	})
 
 	It("forwards authenticated user and session context to profile logout", func() {
@@ -303,6 +319,9 @@ var _ = Describe("NewRouter", func() {
 			responseWithBody(http.StatusOK, `{"endpoints":[]}`),
 			responseWithBody(http.StatusAccepted, `{"request_id":"req-1"}`),
 			responseWithBody(http.StatusOK, `{"feedback_id":"fb-1"}`),
+			responseWithBody(http.StatusCreated, `{"preference_dataset_id":"pref-1"}`),
+			responseWithBody(http.StatusOK, `{"resources":[]}`),
+			responseWithBody(http.StatusOK, `{"preference_dataset_id":"pref-1"}`),
 		}
 		handler := testRouter(client)
 
@@ -340,6 +359,36 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(feedbackResp.StatusCode).To(Equal(http.StatusOK))
 
+		preferenceBuildResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodPost,
+			Path:       "/v1/private/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1/preference-datasets",
+			Body:       `{"min_examples":1}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+				"X-Request-ID": "request-4",
+			},
+			RequestContext: authorizerContext(authz.PermissionModelWrite),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(preferenceBuildResp.StatusCode).To(Equal(http.StatusCreated))
+
+		preferenceListResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:            http.MethodGet,
+			Path:                  "/v1/private/inference/preference-datasets",
+			QueryStringParameters: map[string]string{"model_id": "2ef65f05-dc98-4be8-b952-ff73c84e10f1"},
+			RequestContext:        authorizerContext(authz.PermissionInferenceEndpointsRead),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(preferenceListResp.StatusCode).To(Equal(http.StatusOK))
+
+		preferenceReadResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodGet,
+			Path:           "/v1/private/inference/preference-datasets/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			RequestContext: authorizerContext(authz.PermissionInferenceEndpointsRead),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(preferenceReadResp.StatusCode).To(Equal(http.StatusOK))
+
 		deniedResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod:     http.MethodPost,
 			Path:           "/v1/private/training-runs",
@@ -349,7 +398,7 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(deniedResp.StatusCode).To(Equal(http.StatusForbidden))
 
-		Expect(client.requests).To(HaveLen(3))
+		Expect(client.requests).To(HaveLen(6))
 		Expect(client.requests[0].url).To(Equal("http://inference.service/v1/inference/endpoints"))
 		Expect(client.requests[0].headers.Get(testUserHeader)).To(Equal("user-123"))
 		Expect(client.requests[0].headers.Get(testOrgHeader)).To(Equal("org-789"))
@@ -359,6 +408,26 @@ var _ = Describe("NewRouter", func() {
 		Expect(client.requests[2].url).To(Equal("http://inference.service/v1/inference/feedback"))
 		Expect(client.requests[2].body).To(Equal(`{"request_id":"2ef65f05-dc98-4be8-b952-ff73c84e10f1","accepted":true}`))
 		Expect(client.requests[2].headers.Get("X-Request-ID")).To(Equal("request-3"))
+		Expect(client.requests[3].url).To(Equal("http://inference.service/v1/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1/preference-datasets"))
+		Expect(client.requests[3].body).To(Equal(`{"min_examples":1}`))
+		Expect(client.requests[3].headers.Get("X-Request-ID")).To(Equal("request-4"))
+		Expect(client.requests[4].url).To(Equal("http://inference.service/v1/inference/preference-datasets?model_id=2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[5].url).To(Equal("http://inference.service/v1/inference/preference-datasets/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+	})
+
+	It("requires model write permission to build preference datasets", func() {
+		handler := testRouter(client)
+
+		resp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodPost,
+			Path:           "/v1/private/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1/preference-datasets",
+			Body:           `{"min_examples":1}`,
+			RequestContext: authorizerContext(authz.PermissionInferenceFeedback),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
+		Expect(client.requests).To(BeEmpty())
 	})
 
 	It("denies unmatched private routes by default", func() {

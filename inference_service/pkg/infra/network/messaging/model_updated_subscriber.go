@@ -196,6 +196,7 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		SourceURI:         strings.TrimSpace(payload.GetSourceUri()),
 		SourceMetadata:    strings.TrimSpace(payload.GetSourceMetadata()),
 		Name:              strings.TrimSpace(payload.GetName()),
+		LineageName:       lineageNameFromModelEvent(payload.GetLineageName(), payload.GetName()),
 		ModelVersion:      int(payload.GetModelVersion()),
 		BaseModel:         strings.TrimSpace(payload.GetBaseModel()),
 		ArtifactLocation:  strings.TrimSpace(payload.GetArtifactLocation()),
@@ -237,6 +238,16 @@ func modelSourceFromEvent(value string) model.ModelSource {
 	log.Trace("modelSourceFromEvent")
 
 	return model.ToModelSource(value)
+}
+
+func lineageNameFromModelEvent(lineageName string, modelName string) string {
+	log.Trace("lineageNameFromModelEvent")
+
+	lineageName = strings.TrimSpace(lineageName)
+	if lineageName != "" {
+		return lineageName
+	}
+	return strings.TrimSpace(modelName)
 }
 
 func validateModelUpdatedEvent(inferenceModel *model.InferenceModel) error {

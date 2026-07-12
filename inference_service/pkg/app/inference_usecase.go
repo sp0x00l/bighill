@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const maxConcurrentDatasetRetrievals = 4
+const (
+	maxConcurrentDatasetRetrievals = 4
+	minimumFrozenEvalExamples      = 1
+)
 
 type InferenceUsecase interface {
 	RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error)
@@ -33,7 +37,10 @@ type InferenceUsecase interface {
 	GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error)
 	Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error)
 	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
-	ExportPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
+	BuildPreferenceDatasetForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error)
+	ReadPreferenceDataset(ctx context.Context, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (*model.PreferenceDataset, error)
+	ListPreferenceDatasets(ctx context.Context, orgID uuid.UUID, filter model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error)
+	BuildPreferenceDataset(ctx context.Context, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error)
 }
 
 type inferenceUsecase struct {
@@ -42,8 +49,8 @@ type inferenceUsecase struct {
 	endpointRepository        PublishedEndpointRepository
 	requestRepository         InferenceRequestRepository
 	feedbackRepository        InferenceFeedbackRepository
+	lineageEvalSetRepository  LineageEvalSetRepository
 	inferenceUnitOfWork       InferenceUnitOfWorkAdapter
-	preferenceEventBuilder    PreferenceDatasetEventBuilder
 	retrievalClient           RetrievalClient
 	queryTransformer          QueryTransformer
 	contextPacker             ContextPacker
@@ -58,6 +65,11 @@ type inferenceUsecase struct {
 	queryTransformerTimeout   time.Duration
 	rerankCandidateMultiplier int
 	defaultRAGMergeStrategy   model.RAGMergeStrategy
+}
+
+type preferenceEvalSetFreeze struct {
+	evalSet    *model.LineageEvalSet
+	exampleIDs []uuid.UUID
 }
 
 type InferenceOption func(*inferenceUsecase)
@@ -118,12 +130,19 @@ func WithInferenceFeedbackRepository(repository InferenceFeedbackRepository) Inf
 	}
 }
 
-func WithInferenceUnitOfWork(unitOfWork InferenceUnitOfWorkAdapter, preferenceEventBuilder PreferenceDatasetEventBuilder) InferenceOption {
+func WithLineageEvalSetRepository(repository LineageEvalSetRepository) InferenceOption {
+	log.Trace("WithLineageEvalSetRepository")
+
+	return func(u *inferenceUsecase) {
+		u.lineageEvalSetRepository = repository
+	}
+}
+
+func WithInferenceUnitOfWork(unitOfWork InferenceUnitOfWorkAdapter) InferenceOption {
 	log.Trace("WithInferenceUnitOfWork")
 
 	return func(u *inferenceUsecase) {
 		u.inferenceUnitOfWork = unitOfWork
-		u.preferenceEventBuilder = preferenceEventBuilder
 	}
 }
 
@@ -357,18 +376,61 @@ func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.I
 	return record, nil
 }
 
-func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
-	log.Trace("InferenceUsecase ExportPreferenceDataset")
+func (u *inferenceUsecase) BuildPreferenceDatasetForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
+	log.Trace("InferenceUsecase BuildPreferenceDatasetForEndpoint")
+
+	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, endpointID)
+	if err != nil {
+		return nil, err
+	}
+	if !endpoint.IsReady() {
+		return nil, domain.ErrModelNotReady.Extend("inference endpoint is not ready")
+	}
+	request.EndpointID = endpoint.EndpointID
+	request.ModelID = endpoint.ModelID
+	request.DatasetIDs = append([]uuid.UUID(nil), endpoint.DatasetIDs...)
+	if request.DatasetID == uuid.Nil && len(request.DatasetIDs) == 1 {
+		request.DatasetID = request.DatasetIDs[0]
+	}
+	return u.BuildPreferenceDataset(ctx, request)
+}
+
+func (u *inferenceUsecase) ReadPreferenceDataset(ctx context.Context, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (*model.PreferenceDataset, error) {
+	log.Trace("InferenceUsecase ReadPreferenceDataset")
+
+	return u.feedbackRepository.ReadPreferenceDatasetSnapshot(ctx, orgID, preferenceDatasetID)
+}
+
+func (u *inferenceUsecase) ListPreferenceDatasets(ctx context.Context, orgID uuid.UUID, filter model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error) {
+	log.Trace("InferenceUsecase ListPreferenceDatasets")
+
+	return u.feedbackRepository.ListPreferenceDatasetSnapshots(ctx, orgID, filter)
+}
+
+func (u *inferenceUsecase) BuildPreferenceDataset(ctx context.Context, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
+	log.Trace("InferenceUsecase BuildPreferenceDataset")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
 	dataset, err := u.feedbackRepository.ReadPreferenceDataset(ctx, request)
 	if err != nil {
 		return nil, err
 	}
+	var evalFreeze *preferenceEvalSetFreeze
 	if request.OutputURI != "" {
+		evalFreeze, err = u.preparePreferenceEvalSet(ctx, dataset)
+		if err != nil {
+			return nil, err
+		}
 		dataset.PreferenceDatasetID = preferenceDatasetID(dataset)
 		dataset.OutputURI = preferenceDatasetOutputURI(request.OutputURI, dataset)
-		dataset.EvaluationOutputURI = preferenceDatasetEvaluationOutputURI(request.OutputURI, dataset)
+		if strings.TrimSpace(dataset.EvaluationOutputURI) == "" {
+			dataset.EvaluationOutputURI = preferenceDatasetEvaluationOutputURI(request.OutputURI, dataset)
+		}
+		dataset.IntegrityKey = preferenceDatasetIntegrityKey(dataset)
+		if evalFreeze != nil && evalFreeze.evalSet != nil {
+			evalFreeze.evalSet.EvalDatasetURI = dataset.EvaluationOutputURI
+		}
 	}
 	if dataset.ExampleCount() < request.MinExamples {
 		return dataset, nil
@@ -381,12 +443,11 @@ func (u *inferenceUsecase) ExportPreferenceDataset(ctx context.Context, request 
 		return nil, err
 	}
 	if written != nil && written.Exported {
-		written.PreferenceDatasetID = preferenceDatasetID(written)
 		written.Format = preferenceDatasetFormat(written.Format)
 		written.EligibilityPolicy = preferenceDatasetEligibilityPolicy(written.EligibilityPolicy)
 		written.MinExamples = request.MinExamples
 		written.Limit = request.Limit
-		return u.recordPreferenceDatasetSnapshot(ctx, written, request)
+		return u.recordPreferenceDatasetSnapshot(ctx, written, request, evalFreeze)
 	}
 	return written, nil
 }
@@ -406,17 +467,19 @@ func (u *inferenceUsecase) recordFeedback(ctx context.Context, feedback *model.I
 	return record, err
 }
 
-func (u *inferenceUsecase) recordPreferenceDatasetSnapshot(ctx context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+func (u *inferenceUsecase) recordPreferenceDatasetSnapshot(ctx context.Context, dataset *model.PreferenceDataset, request model.PreferenceDatasetBuildRequest, evalFreeze *preferenceEvalSetFreeze) (*model.PreferenceDataset, error) {
 	log.Trace("InferenceUsecase recordPreferenceDatasetSnapshot")
 
 	var record *model.PreferenceDataset
-	err := u.inferenceUnitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+	err := u.inferenceUnitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		if evalFreeze != nil && evalFreeze.evalSet != nil && u.lineageEvalSetRepository != nil {
+			if _, err := u.lineageEvalSetRepository.FreezeEvalSet(ctx, tx, evalFreeze.evalSet, evalFreeze.exampleIDs); err != nil {
+				return err
+			}
+		}
 		out, err := u.feedbackRepository.RecordPreferenceDatasetSnapshot(ctx, tx, dataset, request)
 		if err != nil {
 			return err
-		}
-		if err := enqueue(u.preferenceEventBuilder.PreferenceDatasetReadyMessage(out, request)); err != nil {
-			return fmt.Errorf("enqueue preference dataset ready: %w", err)
 		}
 		record = out
 		return nil
@@ -927,7 +990,7 @@ func renderPreferenceDatasetOutputURI(uriTemplate string, dataset *model.Prefere
 	log.Trace("renderPreferenceDatasetOutputURI")
 
 	outputURI := strings.TrimSpace(uriTemplate)
-	outputURI = strings.ReplaceAll(outputURI, "{request_id}", dataset.RequestID.String())
+	outputURI = strings.ReplaceAll(outputURI, "{endpoint_id}", dataset.EndpointID.String())
 	outputURI = strings.ReplaceAll(outputURI, "{dataset_id}", dataset.DatasetID.String())
 	outputURI = strings.ReplaceAll(outputURI, "{model_id}", dataset.ModelID.String())
 	outputURI = strings.ReplaceAll(outputURI, "{preference_dataset_id}", dataset.PreferenceDatasetID.String())
@@ -953,6 +1016,7 @@ func preferenceDatasetID(dataset *model.PreferenceDataset) uuid.UUID {
 	parts := []string{
 		"preference-dataset",
 		dataset.OrgID.String(),
+		dataset.EndpointID.String(),
 		dataset.DatasetID.String(),
 		dataset.ModelID.String(),
 		dataset.ParentModelKind.String(),
@@ -960,13 +1024,166 @@ func preferenceDatasetID(dataset *model.PreferenceDataset) uuid.UUID {
 		strings.TrimSpace(dataset.ParentArtifactChecksum),
 		strings.TrimSpace(dataset.ParentAdapterURI),
 		strings.TrimSpace(dataset.ParentBaseModel),
+		strings.TrimSpace(dataset.ParentLineageName),
+		strings.TrimSpace(dataset.ParentModelName),
 		fmt.Sprintf("%d", dataset.ParentModelVersion),
+	}
+	for _, datasetID := range dedupeUUIDs(dataset.DatasetIDs) {
+		parts = append(parts, datasetID.String())
 	}
 	for _, example := range dataset.Examples {
 		parts = append(parts, example.PreferenceExampleID.String())
 		parts = append(parts, example.Split)
 	}
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join(parts, ":")))
+}
+
+func preferenceDatasetIntegrityKey(dataset *model.PreferenceDataset) string {
+	log.Trace("preferenceDatasetIntegrityKey")
+
+	if dataset == nil {
+		return ""
+	}
+	parts := []string{
+		"preference-dataset-integrity-v1",
+		dataset.PreferenceDatasetID.String(),
+		dataset.OrgID.String(),
+		dataset.EndpointID.String(),
+		dataset.DatasetID.String(),
+		dataset.ModelID.String(),
+		dataset.ParentModelKind.String(),
+		strings.TrimSpace(dataset.ParentArtifactURI),
+		strings.TrimSpace(dataset.ParentArtifactChecksum),
+		strings.TrimSpace(dataset.ParentAdapterURI),
+		strings.TrimSpace(dataset.ParentBaseModel),
+		strings.TrimSpace(dataset.ParentLineageName),
+		strings.TrimSpace(dataset.ParentModelName),
+		fmt.Sprintf("%d", dataset.ParentModelVersion),
+		strings.TrimSpace(dataset.OutputURI),
+		strings.TrimSpace(dataset.EvaluationOutputURI),
+		preferenceDatasetFormat(dataset.Format),
+		preferenceDatasetEligibilityPolicy(dataset.EligibilityPolicy),
+	}
+	for _, datasetID := range dedupeUUIDs(dataset.DatasetIDs) {
+		parts = append(parts, datasetID.String())
+	}
+	for _, example := range dataset.Examples {
+		parts = append(parts,
+			example.PreferenceExampleID.String(),
+			example.FeedbackID.String(),
+			example.RequestID.String(),
+			example.UserID.String(),
+			example.OrgID.String(),
+			example.DatasetID.String(),
+			example.ModelID.String(),
+			strings.TrimSpace(example.Split),
+			example.PromptText,
+			example.AcceptedAnswer,
+			example.RejectedAnswer,
+			fmt.Sprintf("%d", example.Rating),
+			strings.TrimSpace(example.FeedbackLabel),
+		)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+func (u *inferenceUsecase) preparePreferenceEvalSet(ctx context.Context, dataset *model.PreferenceDataset) (*preferenceEvalSetFreeze, error) {
+	log.Trace("InferenceUsecase preparePreferenceEvalSet")
+
+	if u.lineageEvalSetRepository == nil || dataset == nil {
+		return nil, nil
+	}
+	lineageName := preferenceDatasetLineageName(dataset)
+	active, err := u.lineageEvalSetRepository.ReadActiveEvalSet(ctx, dataset.OrgID, lineageName)
+	if err == nil && active != nil {
+		dataset.EvaluationOutputURI = strings.TrimSpace(active.EvalDatasetURI)
+		dataset.Examples = preferenceDatasetTrainOnlyExamples(dataset.Examples)
+		return nil, nil
+	}
+	if err != nil && !errors.Is(err, domain.ErrEvalSetNotFound) {
+		return nil, err
+	}
+	exampleIDs := preferenceDatasetEvalExampleIDs(dataset)
+	if len(exampleIDs) < minimumFrozenEvalExamples {
+		return nil, nil
+	}
+	return &preferenceEvalSetFreeze{
+		evalSet: &model.LineageEvalSet{
+			OrgID:        dataset.OrgID,
+			LineageName:  lineageName,
+			Version:      1,
+			Checksum:     preferenceEvalSetChecksum(exampleIDs),
+			ExampleCount: len(exampleIDs),
+			Source:       model.LineageEvalSetSourceFrozenGen0,
+			Active:       true,
+		},
+		exampleIDs: exampleIDs,
+	}, nil
+}
+
+func preferenceDatasetLineageName(dataset *model.PreferenceDataset) string {
+	log.Trace("preferenceDatasetLineageName")
+
+	if dataset == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(dataset.ParentLineageName); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(dataset.ParentModelName); name != "" {
+		return name
+	}
+	if dataset.ModelID != uuid.Nil {
+		return dataset.ModelID.String()
+	}
+	return strings.TrimSpace(dataset.ParentBaseModel)
+}
+
+func preferenceDatasetTrainOnlyExamples(examples []model.PreferenceExample) []model.PreferenceExample {
+	log.Trace("preferenceDatasetTrainOnlyExamples")
+
+	out := make([]model.PreferenceExample, len(examples))
+	copy(out, examples)
+	for i := range out {
+		out[i].Split = "TRAIN"
+	}
+	return out
+}
+
+func preferenceDatasetEvalExampleIDs(dataset *model.PreferenceDataset) []uuid.UUID {
+	log.Trace("preferenceDatasetEvalExampleIDs")
+
+	if dataset == nil {
+		return nil
+	}
+	evalExamples := dataset.EvaluationExamples()
+	ids := make([]uuid.UUID, 0, len(evalExamples))
+	for _, example := range evalExamples {
+		if example.PreferenceExampleID == uuid.Nil {
+			continue
+		}
+		ids = append(ids, example.PreferenceExampleID)
+	}
+	return ids
+}
+
+func preferenceEvalSetChecksum(exampleIDs []uuid.UUID) string {
+	log.Trace("preferenceEvalSetChecksum")
+
+	if len(exampleIDs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(exampleIDs))
+	for _, id := range exampleIDs {
+		if id == uuid.Nil {
+			continue
+		}
+		parts = append(parts, id.String())
+	}
+	sort.Strings(parts)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+	return fmt.Sprintf("sha256:%x", sum[:])
 }
 
 func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferenceModel *model.InferenceModel) error {

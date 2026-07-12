@@ -30,7 +30,7 @@ const (
 	MsgTypeModelTrainingCompleted
 	MsgTypeModelTrainingFailed
 	MsgTypeModelUpdated
-	MsgTypePreferenceDatasetReady
+	msgTypePreferenceDatasetReadyDeprecated
 	MsgTypeModelArtifactIngested
 	MsgTypePromotionRequested
 	MsgTypePromotionReportReady
@@ -50,7 +50,6 @@ var msgType = map[MsgType]string{
 	MsgTypeModelTrainingCompleted: "model_training_completed",
 	MsgTypeModelTrainingFailed:    "model_training_failed",
 	MsgTypeModelUpdated:           "model_updated",
-	MsgTypePreferenceDatasetReady: "preference_dataset_ready",
 	MsgTypeModelArtifactIngested:  "model_artifact_ingested",
 	MsgTypePromotionRequested:     "promotion_requested",
 	MsgTypePromotionReportReady:   "promotion_report_ready",

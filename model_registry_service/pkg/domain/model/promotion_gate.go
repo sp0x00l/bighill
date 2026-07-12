@@ -51,13 +51,14 @@ type PromotionReportResult struct {
 }
 
 type GatePolicy struct {
-	AbsoluteFloors       map[string]float64
-	MinDeltaVsChampion   map[string]float64
-	NoRegressMetrics     []string
-	RequireEvalDataset   bool
-	RequireDeepchecks    bool
-	RequireEvidently     bool
-	RejectBuiltinMetrics bool
+	AbsoluteFloors           map[string]float64
+	MinDeltaVsChampion       map[string]float64
+	NoRegressMetrics         []string
+	RequireEvalDataset       bool
+	RequireComparableEvalSet bool
+	RequireDeepchecks        bool
+	RequireEvidently         bool
+	RejectBuiltinMetrics     bool
 }
 
 type GateDecision struct {
@@ -85,18 +86,23 @@ func DefaultGatePolicy() GatePolicy {
 			"answer_relevancy",
 			"context_precision",
 		},
-		RequireEvalDataset:   true,
-		RejectBuiltinMetrics: true,
+		RequireEvalDataset:       true,
+		RequireComparableEvalSet: true,
+		RejectBuiltinMetrics:     true,
 	}
 }
 
 func LineageForModel(modelRecord *Model) Lineage {
 	log.Trace("LineageForModel")
 
+	name := strings.TrimSpace(modelRecord.LineageName)
+	if name == "" {
+		name = strings.TrimSpace(modelRecord.Name)
+	}
 	return Lineage{
 		UserID: modelRecord.UserID,
 		OrgID:  modelRecord.OrgID,
-		Name:   modelRecord.Name,
+		Name:   name,
 	}
 }
 
@@ -125,6 +131,9 @@ func EvaluatePromotion(candidate *EvalMetrics, champion *EvalMetrics, report *Pr
 		return reject("evidently report did not pass", nil)
 	}
 	if err := comparableEvalSets(candidate, champion); err != nil {
+		if policy.RequireComparableEvalSet {
+			return reject("champion metrics incomparable; "+err.Error(), nil)
+		}
 		return GateDecision{
 			Promote: true,
 			Reason:  "champion metrics incomparable; floor-only: " + err.Error(),

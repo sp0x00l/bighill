@@ -12,6 +12,7 @@ import (
 	"model_registry_service/pkg/infra/network/adapter"
 
 	"lib/shared_lib/ctxutil"
+	sharedDomain "lib/shared_lib/domain"
 	"lib/shared_lib/transport"
 
 	"github.com/google/uuid"
@@ -125,8 +126,8 @@ func modelListFilterFromRequest(req *http.Request) (model.ListFilter, error) {
 	var filter model.ListFilter
 	query := req.URL.Query()
 	if raw := query.Get("kind"); raw != "" {
-		kind := model.ToModelKind(raw)
-		if !model.IsKnownModelKind(kind) {
+		kind := sharedDomain.ToModelKind(raw)
+		if !sharedDomain.IsKnownModelKind(kind) {
 			return filter, fmt.Errorf("invalid model kind %q", raw)
 		}
 		filter.Kind = kind

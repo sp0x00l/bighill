@@ -171,6 +171,12 @@ func requiredRoutePermission(request events.APIGatewayProxyRequest) string {
 		if len(afterResource) >= 3 && afterResource[0] == "endpoints" && afterResource[2] == "generations" && routeCtx.method == http.MethodPost {
 			return authz.PermissionInferenceInvoke
 		}
+		if len(afterResource) >= 3 && afterResource[0] == "endpoints" && afterResource[2] == "preference-datasets" && routeCtx.method == http.MethodPost {
+			return authz.PermissionModelWrite
+		}
+		if len(afterResource) >= 1 && afterResource[0] == "preference-datasets" && routeCtx.method == http.MethodGet {
+			return authz.PermissionInferenceEndpointsRead
+		}
 		if len(afterResource) == 1 && afterResource[0] == "feedback" && routeCtx.method == http.MethodPost {
 			return authz.PermissionInferenceFeedback
 		}

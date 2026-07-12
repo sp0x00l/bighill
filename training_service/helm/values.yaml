@@ -35,7 +35,7 @@ env:
   temporalTaskQueue: "training-service"
   temporalConnectTimeoutSeconds: "60"
   temporalConnectRetryIntervalSeconds: "1"
-  trainingTriggerEnabled: "false"
+  promotionReportSubscriberEnabled: "false"
   kafkaBroker: "kafka:9092"
   kafkaBaseGroupId: "training"
   kafkaAutoOffsetReset: "earliest"

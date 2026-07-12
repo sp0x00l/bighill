@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -243,6 +244,52 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		Expect(deployer.models[0].ModelID).To(Equal(candidate.ModelID))
 	})
 
+	It("accepts a challenger against the pinned eval set and records promotion deltas", func() {
+		userID := uuid.New()
+		orgID := uuid.New()
+		Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
+		champion := validIntegrationModel()
+		champion.UserID = userID
+		champion.OrgID = orgID
+		champion.ModelVersion = 1
+		champion.Status = model.ModelStatusReady
+		champion.ServingLoadStatus = model.ModelLoadStatusLoaded
+		champion.ServingProtocol = model.ServingProtocolOpenAIChatCompletions
+		champion.MetricsMetadata = integrationMetricsMetadataForEvalURI(0.82, 0.83, 0.84, pinnedIntegrationEvalURI)
+		_, err := modelsUse.RegisterModel(ctx, champion, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
+
+		candidate := trainingCompletedEvent(userID, orgID, uuid.New(), uuid.New(), uuid.New(), 2, 0.91, 0.90, 0.89)
+		listener := registrymessaging.NewModelTrainingCompletedEventListener(modelsUse)
+		Expect(listener.Handle(ctx, uuid.MustParse(candidate.DatasetId), candidate)).To(Succeed())
+		candidateRecord, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, userID, orgID), uuid.MustParse(candidate.TrainingRunId))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(candidateRecord.Name).To(HavePrefix("dpo-"))
+		Expect(candidateRecord.LineageName).To(Equal("movie-ranker"))
+
+		promotionListener := registrymessaging.NewPromotionReportReadyEventListener(modelsUse)
+		Expect(promotionListener.Handle(ctx, candidateRecord.ModelID, &trainingpb.PromotionReportReadyEvent{
+			UserId:             candidateRecord.UserID.String(),
+			OrgId:              candidateRecord.OrgID.String(),
+			ModelId:            candidateRecord.ModelID.String(),
+			TrainingRunId:      candidateRecord.TrainingRunID.String(),
+			PromotionReportUri: "s3://local-dev-bucket/promotion/accepted.json",
+			PromotionDeltas:    "{}",
+		})).To(Succeed())
+
+		promotedModel, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, candidateRecord.UserID, candidateRecord.OrgID), candidateRecord.TrainingRunID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(promotedModel.Status).To(Equal(model.ModelStatusEvaluated))
+		Expect(promotedModel.PromotionDecision).To(ContainSubstring(model.PromotionDecisionOutcomeAccepted.String()))
+		Expect(promotedModel.PromotionReason).To(Equal("candidate beats champion gate"))
+		expectPromotionDelta(promotedModel.PromotionDeltas, "faithfulness", 0.09)
+		expectPromotionDelta(promotedModel.PromotionDeltas, "answer_relevancy", 0.07)
+		expectPromotionDelta(promotedModel.PromotionDeltas, "context_precision", 0.05)
+		Expect(promotedModel.FailureReason).To(BeEmpty())
+		Expect(deployer.models).To(HaveLen(1))
+		Expect(deployer.models[0].ModelID).To(Equal(candidateRecord.ModelID))
+	})
+
 	It("rejects a promotion report when candidate metrics regress against the champion", func() {
 		userID := uuid.New()
 		orgID := uuid.New()
@@ -279,6 +326,46 @@ var _ = Describe("Model registry integration", Ordered, func() {
 		Expect(rejectedModel.Status).To(Equal(model.ModelStatusFailed))
 		Expect(rejectedModel.PromotionDecision).To(ContainSubstring(model.PromotionDecisionOutcomeRejected.String()))
 		Expect(rejectedModel.FailureReason).To(ContainSubstring("candidate metric faithfulness regressed"))
+		Expect(deployer.models).To(BeEmpty())
+	})
+
+	It("rejects promotion when champion and challenger eval sets are incomparable", func() {
+		userID := uuid.New()
+		orgID := uuid.New()
+		Expect(upsertModelRegistryTenant(ctx, database, userID)).To(Succeed())
+		champion := validIntegrationModel()
+		champion.UserID = userID
+		champion.OrgID = orgID
+		champion.ModelVersion = 1
+		champion.Status = model.ModelStatusReady
+		champion.ServingLoadStatus = model.ModelLoadStatusLoaded
+		champion.ServingProtocol = model.ServingProtocolOpenAIChatCompletions
+		champion.MetricsMetadata = integrationMetricsMetadataForEvalURI(0.82, 0.83, 0.84, "s3://evals/old-held-out.jsonl")
+		_, err := modelsUse.RegisterModel(ctx, champion, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
+
+		candidate := trainingCompletedEvent(userID, orgID, uuid.New(), uuid.New(), uuid.New(), 2, 0.91, 0.90, 0.89)
+		listener := registrymessaging.NewModelTrainingCompletedEventListener(modelsUse)
+		Expect(listener.Handle(ctx, uuid.MustParse(candidate.DatasetId), candidate)).To(Succeed())
+		candidateRecord, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, userID, orgID), uuid.MustParse(candidate.TrainingRunId))
+		Expect(err).NotTo(HaveOccurred())
+
+		promotionListener := registrymessaging.NewPromotionReportReadyEventListener(modelsUse)
+		Expect(promotionListener.Handle(ctx, candidateRecord.ModelID, &trainingpb.PromotionReportReadyEvent{
+			UserId:             candidateRecord.UserID.String(),
+			OrgId:              candidateRecord.OrgID.String(),
+			ModelId:            candidateRecord.ModelID.String(),
+			TrainingRunId:      candidateRecord.TrainingRunID.String(),
+			PromotionReportUri: "s3://local-dev-bucket/promotion/incomparable.json",
+			PromotionDeltas:    "{}",
+		})).To(Succeed())
+
+		rejectedModel, err := models.ReadByTrainingRunID(ctxutil.WithActorOrg(ctx, candidateRecord.UserID, candidateRecord.OrgID), candidateRecord.TrainingRunID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rejectedModel.Status).To(Equal(model.ModelStatusFailed))
+		Expect(rejectedModel.PromotionDecision).To(ContainSubstring(model.PromotionDecisionOutcomeRejected.String()))
+		Expect(rejectedModel.FailureReason).To(ContainSubstring("champion metrics incomparable"))
+		Expect(rejectedModel.FailureReason).To(ContainSubstring("eval dataset uri"))
 		Expect(deployer.models).To(BeEmpty())
 	})
 
@@ -496,6 +583,7 @@ func validIntegrationModel() *model.Model {
 		ModelKind:         model.ModelKindFineTuned,
 		Source:            model.ModelSourceTraining,
 		Name:              "movie-ranker",
+		LineageName:       "movie-ranker",
 		ModelVersion:      1,
 		BaseModel:         "mistral-7b",
 		ArtifactLocation:  "s3://local-dev-bucket/models/pending",
@@ -518,7 +606,8 @@ func trainingCompletedEvent(userID, orgID, datasetID, trainingRunID, modelID uui
 		DatasetVersion:    fmt.Sprintf("%d", version),
 		FeatureSnapshotId: uuid.NewString(),
 		ModelId:           modelID.String(),
-		ModelName:         "movie-ranker",
+		ModelName:         "dpo-" + modelID.String(),
+		LineageName:       "movie-ranker",
 		ModelVersion:      fmt.Sprintf("%d", version),
 		BaseModel:         "mistral-7b",
 		ArtifactLocation:  "s3://local-dev-bucket/models/" + trainingRunID.String(),
@@ -551,12 +640,25 @@ func createCandidateFromTraining(ctx context.Context, database *dbconn.Database,
 }
 
 func integrationMetricsMetadata(faithfulness float64, answerRelevancy float64, contextPrecision float64) string {
-	return fmt.Sprintf(`{"passed":true,"metrics":{"faithfulness":%.2f,"answer_relevancy":%.2f,"context_precision":%.2f},"thresholds":{"faithfulness":0.8,"answer_relevancy":0.8,"context_precision":0.8},"report_uri":"s3://local-dev-bucket/evaluations/run.json","evaluator_name":"ragas","evaluator_version":"ragas-v1","metric_suite":"rag","eval_dataset_uri":"s3://evals/held-out.jsonl","eval_dataset_mode":"labeled"}`, faithfulness, answerRelevancy, contextPrecision)
+	return integrationMetricsMetadataForEvalURI(faithfulness, answerRelevancy, contextPrecision, pinnedIntegrationEvalURI)
+}
+
+const pinnedIntegrationEvalURI = "s3://evals/held-out.jsonl"
+
+func integrationMetricsMetadataForEvalURI(faithfulness float64, answerRelevancy float64, contextPrecision float64, evalURI string) string {
+	return fmt.Sprintf(`{"passed":true,"metrics":{"faithfulness":%.2f,"answer_relevancy":%.2f,"context_precision":%.2f},"thresholds":{"faithfulness":0.8,"answer_relevancy":0.8,"context_precision":0.8},"report_uri":"s3://local-dev-bucket/evaluations/run.json","evaluator_name":"ragas","evaluator_version":"ragas-v1","metric_suite":"rag","eval_dataset_uri":"%s","eval_dataset_mode":"labeled"}`, faithfulness, answerRelevancy, contextPrecision, evalURI)
+}
+
+func expectPromotionDelta(raw string, metric string, expected float64) {
+	var deltas map[string]float64
+	Expect(json.Unmarshal([]byte(raw), &deltas)).To(Succeed())
+	Expect(deltas).To(HaveKey(metric))
+	Expect(deltas[metric]).To(BeNumerically("~", expected, 0.0001))
 }
 
 func truncateModelRegistry(ctx context.Context, database *dbconn.Database) error {
 	ctx = ctxutil.WithSystemContext(ctx)
-	for _, table := range []string{"outbox_messages", "models", "tenants"} {
+	for _, table := range []string{"outbox_messages", "published_inference_endpoints", "models", "tenants"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}

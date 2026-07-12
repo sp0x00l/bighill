@@ -28,14 +28,15 @@ func TestRest(t *testing.T) {
 }
 
 type inferenceUsecaseStub struct {
-	endpoints       []*model.PublishedEndpoint
-	generateRequest model.GenerateRequest
-	endpointID      uuid.UUID
-	feedback        *model.InferenceFeedback
-	idempotencyKey  uuid.UUID
-	actor           uuid.UUID
-	org             uuid.UUID
-	err             error
+	endpoints         []*model.PublishedEndpoint
+	preferenceDataset *model.PreferenceDataset
+	generateRequest   model.GenerateRequest
+	endpointID        uuid.UUID
+	feedback          *model.InferenceFeedback
+	idempotencyKey    uuid.UUID
+	actor             uuid.UUID
+	org               uuid.UUID
+	err               error
 }
 
 func (s *inferenceUsecaseStub) RecordModelUpdated(context.Context, *model.InferenceModel, uuid.UUID) (*model.InferenceModel, error) {
@@ -117,7 +118,42 @@ func (s *inferenceUsecaseStub) RecordFeedback(ctx context.Context, feedback *mod
 	return feedback, nil
 }
 
-func (s *inferenceUsecaseStub) ExportPreferenceDataset(context.Context, model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error) {
+func (s *inferenceUsecaseStub) BuildPreferenceDatasetForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
+	s.endpointID = endpointID
+	if actor, ok := ctxutil.TenantID(ctx); ok {
+		s.actor = actor
+	}
+	if org, ok := ctxutil.OrgID(ctx); ok {
+		s.org = org
+	}
+	if err := s.err; err != nil {
+		return nil, err
+	}
+	if s.preferenceDataset != nil {
+		return s.preferenceDataset, nil
+	}
+	return &model.PreferenceDataset{
+		PreferenceDatasetID: uuid.New(),
+		EndpointID:          endpointID,
+		UserID:              request.UserID,
+		OrgID:               request.OrgID,
+		ModelID:             uuid.New(),
+		OutputURI:           request.OutputURI,
+	}, nil
+}
+
+func (s *inferenceUsecaseStub) ReadPreferenceDataset(context.Context, uuid.UUID, uuid.UUID) (*model.PreferenceDataset, error) {
+	return s.preferenceDataset, s.err
+}
+
+func (s *inferenceUsecaseStub) ListPreferenceDatasets(context.Context, uuid.UUID, model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error) {
+	if s.preferenceDataset == nil {
+		return nil, s.err
+	}
+	return []*model.PreferenceDataset{s.preferenceDataset}, s.err
+}
+
+func (s *inferenceUsecaseStub) BuildPreferenceDataset(context.Context, model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
 	return nil, nil
 }
 

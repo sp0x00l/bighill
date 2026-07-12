@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -83,31 +84,48 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 
 func waitForPublishedEndpoint(token string, displayName string) uuid.UUID {
 	var endpointID uuid.UUID
-	Eventually(func(g Gomega) {
+	var endpoint map[string]any
+	var lastErr error
+	Eventually(func() bool {
 		status, body := doJSON(http.MethodGet, "/v1/private/inference/endpoints", nil, token, uuid.Nil)
-		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
 		var endpoints []map[string]any
-		g.Expect(json.Unmarshal(body, &endpoints)).To(Succeed())
-		for _, endpoint := range endpoints {
-			if endpoint["display_name"] != displayName || endpoint["status"] != "ready" {
+		if err := json.Unmarshal(body, &endpoints); err != nil {
+			lastErr = err
+			return false
+		}
+		for _, candidate := range endpoints {
+			if candidate["display_name"] != displayName || candidate["status"] != "ready" {
 				continue
 			}
-			g.Expect(endpoint).To(SatisfyAll(
-				HaveKey("endpoint_id"),
-				Not(HaveKey("model_id")),
-				Not(HaveKey("dataset_id")),
-				Not(HaveKey("org_id")),
-				Not(HaveKey("user_id")),
-			))
-			rawEndpointID, ok := endpoint["endpoint_id"].(string)
-			g.Expect(ok).To(BeTrue())
+			rawEndpointID, ok := candidate["endpoint_id"].(string)
+			if !ok {
+				lastErr = fmt.Errorf("ready endpoint %q has no endpoint_id: %#v", displayName, candidate)
+				return false
+			}
 			parsed, err := uuid.Parse(rawEndpointID)
-			g.Expect(err).NotTo(HaveOccurred())
+			if err != nil {
+				lastErr = err
+				return false
+			}
+			endpoint = candidate
 			endpointID = parsed
-			return
+			lastErr = nil
+			return true
 		}
-		g.Expect(endpoints).To(ContainElement(HaveKeyWithValue("display_name", displayName)))
-	}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(Succeed())
+		lastErr = fmt.Errorf("ready endpoint %q not found in %#v", displayName, endpoints)
+		return false
+	}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(BeTrue(), "published endpoint was not ready: %v", lastErr)
+	Expect(endpoint).To(SatisfyAll(
+		HaveKey("endpoint_id"),
+		Not(HaveKey("model_id")),
+		Not(HaveKey("dataset_id")),
+		Not(HaveKey("org_id")),
+		Not(HaveKey("user_id")),
+	))
 	return endpointID
 }
 

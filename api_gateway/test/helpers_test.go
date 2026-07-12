@@ -59,6 +59,12 @@ func doJSON(method, path string, payload any, bearerToken string, requestID uuid
 }
 
 func doJSONWithTimeout(method, path string, payload any, bearerToken string, requestID uuid.UUID, timeout time.Duration) (int, []byte) {
+	status, body, err := requestWithTimeout(method, path, payload, bearerToken, requestID, timeout)
+	Expect(err).NotTo(HaveOccurred())
+	return status, body
+}
+
+func requestWithTimeout(method, path string, payload any, bearerToken string, requestID uuid.UUID, timeout time.Duration) (int, []byte, error) {
 	var body io.Reader
 	if payload != nil {
 		payloadBytes, err := json.Marshal(payload)
@@ -85,12 +91,16 @@ func doJSONWithTimeout(method, path string, payload any, bearerToken string, req
 
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
-	Expect(err).NotTo(HaveOccurred())
+	if err != nil {
+		return 0, nil, err
+	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
-	Expect(err).NotTo(HaveOccurred())
-	return resp.StatusCode, respBody
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	return resp.StatusCode, respBody, nil
 }
 
 func doMultipartFile(method, path string, fieldName string, filename string, content []byte, bearerToken string, requestID uuid.UUID) (int, []byte) {
@@ -234,11 +244,14 @@ func createDataRegistryDataset(user profileTestUser, payload map[string]any) map
 	defer stopDatasetEvents()
 
 	var created map[string]any
-	Eventually(func(g Gomega) {
+	Eventually(func() bool {
 		status, body := doJSON(http.MethodPost, "/v1/private/data/registry", payload, user.Token, uuid.New())
-		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		if status != http.StatusCreated {
+			return false
+		}
 		created = decodeObject(body)
-	}, 30*time.Second, 1*time.Second).Should(Succeed())
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue())
 	datasetID, err := uuid.Parse(stringField(created, "id"))
 	Expect(err).NotTo(HaveOccurred())
 	datasetEvents.waitFor(datasetID, 30*time.Second, func(event *dataregistrypb.DatasetCreatedEvent) bool {
@@ -251,11 +264,14 @@ func createDataRegistryDataset(user profileTestUser, payload map[string]any) map
 
 func createDataRegistryConnector(user profileTestUser, connectorType string, payload map[string]any) map[string]any {
 	var created map[string]any
-	Eventually(func(g Gomega) {
+	Eventually(func() bool {
 		status, body := doJSON(http.MethodPost, "/v1/private/data/registry/connector/"+connectorType, payload, user.Token, uuid.New())
-		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		if status != http.StatusCreated {
+			return false
+		}
 		created = decodeObject(body)
-	}, 30*time.Second, 1*time.Second).Should(Succeed())
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue())
 	return created
 }
 

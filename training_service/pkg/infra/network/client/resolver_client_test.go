@@ -260,6 +260,94 @@ var _ = Describe("ModelResolver", func() {
 	})
 })
 
+var _ = Describe("PreferenceDatasetResolver", func() {
+	It("resolves ready preference datasets and forwards user and org ids", func() {
+		userID := uuid.New()
+		orgID := uuid.New()
+		datasetID := uuid.New()
+		modelID := uuid.New()
+		preferenceDatasetID := uuid.New()
+		httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			Expect(req.Method).To(Equal(http.MethodGet))
+			Expect(req.URL.Path).To(Equal("/v1/inference/preference-datasets/" + preferenceDatasetID.String()))
+			Expect(req.Header.Get(userIDHeader)).To(Equal(userID.String()))
+			Expect(req.Header.Get(orgIDHeader)).To(Equal(orgID.String()))
+			return jsonResponse(http.StatusOK, `[{
+				"preference_dataset_id":"`+preferenceDatasetID.String()+`",
+				"dataset_id":"`+datasetID.String()+`",
+				"dataset_ids":["`+datasetID.String()+`"],
+				"model_id":"`+modelID.String()+`",
+				"parent_model_kind":"BASE",
+				"parent_artifact_uri":"s3://models/parent",
+				"parent_artifact_checksum":"sha256:parent",
+				"parent_base_model":"llama-3",
+				"parent_model_name":"citadel-rag",
+				"parent_lineage_name":"citadel-lineage",
+				"parent_model_version":3,
+				"output_uri":"s3://preferences/train.jsonl",
+				"evaluation_output_uri":"s3://preferences/eval.jsonl",
+				"example_count":4,
+				"integrity_key":"sha256:pref"
+			}]`), nil
+		})}
+
+		ref, err := NewPreferenceDatasetResolver("http://inference", httpClient).ResolvePreferenceDataset(context.Background(), userID, orgID, preferenceDatasetID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ref.PreferenceDatasetID).To(Equal(preferenceDatasetID.String()))
+		Expect(ref.DatasetID).To(Equal(datasetID.String()))
+		Expect(ref.ModelID).To(Equal(modelID.String()))
+		Expect(ref.ParentArtifactURI).To(Equal("s3://models/parent"))
+		Expect(ref.ParentLineageName).To(Equal("citadel-lineage"))
+		Expect(ref.OutputURI).To(Equal("s3://preferences/train.jsonl"))
+	})
+
+	It("maps missing preference datasets to validation errors", func() {
+		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusNotFound, `{"message":"missing"}`), nil
+		})}
+
+		_, err := NewPreferenceDatasetResolver("http://inference", httpClient).ResolvePreferenceDataset(context.Background(), uuid.New(), uuid.New(), uuid.New())
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+	})
+
+	It("rejects fine-tuned parent datasets without an adapter uri", func() {
+		preferenceDatasetID := uuid.New()
+		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, `[{
+				"preference_dataset_id":"`+preferenceDatasetID.String()+`",
+				"dataset_id":"`+uuid.NewString()+`",
+				"model_id":"`+uuid.NewString()+`",
+				"parent_model_kind":"FINE_TUNED",
+				"parent_artifact_uri":"s3://models/parent",
+				"parent_artifact_checksum":"sha256:parent",
+				"parent_base_model":"llama-3",
+				"parent_model_name":"citadel-rag",
+				"parent_model_version":3,
+				"output_uri":"s3://preferences/train.jsonl",
+				"example_count":4,
+				"integrity_key":"sha256:pref"
+			}]`), nil
+		})}
+
+		_, err := NewPreferenceDatasetResolver("http://inference", httpClient).ResolvePreferenceDataset(context.Background(), uuid.New(), uuid.New(), preferenceDatasetID)
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("adapter uri"))
+	})
+
+	It("maps preference dataset resolver outages to dependency errors", func() {
+		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusInternalServerError, `inference failed`), nil
+		})}
+
+		_, err := NewPreferenceDatasetResolver("http://inference", httpClient).ResolvePreferenceDataset(context.Background(), uuid.New(), uuid.New(), uuid.New())
+
+		Expect(errors.Is(err, domain.ErrDependencyFailed)).To(BeTrue())
+	})
+})
+
 func jsonResponse(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,

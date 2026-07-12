@@ -7,7 +7,6 @@ option go_package = "lib/data_contracts_lib/inference";
 service InferenceService {
   rpc Generate(GenerateRequest) returns (GenerateResponse);
   rpc RecordFeedback(RecordFeedbackRequest) returns (RecordFeedbackResponse);
-  rpc ExportPreferenceDataset(ExportPreferenceDatasetRequest) returns (ExportPreferenceDatasetResponse);
 }
 
 message GenerateRequest {
@@ -60,46 +59,4 @@ message RecordFeedbackRequest {
 message RecordFeedbackResponse {
   string feedback_id = 1;
   string request_id = 2;
-}
-
-message ExportPreferenceDatasetRequest {
-  string request_id = 1;
-  string user_id = 2;
-  string dataset_id = 3;
-  string model_id = 4;
-  string output_uri = 5;
-  int32 min_examples = 6;
-  int32 limit = 7;
-  string org_id = 8;
-}
-
-message ExportPreferenceDatasetResponse {
-  string request_id = 1;
-  string dataset_id = 2;
-  string model_id = 3;
-  string output_uri = 4;
-  int32 example_count = 5;
-  bool exported = 6;
-  string org_id = 7;
-}
-
-message PreferenceDatasetReadyEvent {
-  string preference_dataset_id = 1;
-  string user_id = 2;
-  string dataset_id = 3;
-  string model_id = 4;
-  string source_request_id = 5;
-  string output_uri = 6;
-  int32 example_count = 7;
-  string format = 8;
-  int32 min_examples = 9;
-  int32 limit = 10;
-  string parent_model_kind = 11;
-  string parent_artifact_uri = 12;
-  string parent_artifact_checksum = 13;
-  string parent_adapter_uri = 14;
-  string parent_base_model = 15;
-  int32 parent_model_version = 16;
-  string evaluation_output_uri = 17;
-  string org_id = 18;
 }

@@ -33,16 +33,20 @@ type InferenceRequestRepository interface {
 
 type InferenceFeedbackRepository interface {
 	RecordFeedback(ctx context.Context, tx pgx.Tx, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
-	ReadPreferenceDataset(ctx context.Context, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
-	RecordPreferenceDatasetSnapshot(ctx context.Context, tx pgx.Tx, dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) (*model.PreferenceDataset, error)
+	ReadPreferenceDataset(ctx context.Context, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error)
+	RecordPreferenceDatasetSnapshot(ctx context.Context, tx pgx.Tx, dataset *model.PreferenceDataset, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error)
+	ReadPreferenceDatasetSnapshot(ctx context.Context, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (*model.PreferenceDataset, error)
+	ListPreferenceDatasetSnapshots(ctx context.Context, orgID uuid.UUID, filter model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error)
+}
+
+type LineageEvalSetRepository interface {
+	ReadActiveEvalSet(ctx context.Context, orgID uuid.UUID, lineageName string) (*model.LineageEvalSet, error)
+	FreezeEvalSet(ctx context.Context, tx pgx.Tx, evalSet *model.LineageEvalSet, exampleIDs []uuid.UUID) (*model.LineageEvalSet, error)
+	RegisterCuratedEvalSet(ctx context.Context, tx pgx.Tx, evalSet *model.LineageEvalSet, exampleIDs []uuid.UUID) (*model.LineageEvalSet, error)
 }
 
 type InferenceUnitOfWorkAdapter interface {
 	Do(ctx context.Context, fn shareduow.TxFunc) error
-}
-
-type PreferenceDatasetEventBuilder interface {
-	PreferenceDatasetReadyMessage(dataset *model.PreferenceDataset, request model.PreferenceDatasetExportRequest) shareduow.OutboundMessage
 }
 
 type PreferenceDatasetWriter interface {

@@ -29,6 +29,7 @@ message ModelUpdatedEvent {
   string promotion_deltas = 24;
   string org_id = 25;
   string serving_protocol = 26;
+  string lineage_name = 27;
 }
 
 message PromotionRequestedEvent {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
@@ -173,6 +174,8 @@ func assignScanValue(dest any, value any) {
 		}
 	case *bool:
 		*typed = value.(bool)
+	case *time.Time:
+		*typed = value.(time.Time)
 	default:
 		Fail(fmt.Sprintf("unsupported scan destination %T", dest))
 	}
@@ -196,6 +199,7 @@ func validInferenceModel() *model.InferenceModel {
 		Source:            model.ModelSourceTraining,
 		SourceMetadata:    "{}",
 		Name:              "fraud-rag-ranker",
+		LineageName:       "fraud-rag",
 		ModelVersion:      7,
 		BaseModel:         "bge-small-en-v1.5",
 		ArtifactLocation:  "s3://models/fraud-rag-ranker/7/model.onnx",
@@ -225,6 +229,7 @@ func inferenceModelRow(inferenceModel *model.InferenceModel) pgx.Row {
 		inferenceModel.SourceURI,
 		inferenceModel.SourceMetadata,
 		inferenceModel.Name,
+		inferenceModel.LineageName,
 		inferenceModel.ModelVersion,
 		inferenceModel.BaseModel,
 		inferenceModel.ArtifactLocation,
@@ -288,6 +293,7 @@ var _ = Describe("InferenceModelRepository", func() {
 				HaveKeyWithValue("source", model.ModelSourceTraining.String()),
 				HaveKeyWithValue("source_metadata", "{}"),
 				HaveKeyWithValue("name", inferenceModel.Name),
+				HaveKeyWithValue("lineage_name", inferenceModel.LineageName),
 				HaveKeyWithValue("model_version", inferenceModel.ModelVersion),
 				HaveKeyWithValue("adapter_uri", inferenceModel.AdapterURI),
 				HaveKeyWithValue("serving_target", inferenceModel.ServingTarget),
@@ -386,7 +392,7 @@ var _ = Describe("InferenceModelRepository", func() {
 		It("surfaces invalid persisted status values", func() {
 			inferenceModel := validInferenceModel()
 			row := inferenceModelRow(inferenceModel).(*repositoryRow)
-			row.values[22] = "BROKEN"
+			row.values[23] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
 			record, err := repository.ReadByID(ctx, inferenceModel.OrgID, inferenceModel.ModelID)
@@ -398,7 +404,7 @@ var _ = Describe("InferenceModelRepository", func() {
 		It("surfaces invalid persisted serving load status values", func() {
 			inferenceModel := validInferenceModel()
 			row := inferenceModelRow(inferenceModel).(*repositoryRow)
-			row.values[20] = "BROKEN"
+			row.values[21] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
 			record, err := repository.ReadByID(ctx, inferenceModel.OrgID, inferenceModel.ModelID)

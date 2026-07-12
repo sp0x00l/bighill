@@ -38,6 +38,7 @@ func (b *TrainingEventBuilder) ModelTrainingCompletedMessage(result *model.Train
 		FeatureSnapshotId: result.FeatureSnapshotID,
 		ModelId:           modelID.String(),
 		ModelName:         result.ModelName,
+		LineageName:       trainingResultLineageName(result),
 		ModelVersion:      result.ModelVersion,
 		BaseModel:         result.BaseModel,
 		ArtifactLocation:  result.ModelURI,
@@ -79,6 +80,7 @@ func (b *TrainingEventBuilder) ModelTrainingFailedMessage(result *model.Training
 		FeatureSnapshotId: result.FeatureSnapshotID,
 		ModelId:           modelID.String(),
 		ModelName:         result.ModelName,
+		LineageName:       trainingResultLineageName(result),
 		ModelVersion:      result.ModelVersion,
 		BaseModel:         result.BaseModel,
 		FailureReason:     result.FailureReason,
@@ -94,6 +96,18 @@ func (b *TrainingEventBuilder) ModelTrainingFailedMessage(result *model.Training
 		},
 		DispatchKey: "model_training_failed:" + result.TrainingRunID,
 	}, nil
+}
+
+func trainingResultLineageName(result *model.TrainingRunResult) string {
+	log.Trace("trainingResultLineageName")
+
+	if result == nil {
+		return ""
+	}
+	if result.LineageName != "" {
+		return result.LineageName
+	}
+	return result.ModelName
 }
 
 func (b *TrainingEventBuilder) PromotionReportReadyMessage(report *model.PromotionReport) (msgConn.OutboundMessage, error) {

@@ -24,6 +24,12 @@ type StartTrainingRunDTO struct {
 	EvaluationProfile string `json:"evaluation_profile"`
 }
 
+type StartDPOTrainingRunDTO struct {
+	PreferenceDatasetID string `json:"preference_dataset_id" validate:"required,uuid,ne=00000000-0000-0000-0000-000000000000"`
+	TrainingProfile     string `json:"training_profile"`
+	EvaluationProfile   string `json:"evaluation_profile"`
+}
+
 type StartTrainingRunResponseDTO struct {
 	TrainingRunID string `json:"training_run_id"`
 	StatusURL     string `json:"status_url"`
@@ -36,6 +42,7 @@ type TrainingRunStatusDTO struct {
 
 type TrainingRunDTOAdapter interface {
 	FromDTO(ctx context.Context, body []byte) (model.StartTrainingRunCommand, error)
+	FromDPOTrainingRunDTO(ctx context.Context, body []byte) (model.StartDPOTrainingRunCommand, error)
 	ToStartTrainingRunDTO(ctx context.Context, result *model.TrainingRunStartResult) ([]byte, error)
 	ToTrainingRunStatusDTO(ctx context.Context, result *model.TrainingRunStatusResult) ([]byte, error)
 }
@@ -84,6 +91,34 @@ func (a *trainingRunDTOAdapter) FromDTO(ctx context.Context, body []byte) (model
 		SourceModelID:     sourceModelID,
 		TrainingProfile:   strings.TrimSpace(dto.TrainingProfile),
 		EvaluationProfile: strings.TrimSpace(dto.EvaluationProfile),
+	}, nil
+}
+
+func (a *trainingRunDTOAdapter) FromDPOTrainingRunDTO(ctx context.Context, body []byte) (model.StartDPOTrainingRunCommand, error) {
+	log.Trace("TrainingRunDTOAdapter FromDPOTrainingRunDTO")
+
+	var dto StartDPOTrainingRunDTO
+	if err := a.encoder.DecodeStringToData(string(body), &dto); err != nil {
+		return model.StartDPOTrainingRunCommand{}, domain.ErrValidationFailed.Extend(err.Error())
+	}
+	if err := a.validator.Struct(dto); err != nil {
+		log.WithContext(ctx).WithError(err).Error("StartDPOTrainingRunDTO validation failed")
+		return model.StartDPOTrainingRunCommand{}, domain.ErrValidationFailed.Extend(err.Error())
+	}
+	preferenceDatasetID, err := uuid.Parse(dto.PreferenceDatasetID)
+	if err != nil {
+		return model.StartDPOTrainingRunCommand{}, domain.ErrValidationFailed.Extend("preference dataset id is required")
+	}
+	if err := validatePinnedProfileName("training profile", dto.TrainingProfile); err != nil {
+		return model.StartDPOTrainingRunCommand{}, err
+	}
+	if err := validatePinnedProfileName("evaluation profile", dto.EvaluationProfile); err != nil {
+		return model.StartDPOTrainingRunCommand{}, err
+	}
+	return model.StartDPOTrainingRunCommand{
+		PreferenceDatasetID: preferenceDatasetID,
+		TrainingProfile:     strings.TrimSpace(dto.TrainingProfile),
+		EvaluationProfile:   strings.TrimSpace(dto.EvaluationProfile),
 	}, nil
 }
 

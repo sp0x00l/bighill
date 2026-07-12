@@ -21,6 +21,17 @@ var _ = Describe("PromotionGate", func() {
 		}
 	}
 
+	It("uses a stable lineage name instead of the generation display name", func() {
+		record := &model.Model{
+			Name:        "dpo-123",
+			LineageName: "movie-ranker",
+		}
+
+		lineage := model.LineageForModel(record)
+
+		Expect(lineage.Name).To(Equal("movie-ranker"))
+	})
+
 	It("promotes the first model in a lineage when floors pass", func() {
 		decision := model.EvaluatePromotion(candidateMetrics(map[string]float64{
 			"faithfulness":      0.82,
@@ -47,6 +58,7 @@ var _ = Describe("PromotionGate", func() {
 		decision := model.EvaluatePromotion(candidate, champion, nil, policy)
 
 		Expect(decision.Promote).To(BeTrue())
+		Expect(decision.Reason).To(Equal("candidate beats champion gate"))
 		Expect(decision.Deltas).To(HaveKeyWithValue("faithfulness", BeNumerically("~", 0.04, 0.0001)))
 	})
 
@@ -111,6 +123,8 @@ var _ = Describe("PromotionGate", func() {
 	})
 
 	It("falls back to absolute floors when champion metrics are incomparable", func() {
+		lenient := policy
+		lenient.RequireComparableEvalSet = false
 		champion := candidateMetrics(map[string]float64{
 			"faithfulness":      0.80,
 			"answer_relevancy":  0.82,
@@ -123,10 +137,33 @@ var _ = Describe("PromotionGate", func() {
 			"context_precision": 0.95,
 		})
 
-		decision := model.EvaluatePromotion(candidate, champion, nil, policy)
+		decision := model.EvaluatePromotion(candidate, champion, nil, lenient)
 
 		Expect(decision.Promote).To(BeTrue())
 		Expect(decision.Reason).To(ContainSubstring("floor-only"))
+		Expect(decision.Reason).To(ContainSubstring("eval dataset uri differ"))
+		Expect(decision.Deltas).To(BeEmpty())
+	})
+
+	It("rejects incomparable champion metrics when the policy requires a comparable eval set", func() {
+		strict := policy
+		strict.RequireComparableEvalSet = true
+		champion := candidateMetrics(map[string]float64{
+			"faithfulness":      0.80,
+			"answer_relevancy":  0.82,
+			"context_precision": 0.81,
+		})
+		champion.EvalDatasetURI = "s3://evals/old.jsonl"
+		candidate := candidateMetrics(map[string]float64{
+			"faithfulness":      0.95,
+			"answer_relevancy":  0.95,
+			"context_precision": 0.95,
+		})
+
+		decision := model.EvaluatePromotion(candidate, champion, nil, strict)
+
+		Expect(decision.Promote).To(BeFalse())
+		Expect(decision.Reason).To(ContainSubstring("incomparable"))
 		Expect(decision.Reason).To(ContainSubstring("eval dataset uri differ"))
 		Expect(decision.Deltas).To(BeEmpty())
 	})

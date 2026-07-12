@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -23,27 +24,45 @@ const (
 
 type TrainingCommandUsecase interface {
 	StartTrainingRun(ctx context.Context, command model.StartTrainingRunCommand) (*model.TrainingRunStartResult, error)
+	StartDPOTrainingRun(ctx context.Context, command model.StartDPOTrainingRunCommand) (*model.TrainingRunStartResult, error)
 	ReadTrainingRun(ctx context.Context, trainingRunID uuid.UUID) (*model.TrainingRunStatusResult, error)
 }
 
 type trainingCommandUsecase struct {
-	starter         TrainingWorkflowStarter
-	statusReader    TrainingWorkflowStatusReader
-	datasetResolver DatasetResolver
-	modelResolver   ModelResolver
-	profileCatalog  TrainingProfileCatalog
+	starter                   TrainingWorkflowStarter
+	statusReader              TrainingWorkflowStatusReader
+	datasetResolver           DatasetResolver
+	modelResolver             ModelResolver
+	preferenceDatasetResolver PreferenceDatasetResolver
+	profileCatalog            TrainingProfileCatalog
 }
 
-func NewTrainingCommandUsecase(starter TrainingWorkflowStarter, statusReader TrainingWorkflowStatusReader, datasetResolver DatasetResolver, modelResolver ModelResolver, profileCatalog TrainingProfileCatalog) TrainingCommandUsecase {
+type TrainingCommandOption func(*trainingCommandUsecase)
+
+func WithPreferenceDatasetResolver(resolver PreferenceDatasetResolver) TrainingCommandOption {
+	log.Trace("WithPreferenceDatasetResolver")
+
+	return func(u *trainingCommandUsecase) {
+		u.preferenceDatasetResolver = resolver
+	}
+}
+
+func NewTrainingCommandUsecase(starter TrainingWorkflowStarter, statusReader TrainingWorkflowStatusReader, datasetResolver DatasetResolver, modelResolver ModelResolver, profileCatalog TrainingProfileCatalog, opts ...TrainingCommandOption) TrainingCommandUsecase {
 	log.Trace("NewTrainingCommandUsecase")
 
-	return &trainingCommandUsecase{
+	u := &trainingCommandUsecase{
 		starter:         starter,
 		statusReader:    statusReader,
 		datasetResolver: datasetResolver,
 		modelResolver:   modelResolver,
 		profileCatalog:  profileCatalog,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(u)
+		}
+	}
+	return u
 }
 
 func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command model.StartTrainingRunCommand) (out *model.TrainingRunStartResult, err error) {
@@ -69,7 +88,7 @@ func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command m
 	if err != nil {
 		return nil, err
 	}
-	trainingProfile, evaluationProfile, err := u.resolveProfiles(ctx, command)
+	trainingProfile, evaluationProfile, err := u.resolveProfiles(ctx, command.TrainingProfile, command.EvaluationProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +96,38 @@ func (u *trainingCommandUsecase) StartTrainingRun(ctx context.Context, command m
 	request := u.trainingRunRequest(command.IdempotencyKey.String(), userID, orgID, datasetRef, sourceModel, trainingProfile, evaluationProfile)
 	if err := u.starter.StartTrainingWorkflow(ctx, request); err != nil {
 		return nil, fmt.Errorf("%w: start training workflow: %w", domain.ErrTrainModel, err)
+	}
+	return &model.TrainingRunStartResult{
+		TrainingRunID: request.TrainingRunID,
+		StatusURL:     defaultTrainingRunStatusURLPrefix + request.TrainingRunID,
+	}, nil
+}
+
+func (u *trainingCommandUsecase) StartDPOTrainingRun(ctx context.Context, command model.StartDPOTrainingRunCommand) (out *model.TrainingRunStartResult, err error) {
+	log.Trace("TrainingCommandUsecase StartDPOTrainingRun")
+
+	ctx, span := usecasetrace.StartSpan(ctx, "training_service/app", "training.start_dpo_training_run")
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	userID, _ := ctxutil.TenantID(ctx)
+	orgID, _ := ctxutil.OrgID(ctx)
+	span.SetAttributes(
+		attribute.String("user_id", userID.String()),
+		attribute.String("org_id", orgID.String()),
+		attribute.String("preference_dataset_id", command.PreferenceDatasetID.String()),
+	)
+
+	preferenceDataset, err := u.preferenceDatasetResolver.ResolvePreferenceDataset(ctx, userID, orgID, command.PreferenceDatasetID)
+	if err != nil {
+		return nil, err
+	}
+	trainingProfile, evaluationProfile, err := u.resolveProfiles(ctx, command.TrainingProfile, command.EvaluationProfile)
+	if err != nil {
+		return nil, err
+	}
+	request := u.dpoTrainingRunRequest(command.IdempotencyKey.String(), userID, orgID, preferenceDataset, trainingProfile, evaluationProfile)
+	if err := u.starter.StartTrainingWorkflow(ctx, request); err != nil {
+		return nil, fmt.Errorf("%w: start DPO training workflow: %w", domain.ErrTrainModel, err)
 	}
 	return &model.TrainingRunStartResult{
 		TrainingRunID: request.TrainingRunID,
@@ -94,14 +145,14 @@ func (u *trainingCommandUsecase) ReadTrainingRun(ctx context.Context, trainingRu
 	return u.statusReader.ReadTrainingWorkflowStatus(ctx, trainingRunID.String())
 }
 
-func (u *trainingCommandUsecase) resolveProfiles(ctx context.Context, command model.StartTrainingRunCommand) (model.TrainingProfile, string, error) {
+func (u *trainingCommandUsecase) resolveProfiles(ctx context.Context, trainingProfileName string, evaluationProfileName string) (model.TrainingProfile, string, error) {
 	log.Trace("trainingCommandUsecase resolveProfiles")
 
-	trainingProfile, err := u.profileCatalog.ResolveTrainingProfile(ctx, command.TrainingProfile)
+	trainingProfile, err := u.profileCatalog.ResolveTrainingProfile(ctx, trainingProfileName)
 	if err != nil {
 		return model.TrainingProfile{}, "", err
 	}
-	evaluationProfile, err := u.profileCatalog.ResolveEvaluationProfile(ctx, command.EvaluationProfile)
+	evaluationProfile, err := u.profileCatalog.ResolveEvaluationProfile(ctx, evaluationProfileName)
 	if err != nil {
 		return model.TrainingProfile{}, "", err
 	}
@@ -136,6 +187,7 @@ func (u *trainingCommandUsecase) trainingRunRequest(idempotencyKey string, userI
 		SourceModelKind:        sourceModel.ModelKind,
 		SourceArtifactChecksum: sourceModel.ArtifactChecksum,
 		ModelName:              datasetRef.TableName,
+		LineageName:            trainingLineageName(datasetRef, sourceModel),
 		ModelVersion:           trainingModelVersion(sourceModel),
 		BaseModel:              baseModel,
 		EvaluationProfile:      evaluationProfile,
@@ -149,6 +201,15 @@ func (u *trainingCommandUsecase) trainingRunRequest(idempotencyKey string, userI
 	return request
 }
 
+func trainingLineageName(datasetRef model.MaterializedDatasetRef, sourceModel model.SourceModelRef) string {
+	log.Trace("trainingLineageName")
+
+	if sharedDomain.ToModelKind(sourceModel.ModelKind) == sharedDomain.ModelKindFineTuned && strings.TrimSpace(sourceModel.LineageName) != "" {
+		return strings.TrimSpace(sourceModel.LineageName)
+	}
+	return strings.TrimSpace(datasetRef.TableName)
+}
+
 func trainingModelVersion(sourceModel model.SourceModelRef) string {
 	log.Trace("trainingModelVersion")
 
@@ -156,4 +217,91 @@ func trainingModelVersion(sourceModel model.SourceModelRef) string {
 		return fmt.Sprintf("%d", sourceModel.ModelVersion+1)
 	}
 	return "1"
+}
+
+func (u *trainingCommandUsecase) dpoTrainingRunRequest(idempotencyKey string, userID uuid.UUID, orgID uuid.UUID, preferenceDataset model.PreferenceDatasetRef, trainingProfile model.TrainingProfile, evaluationProfile string) model.TrainingRunRequest {
+	log.Trace("trainingCommandUsecase dpoTrainingRunRequest")
+
+	trainingProfile.Trainer = "dpo"
+	trainingProfile.PreferenceDatasetURI = preferenceDataset.OutputURI
+	if strings.TrimSpace(trainingProfile.Name) == "" {
+		trainingProfile.Name = "dpo"
+	}
+	trainingRunID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(strings.Join([]string{
+		"dpo",
+		orgID.String(),
+		userID.String(),
+		preferenceDataset.PreferenceDatasetID,
+		preferenceDataset.ModelID,
+		fmt.Sprintf("%d", preferenceDataset.ParentModelVersion),
+		idempotencyKey,
+	}, ":")))
+	modelVersion := fmt.Sprintf("%d", preferenceDataset.ParentModelVersion+1)
+	return model.TrainingRunRequest{
+		TrainingRunID:          trainingRunID.String(),
+		UserID:                 userID.String(),
+		OrgID:                  orgID.String(),
+		DatasetID:              preferenceDataset.DatasetID,
+		PreferenceDatasetID:    preferenceDataset.PreferenceDatasetID,
+		PreferenceDatasetURI:   preferenceDataset.OutputURI,
+		SourceModelID:          preferenceDataset.ModelID,
+		SourceArtifactURI:      preferenceDataset.ParentArtifactURI,
+		SourceModelKind:        preferenceDataset.ParentModelKind,
+		SourceArtifactChecksum: preferenceDataset.ParentArtifactChecksum,
+		ParentModelID:          preferenceDataset.ModelID,
+		ParentModelVersion:     fmt.Sprintf("%d", preferenceDataset.ParentModelVersion),
+		ParentAdapterURI:       preferenceDataset.ParentAdapterURI,
+		ModelName:              "dpo-" + preferenceDataset.ModelID,
+		LineageName:            preferenceDpoLineageName(preferenceDataset),
+		ModelVersion:           modelVersion,
+		BaseModel:              preferenceDataset.ParentBaseModel,
+		EvaluationProfile:      preferenceDpoEvaluationProfile(evaluationProfile, preferenceDataset.EvaluationOutputURI),
+		TrainingProfile:        trainingProfile,
+	}
+}
+
+func preferenceDpoLineageName(preferenceDataset model.PreferenceDatasetRef) string {
+	log.Trace("preferenceDpoLineageName")
+
+	if lineageName := strings.TrimSpace(preferenceDataset.ParentLineageName); lineageName != "" {
+		return lineageName
+	}
+	if parentBaseModel := strings.TrimSpace(preferenceDataset.ParentBaseModel); parentBaseModel != "" {
+		return parentBaseModel
+	}
+	return strings.TrimSpace(preferenceDataset.ModelID)
+}
+
+func preferenceDpoEvaluationProfile(profile string, evaluationOutputURI string) string {
+	log.Trace("preferenceDpoEvaluationProfile")
+
+	profile = strings.TrimSpace(profile)
+	evaluationOutputURI = strings.TrimSpace(evaluationOutputURI)
+	if evaluationOutputURI == "" {
+		return profile
+	}
+	values := map[string]any{}
+	if strings.HasPrefix(profile, "{") {
+		if err := json.Unmarshal([]byte(profile), &values); err != nil {
+			return profile
+		}
+	} else if profile != "" {
+		values["evaluator_name"] = profile
+	}
+	if _, ok := values["metric_suite"]; !ok {
+		values["metric_suite"] = "preference"
+	}
+	if _, ok := values["evaluator_name"]; !ok {
+		values["evaluator_name"] = "pairwise-judge"
+	}
+	if _, ok := values["evaluator_version"]; !ok {
+		values["evaluator_version"] = "v1"
+	}
+	values["dataset_uri"] = evaluationOutputURI
+	values["dataset_mode"] = "heldout_preference"
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return profile
+	}
+	return string(raw)
 }

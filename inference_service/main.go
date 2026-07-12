@@ -172,6 +172,7 @@ func main() {
 	endpointRepository := inferencedb.NewPublishedEndpointRepository(database)
 	requestRepository := inferencedb.NewInferenceRequestRepository(database)
 	feedbackRepository := inferencedb.NewInferenceFeedbackRepository(database)
+	lineageEvalRepository := inferencedb.NewLineageEvalRepository(database)
 	inferenceUnitOfWork := shareduow.New(database.Pool,
 		shareduow.WithTransactionalOutbox(orderedOutbox),
 		shareduow.WithOutboxSignal(func() { messagingConn.NotifyOutboxSignal(outboxSignal) }),
@@ -201,13 +202,13 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("invalid rag merge strategy configuration")
 	}
-	preferenceEventBuilder := inferencemessaging.NewPreferenceDatasetEventBuilder(cfg.Topics.PreferenceDataset)
 	inferenceOptions := []app.InferenceOption{
 		app.WithInferenceDatasetRepository(datasetRepository),
 		app.WithPublishedEndpointRepository(endpointRepository),
 		app.WithInferenceRequestRepository(requestRepository),
 		app.WithInferenceFeedbackRepository(feedbackRepository),
-		app.WithInferenceUnitOfWork(inferenceUnitOfWork, preferenceEventBuilder),
+		app.WithLineageEvalSetRepository(lineageEvalRepository),
+		app.WithInferenceUnitOfWork(inferenceUnitOfWork),
 		app.WithRetrievalClient(retrievalClient),
 		app.WithGenerationAdapters(generationAdapters),
 		app.WithPromptStrategy(promptStrategy),
@@ -371,7 +372,7 @@ func readInferenceConfig() inferenceConfig {
 	preferenceDatasetExportEnabled := env.WithDefaultBool("INFERENCE_SERVICE_PREFERENCE_DATASET_EXPORT_ENABLED", false)
 	preferenceDatasetURITemplate := env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE", "")
 	if preferenceDatasetExportEnabled && strings.TrimSpace(preferenceDatasetURITemplate) == "" {
-		log.Fatal("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE is required when preference dataset export is enabled")
+		log.Fatal("INFERENCE_SERVICE_PREFERENCE_DATASET_URI_TEMPLATE is required when preference dataset builds are enabled")
 	}
 	cfg := inferenceConfig{
 		ServiceName:        env.WithDefaultString("INFERENCE_SERVICE_NAME", "inference-service"),

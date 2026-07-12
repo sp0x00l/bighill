@@ -196,6 +196,7 @@ func completedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTrain
 		TrainingRunID:     trainingRunID,
 		DatasetID:         datasetID,
 		Name:              modelName,
+		LineageName:       lineageNameFromEvent(payload.GetLineageName(), modelName),
 		ModelVersion:      modelVersion,
 		BaseModel:         strings.TrimSpace(payload.GetBaseModel()),
 		ArtifactLocation:  strings.TrimSpace(payload.GetArtifactLocation()),
@@ -256,6 +257,7 @@ func failedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTraining
 		TrainingRunID:   trainingRunID,
 		DatasetID:       datasetID,
 		Name:            modelName,
+		LineageName:     lineageNameFromEvent(payload.GetLineageName(), modelName),
 		ModelVersion:    modelVersion,
 		BaseModel:       strings.TrimSpace(payload.GetBaseModel()),
 		MetricsMetadata: "{}",
@@ -265,6 +267,16 @@ func failedEventToModel(resourceKey uuid.UUID, payload *trainingpb.ModelTraining
 		return nil, uuid.Nil, err
 	}
 	return failedModel, trainingRunID, nil
+}
+
+func lineageNameFromEvent(lineageName string, modelName string) string {
+	log.Trace("lineageNameFromEvent")
+
+	lineageName = strings.TrimSpace(lineageName)
+	if lineageName != "" {
+		return lineageName
+	}
+	return strings.TrimSpace(modelName)
 }
 
 func promotionReportReadyToModel(resourceKey uuid.UUID, payload *trainingpb.PromotionReportReadyEvent) (model.PromotionReportResult, uuid.UUID, error) {

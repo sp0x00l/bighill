@@ -402,7 +402,19 @@ func (u *modelRegistryUsecase) evaluateCandidatePromotion(ctx context.Context, c
 			EvidentlyPassed:  report.EvidentlyPassed,
 		}
 	}
-	return model.EvaluatePromotion(candidateMetrics, championMetrics, evidence, u.gatePolicy), nil
+	decision := model.EvaluatePromotion(candidateMetrics, championMetrics, evidence, u.gatePolicy)
+	if decision.Promote && strings.HasPrefix(decision.Reason, "champion metrics incomparable; floor-only:") {
+		lineage := model.LineageForModel(candidate)
+		log.WithFields(log.Fields{
+			"model_id":                   candidate.ModelID,
+			"lineage":                    lineage.Name,
+			"candidate_eval_dataset_uri": strings.TrimSpace(candidateMetrics.EvalDatasetURI),
+			"champion_eval_dataset_uri":  strings.TrimSpace(championMetrics.EvalDatasetURI),
+			"metric_suite":               strings.TrimSpace(candidateMetrics.MetricSuite),
+			"evaluator_version":          strings.TrimSpace(candidateMetrics.EvaluatorVersion),
+		}).Warn("promotion fell through to floor-only; champion/challenger eval sets incomparable")
+	}
+	return decision, nil
 }
 
 func (u *modelRegistryUsecase) ensureServedModel(ctx context.Context, registeredModel *model.Model) error {

@@ -116,7 +116,8 @@ var _ = Describe("Training event listeners", func() {
 			DatasetVersion:    "4",
 			FeatureSnapshotId: uuid.NewString(),
 			ModelId:           uuid.NewString(),
-			ModelName:         "movie-ranker",
+			ModelName:         "dpo-" + uuid.NewString(),
+			LineageName:       "movie-ranker",
 			ModelVersion:      "4",
 			BaseModel:         "mistral-7b",
 			ArtifactLocation:  "s3://local-dev-bucket/models/run",
@@ -138,6 +139,8 @@ var _ = Describe("Training event listeners", func() {
 		Expect(uc.completedModel.OrgID).To(Equal(orgID))
 		Expect(uc.completedModel.TrainingRunID).To(Equal(trainingRunID))
 		Expect(uc.completedModel.DatasetID).To(Equal(datasetID))
+		Expect(uc.completedModel.Name).To(HavePrefix("dpo-"))
+		Expect(uc.completedModel.LineageName).To(Equal("movie-ranker"))
 		Expect(uc.completedModel.ModelVersion).To(Equal(4))
 		Expect(uc.completedModel.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/run"))
 		Expect(uc.completedModel.AdapterURI).To(Equal("s3://local-dev-bucket/models/run"))

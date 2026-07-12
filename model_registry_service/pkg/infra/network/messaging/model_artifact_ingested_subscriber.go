@@ -143,6 +143,7 @@ func artifactIngestedEventToModel(resourceKey uuid.UUID, payload *ingestionpb.Mo
 		SourceURI:         strings.TrimSpace(payload.GetSourceUri()),
 		SourceMetadata:    withDefaultSourceMetadata(payload.GetSourceMetadata()),
 		Name:              modelName,
+		LineageName:       modelName,
 		ModelVersion:      modelVersion,
 		BaseModel:         baseModel,
 		ArtifactLocation:  artifactLocation,

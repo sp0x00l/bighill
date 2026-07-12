@@ -21,7 +21,7 @@ stop_data_sources()
     fi
 
     cd "$PROJECT_ROOT"
-    docker compose -f "$COMPOSE_FILE" down -v --remove-orphans
+    docker compose -f "$COMPOSE_FILE" down -v
     cd "$CURRENT_DIR"
 }
 

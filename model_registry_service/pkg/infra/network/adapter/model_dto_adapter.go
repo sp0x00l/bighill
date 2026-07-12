@@ -21,6 +21,7 @@ type ModelDTO struct {
 	Source             string        `json:"source"`
 	SourceURI          string        `json:"source_uri,omitempty"`
 	Name               string        `json:"name"`
+	LineageName        string        `json:"lineage_name"`
 	ModelVersion       int           `json:"model_version"`
 	BaseModel          string        `json:"base_model"`
 	ArtifactLocation   string        `json:"artifact_location"`
@@ -98,6 +99,7 @@ func (a *modelDTOAdapter) toDTO(modelRecord *model.Model, baseURL string) *Model
 		Source:             modelRecord.Source.String(),
 		SourceURI:          modelRecord.SourceURI,
 		Name:               modelRecord.Name,
+		LineageName:        modelRecord.LineageName,
 		ModelVersion:       modelRecord.ModelVersion,
 		BaseModel:          modelRecord.BaseModel,
 		ArtifactLocation:   modelRecord.ArtifactLocation,

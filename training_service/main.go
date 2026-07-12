@@ -33,25 +33,26 @@ import (
 var Version string
 
 type trainingConfig struct {
-	ServiceName              string
-	HTTPPort                 int
-	TrainingTriggerEnabled   bool
-	Temporal                 temporalConfig
-	Messaging                messagingConn.MessengerConfig
-	Topics                   trainingmessaging.TrainingTopics
-	DataRegistryServiceURL   string
-	ModelRegistryServiceURL  string
-	HTTPClientTimeout        time.Duration
-	EvaluationProfile        string
-	EvaluationProfileName    string
-	DPOTrainingProfileName   string
-	DPOEvaluationProfile     string
-	DPOEvaluationProfileName string
-	PromotionProfile         string
-	Profile                  model.TrainingProfile
-	Executor                 trainingExecutorConfig
-	Health                   healthConfig
-	Lifecycle                lifecycle.Config
+	ServiceName                      string
+	HTTPPort                         int
+	PromotionReportSubscriberEnabled bool
+	Temporal                         temporalConfig
+	Messaging                        messagingConn.MessengerConfig
+	Topics                           trainingmessaging.TrainingTopics
+	DataRegistryServiceURL           string
+	InferenceServiceURL              string
+	ModelRegistryServiceURL          string
+	HTTPClientTimeout                time.Duration
+	EvaluationProfile                string
+	EvaluationProfileName            string
+	DPOTrainingProfileName           string
+	DPOEvaluationProfile             string
+	DPOEvaluationProfileName         string
+	PromotionProfile                 string
+	Profile                          model.TrainingProfile
+	Executor                         trainingExecutorConfig
+	Health                           healthConfig
+	Lifecycle                        lifecycle.Config
 }
 
 type temporalConfig struct {
@@ -155,6 +156,7 @@ func main() {
 	resolverClient := &http.Client{Timeout: cfg.HTTPClientTimeout}
 	datasetResolver := trainingclient.NewDatasetResolver(cfg.DataRegistryServiceURL, resolverClient)
 	modelResolver := trainingclient.NewModelResolver(cfg.ModelRegistryServiceURL, resolverClient)
+	preferenceDatasetResolver := trainingclient.NewPreferenceDatasetResolver(cfg.InferenceServiceURL, resolverClient)
 	profileCatalog := app.NewStaticTrainingProfileCatalog(
 		[]model.TrainingProfile{cfg.Profile, dpoTrainingProfile(cfg)},
 		cfg.Profile.Name,
@@ -165,7 +167,14 @@ func main() {
 		cfg.EvaluationProfileName,
 	)
 	validateProfileCatalog(cancelCtx, profileCatalog, cfg)
-	trainingCommandUsecase := app.NewTrainingCommandUsecase(workflowStarter, workflowStarter, datasetResolver, modelResolver, profileCatalog)
+	trainingCommandUsecase := app.NewTrainingCommandUsecase(
+		workflowStarter,
+		workflowStarter,
+		datasetResolver,
+		modelResolver,
+		profileCatalog,
+		app.WithPreferenceDatasetResolver(preferenceDatasetResolver),
+	)
 	trainingDTOAdapter := trainingrest.NewTrainingRunDTOAdapter(serializers.NewJSONSerializer())
 	restService := trainingrest.NewService(trainingrest.NewTrainingHandlers(trainingCommandUsecase, trainingDTOAdapter).GetRoutes(), cfg.HTTPPort, serviceName)
 
@@ -220,16 +229,13 @@ func main() {
 		}))
 	}
 
-	if cfg.TrainingTriggerEnabled {
-		startSubscriber("preference-dataset-ready", []string{cfg.Topics.Inference}, func(subscriber messagingConn.Subscriber) {
-			messagingConn.AddListener(subscriber, trainingmessaging.NewPreferenceDatasetReadyEventListener(workflowStarter, profileCatalog, cfg.DPOTrainingProfileName, cfg.DPOEvaluationProfileName))
-		})
+	if cfg.PromotionReportSubscriberEnabled {
 		promotionRunner := trainingmessaging.NewPromotionReportRunner(trainingExecutor, trainingEventPublisher, cfg.Executor.PromotionReportURIPrefix, cfg.Executor.ArtifactBucketRegion, cfg.PromotionProfile)
 		startSubscriber("promotion-requested", []string{cfg.Topics.ModelRegistry}, func(subscriber messagingConn.Subscriber) {
 			messagingConn.AddListener(subscriber, trainingmessaging.NewPromotionRequestedEventListener(promotionRunner))
 		})
 	} else {
-		log.WithContext(cancelCtx).Info("training event triggers disabled; preference dataset events will not start training workflows")
+		log.WithContext(cancelCtx).Info("promotion report subscriber disabled; promotion_requested events will not build promotion reports")
 	}
 
 	log.WithContext(cancelCtx).WithFields(log.Fields{
@@ -294,9 +300,9 @@ func readTrainingConfig() trainingConfig {
 
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	return trainingConfig{
-		ServiceName:            env.WithDefaultString("TRAINING_SERVICE_NAME", "training-service"),
-		HTTPPort:               env.WithDefaultInt("TRAINING_SERVICE_API_HTTP_PORT", "8085"),
-		TrainingTriggerEnabled: env.WithDefaultBool("TRAINING_SERVICE_TRAINING_TRIGGER_ENABLED", false),
+		ServiceName:                      env.WithDefaultString("TRAINING_SERVICE_NAME", "training-service"),
+		HTTPPort:                         env.WithDefaultInt("TRAINING_SERVICE_API_HTTP_PORT", "8085"),
+		PromotionReportSubscriberEnabled: env.WithDefaultBool("TRAINING_SERVICE_PROMOTION_REPORT_SUBSCRIBER_ENABLED", false),
 		Temporal: temporalConfig{
 			Address:              env.WithDefaultString("TRAINING_SERVICE_TEMPORAL_ADDRESS", env.WithDefaultString("TEMPORAL_ADDRESS", "localhost:7233")),
 			Namespace:            env.WithDefaultString("TRAINING_SERVICE_TEMPORAL_NAMESPACE", env.WithDefaultString("TEMPORAL_NAMESPACE", "default")),
@@ -312,12 +318,16 @@ func readTrainingConfig() trainingConfig {
 		},
 		Topics: trainingmessaging.TrainingTopics{
 			Inference:     env.WithDefaultString("TRAINING_SERVICE_INFERENCE_SUBSCRIBER_TOPIC", "inference"),
-			ModelRegistry: env.WithDefaultString("TRAINING_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry"),
+			ModelRegistry: env.MustString("TRAINING_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC"),
 			Training:      env.WithDefaultString("TRAINING_SERVICE_TOPIC", "training"),
 		},
 		DataRegistryServiceURL: serviceBaseRoute(
 			env.WithDefaultString("DATA_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
 			env.WithDefaultString("DATA_REGISTRY_SERVICE_HTTP_PORT", "8081"),
+		),
+		InferenceServiceURL: serviceBaseRoute(
+			env.WithDefaultString("INFERENCE_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("INFERENCE_SERVICE_HTTP_PORT", "8087"),
 		),
 		ModelRegistryServiceURL: serviceBaseRoute(
 			env.WithDefaultString("MODEL_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),

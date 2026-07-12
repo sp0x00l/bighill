@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS bighill_model_registry_db.models (
     source_uri text NOT NULL DEFAULT '',
     source_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     name text NOT NULL,
+    lineage_name text NOT NULL,
     model_version integer NOT NULL,
     base_model text NOT NULL,
     artifact_location text NOT NULL,
@@ -93,7 +94,7 @@ CREATE INDEX IF NOT EXISTS index_models_dataset_id
 ON bighill_model_registry_db.models(dataset_id);
 
 CREATE INDEX IF NOT EXISTS index_models_champion_lookup
-ON bighill_model_registry_db.models(org_id, name, model_version DESC)
+ON bighill_model_registry_db.models(org_id, lineage_name, model_version DESC)
 WHERE status = 'READY' AND serving_load_status = 'LOADED';
 
 CREATE TRIGGER models_updated_at

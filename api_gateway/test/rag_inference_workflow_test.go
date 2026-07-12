@@ -10,13 +10,10 @@ import (
 	dataregistrypb "lib/data_contracts_lib/data_registry"
 	featurepb "lib/data_contracts_lib/feature_materializer"
 	"net/http"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
-	inferencepb "lib/data_contracts_lib/inference"
 	ingestionpb "lib/data_contracts_lib/ingestion"
 	env "lib/shared_lib/env"
 	msgConn "lib/shared_lib/messaging"
@@ -24,15 +21,14 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
-	defaultInferenceGRPCAddress = "localhost:7073"
-	ragE2EGenerateCallTimeout   = 90 * time.Second
-	ragE2EGenerateWaitTimeout   = 3 * time.Minute
-	ragE2EModelPollTimeout      = 5 * time.Second
+	ragE2EGenerateCallTimeout = 90 * time.Second
+	ragE2EGenerateWaitTimeout = 3 * time.Minute
+	ragE2EModelPollTimeout    = 5 * time.Second
+	ragE2EOllamaPollTimeout   = 90 * time.Second
+	ragE2EOllamaCallTimeout   = 20 * time.Second
 )
 
 var ragE2EBaseModelTag string
@@ -50,74 +46,91 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 
 		modelID := uploadBaseModelThroughIngestion(user, datasetID)
 		selectedModel := assertModelSelectable(user, modelID, "UPLOAD", "rag-e2e-uploaded-base")
+		endpointID := waitForPublishedEndpoint(user.Token, "rag-e2e-uploaded-base")
 
-		client, closeClient := newInferenceClient()
-		defer closeClient()
+		requestID := uuid.New()
+		generation := waitForEndpointRAGGeneration(user.Token, endpointID, requestID, "What phrase identifies the embedded knowledge base?")
 
-		var response *inferencepb.GenerateResponse
-		requestID := uuid.NewString()
-		Eventually(func(g Gomega) {
-			ctx, cancel := context.WithTimeout(context.Background(), ragE2EGenerateCallTimeout)
-			defer cancel()
+		Expect(generation["dataset_id"]).To(Equal(datasetID))
+		Expect(generation["generation_protocol"]).To(Equal(stringField(selectedModel, "serving_protocol")))
+		Expect(generation["generation_model"]).To(Equal(stringField(selectedModel, "serving_model")))
+		Expect(ragResponseContextTextObject(generation)).To(ContainSubstring("RAG e2e verification phrase"))
 
-			var err error
-			response, err = client.Generate(ctx, &inferencepb.GenerateRequest{
-				RequestId: requestID,
-				UserId:    user.ID.String(),
-				OrgId:     user.OrgID.String(),
-				DatasetId: datasetID,
-				ModelId:   modelID.String(),
-				QueryText: "What phrase identifies the embedded knowledge base?",
-				TopK:      3,
-			})
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(strings.TrimSpace(response.GetAnswer())).NotTo(BeEmpty())
-			expectRAGVerificationContext(g, response)
-		}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(Succeed())
+		recordRejectedFeedback := func(comment string, preferredAnswer string) {
+			feedbackID := uuid.New()
+			status, body := doJSON(http.MethodPost, "/v1/private/inference/feedback", map[string]any{
+				"request_id":       stringField(generation, "request_id"),
+				"accepted":         false,
+				"rating":           -1,
+				"comment":          comment,
+				"preferred_answer": preferredAnswer,
+			}, user.Token, feedbackID)
+			Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+			feedback := decodeObject(body)
+			Expect(feedback["feedback_id"]).To(Equal(feedbackID.String()))
+			Expect(feedback["request_id"]).To(Equal(stringField(generation, "request_id")))
+		}
+		recordRejectedFeedback(
+			"Prefer the explicit verification phrase.",
+			"RAG e2e verification phrase: the citadel index stores normalized feature context.",
+		)
+		recordRejectedFeedback(
+			"Prefer the correction with source phrase.",
+			"RAG e2e verification phrase: the citadel index stores normalized feature context, with explicit source grounding.",
+		)
 
-		Expect(response.GetDatasetId()).To(Equal(datasetID))
-		Expect(response.GetModelId()).To(Equal(modelID.String()))
-		Expect(response.GetGenerationProtocol()).To(Equal(stringField(selectedModel, "serving_protocol")))
-		Expect(response.GetGenerationModel()).To(Equal(stringField(selectedModel, "serving_model")))
-		Expect(response.GetPromptStrategyVersion()).To(Equal("rag-prompt-v1"))
-		Expect(response.GetContexts()[0].GetEmbeddingRecordId()).NotTo(BeEmpty())
-		Expect(response.GetContexts()[0].GetEmbeddingSnapshotId()).NotTo(BeEmpty())
-		Expect(ragResponseContextText(response)).To(ContainSubstring("RAG e2e verification phrase"))
+		status, body := doJSON(http.MethodPost, "/v1/private/inference/endpoints/"+endpointID.String()+"/preference-datasets", map[string]any{
+			"output_uri":   "s3://local-dev-bucket/preference-datasets/rag-e2e/{preference_dataset_id}.jsonl",
+			"min_examples": 1,
+			"limit":        10,
+		}, user.Token, uuid.New())
+		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		export := decodeSingleObject(body)
+		Expect(export["dataset_id"]).To(Equal(datasetID))
+		Expect(export["model_id"]).To(Equal(modelID.String()))
+		Expect(export["example_count"]).To(BeNumerically(">=", 1))
+		Expect(stringField(export, "integrity_key")).To(MatchRegexp(`^sha256:[0-9a-f]{64}$`))
+		Expect(stringField(export, "integrity_key")).NotTo(Equal(stringField(export, "preference_dataset_id")))
+		Expect(stringField(export, "output_uri")).To(MatchRegexp(`^s3://local-dev-bucket/preference-datasets/rag-e2e/.+\.jsonl$`))
+		Expect(stringField(export, "evaluation_output_uri")).To(MatchRegexp(`^s3://local-dev-bucket/preference-datasets/rag-e2e/.+-eval\.jsonl$`))
+		Expect(preferenceExampleIDsFromJSONL(readLocalS3ObjectURI(stringField(export, "evaluation_output_uri")))).NotTo(BeEmpty())
 
-		feedbackID := uuid.NewString()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		feedback, err := client.RecordFeedback(ctx, &inferencepb.RecordFeedbackRequest{
-			FeedbackId:      feedbackID,
-			RequestId:       response.GetRequestId(),
-			UserId:          user.ID.String(),
-			OrgId:           user.OrgID.String(),
-			Accepted:        false,
-			Rating:          -1,
-			Comment:         "Prefer the explicit verification phrase.",
-			PreferredAnswer: "RAG e2e verification phrase: the citadel index stores normalized feature context.",
-		})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(feedback.GetFeedbackId()).To(Equal(feedbackID))
-		Expect(feedback.GetRequestId()).To(Equal(response.GetRequestId()))
+		recordRejectedFeedback(
+			"Prefer the later correction with source phrase.",
+			"RAG e2e verification phrase: the citadel index stores normalized feature context, with explicit source grounding and audit-ready citations.",
+		)
 
-		export, err := client.ExportPreferenceDataset(ctx, &inferencepb.ExportPreferenceDatasetRequest{
-			RequestId:   response.GetRequestId(),
-			UserId:      user.ID.String(),
-			OrgId:       user.OrgID.String(),
-			DatasetId:   datasetID,
-			ModelId:     modelID.String(),
-			OutputUri:   "s3://local-dev-bucket/preference-datasets/rag-e2e/{preference_dataset_id}.jsonl",
-			MinExamples: 1,
-			Limit:       10,
-		})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(export.GetRequestId()).To(Equal(response.GetRequestId()))
-		Expect(export.GetDatasetId()).To(Equal(datasetID))
-		Expect(export.GetModelId()).To(Equal(modelID.String()))
-		Expect(export.GetExampleCount()).To(BeNumerically(">=", 1))
-		Expect(export.GetExported()).To(BeTrue())
-		Expect(export.GetOutputUri()).To(MatchRegexp(`^s3://local-dev-bucket/preference-datasets/rag-e2e/.+\.jsonl$`))
+		status, body = doJSON(http.MethodPost, "/v1/private/inference/endpoints/"+endpointID.String()+"/preference-datasets", map[string]any{
+			"output_uri":   "s3://local-dev-bucket/preference-datasets/rag-e2e/{preference_dataset_id}.jsonl",
+			"min_examples": 1,
+			"limit":        10,
+			"max_per_user": 1,
+		}, user.Token, uuid.New())
+		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		secondExport := decodeSingleObject(body)
+		Expect(secondExport["evaluation_output_uri"]).To(Equal(export["evaluation_output_uri"]))
+		Expect(secondExport["output_uri"]).NotTo(Equal(export["output_uri"]))
+		Expect(secondExport["example_count"]).To(BeNumerically("<=", 1))
+
+		status, body = doJSON(http.MethodGet, "/v1/private/inference/preference-datasets/"+stringField(secondExport, "preference_dataset_id"), nil, user.Token, uuid.Nil)
+		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		readExport := decodeSingleObject(body)
+		Expect(readExport["preference_dataset_id"]).To(Equal(secondExport["preference_dataset_id"]))
+
+		status, body = doJSON(http.MethodPost, "/v1/private/training-runs/dpo", map[string]any{
+			"preference_dataset_id": stringField(secondExport, "preference_dataset_id"),
+			"training_profile":      "dpo-default@v1",
+			"evaluation_profile":    "dpo-default@v1",
+		}, user.Token, uuid.New())
+		Expect(status).To(Equal(http.StatusAccepted), "body: %s", string(body))
+		dpoRun := decodeObject(body)
+		Expect(strings.TrimSpace(stringField(dpoRun, "training_run_id"))).NotTo(BeEmpty())
+
+		trainIDs := preferenceExampleIDsFromJSONL(readLocalS3ObjectURI(stringField(secondExport, "output_uri")))
+		evalIDs := preferenceExampleIDsFromJSONL(readLocalS3ObjectURIIfExists(stringField(secondExport, "evaluation_output_uri")))
+		for id := range trainIDs {
+			Expect(evalIDs).NotTo(HaveKey(id))
+		}
 	})
 
 	It("uploads a base model artifact and uses the served model for RAG", func() {
@@ -126,33 +139,13 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 
 		modelID := uploadBaseModelThroughIngestion(user, datasetID)
 		selectedModel := assertModelSelectable(user, modelID, "UPLOAD", "rag-e2e-uploaded-base")
-		client, closeClient := newInferenceClient()
-		defer closeClient()
+		endpointID := waitForPublishedEndpoint(user.Token, "rag-e2e-uploaded-base")
 
-		var response *inferencepb.GenerateResponse
-		Eventually(func(g Gomega) {
-			ctx, cancel := context.WithTimeout(context.Background(), ragE2EGenerateCallTimeout)
-			defer cancel()
+		response := waitForEndpointRAGGeneration(user.Token, endpointID, uuid.New(), "Which phrase proves the uploaded base model can serve RAG?")
 
-			var err error
-			response, err = client.Generate(ctx, &inferencepb.GenerateRequest{
-				RequestId: uuid.NewString(),
-				UserId:    user.ID.String(),
-				OrgId:     user.OrgID.String(),
-				DatasetId: datasetID,
-				ModelId:   modelID.String(),
-				QueryText: "Which phrase proves the uploaded base model can serve RAG?",
-				TopK:      3,
-			})
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(strings.TrimSpace(response.GetAnswer())).NotTo(BeEmpty())
-			expectRAGVerificationContext(g, response)
-		}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(Succeed())
-
-		Expect(response.GetDatasetId()).To(Equal(datasetID))
-		Expect(response.GetModelId()).To(Equal(modelID.String()))
-		Expect(response.GetGenerationProtocol()).To(Equal(stringField(selectedModel, "serving_protocol")))
-		Expect(response.GetGenerationModel()).To(Equal(stringField(selectedModel, "serving_model")))
+		Expect(response["dataset_id"]).To(Equal(datasetID))
+		Expect(response["generation_protocol"]).To(Equal(stringField(selectedModel, "serving_protocol")))
+		Expect(response["generation_model"]).To(Equal(stringField(selectedModel, "serving_model")))
 	})
 
 	It("selects a base model and starts an idempotent training run for a materialized dataset", func() {
@@ -228,10 +221,16 @@ func createRAGInferenceDataset(user profileTestUser) string {
 
 func uploadRAGInferenceDocument(user profileTestUser, datasetID string) {
 	html := []byte("<!doctype html><html><body><main><h1>RAG verification</h1><p>RAG e2e verification phrase: the citadel index stores normalized feature context.</p></main></body></html>")
-	Eventually(func(g Gomega) {
+	var lastErr error
+	Eventually(func() bool {
 		status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "rag-inference.html", html, user.Token, uuid.New())
-		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-	}, 30*time.Second, 1*time.Second).Should(Succeed())
+		if status != http.StatusCreated {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
+		lastErr = nil
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue(), "RAG document upload failed: %v", lastErr)
 }
 
 func materializeRAGInferenceDataset(user profileTestUser, datasetID string) {
@@ -278,52 +277,144 @@ func waitForRAGDatasetMaterialized(
 			strings.TrimSpace(event.GetEmbeddingSnapshotId()) == embeddingEvent.GetEmbeddingSnapshotId()
 	})
 
-	Eventually(func(g Gomega) {
+	var lastErr error
+	Eventually(func() bool {
 		status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
-		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
 
 		read := decodeObject(body)
-		g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
-		metadata := schemaMetadataObject(g, read)
-		g.Expect(metadata["source_format"]).To(Equal("html"))
-		g.Expect(metadata["rows"]).To(BeNumerically(">=", 1))
-		expectSchemaField(g, metadata, "source_text")
-	}, 30*time.Second, 1*time.Second).Should(Succeed())
+		if read["processingState"] != "EMBEDDINGS_MATERIALIZED" {
+			lastErr = fmt.Errorf("dataset not materialized: %#v", read)
+			return false
+		}
+		metadata, ok := read["schemaMetadata"].(map[string]any)
+		if !ok {
+			lastErr = fmt.Errorf("schemaMetadata: %#v", read["schemaMetadata"])
+			return false
+		}
+		if metadata["source_format"] != "html" {
+			lastErr = fmt.Errorf("unexpected source format: %#v", metadata)
+			return false
+		}
+		rows, ok := metadata["rows"].(float64)
+		if !ok || rows < 1 {
+			lastErr = fmt.Errorf("unexpected row count: %#v", metadata)
+			return false
+		}
+		if !materializationSchemaMetadataHasField(metadata, "source_text") {
+			lastErr = fmt.Errorf("source_text field missing: %#v", metadata)
+			return false
+		}
+		lastErr = nil
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue(), "RAG dataset was not materialized: %v", lastErr)
 }
 
-func expectRAGVerificationContext(g Gomega, response *inferencepb.GenerateResponse) {
-	g.Expect(response.GetContexts()).NotTo(BeEmpty())
-	g.Expect(ragResponseContextText(response)).To(ContainSubstring("RAG e2e verification phrase"))
+func materializationSchemaMetadataHasField(metadata map[string]any, fieldName string) bool {
+	fields, ok := metadata["fields"].([]any)
+	if !ok {
+		return false
+	}
+	for _, field := range fields {
+		fieldMap, ok := field.(map[string]any)
+		if ok && fieldMap["name"] == fieldName {
+			return true
+		}
+	}
+	return false
 }
 
-func ragResponseContextText(response *inferencepb.GenerateResponse) string {
-	contexts := make([]string, 0, len(response.GetContexts()))
-	for _, retrieved := range response.GetContexts() {
-		contexts = append(contexts, retrieved.GetSourceText())
+func waitForEndpointRAGGeneration(token string, endpointID uuid.UUID, requestID uuid.UUID, query string) map[string]any {
+	var response map[string]any
+	var lastErr error
+	Eventually(func() bool {
+		status, body, err := requestWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+endpointID.String()+"/generations", map[string]any{
+			"query_text": query,
+			"top_k":      3,
+		}, token, requestID, ragE2EGenerateCallTimeout)
+		if err != nil {
+			lastErr = err
+			return false
+		}
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
+		response = decodeObject(body)
+		if strings.TrimSpace(stringField(response, "answer")) == "" {
+			lastErr = fmt.Errorf("empty answer in %#v", response)
+			return false
+		}
+		if !hasRAGVerificationContextObject(response) {
+			lastErr = fmt.Errorf("missing RAG verification context in %#v", response)
+			return false
+		}
+		lastErr = nil
+		return true
+	}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(BeTrue(), "endpoint generation failed: %v", lastErr)
+	return response
+}
+
+func expectRAGVerificationContextObject(response map[string]any) {
+	Expect(response["contexts"]).NotTo(BeEmpty())
+	Expect(ragResponseContextTextObject(response)).To(ContainSubstring("RAG e2e verification phrase"))
+}
+
+func hasRAGVerificationContextObject(response map[string]any) bool {
+	rawContexts, ok := response["contexts"].([]any)
+	if !ok || len(rawContexts) == 0 {
+		return false
+	}
+	for _, raw := range rawContexts {
+		context, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.Contains(strings.TrimSpace(fmt.Sprint(context["source_text"])), "RAG e2e verification phrase") {
+			return true
+		}
+	}
+	return false
+}
+
+func ragResponseContextTextObject(response map[string]any) string {
+	rawContexts, ok := response["contexts"].([]any)
+	Expect(ok).To(BeTrue(), "expected contexts array in %#v", response)
+	contexts := make([]string, 0, len(rawContexts))
+	for _, raw := range rawContexts {
+		context, ok := raw.(map[string]any)
+		Expect(ok).To(BeTrue(), "expected context object in %#v", raw)
+		contexts = append(contexts, strings.TrimSpace(fmt.Sprint(context["source_text"])))
 	}
 	return strings.Join(contexts, "\n")
 }
 
+func decodeSingleObject(body []byte) map[string]any {
+	var decoded []map[string]any
+	err := json.Unmarshal(body, &decoded)
+	Expect(err).NotTo(HaveOccurred(), "body: %s", string(body))
+	Expect(decoded).To(HaveLen(1), "body: %s", string(body))
+	return decoded[0]
+}
+
 func expectLocalOllamaModelAvailable(modelName string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:11434/api/tags", nil)
-	Expect(err).NotTo(HaveOccurred())
-	resp, err := http.DefaultClient.Do(req)
-	Expect(err).NotTo(HaveOccurred(), "local Ollama must be running for full-stack RAG e2e")
-	defer resp.Body.Close()
-	Expect(resp.StatusCode).To(Equal(http.StatusOK))
-	var payload map[string]any
-	Expect(json.NewDecoder(resp.Body).Decode(&payload)).To(Succeed())
-	models, ok := payload["models"].([]any)
-	Expect(ok).To(BeTrue(), "ollama tags payload: %#v", payload)
-	for _, candidate := range models {
-		object, ok := candidate.(map[string]any)
-		if ok && ollamaTagMatches(fmt.Sprint(object["name"]), modelName) {
-			return
+	var tags []string
+	var lastErr error
+	Eventually(func() bool {
+		tags, lastErr = localOllamaGenerationTags()
+		if lastErr != nil {
+			return false
 		}
-	}
-	Fail(fmt.Sprintf("local Ollama model %q is not available; run `ollama pull %s`", modelName, modelName))
+		for _, candidate := range tags {
+			if ollamaTagMatches(candidate, modelName) {
+				return true
+			}
+		}
+		return false
+	}, ragE2EOllamaPollTimeout, 1*time.Second).Should(BeTrue(), "local Ollama model %q is not available; run `ollama pull %s`; last error: %v; available tags: %v", modelName, modelName, lastErr, tags)
 }
 
 func ollamaTagMatches(candidate string, expected string) bool {
@@ -360,21 +451,43 @@ func uploadBaseModelThroughIngestion(user profileTestUser, datasetID string) uui
 	var uploadID string
 	var resourceID uuid.UUID
 	var fields map[string]any
-	Eventually(func(g Gomega) {
+	var lastErr error
+	Eventually(func() bool {
 		status, body := doJSON(http.MethodPost, "/v1/private/models/uploads", initiatePayload, user.Token, uuid.New())
-		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		if status != http.StatusCreated {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
 		initiated := decodeObject(body)
 		uploadID = stringField(initiated, "upload_id")
 		parsedResourceID, err := uuid.Parse(stringField(initiated, "resource_id"))
-		g.Expect(err).NotTo(HaveOccurred())
+		if err != nil {
+			lastErr = err
+			return false
+		}
 		resourceID = parsedResourceID
-		g.Expect(stringField(initiated, "url")).To(Equal("local-s3://local-dev-bucket"))
+		if stringField(initiated, "url") != "local-s3://local-dev-bucket" {
+			lastErr = fmt.Errorf("unexpected upload URL in %#v", initiated)
+			return false
+		}
 		var ok bool
 		fields, ok = initiated["fields"].(map[string]any)
-		g.Expect(ok).To(BeTrue(), "fields: %#v", initiated["fields"])
-		g.Expect(fields).To(HaveKeyWithValue("key", MatchRegexp(`^staging/model_artifact/`)))
-		g.Expect(fields).To(HaveKeyWithValue("Content-Type", "application/zip"))
-	}, 30*time.Second, 1*time.Second).Should(Succeed())
+		if !ok {
+			lastErr = fmt.Errorf("fields: %#v", initiated["fields"])
+			return false
+		}
+		key, ok := fields["key"].(string)
+		if !ok || !strings.HasPrefix(key, "staging/model_artifact/") {
+			lastErr = fmt.Errorf("unexpected upload key in %#v", fields)
+			return false
+		}
+		if fields["Content-Type"] != "application/zip" {
+			lastErr = fmt.Errorf("unexpected content type in %#v", fields)
+			return false
+		}
+		lastErr = nil
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue(), "model upload initiation failed: %v", lastErr)
 
 	writeLocalS3Object("local-dev-bucket", fields["key"].(string), "application/zip", archive)
 
@@ -423,38 +536,80 @@ func replaceHuggingFaceToken(user profileTestUser, token string) {
 
 func assertModelSelectable(user profileTestUser, modelID uuid.UUID, source string, name string) map[string]any {
 	var selected map[string]any
-	Eventually(func(g Gomega) {
-		status, body := doJSONWithTimeout(http.MethodGet, "/v1/private/models/"+modelID.String(), nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
-		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+	var lastErr error
+	Eventually(func() bool {
+		status, body, err := requestWithTimeout(http.MethodGet, "/v1/private/models/"+modelID.String(), nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
+		if err != nil {
+			lastErr = err
+			return false
+		}
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("model read status %d body %s", status, string(body))
+			return false
+		}
 		selected = decodeObject(body)
-		g.Expect(selected).To(SatisfyAll(
-			HaveKeyWithValue("id", modelID.String()),
-			HaveKeyWithValue("source", source),
-			HaveKeyWithValue("model_kind", "BASE"),
-			HaveKeyWithValue("status", "READY"),
-			HaveKeyWithValue("serving_load_status", "LOADED"),
-			HaveKeyWithValue("serving_model", ragE2EBaseModel()),
-			HaveKey("serving_protocol"),
-			HaveKeyWithValue("name", name),
-		))
+		if err := baseModelSelectableError(selected, modelID, source, name); err != nil {
+			lastErr = err
+			return false
+		}
 
-		status, body = doJSONWithTimeout(http.MethodGet, "/v1/private/models?source="+source+"&kind=BASE&status=READY&limit=25&page=1", nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
-		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		status, body, err = requestWithTimeout(http.MethodGet, "/v1/private/models?source="+source+"&kind=BASE&status=READY&limit=25&page=1", nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
+		if err != nil {
+			lastErr = err
+			return false
+		}
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("model list status %d body %s", status, string(body))
+			return false
+		}
 		list := decodeObject(body)
 		resources, ok := list["resources"].([]any)
-		g.Expect(ok).To(BeTrue(), "model list response: %#v", list)
-		g.Expect(resources).To(ContainElement(SatisfyAll(
-			HaveKeyWithValue("id", modelID.String()),
-			HaveKeyWithValue("source", source),
-			HaveKeyWithValue("model_kind", "BASE"),
-			HaveKeyWithValue("status", "READY"),
-			HaveKeyWithValue("serving_load_status", "LOADED"),
-			HaveKeyWithValue("serving_model", ragE2EBaseModel()),
-			HaveKey("serving_protocol"),
-			HaveKeyWithValue("name", name),
-		)))
-	}, 75*time.Second, 1*time.Second).Should(Succeed())
+		if !ok {
+			lastErr = fmt.Errorf("model list response: %#v", list)
+			return false
+		}
+		for _, resource := range resources {
+			object, ok := resource.(map[string]any)
+			if !ok {
+				continue
+			}
+			if baseModelSelectableError(object, modelID, source, name) == nil {
+				lastErr = nil
+				return true
+			}
+		}
+		lastErr = fmt.Errorf("model list did not contain selectable model %s: %#v", modelID, resources)
+		return false
+	}, 75*time.Second, 1*time.Second).Should(BeTrue(), "model was not selectable: %v", lastErr)
 	return selected
+}
+
+func baseModelSelectableError(resource map[string]any, modelID uuid.UUID, source string, name string) error {
+	if resource["id"] != modelID.String() {
+		return fmt.Errorf("model id mismatch in %#v", resource)
+	}
+	if resource["source"] != source {
+		return fmt.Errorf("model source mismatch in %#v", resource)
+	}
+	if resource["model_kind"] != "BASE" {
+		return fmt.Errorf("model kind mismatch in %#v", resource)
+	}
+	if resource["status"] != "READY" {
+		return fmt.Errorf("model status mismatch in %#v", resource)
+	}
+	if resource["serving_load_status"] != "LOADED" {
+		return fmt.Errorf("model serving status mismatch in %#v", resource)
+	}
+	if resource["serving_model"] != ragE2EBaseModel() {
+		return fmt.Errorf("model serving tag mismatch in %#v", resource)
+	}
+	if _, ok := resource["serving_protocol"]; !ok {
+		return fmt.Errorf("model serving protocol missing in %#v", resource)
+	}
+	if resource["name"] != name {
+		return fmt.Errorf("model name mismatch in %#v", resource)
+	}
+	return nil
 }
 
 func ragE2EBaseModel() string {
@@ -466,19 +621,42 @@ func ragE2EBaseModel() string {
 }
 
 func discoverLocalOllamaGenerationModel() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	var candidates []string
+	var lastErr error
+	Eventually(func() bool {
+		candidates, lastErr = localOllamaGenerationTags()
+		return lastErr == nil && len(candidates) > 0
+	}, ragE2EOllamaPollTimeout, 1*time.Second).Should(BeTrue(), "local Ollama has no generation model tags; pull or provision a chat/generation model before running the RAG e2e; last error: %v", lastErr)
+	if len(candidates) == 0 {
+		Fail("local Ollama has no generation model tags; pull or provision a chat/generation model before running the RAG e2e")
+	}
+	return candidates[0]
+}
+
+func localOllamaGenerationTags() ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), ragE2EOllamaCallTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:11434/api/tags", nil)
-	Expect(err).NotTo(HaveOccurred())
+	if err != nil {
+		return nil, err
+	}
 	resp, err := http.DefaultClient.Do(req)
-	Expect(err).NotTo(HaveOccurred(), "local Ollama must be running for full-stack RAG e2e")
+	if err != nil {
+		return nil, fmt.Errorf("local Ollama must be running for full-stack RAG e2e: %w", err)
+	}
 	defer resp.Body.Close()
-	Expect(resp.StatusCode).To(Equal(http.StatusOK))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ollama tags status %d", resp.StatusCode)
+	}
 
 	var payload map[string]any
-	Expect(json.NewDecoder(resp.Body).Decode(&payload)).To(Succeed())
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
 	models, ok := payload["models"].([]any)
-	Expect(ok).To(BeTrue(), "ollama tags payload: %#v", payload)
+	if !ok {
+		return nil, fmt.Errorf("ollama tags payload missing models: %#v", payload)
+	}
 
 	candidates := make([]string, 0, len(models))
 	for _, candidate := range models {
@@ -493,10 +671,7 @@ func discoverLocalOllamaGenerationModel() string {
 		candidates = append(candidates, name)
 	}
 	sort.Strings(candidates)
-	if len(candidates) == 0 {
-		Fail("local Ollama has no generation model tags; pull or provision a chat/generation model before running the RAG e2e")
-	}
-	return candidates[0]
+	return candidates, nil
 }
 
 func looksLikeEmbeddingModel(name string) bool {
@@ -540,25 +715,18 @@ func writeZipFile(writer *zip.Writer, name string, content []byte) {
 	Expect(err).NotTo(HaveOccurred())
 }
 
-func newInferenceClient() (inferencepb.InferenceServiceClient, func()) {
-	conn, err := grpc.NewClient(inferenceGRPCAddress(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	Expect(err).NotTo(HaveOccurred())
-	return inferencepb.NewInferenceServiceClient(conn), func() {
-		Expect(conn.Close()).To(Succeed())
+func preferenceExampleIDsFromJSONL(content []byte) map[string]struct{} {
+	ids := map[string]struct{}{}
+	for _, line := range bytes.Split(content, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var record map[string]any
+		Expect(json.Unmarshal(line, &record)).To(Succeed())
+		id := strings.TrimSpace(fmt.Sprint(record["preference_example_id"]))
+		Expect(id).NotTo(BeEmpty())
+		ids[id] = struct{}{}
 	}
-}
-
-func inferenceGRPCAddress() string {
-	host := strings.TrimSpace(os.Getenv("INFERENCE_SERVICE_API_GRPC_HOST"))
-	if host == "" {
-		host = "localhost"
-	}
-	port := strings.TrimSpace(os.Getenv("INFERENCE_SERVICE_API_GRPC_PORT"))
-	if port == "" {
-		return defaultInferenceGRPCAddress
-	}
-	if _, err := strconv.Atoi(port); err != nil {
-		return defaultInferenceGRPCAddress
-	}
-	return fmt.Sprintf("%s:%s", host, port)
+	return ids
 }

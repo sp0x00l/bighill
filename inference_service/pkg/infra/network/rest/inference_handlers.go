@@ -23,6 +23,9 @@ const (
 	pathInferenceEndpointDatasets      = "/v1/inference/endpoints/{endpointId}/datasets"
 	pathInferenceEndpointMergeStrategy = "/v1/inference/endpoints/{endpointId}/merge-strategy"
 	pathInferenceEndpointGenerations   = "/v1/inference/endpoints/{endpointId}/generations"
+	pathInferenceEndpointPreferences   = "/v1/inference/endpoints/{endpointId}/preference-datasets"
+	pathInferencePreferenceDatasets    = "/v1/inference/preference-datasets"
+	pathInferencePreferenceDataset     = "/v1/inference/preference-datasets/{preferenceDatasetId}"
 	pathInferenceFeedback              = "/v1/inference/feedback"
 )
 
@@ -76,6 +79,24 @@ func (h *InferenceHandlers) GetRoutes() []Route {
 			Handler:  h.RecordFeedback,
 			Method:   http.MethodPost,
 			SpanName: "record-inference-feedback",
+		},
+		{
+			Path:     pathInferenceEndpointPreferences,
+			Handler:  h.BuildPreferenceDataset,
+			Method:   http.MethodPost,
+			SpanName: "build-inference-preference-dataset",
+		},
+		{
+			Path:     pathInferencePreferenceDatasets,
+			Handler:  h.ListPreferenceDatasets,
+			Method:   http.MethodGet,
+			SpanName: "list-inference-preference-datasets",
+		},
+		{
+			Path:     pathInferencePreferenceDataset,
+			Handler:  h.ReadPreferenceDataset,
+			Method:   http.MethodGet,
+			SpanName: "read-inference-preference-dataset",
 		},
 	}
 }
@@ -252,6 +273,77 @@ func (h *InferenceHandlers) RecordFeedback(ctx context.Context, req *http.Reques
 	return NewResponseWithPayload(http.StatusCreated, payload), nil
 }
 
+func (h *InferenceHandlers) BuildPreferenceDataset(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers BuildPreferenceDataset")
+
+	actor, orgID, endpointID, body, err := h.readEndpointMutation(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	command, err := h.adapter.FromPreferenceDatasetBuildDTO(ctx, body)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid preference dataset request")
+	}
+	command.UserID = actor
+	command.OrgID = orgID
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.BuildPreferenceDatasetForEndpoint(ctx, endpointID, command)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.adapter.ToPreferenceDatasetDTO(ctx, result)
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode preference dataset")
+	}
+	return NewResponseWithPayload(http.StatusCreated, payload), nil
+}
+
+func (h *InferenceHandlers) ListPreferenceDatasets(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers ListPreferenceDatasets")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	filter, err := preferenceDatasetFilter(req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid preference dataset filter")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.ListPreferenceDatasets(ctx, orgID, filter)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.adapter.ToPreferenceDatasetDTOs(ctx, result)
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode preference datasets")
+	}
+	return NewResponseWithPayload(http.StatusOK, payload), nil
+}
+
+func (h *InferenceHandlers) ReadPreferenceDataset(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers ReadPreferenceDataset")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	preferenceDatasetID, err := readPreferenceDatasetID(req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid preference dataset id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.ReadPreferenceDataset(ctx, orgID, preferenceDatasetID)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.adapter.ToPreferenceDatasetDTO(ctx, result)
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode preference dataset")
+	}
+	return NewResponseWithPayload(http.StatusOK, payload), nil
+}
+
 func (h *InferenceHandlers) readEndpointMutation(ctx context.Context, req *http.Request) (uuid.UUID, uuid.UUID, uuid.UUID, []byte, error) {
 	log.Trace("InferenceHandlers readEndpointMutation")
 
@@ -292,6 +384,37 @@ func readEndpointID(req *http.Request) (uuid.UUID, error) {
 		return uuid.Nil, domain.ErrValidationFailed.Extend("endpoint_id is invalid")
 	}
 	return endpointID, nil
+}
+
+func readPreferenceDatasetID(req *http.Request) (uuid.UUID, error) {
+	log.Trace("readPreferenceDatasetID")
+
+	preferenceDatasetID, err := uuid.Parse(mux.Vars(req)["preferenceDatasetId"])
+	if err != nil || preferenceDatasetID == uuid.Nil {
+		return uuid.Nil, domain.ErrValidationFailed.Extend("preference_dataset_id is invalid")
+	}
+	return preferenceDatasetID, nil
+}
+
+func preferenceDatasetFilter(req *http.Request) (model.PreferenceDatasetFilter, error) {
+	log.Trace("preferenceDatasetFilter")
+
+	filter := model.PreferenceDatasetFilter{}
+	if value := req.URL.Query().Get("model_id"); value != "" {
+		id, err := uuid.Parse(value)
+		if err != nil || id == uuid.Nil {
+			return filter, domain.ErrValidationFailed.Extend("model_id is invalid")
+		}
+		filter.ModelID = id
+	}
+	if value := req.URL.Query().Get("endpoint_id"); value != "" {
+		id, err := uuid.Parse(value)
+		if err != nil || id == uuid.Nil {
+			return filter, domain.ErrValidationFailed.Extend("endpoint_id is invalid")
+		}
+		filter.EndpointID = id
+	}
+	return filter, nil
 }
 
 func mapInferenceError(err error) error {

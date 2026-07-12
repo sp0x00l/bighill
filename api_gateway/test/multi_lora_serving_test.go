@@ -3,14 +3,12 @@ package test
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
-	inferencepb "lib/data_contracts_lib/inference"
 	ingestionpb "lib/data_contracts_lib/ingestion"
 
 	"github.com/google/uuid"
@@ -35,31 +33,38 @@ var _ = Describe("Multi-LoRA serving control plane", Ordered, func() {
 	})
 
 	It("P1 serves a tenant-owned base model before adapter loading", func() {
-		client, closeClient := newInferenceClient()
-		defer closeClient()
+		endpointID := waitForPublishedEndpoint(user.Token, "rag-e2e-uploaded-base")
 
-		var response *inferencepb.GenerateResponse
-		Eventually(func(g Gomega) {
-			ctx, cancel := context.WithTimeout(context.Background(), ragE2EGenerateCallTimeout)
-			defer cancel()
+		var response map[string]any
+		var lastErr error
+		Eventually(func() bool {
+			status, body, err := requestWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+endpointID.String()+"/generations", map[string]any{
+				"query_text": "What phrase identifies the embedded knowledge base?",
+				"top_k":      3,
+			}, user.Token, uuid.New(), ragE2EGenerateCallTimeout)
+			if err != nil {
+				lastErr = err
+				return false
+			}
+			if status != http.StatusOK {
+				lastErr = fmt.Errorf("status %d body %s", status, string(body))
+				return false
+			}
+			response = decodeObject(body)
+			if strings.TrimSpace(stringField(response, "answer")) == "" {
+				lastErr = fmt.Errorf("empty answer in %#v", response)
+				return false
+			}
+			if !hasRAGVerificationContextObject(response) {
+				lastErr = fmt.Errorf("missing RAG verification context in %#v", response)
+				return false
+			}
+			lastErr = nil
+			return true
+		}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(BeTrue(), "generation did not complete through the base endpoint: %v", lastErr)
 
-			var err error
-			response, err = client.Generate(ctx, &inferencepb.GenerateRequest{
-				RequestId: uuid.NewString(),
-				UserId:    user.ID.String(),
-				OrgId:     user.OrgID.String(),
-				DatasetId: datasetID,
-				ModelId:   baseModelID.String(),
-				QueryText: "What phrase identifies the embedded knowledge base?",
-				TopK:      3,
-			})
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(strings.TrimSpace(response.GetAnswer())).NotTo(BeEmpty())
-			expectRAGVerificationContext(g, response)
-		}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(Succeed())
-
-		Expect(response.GetGenerationModel()).To(Equal(stringField(baseModel, "serving_model")))
-		Expect(response.GetGenerationProtocol()).To(Equal(stringField(baseModel, "serving_protocol")))
+		Expect(response["generation_model"]).To(Equal(stringField(baseModel, "serving_model")))
+		Expect(response["generation_protocol"]).To(Equal(stringField(baseModel, "serving_protocol")))
 	})
 
 	It("P2 uploads a LoRA adapter and refuses silent base fallback", func() {
@@ -92,22 +97,21 @@ var _ = Describe("Multi-LoRA serving control plane", Ordered, func() {
 	})
 
 	It("P5 fails generation against an unserved adapter instead of answering with the base model", func() {
-		client, closeClient := newInferenceClient()
-		defer closeClient()
-		ctx, cancel := context.WithTimeout(context.Background(), ragE2EGenerateCallTimeout)
-		defer cancel()
-
-		_, err := client.Generate(ctx, &inferencepb.GenerateRequest{
-			RequestId: uuid.NewString(),
-			UserId:    user.ID.String(),
-			OrgId:     user.OrgID.String(),
-			DatasetId: datasetID,
-			ModelId:   firstAdapterID.String(),
-			QueryText: "What phrase identifies the embedded knowledge base?",
-			TopK:      3,
-		})
-
-		Expect(err).To(HaveOccurred())
+		status, body := doJSON(http.MethodPost, "/v1/private/inference/endpoints", map[string]any{
+			"model_id":     firstAdapterID.String(),
+			"dataset_ids":  []string{datasetID},
+			"display_name": "rag-e2e-lora-one-unserved",
+		}, user.Token, uuid.New())
+		if status != http.StatusCreated {
+			Expect(status).To(BeElementOf(http.StatusBadRequest, http.StatusConflict, http.StatusNotFound), "body: %s", string(body))
+			return
+		}
+		endpoint := decodeSingleObject(body)
+		status, body = doJSONWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+stringField(endpoint, "endpoint_id")+"/generations", map[string]any{
+			"query_text": "What phrase identifies the embedded knowledge base?",
+			"top_k":      3,
+		}, user.Token, uuid.New(), ragE2EGenerateCallTimeout)
+		Expect(status).NotTo(Equal(http.StatusOK), "body: %s", string(body))
 	})
 
 	It("P6 keeps tenant adapter models private to their owner org", func() {
@@ -140,18 +144,30 @@ func uploadPEFTAdapterThroughIngestion(user profileTestUser, datasetID string, b
 	var uploadID string
 	var resourceID uuid.UUID
 	var fields map[string]any
-	Eventually(func(g Gomega) {
+	var lastErr error
+	Eventually(func() bool {
 		status, body := doJSON(http.MethodPost, "/v1/private/models/uploads", initiatePayload, user.Token, uuid.New())
-		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+		if status != http.StatusCreated {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
 		initiated := decodeObject(body)
 		uploadID = stringField(initiated, "upload_id")
 		parsedResourceID, err := uuid.Parse(stringField(initiated, "resource_id"))
-		g.Expect(err).NotTo(HaveOccurred())
+		if err != nil {
+			lastErr = err
+			return false
+		}
 		resourceID = parsedResourceID
 		var ok bool
 		fields, ok = initiated["fields"].(map[string]any)
-		g.Expect(ok).To(BeTrue(), "fields: %#v", initiated["fields"])
-	}, 30*time.Second, 1*time.Second).Should(Succeed())
+		if !ok {
+			lastErr = fmt.Errorf("fields: %#v", initiated["fields"])
+			return false
+		}
+		lastErr = nil
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue(), "model upload initiation failed: %v", lastErr)
 
 	writeLocalS3Object("local-dev-bucket", fields["key"].(string), "application/zip", archive)
 
@@ -178,33 +194,57 @@ func uploadPEFTAdapterThroughIngestion(user profileTestUser, datasetID string, b
 
 func waitForUploadedAdapterModel(user profileTestUser, modelID uuid.UUID, name string) map[string]any {
 	var read map[string]any
-	Eventually(func(g Gomega) {
-		status, body := doJSONWithTimeout(http.MethodGet, "/v1/private/models/"+modelID.String(), nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
-		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+	var lastErr error
+	Eventually(func() bool {
+		status, body, err := requestWithTimeout(http.MethodGet, "/v1/private/models/"+modelID.String(), nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
+		if err != nil {
+			lastErr = err
+			return false
+		}
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
 		read = decodeObject(body)
-		g.Expect(read).To(SatisfyAll(
-			HaveKeyWithValue("id", modelID.String()),
-			HaveKeyWithValue("name", name),
-			HaveKeyWithValue("source", "UPLOAD"),
-			HaveKeyWithValue("model_kind", "FINE_TUNED"),
-			HaveKeyWithValue("adapter_rank", BeNumerically("==", 16)),
-		))
-	}, 75*time.Second, 1*time.Second).Should(Succeed())
+		if read["id"] != modelID.String() ||
+			read["name"] != name ||
+			read["source"] != "UPLOAD" ||
+			read["model_kind"] != "FINE_TUNED" {
+			lastErr = fmt.Errorf("unexpected adapter model: %#v", read)
+			return false
+		}
+		if rank, ok := read["adapter_rank"].(float64); !ok || int(rank) != 16 {
+			lastErr = fmt.Errorf("unexpected adapter rank in %#v", read)
+			return false
+		}
+		lastErr = nil
+		return true
+	}, 75*time.Second, 1*time.Second).Should(BeTrue(), "adapter model was not projected: %v", lastErr)
 	return read
 }
 
 func assertNoReadyEndpointForModelName(user profileTestUser, displayName string) {
-	Consistently(func(g Gomega) {
+	var lastErr error
+	Consistently(func() bool {
 		status, body := doJSON(http.MethodGet, "/v1/private/inference/endpoints", nil, user.Token, uuid.Nil)
-		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
 		var endpoints []map[string]any
-		g.Expect(json.Unmarshal(body, &endpoints)).To(Succeed())
+		if err := json.Unmarshal(body, &endpoints); err != nil {
+			lastErr = err
+			return false
+		}
 		for _, endpoint := range endpoints {
-			if endpoint["display_name"] == displayName {
-				g.Expect(endpoint["status"]).NotTo(Equal("ready"))
+			if endpoint["display_name"] == displayName && endpoint["status"] == "ready" {
+				lastErr = fmt.Errorf("endpoint %q is ready: %#v", displayName, endpoint)
+				return false
 			}
 		}
-	}, 5*time.Second, 1*time.Second).Should(Succeed())
+		lastErr = nil
+		return true
+	}, 5*time.Second, 1*time.Second).Should(BeTrue(), "adapter endpoint became ready unexpectedly: %v", lastErr)
 }
 
 func minimalPEFTAdapterArchive(rank int) []byte {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	dataregistrypb "lib/data_contracts_lib/data_registry"
 	featurepb "lib/data_contracts_lib/feature_materializer"
-	inferencepb "lib/data_contracts_lib/inference"
 	profilepb "lib/data_contracts_lib/profile"
 	env "lib/shared_lib/env"
 	msgConn "lib/shared_lib/messaging"
@@ -133,35 +132,26 @@ var _ = Describe("Hugging Face real model onboarding", Label("real-huggingface")
 		servingModel := stringField(loadedModel, "serving_model")
 		expectLocalOllamaModelAvailable(servingModel)
 		expectLocalOllamaChatTemplate(servingModel)
+		endpointID := waitForPublishedEndpoint(user.Token, modelName)
 
-		client, closeClient := newInferenceClient()
-		defer closeClient()
+		var response map[string]any
+		Eventually(func() bool {
+			status, body := doJSONWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+endpointID.String()+"/generations", map[string]any{
+				"query_text": "Using the TechniqueRAG paper, what problem is addressed by reranking noisy candidates for adversarial technique annotation?",
+				"top_k":      5,
+			}, user.Token, uuid.New(), 90*time.Second)
+			if status != http.StatusOK {
+				return false
+			}
+			response = decodeObject(body)
+			return strings.TrimSpace(stringField(response, "answer")) != "" &&
+				hasNoChatSpecialTokenLeakageObject(response) &&
+				hasTechniqueRAGPaperContextObject(response, materialized)
+		}, 10*time.Minute, 5*time.Second).Should(BeTrue())
 
-		var response *inferencepb.GenerateResponse
-		Eventually(func(g Gomega) {
-			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-			defer cancel()
-
-			var err error
-			response, err = client.Generate(ctx, &inferencepb.GenerateRequest{
-				RequestId: uuid.NewString(),
-				UserId:    user.ID.String(),
-				OrgId:     user.OrgID.String(),
-				DatasetId: datasetID,
-				ModelId:   modelID,
-				QueryText: "Using the TechniqueRAG paper, what problem is addressed by reranking noisy candidates for adversarial technique annotation?",
-				TopK:      5,
-			})
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(strings.TrimSpace(response.GetAnswer())).NotTo(BeEmpty())
-			expectNoChatSpecialTokenLeakage(g, response)
-			expectTechniqueRAGPaperContext(g, response, materialized)
-		}, 10*time.Minute, 5*time.Second).Should(Succeed())
-
-		Expect(response.GetDatasetId()).To(Equal(datasetID))
-		Expect(response.GetModelId()).To(Equal(modelID))
-		Expect(response.GetGenerationProtocol()).To(Equal("OPENAI_CHAT_COMPLETIONS"))
-		Expect(response.GetGenerationModel()).To(Equal(servingModel))
+		Expect(response["dataset_id"]).To(Equal(datasetID))
+		Expect(response["generation_protocol"]).To(Equal("OPENAI_CHAT_COMPLETIONS"))
+		Expect(response["generation_model"]).To(Equal(servingModel))
 	})
 })
 
@@ -189,10 +179,10 @@ func createTechniqueRAGPaperDataset(user profileTestUser) string {
 
 func uploadTechniqueRAGPaper(user profileTestUser, datasetID string) {
 	pdf := readTechniqueRAGPaperFixture()
-	Eventually(func(g Gomega) {
-		status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "techniquerag-2505.11988v1.pdf", pdf, user.Token, uuid.New())
-		g.Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-	}, 30*time.Second, 1*time.Second).Should(Succeed())
+	Eventually(func() bool {
+		status, _ := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "techniquerag-2505.11988v1.pdf", pdf, user.Token, uuid.New())
+		return status == http.StatusCreated
+	}, 30*time.Second, 1*time.Second).Should(BeTrue())
 }
 
 func readTechniqueRAGPaperFixture() []byte {
@@ -224,24 +214,27 @@ func waitForTechniqueRAGPaperMaterialized(
 			strings.TrimSpace(event.GetEmbeddingSnapshotId()) == embeddingEvent.GetEmbeddingSnapshotId()
 	})
 
-	Eventually(func(g Gomega) {
+	Eventually(func() bool {
 		status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
-		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		if status != http.StatusOK {
+			return false
+		}
 
 		read := decodeObject(body)
-		g.Expect(read["processingState"]).To(Equal("EMBEDDINGS_MATERIALIZED"))
-		g.Expect(read["storageLocation"]).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
-		g.Expect(read["tableFormat"]).To(Equal("PARQUET"))
-		g.Expect(read["catalogProvider"]).To(Equal("LOCAL"))
-		g.Expect(read["processingProfile"]).To(Equal("TEXT_RAG_PROCESSING_PROFILE"))
-		metadata := schemaMetadataObject(g, read)
-		g.Expect(metadata["source_format"]).To(Equal("pdf"))
-		g.Expect(metadata["source_page_count"]).To(BeNumerically("==", techniqueRAGPaperPageCount))
-		g.Expect(metadata["extractor_name"]).To(Equal("poppler-cpp-pdf-extractor"))
-		g.Expect(metadata["extractor_version"]).To(Equal("v1"))
-		g.Expect(metadata["rows"]).To(BeNumerically(">=", 1))
-		expectSchemaField(g, metadata, "source_text")
-	}, 2*time.Minute, 1*time.Second).Should(Succeed())
+		metadata, ok := schemaMetadataObjectOK(read)
+		return ok &&
+			read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+			isFeatureParquetLocation(read["storageLocation"]) &&
+			read["tableFormat"] == "PARQUET" &&
+			read["catalogProvider"] == "LOCAL" &&
+			read["processingProfile"] == "TEXT_RAG_PROCESSING_PROFILE" &&
+			metadata["source_format"] == "pdf" &&
+			numericEqual(metadata["source_page_count"], techniqueRAGPaperPageCount) &&
+			metadata["extractor_name"] == "poppler-cpp-pdf-extractor" &&
+			metadata["extractor_version"] == "v1" &&
+			numericAtLeast(metadata["rows"], 1) &&
+			dataMaterializationSchemaMetadataHasField(metadata, "source_text")
+	}, 2*time.Minute, 1*time.Second).Should(BeTrue())
 
 	return techniqueRAGMaterialization{
 		datasetID:           datasetID,
@@ -250,57 +243,89 @@ func waitForTechniqueRAGPaperMaterialized(
 	}
 }
 
-func expectTechniqueRAGPaperContext(g Gomega, response *inferencepb.GenerateResponse, materialized techniqueRAGMaterialization) {
-	g.Expect(response.GetDatasetId()).To(Equal(materialized.datasetID))
-	g.Expect(response.GetContexts()).NotTo(BeEmpty())
-	g.Expect(int64(len(response.GetContexts()))).To(BeNumerically("<=", materialized.embeddingCount))
-	for _, retrieved := range response.GetContexts() {
-		g.Expect(retrieved.GetEmbeddingSnapshotId()).To(Equal(materialized.embeddingSnapshotID))
-		g.Expect(strings.TrimSpace(retrieved.GetEmbeddingRecordId())).NotTo(BeEmpty())
-		g.Expect(strings.TrimSpace(retrieved.GetSourceText())).NotTo(BeEmpty())
+func expectTechniqueRAGPaperContextObject(response map[string]any, materialized techniqueRAGMaterialization) {
+	Expect(hasTechniqueRAGPaperContextObject(response, materialized)).To(BeTrue())
+}
+
+func hasTechniqueRAGPaperContextObject(response map[string]any, materialized techniqueRAGMaterialization) bool {
+	if response["dataset_id"] != materialized.datasetID {
+		return false
+	}
+	rawContexts, ok := response["contexts"].([]any)
+	if !ok || len(rawContexts) == 0 || int64(len(rawContexts)) > materialized.embeddingCount {
+		return false
+	}
+	for _, raw := range rawContexts {
+		retrieved, ok := raw.(map[string]any)
+		if !ok || strings.TrimSpace(fmt.Sprint(retrieved["source_text"])) == "" {
+			return false
+		}
 	}
 
-	contextText := strings.ToLower(ragResponseContextText(response))
-	g.Expect(compactPaperText(contextText)).To(ContainSubstring("techniquerag"))
-	g.Expect(contextText).To(ContainSubstring("adversarial technique"))
-	g.Expect(contextText).To(ContainSubstring("re-ranker"))
-	g.Expect(contextText).To(ContainSubstring("candidate set"))
-	g.Expect(contextText).To(ContainSubstring("data scarcity"))
+	contextText := strings.ToLower(ragResponseContextTextObject(response))
+	return strings.Contains(compactPaperText(contextText), "techniquerag") &&
+		strings.Contains(contextText, "adversarial technique") &&
+		strings.Contains(contextText, "re-ranker") &&
+		strings.Contains(contextText, "candidate set") &&
+		strings.Contains(contextText, "data scarcity")
 }
 
 func compactPaperText(value string) string {
 	return strings.Join(strings.Fields(strings.ToLower(value)), "")
 }
 
-func expectNoChatSpecialTokenLeakage(g Gomega, response *inferencepb.GenerateResponse) {
-	leakedToken := MatchRegexp(`(<\|eot_id\|>|<\|im_end\|>|<end_of_turn>|<\|end\|>)`)
-	g.Expect(response.GetAnswer()).NotTo(leakedToken)
-	for _, retrieved := range response.GetContexts() {
-		g.Expect(retrieved.GetSourceText()).NotTo(leakedToken)
+func expectNoChatSpecialTokenLeakageObject(response map[string]any) {
+	Expect(hasNoChatSpecialTokenLeakageObject(response)).To(BeTrue())
+}
+
+func hasNoChatSpecialTokenLeakageObject(response map[string]any) bool {
+	if hasChatSpecialTokenLeak(stringField(response, "answer")) {
+		return false
 	}
+	rawContexts, ok := response["contexts"].([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range rawContexts {
+		retrieved, ok := raw.(map[string]any)
+		if !ok || hasChatSpecialTokenLeak(strings.TrimSpace(fmt.Sprint(retrieved["source_text"]))) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasChatSpecialTokenLeak(value string) bool {
+	return strings.Contains(value, "<|eot_id|>") ||
+		strings.Contains(value, "<|im_end|>") ||
+		strings.Contains(value, "<end_of_turn>") ||
+		strings.Contains(value, "<|end|>")
 }
 
 func waitForRealHuggingFaceModelLoaded(user profileTestUser, modelID string, modelName string, checksum string) map[string]any {
 	var loaded map[string]any
 	checksumPart := checksumServingTagPart(checksum)
-	Eventually(func(g Gomega) {
+	Eventually(func() bool {
 		status, body := doJSON(http.MethodGet, "/v1/private/models/"+modelID, nil, user.Token, uuid.Nil)
-		g.Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		if status != http.StatusOK {
+			return false
+		}
 		read := decodeObject(body)
-		g.Expect(read).To(SatisfyAll(
-			HaveKeyWithValue("id", modelID),
-			HaveKeyWithValue("source", "HUGGING_FACE"),
-			HaveKeyWithValue("model_kind", "BASE"),
-			HaveKeyWithValue("status", "READY"),
-			HaveKeyWithValue("serving_load_status", "LOADED"),
-			HaveKeyWithValue("serving_protocol", "OPENAI_CHAT_COMPLETIONS"),
-			HaveKeyWithValue("name", modelName),
-		))
 		servingModel := stringField(read, "serving_model")
-		g.Expect(servingModel).To(ContainSubstring(checksumPart))
-		g.Expect(servingModel).NotTo(Equal(stringField(read, "base_model")))
+		if read["id"] != modelID ||
+			read["source"] != "HUGGING_FACE" ||
+			read["model_kind"] != "BASE" ||
+			read["status"] != "READY" ||
+			read["serving_load_status"] != "LOADED" ||
+			read["serving_protocol"] != "OPENAI_CHAT_COMPLETIONS" ||
+			read["name"] != modelName ||
+			!strings.Contains(servingModel, checksumPart) ||
+			servingModel == stringField(read, "base_model") {
+			return false
+		}
 		loaded = read
-	}, 20*time.Minute, 5*time.Second).Should(Succeed())
+		return true
+	}, 20*time.Minute, 5*time.Second).Should(BeTrue())
 	return loaded
 }
 

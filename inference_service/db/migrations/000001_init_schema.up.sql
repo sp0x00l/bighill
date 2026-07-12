@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     source_uri text NOT NULL DEFAULT '',
     source_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     name text NOT NULL,
+    lineage_name text NOT NULL,
     model_version integer NOT NULL,
     base_model text NOT NULL,
     artifact_location text NOT NULL DEFAULT '',
@@ -237,23 +238,64 @@ ON bighill_inference_db.preference_examples(org_id);
 CREATE INDEX IF NOT EXISTS index_preference_examples_model_id
 ON bighill_inference_db.preference_examples(model_id);
 
+CREATE TABLE IF NOT EXISTS bighill_inference_db.lineage_eval_sets (
+    org_id uuid NOT NULL,
+    lineage_name text NOT NULL,
+    eval_set_version integer NOT NULL,
+    eval_dataset_uri text NOT NULL,
+    checksum text NOT NULL DEFAULT '',
+    example_count integer NOT NULL DEFAULT 0,
+    source text NOT NULL CHECK (source IN ('CURATED', 'FROZEN_GEN0')),
+    is_active boolean NOT NULL DEFAULT true,
+    frozen_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (org_id, lineage_name, eval_set_version)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS index_lineage_eval_sets_one_active
+ON bighill_inference_db.lineage_eval_sets(org_id, lineage_name)
+WHERE is_active = true;
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.lineage_eval_examples (
+    org_id uuid NOT NULL,
+    lineage_name text NOT NULL,
+    eval_set_version integer NOT NULL,
+    preference_example_id uuid NOT NULL REFERENCES bighill_inference_db.preference_examples(preference_example_id),
+    PRIMARY KEY (org_id, lineage_name, eval_set_version, preference_example_id),
+    FOREIGN KEY (org_id, lineage_name, eval_set_version)
+        REFERENCES bighill_inference_db.lineage_eval_sets(org_id, lineage_name, eval_set_version)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS index_lineage_eval_examples_preference_example_id
+ON bighill_inference_db.lineage_eval_examples(preference_example_id);
+
 CREATE TABLE IF NOT EXISTS bighill_inference_db.preference_dataset_snapshots (
     preference_dataset_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
     org_id uuid NOT NULL,
-    dataset_id uuid NOT NULL,
+    endpoint_id uuid,
+    dataset_id uuid,
+    dataset_ids uuid[] NOT NULL DEFAULT '{}',
     model_id uuid NOT NULL,
+    parent_model_kind inference_model_kind_enum NOT NULL,
+    parent_artifact_uri text NOT NULL,
+    parent_artifact_checksum text NOT NULL DEFAULT '',
     parent_adapter_uri text NOT NULL,
     parent_base_model text NOT NULL,
+    parent_model_name text NOT NULL,
+    parent_lineage_name text NOT NULL DEFAULT '',
     parent_model_version integer NOT NULL,
-    source_request_id uuid NOT NULL,
+    source_request_id uuid,
     output_uri text NOT NULL,
     evaluation_output_uri text NOT NULL DEFAULT '',
     format text NOT NULL,
     eligibility_policy text NOT NULL,
     example_count integer NOT NULL,
+    training_example_count integer NOT NULL DEFAULT 0,
+    evaluation_example_count integer NOT NULL DEFAULT 0,
     min_examples integer NOT NULL,
     limit_count integer NOT NULL,
+    integrity_key text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -269,6 +311,9 @@ ON bighill_inference_db.preference_dataset_snapshots(org_id, created_at);
 
 CREATE INDEX IF NOT EXISTS index_preference_dataset_snapshots_model_id
 ON bighill_inference_db.preference_dataset_snapshots(model_id, created_at);
+
+CREATE INDEX IF NOT EXISTS index_preference_dataset_snapshots_endpoint_id
+ON bighill_inference_db.preference_dataset_snapshots(endpoint_id, created_at);
 
 CREATE TRIGGER preference_dataset_snapshots_updated_at
 BEFORE UPDATE ON bighill_inference_db.preference_dataset_snapshots
@@ -412,6 +457,30 @@ WITH CHECK (
 ALTER TABLE bighill_inference_db.preference_examples ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bighill_inference_db.preference_examples FORCE ROW LEVEL SECURITY;
 CREATE POLICY preference_examples_tenant_isolation ON bighill_inference_db.preference_examples
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.lineage_eval_sets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.lineage_eval_sets FORCE ROW LEVEL SECURITY;
+CREATE POLICY lineage_eval_sets_tenant_isolation ON bighill_inference_db.lineage_eval_sets
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.lineage_eval_examples ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.lineage_eval_examples FORCE ROW LEVEL SECURITY;
+CREATE POLICY lineage_eval_examples_tenant_isolation ON bighill_inference_db.lineage_eval_examples
 USING (
     current_setting('app.system_context', true) = 'true'
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id

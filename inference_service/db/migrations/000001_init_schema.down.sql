@@ -12,6 +12,8 @@ DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_mo
 DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_org_id;
 DROP TABLE IF EXISTS bighill_inference_db.published_inference_endpoints;
 DROP TABLE IF EXISTS bighill_inference_db.preference_dataset_snapshots;
+DROP TABLE IF EXISTS bighill_inference_db.lineage_eval_examples;
+DROP TABLE IF EXISTS bighill_inference_db.lineage_eval_sets;
 DROP TABLE IF EXISTS bighill_inference_db.preference_examples;
 DROP TABLE IF EXISTS bighill_inference_db.inference_feedback;
 DROP TABLE IF EXISTS bighill_inference_db.inference_requests;
