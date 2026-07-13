@@ -2,15 +2,6 @@ syntax = "proto3";
 package training;
 option go_package = "lib/data_contracts_lib/training";
 
-message TrainingRunRequestedCommand {
-  string idempotency_key = 1;
-  string dataset_id = 2;
-  string source_model_id = 3;
-  string training_profile = 4;
-  string evaluation_profile = 5;
-  string org_id = 6;
-}
-
 message ModelTrainingCompletedEvent {
   string training_run_id = 1;
   string user_id = 2;

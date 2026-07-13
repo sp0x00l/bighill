@@ -11,6 +11,7 @@ import (
 	tiktoken "github.com/pkoukk/tiktoken-go"
 	tiktokenloader "github.com/pkoukk/tiktoken-go-loader"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -41,15 +42,22 @@ func NewContextWindowPacker(strategy model.PromptStrategy) *ContextWindowPacker 
 	}
 }
 
-func (p *ContextWindowPacker) Pack(_ context.Context, request model.ContextPackRequest) ([]model.RetrievedContext, error) {
+func (p *ContextWindowPacker) Pack(ctx context.Context, request model.ContextPackRequest) (packed []model.RetrievedContext, err error) {
 	log.Trace("ContextWindowPacker Pack")
+
+	ctx, span := startInferenceSpan(ctx, "generate.pack_context_window",
+		attribute.Int("candidate_count", len(request.Contexts)),
+		attribute.Int("max_context_chunks", p.strategy.MaxContextChunks),
+		attribute.Int("max_context_tokens", p.strategy.MaxContextTokens),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
 
 	strategy := p.strategy
 	encoding, err := loadPromptEncoding()
 	if err != nil {
 		return nil, err
 	}
-	packed := make([]model.RetrievedContext, 0, min(len(request.Contexts), strategy.MaxContextChunks))
+	packed = make([]model.RetrievedContext, 0, min(len(request.Contexts), strategy.MaxContextChunks))
 	remainingTokens := strategy.MaxContextTokens
 	for _, retrieved := range request.Contexts {
 		if len(packed) >= strategy.MaxContextChunks || remainingTokens <= 0 {
@@ -99,8 +107,16 @@ func NewDefaultPromptBuilder(strategy model.PromptStrategy) *DefaultPromptBuilde
 	}
 }
 
-func (b *DefaultPromptBuilder) BuildPrompt(_ context.Context, request model.PromptBuildRequest) (*model.PromptPackage, error) {
+func (b *DefaultPromptBuilder) BuildPrompt(ctx context.Context, request model.PromptBuildRequest) (promptPackage *model.PromptPackage, err error) {
 	log.Trace("DefaultPromptBuilder BuildPrompt")
+
+	ctx, span := startInferenceSpan(ctx, "generate.build_prompt",
+		attribute.String("dataset_id", request.Dataset.DatasetID.String()),
+		attribute.String("model_id", request.Model.ModelID.String()),
+		attribute.Int("context_count", len(request.Contexts)),
+		attribute.String("prompt_strategy_version", b.strategy.Version),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
 
 	query := strings.TrimSpace(request.Query)
 	strategy := b.strategy

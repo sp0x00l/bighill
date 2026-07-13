@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -234,13 +235,16 @@ func NewInferenceUsecase(repository InferenceModelRepository, opts ...InferenceO
 	return u
 }
 
-func (u *inferenceUsecase) RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error) {
+func (u *inferenceUsecase) RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (record *model.InferenceModel, err error) {
 	log.Trace("InferenceUsecase RecordModelUpdated")
 
 	if inferenceModel != nil {
 		ctx = contextForActorOrg(ctx, inferenceModel.UserID, inferenceModel.OrgID)
 	}
-	record, err := u.modelRepository.UpsertModel(ctx, inferenceModel, idempotencyKey)
+	ctx, span := startInferenceSpan(ctx, "model.record_updated")
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
+	record, err = u.modelRepository.UpsertModel(ctx, inferenceModel, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -250,31 +254,45 @@ func (u *inferenceUsecase) RecordModelUpdated(ctx context.Context, inferenceMode
 	return record, nil
 }
 
-func (u *inferenceUsecase) RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error) {
+func (u *inferenceUsecase) RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (record *model.InferenceDataset, err error) {
 	log.Trace("InferenceUsecase RecordDatasetUpdated")
 
 	if dataset != nil {
 		ctx = contextForActorOrg(ctx, dataset.UserID, dataset.OrgID)
 	}
+	ctx, span := startInferenceSpan(ctx, "dataset.record_updated")
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
 	return u.datasetRepository.UpsertDataset(ctx, dataset, idempotencyKey)
 }
 
-func (u *inferenceUsecase) ReadModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error) {
+func (u *inferenceUsecase) ReadModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (record *model.InferenceModel, err error) {
 	log.Trace("InferenceUsecase ReadModel")
 
 	ctx = ctxutil.WithOrgID(ctx, orgID)
+	ctx, span := startInferenceSpan(ctx, "model.read",
+		attribute.String("org_id", orgID.String()),
+		attribute.String("model_id", modelID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
 	return u.modelRepository.ReadByID(ctx, orgID, modelID)
 }
 
-func (u *inferenceUsecase) ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error) {
+func (u *inferenceUsecase) ListEndpoints(ctx context.Context, orgID uuid.UUID) (out []*model.PublishedEndpoint, err error) {
 	log.Trace("InferenceUsecase ListEndpoints")
 
 	ctx = ctxutil.WithOrgID(ctx, orgID)
+	ctx, span := startInferenceSpan(ctx, "endpoint.list",
+		attribute.String("org_id", orgID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
 	endpoints, err := u.endpointRepository.ListEndpoints(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*model.PublishedEndpoint, 0, len(endpoints))
+	out = make([]*model.PublishedEndpoint, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		if endpoint != nil && endpoint.IsReady() {
 			out = append(out, endpoint)
@@ -283,10 +301,18 @@ func (u *inferenceUsecase) ListEndpoints(ctx context.Context, orgID uuid.UUID) (
 	return out, nil
 }
 
-func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.EndpointPublication) (*model.PublishedEndpoint, error) {
+func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.EndpointPublication) (endpoint *model.PublishedEndpoint, err error) {
 	log.Trace("InferenceUsecase PublishEndpoint")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	ctx, span := startInferenceSpan(ctx, "endpoint.publish",
+		attribute.String("org_id", request.OrgID.String()),
+		attribute.String("user_id", request.UserID.String()),
+		attribute.String("model_id", request.ModelID.String()),
+		attribute.Int("dataset_count", len(request.DatasetIDs)),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
 	inferenceModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, request.ModelID)
 	if err != nil {
 		return nil, err
@@ -319,21 +345,37 @@ func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.En
 	})
 }
 
-func (u *inferenceUsecase) SetEndpointDatasets(ctx context.Context, request model.EndpointDatasetBinding) (*model.PublishedEndpoint, error) {
+func (u *inferenceUsecase) SetEndpointDatasets(ctx context.Context, request model.EndpointDatasetBinding) (endpoint *model.PublishedEndpoint, err error) {
 	log.Trace("InferenceUsecase SetEndpointDatasets")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	ctx, span := startInferenceSpan(ctx, "endpoint.set_datasets",
+		attribute.String("org_id", request.OrgID.String()),
+		attribute.String("user_id", request.UserID.String()),
+		attribute.String("endpoint_id", request.EndpointID.String()),
+		attribute.Int("dataset_count", len(request.DatasetIDs)),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
 	if err := u.ensureDatasetsExist(ctx, request.OrgID, request.DatasetIDs); err != nil {
 		return nil, err
 	}
 	return u.endpointRepository.SetEndpointDatasets(ctx, request.OrgID, request.EndpointID, dedupeUUIDs(request.DatasetIDs))
 }
 
-func (u *inferenceUsecase) SetEndpointMergeStrategy(ctx context.Context, request model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error) {
+func (u *inferenceUsecase) SetEndpointMergeStrategy(ctx context.Context, request model.EndpointMergeConfiguration) (endpoint *model.PublishedEndpoint, err error) {
 	log.Trace("InferenceUsecase SetEndpointMergeStrategy")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
-	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, request.EndpointID)
+	ctx, span := startInferenceSpan(ctx, "endpoint.set_merge_strategy",
+		attribute.String("org_id", request.OrgID.String()),
+		attribute.String("user_id", request.UserID.String()),
+		attribute.String("endpoint_id", request.EndpointID.String()),
+		attribute.String("merge_strategy", request.MergeStrategy.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
+	endpoint, err = u.endpointRepository.ReadEndpoint(ctx, request.OrgID, request.EndpointID)
 	if err != nil {
 		return nil, err
 	}
@@ -348,10 +390,18 @@ func (u *inferenceUsecase) SetEndpointMergeStrategy(ctx context.Context, request
 	return u.endpointRepository.UpsertEndpoint(ctx, endpoint)
 }
 
-func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error) {
+func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (response *model.GenerateResponse, err error) {
 	log.Trace("InferenceUsecase GenerateForEndpoint")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	ctx, span := startInferenceSpan(ctx, "generate.for_endpoint",
+		attribute.String("request_id", request.RequestID.String()),
+		attribute.String("org_id", request.OrgID.String()),
+		attribute.String("user_id", request.UserID.String()),
+		attribute.String("endpoint_id", endpointID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
 	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, endpointID)
 	if err != nil {
 		return nil, err
@@ -363,23 +413,33 @@ func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID u
 	return u.generate(ctx, request, endpoint)
 }
 
-func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
+func (u *inferenceUsecase) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (record *model.InferenceFeedback, err error) {
 	log.Trace("InferenceUsecase RecordFeedback")
 
 	if feedback != nil {
 		ctx = contextForActorOrg(ctx, feedback.UserID, feedback.OrgID)
 	}
-	record, err := u.recordFeedback(ctx, feedback, idempotencyKey)
+	ctx, span := startInferenceSpan(ctx, "feedback.record")
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
+	record, err = u.recordFeedback(ctx, feedback, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
 	return record, nil
 }
 
-func (u *inferenceUsecase) BuildPreferenceDatasetForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
+func (u *inferenceUsecase) BuildPreferenceDatasetForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.PreferenceDatasetBuildRequest) (dataset *model.PreferenceDataset, err error) {
 	log.Trace("InferenceUsecase BuildPreferenceDatasetForEndpoint")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	ctx, span := startInferenceSpan(ctx, "preference_dataset.build_for_endpoint",
+		attribute.String("org_id", request.OrgID.String()),
+		attribute.String("user_id", request.UserID.String()),
+		attribute.String("endpoint_id", endpointID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
 	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, endpointID)
 	if err != nil {
 		return nil, err
@@ -396,23 +456,45 @@ func (u *inferenceUsecase) BuildPreferenceDatasetForEndpoint(ctx context.Context
 	return u.BuildPreferenceDataset(ctx, request)
 }
 
-func (u *inferenceUsecase) ReadPreferenceDataset(ctx context.Context, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (*model.PreferenceDataset, error) {
+func (u *inferenceUsecase) ReadPreferenceDataset(ctx context.Context, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (dataset *model.PreferenceDataset, err error) {
 	log.Trace("InferenceUsecase ReadPreferenceDataset")
+
+	ctx, span := startInferenceSpan(ctx, "preference_dataset.read",
+		attribute.String("org_id", orgID.String()),
+		attribute.String("preference_dataset_id", preferenceDatasetID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
 
 	return u.feedbackRepository.ReadPreferenceDatasetSnapshot(ctx, orgID, preferenceDatasetID)
 }
 
-func (u *inferenceUsecase) ListPreferenceDatasets(ctx context.Context, orgID uuid.UUID, filter model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error) {
+func (u *inferenceUsecase) ListPreferenceDatasets(ctx context.Context, orgID uuid.UUID, filter model.PreferenceDatasetFilter) (datasets []*model.PreferenceDataset, err error) {
 	log.Trace("InferenceUsecase ListPreferenceDatasets")
+
+	ctx, span := startInferenceSpan(ctx, "preference_dataset.list",
+		attribute.String("org_id", orgID.String()),
+		attribute.String("model_id", filter.ModelID.String()),
+		attribute.String("endpoint_id", filter.EndpointID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
 
 	return u.feedbackRepository.ListPreferenceDatasetSnapshots(ctx, orgID, filter)
 }
 
-func (u *inferenceUsecase) BuildPreferenceDataset(ctx context.Context, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
+func (u *inferenceUsecase) BuildPreferenceDataset(ctx context.Context, request model.PreferenceDatasetBuildRequest) (dataset *model.PreferenceDataset, err error) {
 	log.Trace("InferenceUsecase BuildPreferenceDataset")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
-	dataset, err := u.feedbackRepository.ReadPreferenceDataset(ctx, request)
+	ctx, span := startInferenceSpan(ctx, "preference_dataset.build",
+		attribute.String("org_id", request.OrgID.String()),
+		attribute.String("user_id", request.UserID.String()),
+		attribute.String("model_id", request.ModelID.String()),
+		attribute.String("endpoint_id", request.EndpointID.String()),
+		attribute.Int("dataset_count", len(request.DatasetIDs)),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
+	dataset, err = u.feedbackRepository.ReadPreferenceDataset(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -491,11 +573,29 @@ func (u *inferenceUsecase) Generate(ctx context.Context, request model.GenerateR
 	log.Trace("InferenceUsecase Generate")
 
 	ctx = contextForActorOrg(ctx, request.UserID, request.OrgID)
+	ctx, span := startInferenceSpan(ctx, "generate.raw",
+		attribute.String("request_id", request.RequestID.String()),
+		attribute.String("org_id", request.OrgID.String()),
+		attribute.String("user_id", request.UserID.String()),
+		attribute.String("model_id", request.ModelID.String()),
+		attribute.String("dataset_id", request.DatasetID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
 	return u.generate(ctx, request, nil)
 }
 
 func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint) (response *model.GenerateResponse, err error) {
 	log.Trace("InferenceUsecase generate")
+
+	ctx, span := startInferenceSpan(ctx, "generate.execute",
+		attribute.String("request_id", request.RequestID.String()),
+		attribute.String("org_id", request.OrgID.String()),
+		attribute.String("user_id", request.UserID.String()),
+		attribute.String("model_id", request.ModelID.String()),
+		attribute.Bool("endpoint_request", endpoint != nil),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
 
 	startedAt := time.Now()
 
@@ -573,12 +673,17 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 	retrievalQuery := request.QueryText
 	retrievalFilters := copyMetadataFilters(request.MetadataFilters)
 	if u.queryTransformer != nil {
-		transformCtx := ctx
+		transformErr := error(nil)
+		transformCtx, transformSpan := startInferenceSpan(ctx, "generate.transform_query",
+			attribute.String("request_id", request.RequestID.String()),
+			attribute.String("model_id", request.ModelID.String()),
+		)
+		queryTransformCtx := transformCtx
 		cancel := func() {}
 		if u.queryTransformerTimeout > 0 {
-			transformCtx, cancel = context.WithTimeout(ctx, u.queryTransformerTimeout)
+			queryTransformCtx, cancel = context.WithTimeout(transformCtx, u.queryTransformerTimeout)
 		}
-		transformed, transformErr := u.queryTransformer.TransformQuery(transformCtx, model.QueryTransformRequest{
+		transformed, transformErr := u.queryTransformer.TransformQuery(queryTransformCtx, model.QueryTransformRequest{
 			RequestID:       request.RequestID,
 			UserID:          request.UserID,
 			OrgID:           request.OrgID,
@@ -589,6 +694,7 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 			MetadataFilters: copyMetadataFilters(request.MetadataFilters),
 		})
 		cancel()
+		endInferenceSpanOnReturn(transformCtx, transformSpan, &transformErr)
 		if transformErr != nil {
 			log.WithContext(ctx).WithError(transformErr).Warn("query transform failed; falling back to raw query")
 		} else if transformed != nil {
@@ -619,13 +725,25 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 			err = domain.ErrRerankFailed.Extend("reranker merge strategy requires a configured reranker")
 			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 		}
-		contexts, err = u.reranker.Rerank(ctx, retrievalQuery, contexts, request.TopK)
+		rerankCtx, rerankSpan := startInferenceSpan(ctx, "generate.rerank",
+			attribute.String("request_id", request.RequestID.String()),
+			attribute.Int("candidate_count", len(contexts)),
+			attribute.Int("top_k", request.TopK),
+		)
+		contexts, err = u.reranker.Rerank(rerankCtx, retrievalQuery, contexts, request.TopK)
+		endInferenceSpanOnReturn(rerankCtx, rerankSpan, &err)
 		if err != nil {
 			err = fmt.Errorf("%w: %w", domain.ErrRerankFailed, err)
 			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 		}
 	case model.RAGMergeStrategyScoreNormalized:
+		_, mergeSpan := startInferenceSpan(ctx, "generate.score_normalized_merge",
+			attribute.String("request_id", request.RequestID.String()),
+			attribute.Int("candidate_count", len(contexts)),
+			attribute.Int("top_k", request.TopK),
+		)
 		contexts = scoreNormalizedMerge(contexts, request.TopK)
+		mergeSpan.End()
 	default:
 		err = domain.ErrValidationFailed.Extend(fmt.Sprintf("unsupported rag merge strategy %q", mergeStrategy))
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
@@ -649,7 +767,12 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	promptText = promptPackage.Prompt
-	answer, err := generator.Generate(ctx, model.GenerationRequest{
+	generateCtx, generateSpan := startInferenceSpan(ctx, "generate.call_model",
+		attribute.String("request_id", request.RequestID.String()),
+		attribute.String("generation_protocol", generationProtocol),
+		attribute.String("generation_model", generationModel),
+	)
+	answer, err := generator.Generate(generateCtx, model.GenerationRequest{
 		RequestID:             request.RequestID,
 		Dataset:               dataset,
 		Model:                 inferenceModel,
@@ -658,6 +781,7 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 		PromptStrategyVersion: promptPackage.Strategy.Version,
 		Contexts:              promptPackage.Contexts,
 	})
+	endInferenceSpanOnReturn(generateCtx, generateSpan, &err)
 	if err != nil {
 		err = fmt.Errorf("%w: %w", domain.ErrGenerationFailed, err)
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
@@ -694,8 +818,18 @@ func (u *inferenceUsecase) generateDatasetIDs(request model.GenerateRequest, end
 	return []uuid.UUID{request.DatasetID}, nil
 }
 
-func (u *inferenceUsecase) ensureServingModelLoaded(ctx context.Context, orgID uuid.UUID, inferenceModel *model.InferenceModel) (*model.InferenceModel, error) {
+func (u *inferenceUsecase) ensureServingModelLoaded(ctx context.Context, orgID uuid.UUID, inferenceModel *model.InferenceModel) (loadedModel *model.InferenceModel, err error) {
 	log.Trace("InferenceUsecase ensureServingModelLoaded")
+
+	modelID := uuid.Nil
+	if inferenceModel != nil {
+		modelID = inferenceModel.ModelID
+	}
+	ctx, span := startInferenceSpan(ctx, "model.ensure_serving_loaded",
+		attribute.String("org_id", orgID.String()),
+		attribute.String("model_id", modelID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
 
 	if inferenceModel.ServingLoadStatus == model.ModelLoadStatusLoaded {
 		return inferenceModel, nil
@@ -807,10 +941,17 @@ func filterReadyRAGDatasets(ctx context.Context, datasets []*model.InferenceData
 	return ready
 }
 
-func (u *inferenceUsecase) retrieveFromDatasets(ctx context.Context, userID uuid.UUID, datasets []*model.InferenceDataset, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error) {
+func (u *inferenceUsecase) retrieveFromDatasets(ctx context.Context, userID uuid.UUID, datasets []*model.InferenceDataset, queryText string, topK int, metadataFilters map[string]string) (contexts []model.RetrievedContext, err error) {
 	log.Trace("InferenceUsecase retrieveFromDatasets")
 
-	contexts := make([]model.RetrievedContext, 0, topK*len(datasets))
+	ctx, span := startInferenceSpan(ctx, "generate.retrieve_contexts",
+		attribute.String("user_id", userID.String()),
+		attribute.Int("dataset_count", len(datasets)),
+		attribute.Int("top_k", topK),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
+	contexts = make([]model.RetrievedContext, 0, topK*len(datasets))
 	errs := make([]error, 0)
 	successfulRetrievals := 0
 	var mu sync.Mutex
@@ -1266,8 +1407,15 @@ func mergeMetadataFilters(base map[string]string, overrides map[string]string) m
 	return out
 }
 
-func (u *inferenceUsecase) recordInferenceRequest(ctx context.Context, request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, promptText string, answerText string, startedAt time.Time, generationProtocol string, generationModel string, status model.InferenceRequestStatus, errorMessage string) error {
+func (u *inferenceUsecase) recordInferenceRequest(ctx context.Context, request model.GenerateRequest, dataset *model.InferenceDataset, inferenceModel *model.InferenceModel, contexts []model.RetrievedContext, promptText string, answerText string, startedAt time.Time, generationProtocol string, generationModel string, status model.InferenceRequestStatus, errorMessage string) (err error) {
 	log.Trace("InferenceUsecase recordInferenceRequest")
+
+	ctx, span := startInferenceSpan(ctx, "generate.record_audit",
+		attribute.String("request_id", request.RequestID.String()),
+		attribute.String("status", status.String()),
+		attribute.Int("context_count", len(contexts)),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
 
 	record, err := inferenceRequestRecord(request, dataset, inferenceModel, contexts, promptText, answerText, u.promptStrategy, startedAt, generationProtocol, generationModel, status, errorMessage)
 	if err != nil {
