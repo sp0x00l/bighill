@@ -20,6 +20,7 @@ const (
 	testUserHeader        = "X-User-ID"
 	testSessionHeader     = "X-Session-ID"
 	testOrgHeader         = "X-Org-ID"
+	testRolesHeader       = "X-Roles"
 	testPermissionsHeader = "X-Permissions"
 	testCORSAllowOrigin   = "*"
 	testCORSAllowMethods  = "GET,POST,PUT,DELETE,PATCH,OPTIONS"
@@ -88,6 +89,7 @@ func testRouter(client *routerHTTPClientMock) func(context.Context, events.APIGa
 		ModelRegistryServiceRoute: "http://model-registry.service",
 		TenantServiceRoute:        "http://tenant.service",
 		TrainingServiceRoute:      "http://training.service",
+		SocketServiceRoute:        "http://socket.service",
 	})
 }
 
@@ -97,6 +99,7 @@ func authorizerContext(permissions ...string) events.APIGatewayProxyRequestConte
 			"userId":      "user-123",
 			"sid":         "session-456",
 			"orgId":       "org-789",
+			"roles":       authz.EncodeStringSlice([]string{authz.RoleMLResearcher}),
 			"permissions": authz.EncodeStringSlice(permissions),
 		},
 	}
@@ -298,7 +301,7 @@ var _ = Describe("NewRouter", func() {
 		Expect(client.requests[0].headers.Get(testSessionHeader)).To(Equal("session-456"))
 	})
 
-	It("does not forward session context outside the logout route", func() {
+	It("forwards trusted auth context to private service routes", func() {
 		handler := testRouter(client)
 
 		resp, err := handler(ctx, events.APIGatewayProxyRequest{
@@ -311,7 +314,27 @@ var _ = Describe("NewRouter", func() {
 		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		Expect(client.requests).To(HaveLen(1))
 		Expect(client.requests[0].headers.Get(testUserHeader)).To(Equal("user-123"))
-		Expect(client.requests[0].headers.Values(testSessionHeader)).To(BeEmpty())
+		Expect(client.requests[0].headers.Get(testSessionHeader)).To(Equal("session-456"))
+		Expect(client.requests[0].headers.Get(testRolesHeader)).To(Equal(authz.EncodeStringSlice([]string{authz.RoleMLResearcher})))
+	})
+
+	It("routes socket ticket minting through the socket service", func() {
+		handler := testRouter(client)
+
+		resp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodPost,
+			Path:           "/v1/private/socket-token",
+			RequestContext: authorizerContext(authz.PermissionInferenceEndpointsRead),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+		Expect(client.requests).To(HaveLen(1))
+		Expect(client.requests[0].url).To(Equal("http://socket.service/v1/socket-token"))
+		Expect(client.requests[0].headers.Get(testUserHeader)).To(Equal("user-123"))
+		Expect(client.requests[0].headers.Get(testOrgHeader)).To(Equal("org-789"))
+		Expect(client.requests[0].headers.Get(testSessionHeader)).To(Equal("session-456"))
+		Expect(client.requests[0].headers.Get(testPermissionsHeader)).To(Equal(authz.EncodeStringSlice([]string{authz.PermissionInferenceEndpointsRead})))
 	})
 
 	It("routes inference facade requests and enforces consumer-safe permissions", func() {

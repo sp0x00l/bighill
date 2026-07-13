@@ -10,10 +10,12 @@ import (
 	"model_registry_service/pkg/domain"
 	"model_registry_service/pkg/domain/model"
 
+	"lib/shared_lib/authz"
 	"lib/shared_lib/ctxutil"
 	transport "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
+	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -42,6 +44,7 @@ type modelRegistryUsecase struct {
 	unitOfWork         ModelUnitOfWorkAdapter
 	eventBuilder       ModelEventBuilder
 	servingDeployer    ModelServingDeployer
+	userEventPublisher UserEventPublisher
 	gatePolicy         model.GatePolicy
 }
 
@@ -71,14 +74,23 @@ func WithPublishedEndpointRepository(repository PublishedEndpointRepository) Mod
 	}
 }
 
+func WithUserEventPublisher(publisher UserEventPublisher) ModelRegistryOption {
+	log.Trace("WithUserEventPublisher")
+
+	return func(u *modelRegistryUsecase) {
+		u.userEventPublisher = publisher
+	}
+}
+
 func NewModelRegistryUsecase(repo ModelRepository, unitOfWork ModelUnitOfWorkAdapter, eventBuilder ModelEventBuilder, opts ...ModelRegistryOption) ModelRegistryUsecase {
 	log.Trace("NewModelRegistryUsecase")
 
 	u := &modelRegistryUsecase{
-		repo:         repo,
-		unitOfWork:   unitOfWork,
-		eventBuilder: eventBuilder,
-		gatePolicy:   model.DefaultGatePolicy(),
+		repo:               repo,
+		unitOfWork:         unitOfWork,
+		eventBuilder:       eventBuilder,
+		userEventPublisher: userevents.NewNoopPublisher(),
+		gatePolicy:         model.DefaultGatePolicy(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -282,7 +294,18 @@ func (u *modelRegistryUsecase) RecordModelServingStatus(ctx context.Context, ser
 	if existing != nil && existing.Status == model.ModelStatusCandidate && status != model.ModelStatusFailed {
 		status = model.ModelStatusCandidate
 	}
-	return u.updateServingStatus(ctx, servedModelStatus, status, failureReason, idempotencyKey)
+	previousServingStatus := model.ModelLoadStatusNotLoaded
+	if existing != nil {
+		previousServingStatus = existing.ServingLoadStatus
+	}
+	out, changed, err := u.updateServingStatus(ctx, servedModelStatus, status, failureReason, idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		u.publishModelServingUserEvent(ctx, out, previousServingStatus)
+	}
+	return out, nil
 }
 
 func (u *modelRegistryUsecase) RecordPromotionReportReady(ctx context.Context, report model.PromotionReportResult, idempotencyKey uuid.UUID) (out *model.Model, err error) {
@@ -517,10 +540,11 @@ func (u *modelRegistryUsecase) updateModelStatus(ctx context.Context, modelID uu
 	return modelRecord, err
 }
 
-func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, status model.ModelStatus, failureReason string, idempotencyKey uuid.UUID) (*model.Model, error) {
+func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedModelStatus *model.ServedModelStatus, status model.ModelStatus, failureReason string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
 	log.Trace("ModelRegistryUsecase updateServingStatus")
 
 	var modelRecord *model.Model
+	var statusChanged bool
 	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		updated, changed, err := u.repo.UpdateServingStatus(ctx, tx, servedModelStatus.ModelID, status, servedModelStatus.ServingLoadStatus, servedModelStatus.ServingTarget, servedModelStatus.ServingModel, servedModelStatus.ServingProtocol, failureReason, idempotencyKey)
 		if err != nil {
@@ -535,9 +559,82 @@ func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedMo
 			}
 		}
 		modelRecord = updated
+		statusChanged = changed
 		return nil
 	})
-	return modelRecord, err
+	return modelRecord, statusChanged, err
+}
+
+func (u *modelRegistryUsecase) publishModelServingUserEvent(ctx context.Context, modelRecord *model.Model, previousServingStatus model.ModelLoadStatus) {
+	log.Trace("ModelRegistryUsecase publishModelServingUserEvent")
+
+	if modelRecord == nil {
+		return
+	}
+	eventType := userevents.EventTypeModelStatusUpdated
+	severity := userevents.SeverityInfo
+	title := "Model status updated"
+	message := "The model serving status changed."
+	var errorDetail *userevents.ErrorDetail
+
+	switch modelRecord.ServingLoadStatus {
+	case model.ModelLoadStatusLoaded:
+		eventType = userevents.EventTypeModelServingLoaded
+		severity = userevents.SeveritySuccess
+		title = "Model ready"
+		message = "The model is ready for inference."
+	case model.ModelLoadStatusFailed:
+		eventType = userevents.EventTypeModelServingFailed
+		severity = userevents.SeverityError
+		title = "Model serving failed"
+		classified := userevents.ClassifyError(userevents.ClassificationInput{
+			Service:          "model_registry_service",
+			Operation:        "record_model_serving_status",
+			ResourceType:     userevents.ResourceTypeModel,
+			RawFailureReason: modelRecord.FailureReason,
+		})
+		errorDetail = &classified
+		message = classified.Message
+	}
+
+	event := userevents.Event{
+		EventID: userevents.DeterministicEventID(
+			userevents.ResourceTypeModel,
+			modelRecord.ModelID.String(),
+			"serving",
+			modelRecord.ServingLoadStatus.String(),
+			userevents.HashString(modelRecord.FailureReason),
+		),
+		SourceService:      "model_registry_service",
+		EventType:          eventType,
+		Severity:           severity,
+		RequiredPermission: authz.PermissionModelRead,
+		UserID:             optionalEventUUID(modelRecord.UserID),
+		OrgID:              optionalEventUUID(modelRecord.OrgID),
+		Resource:           userevents.NewResource(userevents.ResourceTypeModel, modelRecord.ModelID, modelRecord.Name, "/models/"+modelRecord.ModelID.String()),
+		Status: userevents.Status{
+			State:         modelRecord.ServingLoadStatus.String(),
+			PreviousState: previousServingStatus.String(),
+			Phase:         userevents.StatusPhaseServing,
+		},
+		Title:       title,
+		Message:     message,
+		ActionLabel: "View model",
+		ActionHref:  "/models/" + modelRecord.ModelID.String(),
+		Error:       errorDetail,
+	}
+	if err := u.userEventPublisher.Publish(ctx, event); err != nil {
+		userevents.LogPublishFailure(ctx, err, event)
+	}
+}
+
+func optionalEventUUID(id uuid.UUID) string {
+	log.Trace("optionalEventUUID")
+
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 func (u *modelRegistryUsecase) upsertPublishedEndpoint(ctx context.Context, tx pgx.Tx, modelRecord *model.Model) error {

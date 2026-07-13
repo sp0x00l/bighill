@@ -11,10 +11,12 @@ import (
 	"model_registry_service/pkg/domain/model"
 	registrymessaging "model_registry_service/pkg/infra/network/messaging"
 
+	"lib/shared_lib/authz"
 	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 	transport "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -43,6 +45,8 @@ type modelRepositoryStub struct {
 	readErr            error
 	championErr        error
 	updateErr          error
+	servingChanged     bool
+	servingChangedSet  bool
 }
 
 func (s *modelRepositoryStub) Close() {}
@@ -82,15 +86,21 @@ func (s *modelRepositoryStub) UpdateStatus(_ context.Context, _ pgx.Tx, _ uuid.U
 	return s.readModel, s.updateErr
 }
 
-func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _ string, _ string, _ model.ServingProtocol, _ string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
+func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _ string, _ string, _ model.ServingProtocol, failureReason string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
 	s.status = status
 	s.loadStatus = loadStatus
 	s.servingKey = idempotencyKey
+	s.failure = failureReason
 	if s.readModel != nil {
 		s.readModel.Status = status
 		s.readModel.ServingLoadStatus = loadStatus
+		s.readModel.FailureReason = failureReason
 	}
-	return s.readModel, true, s.updateErr
+	changed := true
+	if s.servingChangedSet {
+		changed = s.servingChanged
+	}
+	return s.readModel, changed, s.updateErr
 }
 
 func (s *modelRepositoryStub) UpdatePromotionDecision(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, promotionReportURI string, promotionDeltas string, promotionDecision string, failureReason string) (*model.Model, error) {
@@ -423,6 +433,100 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(repo.status).To(Equal(model.ModelStatusReady))
 		Expect(repo.loadStatus).To(Equal(model.ModelLoadStatusLoaded))
 		Expect(repo.servingKey).To(Equal(idempotencyKey))
+		Expect(result.Status).To(Equal(model.ModelStatusReady))
+	})
+
+	It("publishes a user event when serving status loads", func() {
+		modelRecord := validModel()
+		modelRecord.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		publisher := userevents.NewRecordingPublisher()
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithUserEventPublisher(publisher))
+
+		_, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		events := publisher.Events()
+		Expect(events).To(HaveLen(1))
+		Expect(events[0].EventType).To(Equal(userevents.EventTypeModelServingLoaded))
+		Expect(events[0].Severity).To(Equal(userevents.SeveritySuccess))
+		Expect(events[0].UserID).To(Equal(modelRecord.UserID.String()))
+		Expect(events[0].OrgID).To(Equal(modelRecord.OrgID.String()))
+		Expect(events[0].RequiredPermission).To(Equal(authz.PermissionModelRead))
+		Expect(events[0].Status.State).To(Equal(model.ModelLoadStatusLoaded.String()))
+		Expect(events[0].Status.PreviousState).To(Equal(model.ModelLoadStatusNotLoaded.String()))
+	})
+
+	It("publishes a classified user event when serving status fails", func() {
+		modelRecord := validModel()
+		modelRecord.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		publisher := userevents.NewRecordingPublisher()
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithUserEventPublisher(publisher))
+
+		_, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingLoadStatus: model.ModelLoadStatusFailed,
+			FailureReason:     "Ollama did not infer a usable chat model from GGUF metadata",
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		events := publisher.Events()
+		Expect(events).To(HaveLen(1))
+		Expect(events[0].EventType).To(Equal(userevents.EventTypeModelServingFailed))
+		Expect(events[0].Severity).To(Equal(userevents.SeverityError))
+		Expect(events[0].RequiredPermission).To(Equal(authz.PermissionModelRead))
+		Expect(events[0].Error).NotTo(BeNil())
+		Expect(events[0].Error.Code).To(Equal(userevents.ErrorCodeModelServingChatDefinitionUnusable))
+		Expect(events[0].Message).To(Equal("The model could not be exposed as a chat model."))
+	})
+
+	It("does not publish a user event when serving status is unchanged", func() {
+		modelRecord := validModel()
+		repo := &modelRepositoryStub{readModel: modelRecord, servingChangedSet: true, servingChanged: false}
+		publisher := userevents.NewRecordingPublisher()
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithUserEventPublisher(publisher))
+
+		_, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(publisher.Events()).To(BeEmpty())
+	})
+
+	It("does not publish a user event when serving status update fails", func() {
+		modelRecord := validModel()
+		repo := &modelRepositoryStub{readModel: modelRecord, updateErr: fmt.Errorf("db failed")}
+		publisher := userevents.NewRecordingPublisher()
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithUserEventPublisher(publisher))
+
+		_, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).To(HaveOccurred())
+		Expect(publisher.Events()).To(BeEmpty())
+	})
+
+	It("does not fail the serving status update when user event publishing fails", func() {
+		modelRecord := validModel()
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		publisher := userevents.NewRecordingPublisher()
+		publisher.SetError(fmt.Errorf("redis unavailable"))
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithUserEventPublisher(publisher))
+
+		result, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal(model.ModelStatusReady))
 	})
 

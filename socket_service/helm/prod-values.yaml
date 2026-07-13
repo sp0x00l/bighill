@@ -1,0 +1,10 @@
+replicaCount: 2
+image:
+  repository: "socket-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+env:
+  environment: "prod"
+  redisAddress: "redis:6379"
+  redisTLS: "true"
+  allowedOrigins: "https://app.bighill.io"

@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "socket-service.fullname" . }}
+  labels:
+    app: {{ include "socket-service.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "socket-service.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "socket-service.fullname" . }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default "socket-service" }}
+      {{- end }}
+      containers:
+        - name: {{ include "socket-service.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: {{ .Values.env.environment | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.env.otelExporterEndpoint | quote }}
+            - name: SOCKET_SERVICE_NAME
+              value: {{ .Values.env.serviceName | quote }}
+            - name: SOCKET_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
+            - name: SOCKET_SERVICE_HTTP_PORT
+              value: {{ .Values.service.httpPort | quote }}
+            - name: SOCKET_SERVICE_HEALTHCHECK_PORT
+              value: {{ .Values.service.healthPort | quote }}
+            - name: SOCKET_SERVICE_REDIS_ADDRESS
+              value: {{ .Values.env.redisAddress | quote }}
+            - name: SOCKET_SERVICE_REDIS_USERNAME
+              value: {{ .Values.env.redisUsername | quote }}
+            - name: SOCKET_SERVICE_REDIS_PASSWORD
+              value: {{ .Values.env.redisPassword | quote }}
+            - name: SOCKET_SERVICE_REDIS_TLS
+              value: {{ .Values.env.redisTLS | quote }}
+            - name: SOCKET_SERVICE_CHANNEL_PREFIX
+              value: {{ .Values.env.channelPrefix | quote }}
+            - name: SOCKET_SERVICE_REDIS_LIVE_BLOCK_MS
+              value: {{ .Values.env.redisLiveBlockMs | quote }}
+            - name: SOCKET_SERVICE_TICKET_TTL_SECONDS
+              value: {{ .Values.env.ticketTtlSeconds | quote }}
+            - name: SOCKET_SERVICE_ALLOWED_ORIGINS
+              value: {{ .Values.env.allowedOrigins | quote }}
+            - name: SOCKET_SERVICE_REPLAY_LIMIT
+              value: {{ .Values.env.replayLimit | quote }}
+            - name: SOCKET_SERVICE_SEND_QUEUE_SIZE
+              value: {{ .Values.env.sendQueueSize | quote }}
+            - name: SOCKET_SERVICE_READ_TIMEOUT_SECONDS
+              value: {{ .Values.env.readTimeoutSeconds | quote }}
+            - name: SOCKET_SERVICE_WRITE_TIMEOUT_SECONDS
+              value: {{ .Values.env.writeTimeoutSeconds | quote }}
+            - name: SOCKET_SERVICE_PING_INTERVAL_SECONDS
+              value: {{ .Values.env.pingIntervalSeconds | quote }}
+            - name: SOCKET_SERVICE_PONG_TIMEOUT_SECONDS
+              value: {{ .Values.env.pongTimeoutSeconds | quote }}
+            - name: SOCKET_SERVICE_MAX_MESSAGE_BYTES
+              value: {{ .Values.env.maxMessageBytes | quote }}
+            - name: SOCKET_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckCpuThreshold | quote }}
+            - name: SOCKET_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
+            - name: SOCKET_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory | quote }}
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | quote }}
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3

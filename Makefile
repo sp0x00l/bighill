@@ -8,7 +8,7 @@ GO_BIN ?= $(shell go env GOPATH)/bin
 
 export PATH := $(GO_BIN):$(PATH)
 
-SERVICE_TEST_DIRS := shared_lib pdf_extractor_lib tenant_service ingestion_service data_registry_service feature_materializer_service data_stream_service inference_service model_registry_service model_serving_service training_service
+SERVICE_TEST_DIRS := shared_lib socket_service pdf_extractor_lib tenant_service ingestion_service data_registry_service feature_materializer_service data_stream_service inference_service model_registry_service model_serving_service training_service
 
 .PHONY: install install-dev install-all build-all build-query-engine test test-query-engine test-hf start start-test stop restart start-servers stop-servers start-infra stop-infra start-data-sources stop-data-sources test-servers test-api test-api-data-sources test-api-w-hf kafka-clean kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka k8s-validate k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
 

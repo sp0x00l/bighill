@@ -82,6 +82,13 @@ Parameters:
   InferenceServiceHttpPort:
     Type: String
     Default: 8087
+  SocketServiceHttpDomain:
+    Type: String
+    Default: host.docker.internal
+    Description: The socket service host name. Override through deployment parameters for staging/prod.
+  SocketServiceHttpPort:
+    Type: String
+    Default: 8089
   OtlpCollectorUrl:
     Type: String
     Default: ""
@@ -193,6 +200,8 @@ Resources:
           TRAINING_SERVICE_HTTP_PORT: !Ref TrainingServiceHttpPort
           INFERENCE_SERVICE_HTTP_HOST: !Ref InferenceServiceHttpDomain
           INFERENCE_SERVICE_HTTP_PORT: !Ref InferenceServiceHttpPort
+          SOCKET_SERVICE_HTTP_HOST: !Ref SocketServiceHttpDomain
+          SOCKET_SERVICE_HTTP_PORT: !Ref SocketServiceHttpPort
           OTEL_EXPORTER_OTLP_ENDPOINT: !Ref OtlpCollectorUrl
           OTEL_EXPORTER_OTLP_PORT: !Ref OtlpCollectorPort
       Policies:
@@ -490,6 +499,12 @@ Resources:
             RequestParameters:
               method.request.header.X-Request-ID: true
             Path: /v1/private/inference/feedback
+            Method: post
+        PostSocketToken:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BighillApi
+            Path: /v1/private/socket-token
             Method: post
 
   BighillApi:
@@ -1214,6 +1229,21 @@ Resources:
                   in: header
                   required: true
                   type: string
+              responses: {}
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri:
+                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BighillApiFunction.Arn}/invocations
+              security:
+                - BighillAuthorizer: []
+          /v1/private/socket-token:
+            post:
+              consumes:
+                - application/vnd.bighill.api-v1+json
+                - application/json
+              produces:
+                - application/vnd.bighill.api-v1+json
               responses: {}
               x-amazon-apigateway-integration:
                 httpMethod: POST

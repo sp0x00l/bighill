@@ -79,6 +79,10 @@ func NewAPIHandler() APIHandler {
 			env.WithDefaultString("INFERENCE_SERVICE_HTTP_HOST", "127.0.0.1"),
 			env.WithDefaultString("INFERENCE_SERVICE_HTTP_PORT", "8087"),
 		),
+		SocketServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("SOCKET_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("SOCKET_SERVICE_HTTP_PORT", "8089"),
+		),
 	}
 
 	return APIHandler{

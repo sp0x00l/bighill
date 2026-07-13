@@ -7,6 +7,7 @@ import (
 
 	transport "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,6 +40,10 @@ type ModelEventBuilder interface {
 
 type ModelServingDeployer interface {
 	EnsureServedModel(ctx context.Context, registeredModel *model.Model) error
+}
+
+type UserEventPublisher interface {
+	Publish(ctx context.Context, event userevents.Event) error
 }
 
 type ServingStatusRecorder interface {

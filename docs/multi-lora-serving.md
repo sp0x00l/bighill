@@ -1,128 +1,303 @@
 # Multi-LoRA Serving
 
-## What it is
+## What It Is
 
-Multi-LoRA serving lets many fine-tuned adapters share a single base-model runtime.
-Instead of standing up a dedicated vLLM deployment (and GPU) per fine-tuned model, the
-platform runs one vLLM process per base model and dynamically loads/unloads LoRA
-adapters onto it. This makes per-tenant and per-lineage fine-tunes economical, and is the
-serving foundation the [self-improving loop](self-improving-loop.md) relies on for cheap
-champion/challenger coexistence and fast rollback.
+Multi-LoRA serving means the platform runs one large base model once, then loads many small
+fine-tuned LoRA adapters onto that shared runtime.
+
+Instead of this:
+
+```text
+Fine-tuned model A -> its own vLLM server + GPU
+Fine-tuned model B -> its own vLLM server + GPU
+Fine-tuned model C -> its own vLLM server + GPU
+```
+
+the platform wants this:
+
+```text
+Base model runtime -> one vLLM server + GPU
+  ├── LoRA adapter A
+  ├── LoRA adapter B
+  └── LoRA adapter C
+```
+
+That is much cheaper because a fine-tuned model is usually:
+
+```text
+base model + small adapter
+```
+
+The base model is expensive to keep loaded. The adapter is relatively small. So the platform keeps
+the base model running and dynamically loads adapters onto it.
+
+This is the serving foundation for the [self-improving loop](self-improving-loop.md): champion and
+challenger models can coexist cheaply, and rollback can be fast when the champion stays loaded.
 
 ## Ownership
 
-`model_serving_service` is the serving-plane controller. It reconciles desired serving
-intent into running workloads and writes back observed load status. It does **not** decide
-promotion — `model_registry_service` remains the authority for `READY`/`FAILED` model
-state. `model_serving_service` only answers "is this model loaded and reachable, and on
-what target/protocol".
+`model_serving_service` is the serving-plane controller. It does not decide whether a model is good,
+promoted, or failed from a product/model-registry perspective.
 
-## Custom resources
+It only answers:
 
-Two Kubernetes CRDs under `serving.bighill.io/v1alpha1`
-(`model_serving_service/helm/templates`):
+```text
+Is this model loaded?
+Where is it served?
+What protocol should inference use?
+```
 
-- **`ServedModel`** — one per model the platform wants served. Carries the model
-  identity, `base_model`, `adapter_uri`, `adapter_rank`, `runtime_isolation`
-  (`SHARED`/`DEDICATED`), and `pinned`. Domain type:
-  `model_serving_service/pkg/domain/model/served_model.go`.
-- **`BaseRuntime`** — one per base-model runtime pool. Carries `base_model`, `pool_key`,
-  `max_loras`, `max_lora_rank`, the runtime `endpoint`/`phase`, and the list of
-  `loaded_adapters`. Domain type:
-  `model_serving_service/pkg/domain/model/base_runtime.go`.
+`model_registry_service` remains the authority for model lifecycle state such as `READY`, `FAILED`,
+candidate/champion decisions, and promotion results.
 
-## How an adapter gets served
+## Kubernetes Resources
 
-Reconciliation lives in `model_serving_service/pkg/infra/network/k8s/vllm_runtime.go`
-(`EnsureServedModel`):
+The Kubernetes backend uses two CRDs under `serving.bighill.io/v1alpha1`
+(`model_serving_service/helm/templates`).
 
-1. **Classify.** `IsAdapter()` is true for a `FINE_TUNED` model with an `adapter_uri`.
-   `sharedAdapter()` is true for an adapter when the runtime is not forced dedicated.
-2. **Resolve the base runtime.** `resolveBaseRuntime` → `FindOrCreate` on the
-   `BaseRuntime` for `(base_model, pool_key)`. A base model without an adapter runs as its
-   own workload; adapters attach to the shared base runtime.
-3. **Upsert workload + service.** One vLLM Deployment/Service per base runtime, sized with
-   `max_loras` / `max_lora_rank`.
-4. **Ensure capacity, then load.** `ensureServingModel` → `prepareAdapterCapacity` →
-   `loadLoraAdapter` calls vLLM's OpenAI-compatible `load_lora_adapter` endpoint;
-   `recordAdapterLoaded` records it on the `BaseRuntime`.
-5. **Write status back.** Observed `serving_target`, `serving_model`, `serving_protocol`,
-   ready replicas, and load status are written for registry/inference to consume.
+### `ServedModel`
 
-Deletion (`DeleteServedModel`) unloads the adapter from vLLM and removes it from the base
-runtime's loaded-adapter list.
+`ServedModel` means:
 
-## Runtime pools: shared vs dedicated
+```text
+Please serve this specific model.
+```
 
-`RuntimePoolKey` (`model_serving_service/pkg/infra/network/k8s/names.go`) decides which
-runtime an adapter lands on:
+It carries model identity and serving intent:
 
-- **Shared (default)** — `pool_key = base_model`. All adapters for the same base model,
-  across tenants, share one runtime pool. Maximum density.
-- **Dedicated** — when `runtime_isolation = DEDICATED` and an org id is present,
-  `pool_key = org_id`. Gives a tenant an isolated base runtime (noisy-neighbour / data
-  isolation), at the cost of density.
+- `model_id`
+- `base_model`
+- `adapter_uri`
+- `adapter_rank`
+- `runtime_isolation` (`SHARED` or `DEDICATED`)
+- `pinned`
 
-The base runtime resource name is derived from `base_model` + `pool_key`
-(`BaseRuntimeResourceName`), so shared and dedicated pools never collide.
+Domain type: `model_serving_service/pkg/domain/model/served_model.go`.
 
-## Capacity, eviction, and pinning
+### `BaseRuntime`
 
-A base runtime can hold at most `max_loras` adapters. When a new adapter needs to load and
-the runtime is full (`prepareAdapterCapacity`):
+`BaseRuntime` means:
 
-- If the adapter is already loaded → no-op.
-- If there is room → load directly.
-- If full → pick an **LRU victim** (`lruEvictionCandidate`): the least-recently-used
-  adapter that is **not pinned**. Unload it from vLLM, remove it from the base runtime,
-  and mark the evicted `ServedModel` as `NOT_LOADED` with reason
-  `capacity_evicted` (`NotLoadedReasonCapacityEvicted`) so the controller can re-load it
-  on demand later.
-- If **all** loaded adapters are pinned → fail with "base runtime at capacity with all
-  adapters pinned" rather than evicting a pinned model.
+```text
+This is the shared running base-model pool.
+```
 
-**Pinning** (`ServedModel.Pinned`, propagated to `BaseRuntimeLoadedAdapter.Pinned`) keeps
-an adapter resident. This is what makes instant rollback cheap: the champion adapter can be
-pinned so it is never evicted, so cutting back to it after a bad promotion is immediate.
+It tracks:
 
-**Compatibility checks** before load: the adapter's `base_model` must match the runtime's
-base model, and `adapter_rank` must be known and `≤ max_lora_rank`
-(`validateAdapterCompat`, `validateAdapterRankKnown`).
+- `base_model`
+- `pool_key`
+- `max_loras`
+- `max_lora_rank`
+- runtime `endpoint`
+- runtime `phase`
+- `loaded_adapters`
 
-Capacity-evicted models are treated as needing reconciliation
-(`statusNeedsReconcile` in `controller.go`), so eviction is recoverable, not terminal.
+Domain type: `model_serving_service/pkg/domain/model/base_runtime.go`.
+
+So `ServedModel` is the request to serve a model. `BaseRuntime` is the shared runtime that adapters
+attach to.
+
+## How An Adapter Gets Served
+
+The reconciliation code lives in
+`model_serving_service/pkg/infra/network/k8s/vllm_runtime.go` in `EnsureServedModel`.
+
+When a fine-tuned adapter needs to be served:
+
+1. The controller sees a `ServedModel`.
+2. It checks whether the model is a fine-tuned adapter (`FINE_TUNED` with an `adapter_uri`).
+3. It finds or creates the correct `BaseRuntime` for the adapter's `base_model` and runtime pool.
+4. It ensures a vLLM Deployment/Service exists for that base runtime.
+5. It checks that the runtime has capacity for another adapter.
+6. It calls vLLM's OpenAI-compatible `load_lora_adapter` endpoint.
+7. It records the adapter in the `BaseRuntime` loaded-adapter list.
+8. It writes observed serving status back for registry and inference to consume.
+
+The written status includes:
+
+- `serving_target`
+- `serving_model`
+- `serving_protocol`
+- ready replicas
+- load status
+- failure reason, when loading fails
+
+`inference_service` does not need Kubernetes details. It only needs the recorded serving target,
+model name, and protocol.
+
+Deletion does the inverse: `DeleteServedModel` unloads the adapter from vLLM and removes it from the
+`BaseRuntime` loaded-adapter list.
+
+## Shared vs Dedicated Runtime
+
+Adapters can land in shared or dedicated runtime pools.
+
+### Shared Runtime
+
+Shared mode is the default:
+
+```text
+pool_key = base_model
+```
+
+All adapters for the same base model share one runtime, even across tenants.
+
+Example:
+
+```text
+llama-3-8b runtime
+  ├── org-a adapter
+  ├── org-b adapter
+  └── org-c adapter
+```
+
+This gives maximum density and lowest cost.
+
+### Dedicated Runtime
+
+Dedicated mode is used when:
+
+```text
+runtime_isolation = DEDICATED
+```
+
+and an org id is present.
+
+In that case:
+
+```text
+pool_key = org_id
+```
+
+Example:
+
+```text
+org-a llama-3-8b runtime
+  └── org-a adapters only
+```
+
+This costs more, but gives a tenant isolated capacity and avoids noisy-neighbour concerns.
+
+The `BaseRuntime` resource name is derived from `base_model` and `pool_key`, so shared and dedicated
+pools do not collide.
+
+## Capacity, Eviction, And Pinning
+
+Each base runtime can only hold a limited number of adapters:
+
+```text
+max_loras
+```
+
+Before loading an adapter, the service checks compatibility:
+
+- the adapter's `base_model` must match the runtime's base model;
+- the adapter rank must be known;
+- the adapter rank must be `<= max_lora_rank`.
+
+When the runtime is full and another adapter needs to load, `prepareAdapterCapacity` chooses what to
+do:
+
+1. If the adapter is already loaded, nothing changes.
+2. If there is room, load the adapter directly.
+3. If the runtime is full, evict the least-recently-used adapter that is not pinned.
+4. If every loaded adapter is pinned, fail instead of evicting a pinned model.
+
+Evicted adapters are marked `NOT_LOADED` with reason `capacity_evicted`. That is not terminal. The
+controller treats capacity-evicted models as needing reconciliation, so they can be loaded again when
+they are used later.
+
+Pinning protects an adapter from eviction.
+
+This is useful for rollback. The current champion adapter can stay pinned, so if a challenger is bad,
+the system can switch back to the champion immediately.
 
 ## Backends
 
-- **Kubernetes** (`MODEL_SERVING_SERVICE_BACKEND=kubernetes`) — the CRD/vLLM path above.
-  Staging/prod. Requires the `ServedModel` and `BaseRuntime` CRDs installed.
-- **Local** (`model_serving_service/pkg/infra/network/localserving`) — default for
-  local-dev and CI so tests need no cluster or GPU. Validates artifacts and serves through
-  Ollama; the GGUF chat-template path is deliberately fail-closed (see
-  `model_serving_service/README.md` for the exact acceptance rules). Raw
-  `HF_PEFT_ADAPTER` directories are not local-servable; they must be represented as
-  validated `GGUF_LORA_ADAPTER` artifacts for local adapter serving.
+There are two serving backends.
 
-## How serving is triggered from inference
+### Kubernetes Backend
 
-When `inference_service` needs a model that is not yet loaded, it triggers a load rather
-than failing (`inference_service/pkg/infra/modelserving/http_load_trigger.go`,
-`ensureServingModelLoaded` in `inference_usecase.go`): it calls the serving load trigger,
-then polls the model record until `ServingLoadStatus` becomes `Loaded` (or times out /
-fails). This is how a capacity-evicted adapter is transparently re-loaded on next use.
+```text
+MODEL_SERVING_SERVICE_BACKEND=kubernetes
+```
+
+This is the real CRD + vLLM path used in staging and production. It requires the `ServedModel` and
+`BaseRuntime` CRDs to be installed.
+
+### Local Backend
+
+```text
+MODEL_SERVING_SERVICE_BACKEND=local
+```
+
+This is used for local-dev and CI service-script runs so tests do not need Kubernetes or GPUs.
+
+The local backend serves through Ollama where possible. The GGUF chat-template path is deliberately
+fail-closed; see `model_serving_service/README.md` for the exact acceptance rules.
+
+Important local limitation:
+
+```text
+Raw HF_PEFT_ADAPTER directories are not directly local-servable.
+```
+
+For local adapter serving, artifacts need to be represented as validated `GGUF_LORA_ADAPTER`
+artifacts.
+
+## How Inference Triggers Loading
+
+If `inference_service` needs a model that is not currently loaded, it does not immediately fail.
+
+It:
+
+1. calls the serving load trigger;
+2. waits for the model record to show `ServingLoadStatus=LOADED`;
+3. fails only if loading fails or times out.
+
+This is how capacity eviction becomes recoverable. If an adapter was evicted because the runtime was
+full, the next inference request can trigger it to load again.
+
+Relevant code:
+
+- `inference_service/pkg/infra/modelserving/http_load_trigger.go`
+- `ensureServingModelLoaded` in `inference_service/pkg/app/inference_usecase.go`
 
 ## Controller
 
-`model_serving_service/pkg/infra/network/k8s/controller.go` watches both `ServedModel` and
-`BaseRuntime` resources, reconciles on change and on a poll interval, serialises work per
-resource (and per shared runtime via `sharedRuntimeLockKey`) to avoid concurrent
-load/unload races, and requeues capacity-evicted models. It exposes a health endpoint with
-last-successful-reconcile tracking for supervision.
+`model_serving_service/pkg/infra/network/k8s/controller.go` watches `ServedModel` and `BaseRuntime`
+resources.
+
+It:
+
+- reconciles when resources change;
+- reconciles on a poll interval;
+- serialises work per resource;
+- serialises work per shared runtime via `sharedRuntimeLockKey`;
+- avoids concurrent load/unload races;
+- requeues capacity-evicted models;
+- exposes health status based on last successful reconciliation.
+
+## Plain English Summary
+
+Multi-LoRA serving is a cost-saving serving system.
+
+Instead of running a full GPU server for every fine-tuned model, the platform runs one base model and
+loads small LoRA adapters into it as needed.
+
+The system:
+
+- shares base-model runtimes across adapters;
+- optionally gives tenants dedicated runtimes;
+- evicts least-used adapters when a runtime is full;
+- protects pinned adapters for fast rollback;
+- lets inference trigger reloads on demand;
+- uses Kubernetes/vLLM in staging and production;
+- uses local/Ollama validation paths in local-dev and CI.
 
 ## Testing
 
-- Unit: `model_serving_service/pkg/infra/network/k8s/base_runtime_store_test.go`,
-  `vllm_runtime` tests, `served_model_reconciler_test.go`,
-  `inference_service/pkg/infra/modelserving/http_load_trigger_test.go`.
-- End-to-end: `api_gateway/test/multi_lora_serving_test.go` — exercises multiple adapters
-  over a shared base runtime through the real serving path.
+- Unit tests cover `BaseRuntime` storage, vLLM runtime behavior, served-model reconciliation, and
+  inference load triggering.
+- End-to-end coverage lives in `api_gateway/test/multi_lora_serving_test.go`, which exercises
+  multiple adapters over a shared base runtime through the real serving path.

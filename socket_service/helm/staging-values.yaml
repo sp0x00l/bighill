@@ -1,0 +1,10 @@
+replicaCount: 1
+image:
+  repository: "socket-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+env:
+  environment: "staging"
+  redisAddress: "redis:6379"
+  redisTLS: "false"
+  allowedOrigins: "https://app.staging.bighill.io"

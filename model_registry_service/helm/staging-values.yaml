@@ -12,6 +12,8 @@ ingress:
   host: "model-registry.internal.bighill.example"
 env:
   environment: "staging"
+  userEventsRedisAddress: "redis:6379"
+  userEventsRedisTLS: "false"
   dbCredentialsSecret:
     name: "aurora-creds-staging"
     userKey: "bighill_model_registry_db_user"

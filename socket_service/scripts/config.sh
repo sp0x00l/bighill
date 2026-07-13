@@ -1,0 +1,40 @@
+#! /usr/bin/env sh
+
+BIGHILL_ROOT=$(git rev-parse --show-toplevel)
+. $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
+
+if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
+    export SOCKET_SERVICE_REDIS_ADDRESS=localhost:6379
+    export SOCKET_SERVICE_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173
+elif [ "$1" = "staging" ]; then
+    export SOCKET_SERVICE_REDIS_ADDRESS=redis:6379
+    export SOCKET_SERVICE_ALLOWED_ORIGINS=https://app.staging.bighill.io
+elif [ "$1" = "prod" ]; then
+    export SOCKET_SERVICE_REDIS_ADDRESS=redis:6379
+    export SOCKET_SERVICE_ALLOWED_ORIGINS=https://app.bighill.io
+else
+    echo "Error: Invalid environment provided to socket_service config"
+    echo "Usage: './config.sh [local-dev|cicd|staging|prod]'"
+    exit 1
+fi
+
+export SOCKET_SERVICE_NAME=socket-service
+export SOCKET_SERVICE_HTTP_PORT=8089
+export SOCKET_SERVICE_HEALTHCHECK_PORT=5064
+export SOCKET_SERVICE_REDIS_USERNAME=
+export SOCKET_SERVICE_REDIS_PASSWORD=
+export SOCKET_SERVICE_REDIS_TLS=false
+export SOCKET_SERVICE_CHANNEL_PREFIX=mlops
+export SOCKET_SERVICE_REDIS_LIVE_BLOCK_MS=5000
+export SOCKET_SERVICE_TICKET_TTL_SECONDS=300
+export SOCKET_SERVICE_REPLAY_LIMIT=200
+export SOCKET_SERVICE_SEND_QUEUE_SIZE=256
+export SOCKET_SERVICE_WRITE_TIMEOUT_SECONDS=10
+export SOCKET_SERVICE_READ_TIMEOUT_SECONDS=60
+export SOCKET_SERVICE_PING_INTERVAL_SECONDS=25
+export SOCKET_SERVICE_PONG_TIMEOUT_SECONDS=60
+export SOCKET_SERVICE_MAX_MESSAGE_BYTES=65536
+export SOCKET_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT=80
+export SOCKET_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT=20
+export SOCKET_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS=5
+export SOCKET_SERVICE_BUILD_VERSION=0.0.1

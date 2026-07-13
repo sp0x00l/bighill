@@ -10,17 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
-)
-
-const (
-	kafkaAssertNumShards     = 1
-	kafkaAssertChannelBuffer = 20
-	kafkaAssertOffsetReset   = "earliest"
 )
 
 type kafkaEventCollector[T proto.Message] struct {
@@ -113,7 +106,7 @@ func topicList(raw string) []string {
 }
 
 func newKafkaAssertsSubscriber(ctx context.Context, topics []string) (msgConn.Subscriber, func(), context.CancelFunc) {
-	return newKafkaAssertsSubscriberWithOffset(ctx, topics, kafkaAssertOffsetReset)
+	return newKafkaAssertsSubscriberWithOffset(ctx, topics, "")
 }
 
 func newKafkaAssertsSubscriberWithOffset(ctx context.Context, topics []string, autoOffsetReset string) (msgConn.Subscriber, func(), context.CancelFunc) {
@@ -121,24 +114,14 @@ func newKafkaAssertsSubscriberWithOffset(ctx context.Context, topics []string, a
 	dlqURL := env.WithDefaultString("KAFKA_DLQ_URL", "")
 	groupID := "api-gateway-asserts-" + uuid.NewString()[:8]
 
-	var opts []msgConn.SubscriberOption
-	if autoOffsetReset != "" {
-		opts = append(opts, msgConn.WithAutoOffsetReset(autoOffsetReset))
-	}
-	subscriber, err := msgConn.NewSubscriber(
-		brokers,
-		groupID,
-		msgConn.NewDLQ(ctx, dlqURL),
-		func() *backoff.ExponentialBackOff {
-			return backoff.NewExponentialBackOff(
-				backoff.WithMaxInterval(time.Second),
-				backoff.WithMaxElapsedTime(5*time.Second),
-			)
-		},
-		kafkaAssertNumShards,
-		kafkaAssertChannelBuffer,
-		opts...,
-	)
+	factory := msgConn.NewMessenger(msgConn.MessengerConfig{
+		DlqURL:          dlqURL,
+		GroupID:         groupID,
+		Brokers:         brokers,
+		AutoOffsetReset: autoOffsetReset,
+	}, nil)
+
+	subscriber, err := factory.Subscriber(ctx)
 	Expect(err).NotTo(HaveOccurred())
 
 	subCtx, cancel := context.WithCancel(context.Background())

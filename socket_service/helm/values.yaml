@@ -1,0 +1,46 @@
+replicaCount: 1
+image:
+  repository: "socket-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: false
+  name: "socket-service"
+  annotations: {}
+service:
+  type: ClusterIP
+  healthPort: 5064
+  httpPort: 8089
+ingress:
+  enabled: false
+  host: ""
+  certificateArn: ""
+env:
+  environment: "local-dev"
+  serviceName: "socket-service"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  redisAddress: "redis:6379"
+  redisUsername: ""
+  redisPassword: ""
+  redisTLS: "false"
+  channelPrefix: "mlops"
+  redisLiveBlockMs: "5000"
+  ticketTtlSeconds: "300"
+  allowedOrigins: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+  replayLimit: "200"
+  sendQueueSize: "256"
+  readTimeoutSeconds: "60"
+  writeTimeoutSeconds: "10"
+  pingIntervalSeconds: "25"
+  pongTimeoutSeconds: "60"
+  maxMessageBytes: "65536"
+  healthcheckCpuThreshold: "80"
+  healthcheckFreeMemThreshold: "20"
+  healthcheckServiceLatencyThreshold: "5"
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "25m"
+  limits:
+    memory: "128Mi"
+    cpu: "100m"

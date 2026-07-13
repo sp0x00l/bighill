@@ -55,6 +55,7 @@ type Config struct {
 	TenantServiceRoute        string
 	TrainingServiceRoute      string
 	InferenceServiceRoute     string
+	SocketServiceRoute        string
 }
 
 type routeResolver struct {
@@ -64,6 +65,7 @@ type routeResolver struct {
 	tenantServiceRoute        string
 	trainingServiceRoute      string
 	inferenceServiceRoute     string
+	socketServiceRoute        string
 }
 
 type routeContext struct {
@@ -104,6 +106,9 @@ func (cfg Config) resolver() (routeResolver, error) {
 	if cfg.InferenceServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing inference service route")
 	}
+	if cfg.SocketServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing socket service route")
+	}
 	return routeResolver{
 		dataRegistryServiceRoute:  cfg.DataRegistryServiceRoute,
 		ingestionServiceRoute:     cfg.IngestionServiceRoute,
@@ -111,6 +116,7 @@ func (cfg Config) resolver() (routeResolver, error) {
 		tenantServiceRoute:        cfg.TenantServiceRoute,
 		trainingServiceRoute:      cfg.TrainingServiceRoute,
 		inferenceServiceRoute:     cfg.InferenceServiceRoute,
+		socketServiceRoute:        cfg.SocketServiceRoute,
 	}, nil
 }
 
@@ -180,6 +186,10 @@ func requiredRoutePermission(request events.APIGatewayProxyRequest) string {
 		if len(afterResource) == 1 && afterResource[0] == "feedback" && routeCtx.method == http.MethodPost {
 			return authz.PermissionInferenceFeedback
 		}
+	case "socket-token":
+		if routeCtx.method == http.MethodPost {
+			return authz.PermissionInferenceEndpointsRead
+		}
 	case "orgs":
 		if len(afterResource) == 1 && afterResource[0] == "current" && routeCtx.method == http.MethodGet {
 			return ""
@@ -245,6 +255,7 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 		var userID string
 		var sessionID string
 		var orgID string
+		var roles []string
 		var permissions []string
 		authorizerContext := request.RequestContext.Authorizer
 		if authorizerContext != nil {
@@ -253,11 +264,9 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 					userID = s
 				}
 			}
-			if request.HTTPMethod == http.MethodPost && isProfileLogoutPath(request.Path) {
-				if v, ok := authorizerContext["sid"]; ok {
-					if s, ok := v.(string); ok {
-						sessionID = s
-					}
+			if v, ok := authorizerContext["sid"]; ok {
+				if s, ok := v.(string); ok {
+					sessionID = s
 				}
 			}
 			if v, ok := authorizerContext["orgId"]; ok {
@@ -268,6 +277,11 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 			if v, ok := authorizerContext["permissions"]; ok {
 				if s, ok := v.(string); ok {
 					permissions, _ = authz.DecodeStringSlice(s)
+				}
+			}
+			if v, ok := authorizerContext["roles"]; ok {
+				if s, ok := v.(string); ok {
+					roles, _ = authz.DecodeStringSlice(s)
 				}
 			}
 		}
@@ -300,6 +314,9 @@ func NewRouter(client HttpClient, newReqFunc newRequestFunc, cfg Config) adapter
 		}
 		if orgID != "" {
 			req.Header.Set(orgHeader, orgID)
+		}
+		if len(roles) > 0 {
+			req.Header.Set(rolesHeader, authz.EncodeStringSlice(roles))
 		}
 		if len(permissions) > 0 {
 			req.Header.Set(permissionsHeader, authz.EncodeStringSlice(permissions))
@@ -367,6 +384,8 @@ func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver)
 		return fmt.Sprintf("%s%s", resolver.trainingServiceRoute, path), nil
 	case "inference":
 		return fmt.Sprintf("%s%s", resolver.inferenceServiceRoute, path), nil
+	case "socket-token":
+		return fmt.Sprintf("%s%s", resolver.socketServiceRoute, path), nil
 	default:
 		return "", fmt.Errorf("invalid resource: %s", routeCtx.resource)
 	}
@@ -424,10 +443,6 @@ func profileBackendPath(routeCtx routeContext) string {
 		return "/" + privateEndpoint + "/" + routeCtx.version + "/" + strings.Join(routeCtx.segments[2:], "/")
 	}
 	return routeCtx.path
-}
-
-func isProfileLogoutPath(path string) bool {
-	return path == "/private/v1/profiles/logout" || path == "/v1/private/profiles/logout"
 }
 
 func newRequestWithBody(ctx context.Context, request events.APIGatewayProxyRequest, serviceRoute, verb string, genProxyRequest newRequestFunc) (*http.Request, error) {

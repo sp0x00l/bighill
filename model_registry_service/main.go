@@ -31,6 +31,7 @@ import (
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -48,6 +49,7 @@ type registryConfig struct {
 	Topics             registrymessaging.ModelRegistryTopics
 	TenantTopic        string
 	Serving            servingConfig
+	UserEvents         userevents.Config
 	Health             healthConfig
 	Lifecycle          lifecycle.Config
 }
@@ -135,6 +137,14 @@ func main() {
 		Start(context.Context) error
 	}
 	modelUsecaseOptions := []app.ModelRegistryOption{}
+	userEventPublisher := userevents.Publisher(userevents.NewNoopPublisher())
+	if cfg.UserEvents.Enabled {
+		userEventPublisher, err = userevents.NewRedisPublisher(cfg.UserEvents)
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatal("failed to initialize user event publisher")
+		}
+	}
+	modelUsecaseOptions = append(modelUsecaseOptions, app.WithUserEventPublisher(userEventPublisher))
 	var servingDeployer app.ModelServingDeployer
 	if cfg.Serving.Enabled {
 		servingDeployer, err = newServingBackend(cfg.Serving)
@@ -171,6 +181,10 @@ func main() {
 		}),
 		lifecycle.CloserComponent("model-registry-publisher", func() error {
 			outboxPublisher.Close()
+			return nil
+		}),
+		lifecycle.CloserComponent("model-registry-user-events-publisher", func() error {
+			userEventPublisher.Close()
 			return nil
 		}),
 		lifecycle.HealthCheckComponent("model-registry-healthcheck", healthCheck),
@@ -304,6 +318,16 @@ func readModelRegistryConfig() registryConfig {
 			CRDResource:      env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_RESOURCE", "servedmodels"),
 			CRDKind:          env.WithDefaultString("MODEL_REGISTRY_SERVICE_SERVING_CRD_KIND", "ServedModel"),
 			StatusPollEvery:  time.Duration(env.WithDefaultInt("MODEL_REGISTRY_SERVICE_SERVING_STATUS_POLL_MS", "1000")) * time.Millisecond,
+		},
+		UserEvents: userevents.Config{
+			Enabled:        env.WithDefaultBool("USER_EVENTS_ENABLED", false),
+			RedisAddress:   env.WithDefaultString("USER_EVENTS_REDIS_ADDRESS", ""),
+			RedisUsername:  env.WithDefaultString("USER_EVENTS_REDIS_USERNAME", ""),
+			RedisPassword:  env.WithDefaultString("USER_EVENTS_REDIS_PASSWORD", ""),
+			RedisTLS:       env.WithDefaultBool("USER_EVENTS_REDIS_TLS", false),
+			ChannelPrefix:  env.WithDefaultString("USER_EVENTS_CHANNEL_PREFIX", userevents.DefaultChannelPrefix),
+			PublishTimeout: time.Duration(env.WithDefaultInt("USER_EVENTS_PUBLISH_TIMEOUT_MS", "500")) * time.Millisecond,
+			StreamMaxLen:   int64(env.WithDefaultInt("USER_EVENTS_STREAM_MAX_LEN", "1000")),
 		},
 		Health: healthConfig{
 			CpuThresholdPercentage:                    env.WithDefaultInt("MODEL_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
