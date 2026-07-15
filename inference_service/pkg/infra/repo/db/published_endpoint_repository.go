@@ -36,11 +36,14 @@ func (r *PublishedEndpointRepository) UpsertEndpoint(ctx context.Context, endpoi
 	defer tx.Rollback(ctx)
 
 	query := `INSERT INTO ` + r.Name + `.published_inference_endpoints (
-		org_id, model_id, status, rag_merge_strategy, display_name, created_by_user_id
+		org_id, model_id, mode, agent_spec_id, agent_spec_hash, status, rag_merge_strategy, display_name, created_by_user_id
 	) VALUES (
-		@org_id, @model_id, @status, @rag_merge_strategy, @display_name, @created_by_user_id
+		@org_id, @model_id, @mode::agent_endpoint_mode_enum, @agent_spec_id, @agent_spec_hash, @status, @rag_merge_strategy, @display_name, @created_by_user_id
 	)
 	ON CONFLICT (org_id, model_id) DO UPDATE SET
+		mode = EXCLUDED.mode,
+		agent_spec_id = EXCLUDED.agent_spec_id,
+		agent_spec_hash = EXCLUDED.agent_spec_hash,
 		status = EXCLUDED.status,
 		rag_merge_strategy = EXCLUDED.rag_merge_strategy,
 		display_name = EXCLUDED.display_name,
@@ -205,6 +208,9 @@ func endpointColumns() string {
 	return `endpoint.endpoint_id::text,
 		endpoint.org_id::text,
 		endpoint.model_id::text,
+		endpoint.mode::text,
+		COALESCE(endpoint.agent_spec_id::text, ''),
+		endpoint.agent_spec_hash,
 		endpoint.status,
 		endpoint.rag_merge_strategy,
 		endpoint.display_name,
@@ -222,6 +228,9 @@ func endpointArgs(endpoint *model.PublishedEndpoint) pgx.NamedArgs {
 	return pgx.NamedArgs{
 		"org_id":             pgtype.UUID{Bytes: endpoint.OrgID, Valid: true},
 		"model_id":           pgtype.UUID{Bytes: endpoint.ModelID, Valid: true},
+		"mode":               endpointMode(endpoint.Mode),
+		"agent_spec_id":      nullableUUID(endpoint.AgentSpecID),
+		"agent_spec_hash":    endpoint.AgentSpecHash,
 		"status":             string(endpoint.Status),
 		"rag_merge_strategy": string(endpoint.MergeStrategy),
 		"display_name":       endpoint.DisplayName,
@@ -229,16 +238,25 @@ func endpointArgs(endpoint *model.PublishedEndpoint) pgx.NamedArgs {
 	}
 }
 
+func endpointMode(mode model.AgentEndpointMode) string {
+	log.Trace("endpointMode")
+
+	return mode.String()
+}
+
 func scanEndpoint(row pgx.Row) (*model.PublishedEndpoint, error) {
 	log.Trace("scanEndpoint")
 
-	var endpointID, orgID, modelID, status, mergeStrategy, createdByUserID string
+	var endpointID, orgID, modelID, mode, agentSpecID, status, mergeStrategy, createdByUserID string
 	var datasetIDs []string
 	record := &model.PublishedEndpoint{}
 	if err := row.Scan(
 		&endpointID,
 		&orgID,
 		&modelID,
+		&mode,
+		&agentSpecID,
+		&record.AgentSpecHash,
 		&status,
 		&mergeStrategy,
 		&record.DisplayName,
@@ -250,6 +268,14 @@ func scanEndpoint(row pgx.Row) (*model.PublishedEndpoint, error) {
 	record.EndpointID = uuid.MustParse(endpointID)
 	record.OrgID = uuid.MustParse(orgID)
 	record.ModelID = uuid.MustParse(modelID)
+	parsedMode, err := model.ToAgentEndpointMode(mode)
+	if err != nil {
+		return nil, fmt.Errorf("parse published endpoint mode: %w", err)
+	}
+	record.Mode = parsedMode
+	if agentSpecID != "" {
+		record.AgentSpecID = uuid.MustParse(agentSpecID)
+	}
 	record.Status = model.PublishedEndpointStatus(status)
 	record.MergeStrategy = model.RAGMergeStrategy(mergeStrategy)
 	record.CreatedByUserID = uuid.MustParse(createdByUserID)

@@ -12,6 +12,18 @@ CREATE TYPE processing_profile_enum AS ENUM (
     'TEXT_RAG_PROCESSING_PROFILE',
     'INSTRUCTION_TUNING_PROCESSING_PROFILE'
 );
+CREATE TYPE agent_maturity_enum AS ENUM ('CONFIG_ONLY', 'BOOTSTRAPPED', 'LEARNING', 'SPECIALIZED');
+CREATE TYPE agent_candidate_pipeline_state_enum AS ENUM ('NONE', 'TRAINING', 'EVALUATING', 'GATED', 'ROLLED_BACK');
+CREATE TYPE effective_base_status_enum AS ENUM ('DRAFT', 'PROMOTED', 'RETIRED');
+CREATE TYPE agent_adapter_status_enum AS ENUM ('CANDIDATE', 'EVALUATED', 'PROMOTED', 'STALE', 'QUARANTINED');
+CREATE TYPE agent_spec_status_enum AS ENUM ('DRAFT', 'VALIDATED', 'PROMOTED', 'FAILED');
+CREATE TYPE agent_runtime_mode_enum AS ENUM ('interactive', 'durable');
+CREATE TYPE agent_endpoint_mode_enum AS ENUM ('rag', 'agent');
+CREATE TYPE golden_task_split_enum AS ENUM ('seed_train', 'dev_eval', 'promotion_holdout');
+CREATE TYPE agent_run_status_enum AS ENUM ('RUNNING', 'COMPLETED', 'FAILED');
+CREATE TYPE agent_stop_reason_enum AS ENUM ('FINAL_ANSWER', 'MAX_STEPS', 'BUDGET_EXCEEDED', 'CANCELLED', 'TOOL_ERROR', 'RUNTIME_ERROR', 'LOOP_DETECTED');
+CREATE TYPE agent_training_eligibility_enum AS ENUM ('TENANT_ONLY', 'POOLABLE');
+CREATE TYPE tool_error_type_enum AS ENUM ('TRANSIENT', 'PERMANENT', 'POLICY_DENIED');
 
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -324,6 +336,9 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.published_inference_endpoints (
     endpoint_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id uuid NOT NULL,
     model_id uuid NOT NULL,
+    mode agent_endpoint_mode_enum NOT NULL DEFAULT 'rag',
+    agent_spec_id uuid,
+    agent_spec_hash text NOT NULL DEFAULT '',
     status text NOT NULL DEFAULT 'ready',
     rag_merge_strategy text NOT NULL DEFAULT 'reranker',
     display_name text NOT NULL,
@@ -339,6 +354,9 @@ ON bighill_inference_db.published_inference_endpoints(org_id, status, created_at
 
 CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_model_id
 ON bighill_inference_db.published_inference_endpoints(model_id);
+
+CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_agent_spec_id
+ON bighill_inference_db.published_inference_endpoints(agent_spec_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS index_published_inference_endpoints_natural_key
 ON bighill_inference_db.published_inference_endpoints(org_id, model_id);
@@ -358,6 +376,250 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.published_endpoint_datasets (
 
 CREATE INDEX IF NOT EXISTS index_published_endpoint_datasets_dataset_id
 ON bighill_inference_db.published_endpoint_datasets(dataset_id);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.effective_base_versions (
+    effective_base_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    foundation_model_id uuid NOT NULL,
+    foundation_checksum text NOT NULL,
+    shared_adapter_id uuid,
+    merge_recipe_id text NOT NULL DEFAULT '',
+    merge_tool_version text NOT NULL DEFAULT '',
+    tokenizer_hash text NOT NULL,
+    chat_template_hash text NOT NULL,
+    quantization_format text NOT NULL,
+    quantization_params_hash text NOT NULL,
+    served_artifact_checksum text NOT NULL,
+    capability_report_id uuid,
+    status effective_base_status_enum NOT NULL DEFAULT 'DRAFT',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT effective_base_versions_served_artifact_ck CHECK (
+        status <> 'PROMOTED' OR btrim(served_artifact_checksum) <> ''
+    )
+);
+
+CREATE INDEX IF NOT EXISTS index_effective_base_versions_foundation_model_id
+ON bighill_inference_db.effective_base_versions(foundation_model_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.capability_reports (
+    capability_report_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id uuid NOT NULL,
+    effective_base_id uuid REFERENCES bighill_inference_db.effective_base_versions(effective_base_id),
+    model_id uuid,
+    supports_chat boolean NOT NULL DEFAULT false,
+    supports_tool_calls boolean NOT NULL DEFAULT false,
+    supports_json_schema_output boolean NOT NULL DEFAULT false,
+    supports_system_prompt boolean NOT NULL DEFAULT false,
+    context_window_tokens integer NOT NULL DEFAULT 0,
+    max_output_tokens integer NOT NULL DEFAULT 0,
+    raw_report jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS index_capability_reports_effective_base_id
+ON bighill_inference_db.capability_reports(effective_base_id, created_at);
+
+CREATE INDEX IF NOT EXISTS index_capability_reports_org_model_id
+ON bighill_inference_db.capability_reports(org_id, model_id, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS index_capability_reports_org_model_unique
+ON bighill_inference_db.capability_reports(org_id, model_id)
+WHERE model_id IS NOT NULL AND effective_base_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS index_capability_reports_org_effective_base_unique
+ON bighill_inference_db.capability_reports(org_id, effective_base_id)
+WHERE effective_base_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_specs (
+    agent_spec_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id uuid NOT NULL,
+    agent_lineage text NOT NULL,
+    system_prompt text NOT NULL DEFAULT '',
+    source_yaml text NOT NULL,
+    canonical_json jsonb NOT NULL,
+    schema_version text NOT NULL,
+    content_hash text NOT NULL,
+    validation_report text NOT NULL DEFAULT '',
+    model_id uuid NOT NULL,
+    effective_base_id uuid NOT NULL,
+    tool_bindings jsonb NOT NULL DEFAULT '[]'::jsonb,
+    retrieval_config jsonb NOT NULL DEFAULT '{}'::jsonb,
+    budgets jsonb NOT NULL DEFAULT '{}'::jsonb,
+    stop_conditions jsonb NOT NULL DEFAULT '{}'::jsonb,
+    guardrails jsonb NOT NULL DEFAULT '{}'::jsonb,
+    runtime_mode agent_runtime_mode_enum NOT NULL DEFAULT 'interactive',
+    status agent_spec_status_enum NOT NULL DEFAULT 'DRAFT',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT agent_specs_content_hash_ck CHECK (btrim(content_hash) <> ''),
+    CONSTRAINT agent_specs_effective_base_id_ck CHECK (effective_base_id <> '00000000-0000-0000-0000-000000000000'::uuid),
+    CONSTRAINT agent_specs_budgets_ck CHECK (
+        budgets ? 'max_steps'
+        AND budgets ? 'token'
+        AND (budgets->>'max_steps')::integer > 0
+        AND (budgets->>'token')::integer > 0
+    ),
+    CONSTRAINT agent_specs_unique_content_hash UNIQUE (org_id, content_hash)
+);
+
+CREATE INDEX IF NOT EXISTS index_agent_specs_org_lineage
+ON bighill_inference_db.agent_specs(org_id, agent_lineage, created_at);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_champion_states (
+    org_id uuid NOT NULL,
+    agent_lineage text NOT NULL,
+    maturity agent_maturity_enum NOT NULL DEFAULT 'CONFIG_ONLY',
+    champion_adapter_id uuid,
+    candidate_pipeline_state agent_candidate_pipeline_state_enum NOT NULL DEFAULT 'NONE',
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (org_id, agent_lineage)
+);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_adapters (
+    adapter_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id uuid NOT NULL,
+    lineage_name text NOT NULL,
+    trained_against_effective_base_id uuid NOT NULL,
+    trained_against_agent_spec_hash text NOT NULL,
+    trained_against_toolset_hash text NOT NULL,
+    trained_against_rubric_version text NOT NULL,
+    trained_against_golden_split_version integer NOT NULL,
+    trajectory_schema_version text NOT NULL,
+    status agent_adapter_status_enum NOT NULL DEFAULT 'CANDIDATE',
+    promotion_passed boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT agent_adapters_tuple_ck CHECK (
+        btrim(trained_against_agent_spec_hash) <> ''
+        AND btrim(trained_against_toolset_hash) <> ''
+        AND btrim(trained_against_rubric_version) <> ''
+        AND btrim(trajectory_schema_version) <> ''
+        AND trained_against_golden_split_version > 0
+    )
+);
+
+CREATE INDEX IF NOT EXISTS index_agent_adapters_org_lineage
+ON bighill_inference_db.agent_adapters(org_id, lineage_name, status, created_at);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.golden_tasks (
+    task_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id uuid NOT NULL,
+    agent_lineage text NOT NULL,
+    split golden_task_split_enum NOT NULL,
+    split_version integer NOT NULL,
+    group_key text NOT NULL DEFAULT '',
+    input_hash text NOT NULL,
+    normalized_prompt_hash text NOT NULL,
+    content_fingerprint text NOT NULL,
+    expected_tool_plan_hash text NOT NULL DEFAULT '',
+    expected_answer_rubric_id text NOT NULL,
+    labels_hash text NOT NULL,
+    source_task_lineage text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT golden_tasks_fingerprints_ck CHECK (
+        split_version > 0
+        AND btrim(input_hash) <> ''
+        AND btrim(normalized_prompt_hash) <> ''
+        AND btrim(content_fingerprint) <> ''
+        AND btrim(expected_answer_rubric_id) <> ''
+        AND btrim(labels_hash) <> ''
+    )
+);
+
+CREATE INDEX IF NOT EXISTS index_golden_tasks_lineage_split
+ON bighill_inference_db.golden_tasks(org_id, agent_lineage, split, split_version);
+
+CREATE INDEX IF NOT EXISTS index_golden_tasks_content_fingerprint
+ON bighill_inference_db.golden_tasks(org_id, agent_lineage, content_fingerprint);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_runs (
+    run_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
+    endpoint_id uuid REFERENCES bighill_inference_db.published_inference_endpoints(endpoint_id),
+    agent_spec_hash text NOT NULL,
+    effective_base_id uuid NOT NULL,
+    model_version integer NOT NULL DEFAULT 0,
+    toolset_hash text NOT NULL,
+    rubric_version text NOT NULL DEFAULT '',
+    trajectory_schema_version text NOT NULL,
+    system_template_version text NOT NULL DEFAULT '',
+    decoding_params jsonb NOT NULL,
+    status agent_run_status_enum NOT NULL DEFAULT 'RUNNING',
+    stop_reason agent_stop_reason_enum,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz,
+    total_tokens integer NOT NULL DEFAULT 0,
+    training_eligibility agent_training_eligibility_enum NOT NULL DEFAULT 'TENANT_ONLY',
+    CONSTRAINT agent_runs_tuple_ck CHECK (
+        btrim(agent_spec_hash) <> ''
+        AND effective_base_id <> '00000000-0000-0000-0000-000000000000'::uuid
+        AND btrim(toolset_hash) <> ''
+        AND btrim(trajectory_schema_version) <> ''
+        AND jsonb_typeof(decoding_params) = 'object'
+        AND decoding_params <> '{}'::jsonb
+    )
+);
+
+CREATE INDEX IF NOT EXISTS index_agent_runs_org_endpoint
+ON bighill_inference_db.agent_runs(org_id, endpoint_id, started_at);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_steps (
+    step_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    run_id uuid NOT NULL REFERENCES bighill_inference_db.agent_runs(run_id) ON DELETE CASCADE,
+    org_id uuid NOT NULL,
+    step_index integer NOT NULL,
+    presented_tool_schemas jsonb NOT NULL,
+    generation_result jsonb NOT NULL,
+    finish_reason text NOT NULL,
+    prompt_tokens integer NOT NULL DEFAULT 0,
+    completion_tokens integer NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT agent_steps_unique_index UNIQUE (run_id, step_index),
+    CONSTRAINT agent_steps_payload_ck CHECK (
+        jsonb_typeof(presented_tool_schemas) = 'array'
+        AND jsonb_array_length(presented_tool_schemas) > 0
+        AND jsonb_typeof(generation_result) = 'object'
+        AND generation_result <> '{}'::jsonb
+    )
+);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_tool_invocations (
+    invocation_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    step_id uuid NOT NULL REFERENCES bighill_inference_db.agent_steps(step_id) ON DELETE CASCADE,
+    run_id uuid NOT NULL REFERENCES bighill_inference_db.agent_runs(run_id) ON DELETE CASCADE,
+    org_id uuid NOT NULL,
+    tool_name text NOT NULL,
+    tool_impl_version text NOT NULL,
+    arguments jsonb NOT NULL,
+    result jsonb NOT NULL,
+    error_type tool_error_type_enum,
+    latency_ms bigint NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT agent_tool_invocations_payload_ck CHECK (
+        jsonb_typeof(arguments) = 'object'
+        AND arguments <> '{}'::jsonb
+        AND jsonb_typeof(result) = 'object'
+        AND result <> '{}'::jsonb
+    )
+);
+
+CREATE INDEX IF NOT EXISTS index_agent_tool_invocations_run_id
+ON bighill_inference_db.agent_tool_invocations(run_id, created_at);
+
+CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_run_labels (
+    run_id uuid NOT NULL REFERENCES bighill_inference_db.agent_runs(run_id) ON DELETE CASCADE,
+    evaluator text NOT NULL,
+    task_success boolean NOT NULL DEFAULT false,
+    tool_selection_score double precision NOT NULL DEFAULT 0,
+    groundedness double precision NOT NULL DEFAULT 0,
+    policy_violations integer NOT NULL DEFAULT 0,
+    confidence double precision NOT NULL DEFAULT 0,
+    label_source text NOT NULL DEFAULT '',
+    rubric_version text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (run_id, evaluator, rubric_version)
+);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.outbox_messages (
     outbox_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -533,5 +795,129 @@ WITH CHECK (
         FROM bighill_inference_db.published_inference_endpoints endpoint
         WHERE endpoint.endpoint_id = published_endpoint_datasets.endpoint_id
           AND NULLIF(current_setting('app.current_org_id', true), '')::uuid = endpoint.org_id
+    )
+);
+
+ALTER TABLE bighill_inference_db.effective_base_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.effective_base_versions FORCE ROW LEVEL SECURITY;
+CREATE POLICY effective_base_versions_system_only ON bighill_inference_db.effective_base_versions
+USING (current_setting('app.system_context', true) = 'true')
+WITH CHECK (current_setting('app.system_context', true) = 'true');
+
+ALTER TABLE bighill_inference_db.capability_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.capability_reports FORCE ROW LEVEL SECURITY;
+CREATE POLICY capability_reports_tenant_isolation ON bighill_inference_db.capability_reports
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.agent_specs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.agent_specs FORCE ROW LEVEL SECURITY;
+CREATE POLICY agent_specs_tenant_isolation ON bighill_inference_db.agent_specs
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.agent_champion_states ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.agent_champion_states FORCE ROW LEVEL SECURITY;
+CREATE POLICY agent_champion_states_tenant_isolation ON bighill_inference_db.agent_champion_states
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.agent_adapters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.agent_adapters FORCE ROW LEVEL SECURITY;
+CREATE POLICY agent_adapters_tenant_isolation ON bighill_inference_db.agent_adapters
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.golden_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.golden_tasks FORCE ROW LEVEL SECURITY;
+CREATE POLICY golden_tasks_tenant_isolation ON bighill_inference_db.golden_tasks
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.agent_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.agent_runs FORCE ROW LEVEL SECURITY;
+CREATE POLICY agent_runs_tenant_isolation ON bighill_inference_db.agent_runs
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.agent_steps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.agent_steps FORCE ROW LEVEL SECURITY;
+CREATE POLICY agent_steps_tenant_isolation ON bighill_inference_db.agent_steps
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.agent_tool_invocations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.agent_tool_invocations FORCE ROW LEVEL SECURITY;
+CREATE POLICY agent_tool_invocations_tenant_isolation ON bighill_inference_db.agent_tool_invocations
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_inference_db.agent_run_labels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_inference_db.agent_run_labels FORCE ROW LEVEL SECURITY;
+CREATE POLICY agent_run_labels_tenant_isolation ON bighill_inference_db.agent_run_labels
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR EXISTS (
+        SELECT 1
+        FROM bighill_inference_db.agent_runs run
+        WHERE run.run_id = agent_run_labels.run_id
+          AND NULLIF(current_setting('app.current_org_id', true), '')::uuid = run.org_id
+    )
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR EXISTS (
+        SELECT 1
+        FROM bighill_inference_db.agent_runs run
+        WHERE run.run_id = agent_run_labels.run_id
+          AND NULLIF(current_setting('app.current_org_id', true), '')::uuid = run.org_id
     )
 );

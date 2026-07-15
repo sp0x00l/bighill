@@ -145,6 +145,14 @@ spec:
               value: {{ .Values.env.featureMaterializerGrpcCallTimeoutMs | quote }}
             - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT
               value: {{ .Values.env.featureMaterializerGrpcRetryCount | quote }}
+            - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_ADDRESS
+              value: {{ .Values.env.toolServiceGrpcAddress | quote }}
+            - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_DIAL_TIMEOUT_MS
+              value: {{ .Values.env.toolServiceGrpcDialTimeoutMs | quote }}
+            - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_CALL_TIMEOUT_MS
+              value: {{ .Values.env.toolServiceGrpcCallTimeoutMs | quote }}
+            - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_RETRY_COUNT
+              value: {{ .Values.env.toolServiceGrpcRetryCount | quote }}
             - name: INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.generationRequestTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS

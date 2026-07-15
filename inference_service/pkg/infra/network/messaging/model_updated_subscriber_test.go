@@ -44,6 +44,10 @@ func (u *recordingInferenceUsecase) ReadModel(context.Context, uuid.UUID, uuid.U
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) PublishAgentSpec(context.Context, model.AgentSpecPublication) (*model.AgentSpec, error) {
+	return nil, nil
+}
+
 func (u *recordingInferenceUsecase) ListEndpoints(context.Context, uuid.UUID) ([]*model.PublishedEndpoint, error) {
 	return nil, nil
 }
@@ -85,6 +89,10 @@ func (u *recordingInferenceUsecase) ListPreferenceDatasets(context.Context, uuid
 }
 
 func (u *recordingInferenceUsecase) BuildPreferenceDataset(context.Context, model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
+	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) ReadAgentTrajectory(context.Context, uuid.UUID, uuid.UUID) (*model.AgentTrajectory, error) {
 	return nil, nil
 }
 

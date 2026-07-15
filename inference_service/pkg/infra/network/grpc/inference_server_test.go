@@ -44,6 +44,10 @@ func (s *inferenceUsecaseStub) ReadModel(context.Context, uuid.UUID, uuid.UUID) 
 	return nil, nil
 }
 
+func (s *inferenceUsecaseStub) PublishAgentSpec(context.Context, model.AgentSpecPublication) (*model.AgentSpec, error) {
+	return nil, nil
+}
+
 func (s *inferenceUsecaseStub) ListEndpoints(context.Context, uuid.UUID) ([]*model.PublishedEndpoint, error) {
 	return nil, nil
 }
@@ -92,6 +96,10 @@ func (s *inferenceUsecaseStub) ListPreferenceDatasets(context.Context, uuid.UUID
 }
 
 func (s *inferenceUsecaseStub) BuildPreferenceDataset(context.Context, model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error) {
+	return nil, nil
+}
+
+func (s *inferenceUsecaseStub) ReadAgentTrajectory(context.Context, uuid.UUID, uuid.UUID) (*model.AgentTrajectory, error) {
 	return nil, nil
 }
 

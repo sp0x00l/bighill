@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bighill.ai/schemas/trajectory.schema.json",
+  "title": "BigHill Agent Trajectory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run",
+    "steps"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "agent_spec_hash",
+        "effective_base_id",
+        "toolset_hash",
+        "trajectory_schema_version",
+        "status",
+        "stop_reason",
+        "training_eligibility"
+      ],
+      "properties": {
+        "run_id": { "type": "string", "format": "uuid" },
+        "agent_spec_hash": { "type": "string", "minLength": 1 },
+        "effective_base_id": { "type": "string", "format": "uuid" },
+        "toolset_hash": { "type": "string", "minLength": 1 },
+        "rubric_version": { "type": "string", "default": "" },
+        "trajectory_schema_version": { "type": "string", "minLength": 1 },
+        "system_template_version": { "type": "string", "default": "" },
+        "decoding_params": { "type": "object", "additionalProperties": true },
+        "status": { "type": "string", "enum": ["RUNNING", "COMPLETED", "FAILED"] },
+        "stop_reason": {
+          "type": "string",
+          "enum": ["FINAL_ANSWER", "MAX_STEPS", "BUDGET_EXCEEDED", "CANCELLED", "TOOL_ERROR", "RUNTIME_ERROR", "LOOP_DETECTED"]
+        },
+        "training_eligibility": { "type": "string", "enum": ["TENANT_ONLY", "POOLABLE"] }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_index", "presented_tool_schemas", "generation_result", "finish_reason"],
+        "properties": {
+          "step_index": { "type": "integer", "minimum": 0 },
+          "presented_tool_schemas": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "generation_result": { "type": "object", "additionalProperties": true },
+          "finish_reason": { "type": "string" },
+          "tool_invocations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tool_name", "tool_impl_version", "arguments"],
+              "properties": {
+                "tool_name": { "type": "string", "minLength": 1 },
+                "tool_impl_version": { "type": "string", "minLength": 1 },
+                "arguments": { "type": "object", "additionalProperties": true },
+                "result": { "type": "object", "additionalProperties": true },
+                "error_type": { "type": "string", "enum": ["TRANSIENT", "PERMANENT", "POLICY_DENIED"] }
+              }
+            },
+            "default": []
+          }
+        }
+      }
+    }
+  }
+}

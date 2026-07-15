@@ -20,24 +20,47 @@ import (
 
 const (
 	pathInferenceEndpoints             = "/v1/inference/endpoints"
+	pathInferenceAgentSpecs            = "/v1/inference/agent-specs"
 	pathInferenceEndpointDatasets      = "/v1/inference/endpoints/{endpointId}/datasets"
 	pathInferenceEndpointMergeStrategy = "/v1/inference/endpoints/{endpointId}/merge-strategy"
 	pathInferenceEndpointGenerations   = "/v1/inference/endpoints/{endpointId}/generations"
 	pathInferenceEndpointPreferences   = "/v1/inference/endpoints/{endpointId}/preference-datasets"
 	pathInferencePreferenceDatasets    = "/v1/inference/preference-datasets"
 	pathInferencePreferenceDataset     = "/v1/inference/preference-datasets/{preferenceDatasetId}"
+	pathInferenceAgentRun              = "/v1/inference/agent-runs/{runId}"
 	pathInferenceFeedback              = "/v1/inference/feedback"
 )
 
 type InferenceHandlers struct {
-	usecase app.InferenceUsecase
-	adapter adapter.InferenceDTOAdapter
+	usecase                app.InferenceUsecase
+	endpointAdapter        adapter.EndpointDTOAdapter
+	generationAdapter      adapter.GenerationDTOAdapter
+	feedbackAdapter        adapter.FeedbackDTOAdapter
+	agentSpecAdapter       adapter.AgentSpecDTOAdapter
+	preferenceAdapter      adapter.PreferenceDatasetDTOAdapter
+	agentTrajectoryAdapter adapter.AgentTrajectoryDTOAdapter
 }
 
-func NewInferenceHandlers(usecase app.InferenceUsecase, adapter adapter.InferenceDTOAdapter) *InferenceHandlers {
+func NewInferenceHandlers(
+	usecase app.InferenceUsecase,
+	endpointAdapter adapter.EndpointDTOAdapter,
+	generationAdapter adapter.GenerationDTOAdapter,
+	feedbackAdapter adapter.FeedbackDTOAdapter,
+	agentSpecAdapter adapter.AgentSpecDTOAdapter,
+	preferenceAdapter adapter.PreferenceDatasetDTOAdapter,
+	agentTrajectoryAdapter adapter.AgentTrajectoryDTOAdapter,
+) *InferenceHandlers {
 	log.Trace("NewInferenceHandlers")
 
-	return &InferenceHandlers{usecase: usecase, adapter: adapter}
+	return &InferenceHandlers{
+		usecase:                usecase,
+		endpointAdapter:        endpointAdapter,
+		generationAdapter:      generationAdapter,
+		feedbackAdapter:        feedbackAdapter,
+		agentSpecAdapter:       agentSpecAdapter,
+		preferenceAdapter:      preferenceAdapter,
+		agentTrajectoryAdapter: agentTrajectoryAdapter,
+	}
 }
 
 func (h *InferenceHandlers) GetRoutes() []Route {
@@ -55,6 +78,12 @@ func (h *InferenceHandlers) GetRoutes() []Route {
 			Handler:  h.PublishEndpoint,
 			Method:   http.MethodPost,
 			SpanName: "publish-inference-endpoint",
+		},
+		{
+			Path:     pathInferenceAgentSpecs,
+			Handler:  h.PublishAgentSpec,
+			Method:   http.MethodPost,
+			SpanName: "publish-inference-agent-spec",
 		},
 		{
 			Path:     pathInferenceEndpointDatasets,
@@ -98,6 +127,12 @@ func (h *InferenceHandlers) GetRoutes() []Route {
 			Method:   http.MethodGet,
 			SpanName: "read-inference-preference-dataset",
 		},
+		{
+			Path:     pathInferenceAgentRun,
+			Handler:  h.ReadAgentRun,
+			Method:   http.MethodGet,
+			SpanName: "read-inference-agent-run",
+		},
 	}
 }
 
@@ -113,7 +148,7 @@ func (h *InferenceHandlers) ListEndpoints(ctx context.Context, req *http.Request
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToEndpointDTOs(ctx, endpoints)
+	payload, err := h.endpointAdapter.ToDTOs(ctx, endpoints)
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoints")
 	}
@@ -131,7 +166,7 @@ func (h *InferenceHandlers) PublishEndpoint(ctx context.Context, req *http.Reque
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
 	}
-	command, err := h.adapter.FromEndpointPublicationDTO(ctx, body)
+	command, err := h.endpointAdapter.FromDTO(ctx, body)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid publish endpoint request")
 	}
@@ -142,9 +177,41 @@ func (h *InferenceHandlers) PublishEndpoint(ctx context.Context, req *http.Reque
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToEndpointDetailDTOs(ctx, []*model.PublishedEndpoint{result})
+	payload, err := h.endpointAdapter.ToDetailDTOs(ctx, []*model.PublishedEndpoint{result})
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoint")
+	}
+	return NewResponseWithPayload(http.StatusCreated, payload), nil
+}
+
+func (h *InferenceHandlers) PublishAgentSpec(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers PublishAgentSpec")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	body, err := transport.ReadReqBody(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
+	}
+	command, err := h.agentSpecAdapter.FromDTO(ctx, body)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid agent spec")
+	}
+	command.UserID = actor
+	command.OrgID = orgID
+	if command.Spec != nil {
+		command.Spec.OrgID = orgID
+	}
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.PublishAgentSpec(ctx, command)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.agentSpecAdapter.ToDTO(ctx, result)
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode agent spec")
 	}
 	return NewResponseWithPayload(http.StatusCreated, payload), nil
 }
@@ -156,7 +223,7 @@ func (h *InferenceHandlers) SetEndpointDatasets(ctx context.Context, req *http.R
 	if err != nil {
 		return nil, err
 	}
-	command, err := h.adapter.FromEndpointDatasetBindingDTO(ctx, body)
+	command, err := h.endpointAdapter.FromDatasetBindingDTO(ctx, body)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid endpoint datasets request")
 	}
@@ -168,7 +235,7 @@ func (h *InferenceHandlers) SetEndpointDatasets(ctx context.Context, req *http.R
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToEndpointDetailDTOs(ctx, []*model.PublishedEndpoint{result})
+	payload, err := h.endpointAdapter.ToDetailDTOs(ctx, []*model.PublishedEndpoint{result})
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoint")
 	}
@@ -182,7 +249,7 @@ func (h *InferenceHandlers) SetEndpointMergeStrategy(ctx context.Context, req *h
 	if err != nil {
 		return nil, err
 	}
-	command, err := h.adapter.FromEndpointMergeConfigurationDTO(ctx, body)
+	command, err := h.endpointAdapter.FromMergeConfigurationDTO(ctx, body)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid endpoint merge strategy request")
 	}
@@ -194,7 +261,7 @@ func (h *InferenceHandlers) SetEndpointMergeStrategy(ctx context.Context, req *h
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToEndpointDetailDTOs(ctx, []*model.PublishedEndpoint{result})
+	payload, err := h.endpointAdapter.ToDetailDTOs(ctx, []*model.PublishedEndpoint{result})
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoint")
 	}
@@ -220,7 +287,7 @@ func (h *InferenceHandlers) Generate(ctx context.Context, req *http.Request) (AP
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
 	}
-	command, err := h.adapter.FromGenerateDTO(ctx, body)
+	command, err := h.generationAdapter.FromDTO(ctx, body)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid generation request")
 	}
@@ -232,7 +299,7 @@ func (h *InferenceHandlers) Generate(ctx context.Context, req *http.Request) (AP
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToGenerateDTO(ctx, result)
+	payload, err := h.generationAdapter.ToDTO(ctx, result)
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode generation response")
 	}
@@ -254,7 +321,7 @@ func (h *InferenceHandlers) RecordFeedback(ctx context.Context, req *http.Reques
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
 	}
-	feedback, err := h.adapter.FromFeedbackDTO(ctx, body)
+	feedback, err := h.feedbackAdapter.FromDTO(ctx, body)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid feedback request")
 	}
@@ -266,7 +333,7 @@ func (h *InferenceHandlers) RecordFeedback(ctx context.Context, req *http.Reques
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToFeedbackDTO(ctx, result)
+	payload, err := h.feedbackAdapter.ToDTO(ctx, result)
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode feedback response")
 	}
@@ -280,7 +347,7 @@ func (h *InferenceHandlers) BuildPreferenceDataset(ctx context.Context, req *htt
 	if err != nil {
 		return nil, err
 	}
-	command, err := h.adapter.FromPreferenceDatasetBuildDTO(ctx, body)
+	command, err := h.preferenceAdapter.FromDTO(ctx, body)
 	if err != nil {
 		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid preference dataset request")
 	}
@@ -291,7 +358,7 @@ func (h *InferenceHandlers) BuildPreferenceDataset(ctx context.Context, req *htt
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToPreferenceDatasetDTO(ctx, result)
+	payload, err := h.preferenceAdapter.ToDTO(ctx, result)
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode preference dataset")
 	}
@@ -314,7 +381,7 @@ func (h *InferenceHandlers) ListPreferenceDatasets(ctx context.Context, req *htt
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToPreferenceDatasetDTOs(ctx, result)
+	payload, err := h.preferenceAdapter.ToDTOs(ctx, result)
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode preference datasets")
 	}
@@ -337,9 +404,32 @@ func (h *InferenceHandlers) ReadPreferenceDataset(ctx context.Context, req *http
 	if err != nil {
 		return nil, mapInferenceError(err)
 	}
-	payload, err := h.adapter.ToPreferenceDatasetDTO(ctx, result)
+	payload, err := h.preferenceAdapter.ToDTO(ctx, result)
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode preference dataset")
+	}
+	return NewResponseWithPayload(http.StatusOK, payload), nil
+}
+
+func (h *InferenceHandlers) ReadAgentRun(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers ReadAgentRun")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	runID, err := readAgentRunID(req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid agent run id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.ReadAgentTrajectory(ctx, orgID, runID)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.agentTrajectoryAdapter.ToDTO(ctx, result)
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode agent run")
 	}
 	return NewResponseWithPayload(http.StatusOK, payload), nil
 }
@@ -396,6 +486,16 @@ func readPreferenceDatasetID(req *http.Request) (uuid.UUID, error) {
 	return preferenceDatasetID, nil
 }
 
+func readAgentRunID(req *http.Request) (uuid.UUID, error) {
+	log.Trace("readAgentRunID")
+
+	runID, err := uuid.Parse(mux.Vars(req)["runId"])
+	if err != nil || runID == uuid.Nil {
+		return uuid.Nil, domain.ErrValidationFailed.Extend("run_id is invalid")
+	}
+	return runID, nil
+}
+
 func preferenceDatasetFilter(req *http.Request) (model.PreferenceDatasetFilter, error) {
 	log.Trace("preferenceDatasetFilter")
 
@@ -426,7 +526,7 @@ func mapInferenceError(err error) error {
 	if errors.Is(err, domain.ErrValidationFailed) {
 		return ErrBadRequest().Wrap(err).WithMessage(err.Error())
 	}
-	if errors.Is(err, domain.ErrModelNotFound) || errors.Is(err, domain.ErrDatasetNotFound) {
+	if errors.Is(err, domain.ErrModelNotFound) || errors.Is(err, domain.ErrDatasetNotFound) || errors.Is(err, domain.ErrAgentRunNotFound) {
 		return ErrNotFound().Wrap(err).WithMessage(err.Error())
 	}
 	if errors.Is(err, domain.ErrModelNotReady) || errors.Is(err, domain.ErrModelMismatch) || errors.Is(err, domain.ErrDatasetNotReady) {

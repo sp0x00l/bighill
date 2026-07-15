@@ -30,6 +30,7 @@ func TestRest(t *testing.T) {
 type inferenceUsecaseStub struct {
 	endpoints         []*model.PublishedEndpoint
 	preferenceDataset *model.PreferenceDataset
+	agentTrajectory   *model.AgentTrajectory
 	generateRequest   model.GenerateRequest
 	endpointID        uuid.UUID
 	feedback          *model.InferenceFeedback
@@ -49,6 +50,10 @@ func (s *inferenceUsecaseStub) RecordDatasetUpdated(context.Context, *model.Infe
 
 func (s *inferenceUsecaseStub) ReadModel(context.Context, uuid.UUID, uuid.UUID) (*model.InferenceModel, error) {
 	return nil, nil
+}
+
+func (s *inferenceUsecaseStub) PublishAgentSpec(context.Context, model.AgentSpecPublication) (*model.AgentSpec, error) {
+	return nil, s.err
 }
 
 func (s *inferenceUsecaseStub) ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error) {
@@ -157,6 +162,10 @@ func (s *inferenceUsecaseStub) BuildPreferenceDataset(context.Context, model.Pre
 	return nil, nil
 }
 
+func (s *inferenceUsecaseStub) ReadAgentTrajectory(context.Context, uuid.UUID, uuid.UUID) (*model.AgentTrajectory, error) {
+	return s.agentTrajectory, s.err
+}
+
 var _ = Describe("InferenceHandlers", func() {
 	var (
 		usecase    *inferenceUsecaseStub
@@ -183,7 +192,15 @@ var _ = Describe("InferenceHandlers", func() {
 				DisplayName:   "Support bot",
 			}},
 		}
-		handlers = NewInferenceHandlers(usecase, adapter.NewInferenceDTOAdapter(serializers.NewJSONSerializer()))
+		handlers = NewInferenceHandlers(
+			usecase,
+			adapter.NewEndpointDTOAdapter(serializers.NewJSONSerializer()),
+			adapter.NewGenerationDTOAdapter(serializers.NewJSONSerializer()),
+			adapter.NewFeedbackDTOAdapter(serializers.NewJSONSerializer()),
+			adapter.NewAgentSpecDTOAdapter(serializers.NewJSONSerializer()),
+			adapter.NewPreferenceDatasetDTOAdapter(serializers.NewJSONSerializer()),
+			adapter.NewAgentTrajectoryDTOAdapter(serializers.NewJSONSerializer()),
+		)
 	})
 
 	It("lists safe endpoint projections for the trusted org", func() {
@@ -245,6 +262,51 @@ var _ = Describe("InferenceHandlers", func() {
 		Expect(usecase.feedback.RequestID).To(Equal(targetRequestID))
 		Expect(usecase.feedback.UserID).To(Equal(userID))
 		Expect(usecase.feedback.OrgID).To(Equal(orgID))
+	})
+
+	It("reads an agent run trajectory for the trusted org", func() {
+		runID := uuid.New()
+		stepID := uuid.New()
+		usecase.agentTrajectory = &model.AgentTrajectory{
+			Run: &model.AgentRun{
+				RunID:                   runID,
+				UserID:                  userID,
+				OrgID:                   orgID,
+				EndpointID:              endpointID,
+				AgentSpecHash:           "spec-hash",
+				ModelVersion:            2,
+				ToolsetHash:             "toolset-hash",
+				RubricVersion:           "rubric-v1",
+				TrajectorySchemaVersion: "trajectory-v1",
+				SystemTemplateVersion:   "template-v1",
+				DecodingParams:          []byte(`{"temperature":0}`),
+				Status:                  model.AgentRunStatusCompleted,
+				StopReason:              model.AgentStopReasonFinalAnswer,
+				TrainingEligibility:     model.AgentTrainingEligibilityTenantOnly,
+			},
+			Steps: []*model.AgentStep{{
+				StepID:               stepID,
+				RunID:                runID,
+				OrgID:                orgID,
+				StepIndex:            0,
+				PresentedToolSchemas: []byte(`[]`),
+				GenerationResult:     []byte(`{"content":"answer"}`),
+				FinishReason:         model.GenerationFinishReasonStop,
+			}},
+		}
+		req := requestWithAuth(http.MethodGet, "/v1/inference/agent-runs/"+runID.String(), "", userID, orgID, uuid.Nil)
+		req = mux.SetURLVars(req, map[string]string{"runId": runID.String()})
+
+		res, err := handlers.ReadAgentRun(context.Background(), req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusOK))
+		var dto adapter.AgentTrajectoryDTO
+		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
+		Expect(dto.Run.RunID).To(Equal(runID.String()))
+		Expect(dto.Run.AgentSpecHash).To(Equal("spec-hash"))
+		Expect(dto.Steps).To(HaveLen(1))
+		Expect(dto.Steps[0].StepID).To(Equal(stepID.String()))
 	})
 
 	It("maps domain errors to HTTP status codes", func() {

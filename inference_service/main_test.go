@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"inference_service/pkg/domain/model"
+	inferencetools "inference_service/pkg/infra/tools"
 	env "lib/shared_lib/env"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -66,6 +67,10 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_HTTP_IDLE_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_ADDRESS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_ADDRESS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_DIAL_TIMEOUT_MS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_CALL_TIMEOUT_MS")).To(Succeed())
+		Expect(os.Unsetenv("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_RETRY_COUNT")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_BASE_GROUP_ID")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS")).To(Succeed())
@@ -102,6 +107,7 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.Topics.DataRegistry).To(Equal("data_registry"))
 		Expect(cfg.TenantTopic).To(Equal("tenant"))
 		Expect(cfg.FeatureMaterializer.Address).To(Equal("localhost:7072"))
+		Expect(cfg.ToolService.Address).To(BeEmpty())
 		Expect(cfg.Reranker.Provider).To(Equal("tei"))
 		Expect(cfg.Reranker.URL).To(Equal("http://tei.local"))
 		Expect(cfg.Reranker.Model).To(Equal("bge-reranker"))
@@ -230,6 +236,10 @@ var _ = Describe("runtime ML provider validation", func() {
 				WriteTimeout: 2 * time.Second,
 				IdleTimeout:  time.Second,
 			},
+			Agent: agentConfig{
+				MaxStepsCap:    3,
+				TokenBudgetCap: 512,
+			},
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -246,6 +256,10 @@ var _ = Describe("runtime ML provider validation", func() {
 				ReadTimeout:  time.Second,
 				WriteTimeout: 2 * time.Second,
 				IdleTimeout:  time.Second,
+			},
+			Agent: agentConfig{
+				MaxStepsCap:    3,
+				TokenBudgetCap: 512,
 			},
 		})
 
@@ -272,6 +286,12 @@ var _ = Describe("runtime ML provider validation", func() {
 		}, generationConfig{RequestTimeout: 60 * time.Second})
 
 		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_HTTP_WRITE_TIMEOUT_SECONDS must be greater than INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")))
+	})
+
+	It("rejects incomplete tool service grpc configuration when enabled", func() {
+		err := validateToolServiceConfig(inferencetools.ToolServiceClientConfig{Address: "tool-service:7084"})
+
+		Expect(err).To(MatchError(ContainSubstring("tool service grpc dial timeout must be greater than zero")))
 	})
 })
 

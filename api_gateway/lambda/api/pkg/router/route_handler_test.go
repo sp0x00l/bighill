@@ -345,6 +345,8 @@ var _ = Describe("NewRouter", func() {
 			responseWithBody(http.StatusCreated, `{"preference_dataset_id":"pref-1"}`),
 			responseWithBody(http.StatusOK, `{"resources":[]}`),
 			responseWithBody(http.StatusOK, `{"preference_dataset_id":"pref-1"}`),
+			responseWithBody(http.StatusCreated, `{"content_hash":"hash-1"}`),
+			responseWithBody(http.StatusOK, `{"run":{}}`),
 		}
 		handler := testRouter(client)
 
@@ -412,6 +414,31 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(preferenceReadResp.StatusCode).To(Equal(http.StatusOK))
 
+		agentSpecResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodPost,
+			Path:           "/v1/private/inference/agent-specs",
+			Body:           `{"schema_version":"agent_spec_v1"}`,
+			RequestContext: authorizerContext(authz.PermissionModelWrite),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(agentSpecResp.StatusCode).To(Equal(http.StatusCreated))
+
+		agentRunResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodGet,
+			Path:           "/v1/private/inference/agent-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			RequestContext: authorizerContext(authz.PermissionInferenceEndpointsRead),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(agentRunResp.StatusCode).To(Equal(http.StatusOK))
+
+		agentRunInvokeOnlyResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodGet,
+			Path:           "/v1/private/inference/agent-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			RequestContext: authorizerContext(authz.PermissionInferenceInvoke),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(agentRunInvokeOnlyResp.StatusCode).To(Equal(http.StatusForbidden))
+
 		deniedResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod:     http.MethodPost,
 			Path:           "/v1/private/training-runs",
@@ -421,7 +448,7 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(deniedResp.StatusCode).To(Equal(http.StatusForbidden))
 
-		Expect(client.requests).To(HaveLen(6))
+		Expect(client.requests).To(HaveLen(8))
 		Expect(client.requests[0].url).To(Equal("http://inference.service/v1/inference/endpoints"))
 		Expect(client.requests[0].headers.Get(testUserHeader)).To(Equal("user-123"))
 		Expect(client.requests[0].headers.Get(testOrgHeader)).To(Equal("org-789"))
@@ -436,6 +463,9 @@ var _ = Describe("NewRouter", func() {
 		Expect(client.requests[3].headers.Get("X-Request-ID")).To(Equal("request-4"))
 		Expect(client.requests[4].url).To(Equal("http://inference.service/v1/inference/preference-datasets?model_id=2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
 		Expect(client.requests[5].url).To(Equal("http://inference.service/v1/inference/preference-datasets/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[6].url).To(Equal("http://inference.service/v1/inference/agent-specs"))
+		Expect(client.requests[6].body).To(Equal(`{"schema_version":"agent_spec_v1"}`))
+		Expect(client.requests[7].url).To(Equal("http://inference.service/v1/inference/agent-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
 	})
 
 	It("requires model write permission to build preference datasets", func() {

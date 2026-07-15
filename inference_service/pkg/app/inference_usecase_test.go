@@ -163,20 +163,26 @@ func (s *rerankerStub) Rerank(_ context.Context, query string, candidates []mode
 }
 
 type generationAdapterStub struct {
-	request model.GenerationRequest
-	answer  string
-	err     error
+	request   model.GenerationRequest
+	requests  []model.GenerationRequest
+	answer    string
+	toolCalls []model.ToolCall
+	err       error
 }
 
-func (s *generationAdapterStub) Generate(_ context.Context, request model.GenerationRequest) (string, error) {
+func (s *generationAdapterStub) Generate(_ context.Context, request model.GenerationRequest) (model.GenerationResult, error) {
 	s.request = request
+	s.requests = append(s.requests, request)
 	if s.err != nil {
-		return "", s.err
+		return model.GenerationResult{}, s.err
+	}
+	if len(request.Tools) > 0 && len(s.toolCalls) > 0 {
+		return model.GenerationResult{ToolCalls: s.toolCalls, FinishReason: model.GenerationFinishReasonToolCalls}, nil
 	}
 	if s.answer != "" {
-		return s.answer, nil
+		return model.GenerationResult{Content: s.answer, FinishReason: model.GenerationFinishReasonStop}, nil
 	}
-	return "generated answer", nil
+	return model.GenerationResult{Content: "generated answer", FinishReason: model.GenerationFinishReasonStop}, nil
 }
 
 type modelServingLoadTriggerStub struct {
@@ -201,6 +207,149 @@ type inferenceRequestRepositoryStub struct {
 func (s *inferenceRequestRepositoryStub) RecordInferenceRequest(_ context.Context, request *model.InferenceRequest) error {
 	s.request = request
 	return s.err
+}
+
+type capabilityReportRepositoryStub struct {
+	report   *model.CapabilityReport
+	recorded *model.CapabilityReport
+	readErr  error
+	err      error
+}
+
+func (s *capabilityReportRepositoryStub) RecordCapabilityReport(_ context.Context, report *model.CapabilityReport) (*model.CapabilityReport, error) {
+	s.recorded = report
+	if s.err != nil {
+		return nil, s.err
+	}
+	return report, nil
+}
+
+func (s *capabilityReportRepositoryStub) ReadCapabilityReportForModel(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID) (*model.CapabilityReport, error) {
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.report != nil {
+		return s.report, nil
+	}
+	return &model.CapabilityReport{SupportsToolCalls: true}, nil
+}
+
+type agentSpecRepositoryStub struct {
+	upserted *model.AgentSpec
+	spec     *model.AgentSpec
+	err      error
+}
+
+type agentTrajectoryRepositoryStub struct {
+	runs        []*model.AgentRun
+	steps       []*model.AgentStep
+	invocations []*model.AgentToolInvocation
+	err         error
+}
+
+func (s *agentTrajectoryRepositoryStub) RecordAgentRun(_ context.Context, run *model.AgentRun) (*model.AgentRun, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	recorded := *run
+	if recorded.RunID == uuid.Nil {
+		recorded.RunID = uuid.New()
+	}
+	if recorded.StartedAt.IsZero() {
+		recorded.StartedAt = time.Now().UTC()
+	}
+	s.runs = append(s.runs, &recorded)
+	return &recorded, nil
+}
+
+func (s *agentTrajectoryRepositoryStub) RecordAgentStep(_ context.Context, step *model.AgentStep) (*model.AgentStep, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	recorded := *step
+	if recorded.StepID == uuid.Nil {
+		recorded.StepID = uuid.New()
+	}
+	if recorded.CreatedAt.IsZero() {
+		recorded.CreatedAt = time.Now().UTC()
+	}
+	s.steps = append(s.steps, &recorded)
+	return &recorded, nil
+}
+
+func (s *agentTrajectoryRepositoryStub) RecordToolInvocation(_ context.Context, invocation *model.AgentToolInvocation) (*model.AgentToolInvocation, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	recorded := *invocation
+	if recorded.InvocationID == uuid.Nil {
+		recorded.InvocationID = uuid.New()
+	}
+	if recorded.CreatedAt.IsZero() {
+		recorded.CreatedAt = time.Now().UTC()
+	}
+	s.invocations = append(s.invocations, &recorded)
+	return &recorded, nil
+}
+
+func (s *agentTrajectoryRepositoryStub) ReadAgentTrajectory(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*model.AgentTrajectory, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &model.AgentTrajectory{}, nil
+}
+
+type toolInvokerStub struct {
+	tools  []model.ToolSpec
+	result model.ToolResult
+	err    error
+}
+
+func (s *toolInvokerStub) Available(_ context.Context, _ *model.AgentSession, bindings []model.ToolBinding) ([]model.ToolSpec, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if len(bindings) == 0 {
+		return s.tools, nil
+	}
+	available := map[string]struct{}{}
+	for _, tool := range s.tools {
+		available[tool.Name] = struct{}{}
+	}
+	for _, binding := range bindings {
+		if _, ok := available[binding.Name]; !ok {
+			return nil, domain.ErrValidationFailed.Extend("agent spec references unavailable tool " + binding.Name)
+		}
+	}
+	return s.tools, s.err
+}
+
+func (s *toolInvokerStub) Invoke(_ context.Context, _ *model.AgentSession, call model.ToolCall) (model.ToolResult, error) {
+	if s.result.CallID == "" {
+		s.result.CallID = call.ID
+	}
+	if s.result.Name == "" {
+		s.result.Name = call.Name
+	}
+	return s.result, s.err
+}
+
+func (s *agentSpecRepositoryStub) UpsertAgentSpec(_ context.Context, spec *model.AgentSpec) (*model.AgentSpec, error) {
+	s.upserted = spec
+	if s.err != nil {
+		return nil, s.err
+	}
+	return spec, nil
+}
+
+func (s *agentSpecRepositoryStub) ReadAgentSpecByHash(_ context.Context, _ uuid.UUID, _ string) (*model.AgentSpec, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.spec, nil
 }
 
 type publishedEndpointRepositoryStub struct {
@@ -378,9 +527,11 @@ var _ = Describe("InferenceUsecase", func() {
 	It("records a complete model update", func() {
 		repository := &inferenceModelRepositoryStub{}
 		endpointRepository := &publishedEndpointRepositoryStub{}
+		capabilityRepository := &capabilityReportRepositoryStub{}
 		uc := app.NewInferenceUsecase(
 			repository,
 			app.WithPublishedEndpointRepository(endpointRepository),
+			app.WithCapabilityReportRepository(capabilityRepository),
 		)
 		idempotencyKey := uuid.New()
 		inferenceModel := validInferenceModel()
@@ -395,11 +546,286 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(endpointRepository.upserted.ModelID).To(Equal(inferenceModel.ModelID))
 		Expect(endpointRepository.upserted.DatasetIDs).To(Equal([]uuid.UUID{inferenceModel.DatasetID}))
 		Expect(endpointRepository.upserted.Status).To(Equal(model.PublishedEndpointStatusReady))
+		Expect(capabilityRepository.recorded).To(BeNil())
+	})
+
+	It("does not fabricate an effective base id when the model projection has none", func() {
+		repository := &inferenceModelRepositoryStub{}
+		capabilityRepository := &capabilityReportRepositoryStub{}
+		uc := app.NewInferenceUsecase(
+			repository,
+			app.WithCapabilityReportRepository(capabilityRepository),
+		)
+		inferenceModel := validInferenceModel()
+		inferenceModel.EffectiveBaseID = uuid.Nil
+		inferenceModel.DatasetID = uuid.Nil
+
+		_, err := uc.RecordModelUpdated(context.Background(), inferenceModel, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(capabilityRepository.recorded).To(BeNil())
+	})
+
+	It("does not run live capability probes or fail model updates when capability projection fails", func() {
+		repository := &inferenceModelRepositoryStub{}
+		endpointRepository := &publishedEndpointRepositoryStub{}
+		capabilityRepository := &capabilityReportRepositoryStub{err: errors.New("capability database unavailable")}
+		generator := &generationAdapterStub{answer: "ok", toolCalls: []model.ToolCall{{
+			ID:        "probe-call",
+			Name:      "capability_probe",
+			Arguments: []byte(`{}`),
+		}}}
+		uc := app.NewInferenceUsecase(
+			repository,
+			app.WithPublishedEndpointRepository(endpointRepository),
+			app.WithCapabilityReportRepository(capabilityRepository),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:       "search_knowledge",
+				Parameters: []byte(`{"type":"object"}`),
+			}}}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
+		)
+
+		recorded, err := uc.RecordModelUpdated(context.Background(), validInferenceModel(), uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recorded).NotTo(BeNil())
+		Expect(generator.requests).To(BeEmpty())
+		Expect(capabilityRepository.recorded).To(BeNil())
+	})
+
+	It("lazily probes and records model capability when publishing a tool-using agent spec", func() {
+		inferenceModel := validInferenceModel()
+		agentSpecRepository := &agentSpecRepositoryStub{}
+		capabilityRepository := &capabilityReportRepositoryStub{
+			report: &model.CapabilityReport{SupportsToolCalls: false},
+		}
+		generator := &generationAdapterStub{answer: "ok", toolCalls: []model.ToolCall{{
+			ID:        "probe-call",
+			Name:      "capability_probe",
+			Arguments: []byte(`{}`),
+		}}}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithAgentSpecRepository(agentSpecRepository),
+			app.WithCapabilityReportRepository(capabilityRepository),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:       "search_knowledge",
+				Parameters: []byte(`{"type":"object"}`),
+			}}}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
+		)
+
+		spec, err := uc.PublishAgentSpec(context.Background(), model.AgentSpecPublication{
+			UserID: inferenceModel.UserID,
+			OrgID:  inferenceModel.OrgID,
+			Spec:   validToolUsingAgentSpec(inferenceModel),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec).To(Equal(agentSpecRepository.upserted))
+		Expect(capabilityRepository.recorded).NotTo(BeNil())
+		Expect(capabilityRepository.recorded.SupportsToolCalls).To(BeTrue())
+		Expect(generator.requests).To(HaveLen(3))
+		Expect(generator.requests).To(ContainElement(SatisfyAll(
+			HaveField("ToolChoice", "required"),
+			HaveField("Tools", HaveLen(1)),
+		)))
+	})
+
+	It("rejects tool-using agent specs when the capability report lacks tool-call support", func() {
+		inferenceModel := validInferenceModel()
+		agentSpecRepository := &agentSpecRepositoryStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithAgentSpecRepository(agentSpecRepository),
+			app.WithCapabilityReportRepository(&capabilityReportRepositoryStub{
+				report: &model.CapabilityReport{SupportsToolCalls: false},
+			}),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:       "search_knowledge",
+				Parameters: []byte(`{"type":"object"}`),
+			}}}),
+		)
+
+		_, err := uc.PublishAgentSpec(context.Background(), model.AgentSpecPublication{
+			UserID: inferenceModel.UserID,
+			OrgID:  inferenceModel.OrgID,
+			Spec:   validToolUsingAgentSpec(inferenceModel),
+		})
+
+		Expect(errors.Is(err, domain.ErrModelNotReady)).To(BeTrue())
+		Expect(agentSpecRepository.upserted).To(BeNil())
+	})
+
+	It("rejects publishing a spec whose tool is not available to the org", func() {
+		inferenceModel := validInferenceModel()
+		agentSpecRepository := &agentSpecRepositoryStub{}
+		spec := validToolUsingAgentSpec(inferenceModel)
+		spec.ToolBindings = []model.ToolBinding{{
+			Name:       "write_database",
+			Required:   true,
+			ToolChoice: "required",
+			Config:     []byte(`{}`),
+		}}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithAgentSpecRepository(agentSpecRepository),
+			app.WithCapabilityReportRepository(&capabilityReportRepositoryStub{
+				report: &model.CapabilityReport{SupportsToolCalls: true},
+			}),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:       "search_knowledge",
+				Parameters: []byte(`{"type":"object"}`),
+			}}}),
+		)
+
+		_, err := uc.PublishAgentSpec(context.Background(), model.AgentSpecPublication{
+			UserID: inferenceModel.UserID,
+			OrgID:  inferenceModel.OrgID,
+			Spec:   spec,
+		})
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(agentSpecRepository.upserted).To(BeNil())
+	})
+
+	It("enforces agent token budget even when the backend omits usage", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		spec := validToolUsingAgentSpec(inferenceModel)
+		spec.ToolBindings = nil
+		spec.SystemPrompt = ""
+		spec.Budgets.Token = 15
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: spec.ContentHash,
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		generator := &generationAdapterStub{answer: "this answer has no backend usage block but it is not free"}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "please spend some tokens",
+			TopK:      2,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(response).To(BeNil())
+		Expect(trajectoryRepository.runs).NotTo(BeEmpty())
+		terminal := trajectoryRepository.runs[len(trajectoryRepository.runs)-1]
+		Expect(terminal.Status).To(Equal(model.AgentRunStatusFailed))
+		Expect(terminal.StopReason).To(Equal(model.AgentStopReasonBudget))
+		Expect(terminal.TotalTokens).To(BeNumerically(">", 0))
+	})
+
+	It("marks the agent run failed when a tool invocation fails", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		spec := validToolUsingAgentSpec(inferenceModel)
+		spec.ToolBindings = []model.ToolBinding{{
+			Name:       "http_get",
+			Required:   true,
+			ToolChoice: "required",
+			Config:     []byte(`{}`),
+		}}
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: spec.ContentHash,
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		requestRepository := &inferenceRequestRepositoryStub{}
+		generator := &generationAdapterStub{toolCalls: []model.ToolCall{{
+			ID:        "call-http",
+			Name:      "http_get",
+			Arguments: []byte(`{"url":"https://example.com"}`),
+		}}}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{
+				tools: []model.ToolSpec{{
+					Name:       "http_get",
+					Parameters: []byte(`{"type":"object"}`),
+				}},
+				result: model.ToolResult{
+					Content:         `{"status":500}`,
+					IsError:         true,
+					ErrorType:       model.ToolErrorTypeTransient,
+					ToolImplVersion: "http_get:test",
+				},
+			}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "fetch the tool",
+			TopK:      2,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(response).To(BeNil())
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
+		Expect(trajectoryRepository.invocations).To(HaveLen(1))
+		Expect(trajectoryRepository.invocations[0].ErrorType).To(Equal(model.ToolErrorTypeTransient))
+		terminal := trajectoryRepository.runs[len(trajectoryRepository.runs)-1]
+		Expect(terminal.Status).To(Equal(model.AgentRunStatusFailed))
+		Expect(terminal.StopReason).To(Equal(model.AgentStopReasonToolError))
 	})
 
 	It("does not grant system context when a model update is missing actor and org", func() {
 		repository := &inferenceModelRepositoryStub{}
-		uc := app.NewInferenceUsecase(repository)
+		uc := app.NewInferenceUsecase(repository, app.WithCapabilityReportRepository(&capabilityReportRepositoryStub{}))
 		inferenceModel := validInferenceModel()
 		inferenceModel.UserID = uuid.Nil
 		inferenceModel.OrgID = uuid.Nil
@@ -1804,6 +2230,7 @@ func withRerankScore(context model.RetrievedContext, score float64) model.Retrie
 func validInferenceModel() *model.InferenceModel {
 	return &model.InferenceModel{
 		ModelID:           uuid.New(),
+		EffectiveBaseID:   uuid.New(),
 		UserID:            uuid.New(),
 		OrgID:             uuid.New(),
 		TrainingRunID:     uuid.New(),
@@ -1825,6 +2252,36 @@ func validInferenceModel() *model.InferenceModel {
 		ServingLoadStatus: model.ModelLoadStatusLoaded,
 		MetricsMetadata:   "{}",
 		Status:            model.ModelStatusReady,
+	}
+}
+
+func validToolUsingAgentSpec(inferenceModel *model.InferenceModel) *model.AgentSpec {
+	return &model.AgentSpec{
+		OrgID:            inferenceModel.OrgID,
+		AgentLineage:     "support-agent",
+		SystemPrompt:     "Use the available tools before answering.",
+		SourceYAML:       "schema_version: agent_spec_v1",
+		CanonicalJSON:    []byte(`{"schema_version":"agent_spec_v1"}`),
+		SchemaVersion:    "agent_spec_v1",
+		ContentHash:      "sha256:agent-spec",
+		ValidationReport: "schema:passed;policy:passed",
+		ModelID:          inferenceModel.ModelID,
+		EffectiveBaseID:  inferenceModel.EffectiveBaseID,
+		ToolBindings: []model.ToolBinding{{
+			Name:       "search_knowledge",
+			Required:   true,
+			ToolChoice: "required",
+			Config:     []byte(`{}`),
+		}},
+		RetrievalConfig: []byte(`{}`),
+		Budgets: model.AgentBudgets{
+			MaxSteps: 3,
+			Token:    128,
+		},
+		StopConditions: []byte(`{}`),
+		Guardrails:     []byte(`{}`),
+		RuntimeMode:    model.AgentRuntimeModeInteractive,
+		Status:         model.AgentSpecStatusValidated,
 	}
 }
 

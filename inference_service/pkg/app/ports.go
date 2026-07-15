@@ -5,6 +5,7 @@ import (
 
 	"inference_service/pkg/domain/model"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -27,8 +28,34 @@ type PublishedEndpointRepository interface {
 	ReadEndpoint(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID) (*model.PublishedEndpoint, error)
 }
 
+type AgentSpecRepository interface {
+	UpsertAgentSpec(ctx context.Context, spec *model.AgentSpec) (*model.AgentSpec, error)
+	ReadAgentSpecByHash(ctx context.Context, orgID uuid.UUID, contentHash string) (*model.AgentSpec, error)
+}
+
+type CapabilityReportRepository interface {
+	RecordCapabilityReport(ctx context.Context, report *model.CapabilityReport) (*model.CapabilityReport, error)
+	ReadCapabilityReportForModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID, effectiveBaseID uuid.UUID) (*model.CapabilityReport, error)
+}
+
 type InferenceRequestRepository interface {
 	RecordInferenceRequest(ctx context.Context, request *model.InferenceRequest) error
+}
+
+type AgentTrajectoryRepository interface {
+	RecordAgentRun(ctx context.Context, run *model.AgentRun) (*model.AgentRun, error)
+	RecordAgentStep(ctx context.Context, step *model.AgentStep) (*model.AgentStep, error)
+	RecordToolInvocation(ctx context.Context, invocation *model.AgentToolInvocation) (*model.AgentToolInvocation, error)
+	ReadAgentTrajectory(ctx context.Context, orgID uuid.UUID, runID uuid.UUID) (*model.AgentTrajectory, error)
+}
+
+type UserEventPublisher interface {
+	Publish(ctx context.Context, event userevents.Event) error
+}
+
+type ToolInvoker interface {
+	Available(ctx context.Context, session *model.AgentSession, bindings []model.ToolBinding) ([]model.ToolSpec, error)
+	Invoke(ctx context.Context, session *model.AgentSession, call model.ToolCall) (model.ToolResult, error)
 }
 
 type InferenceFeedbackRepository interface {
@@ -75,7 +102,7 @@ type PromptBuilder interface {
 }
 
 type GenerationAdapter interface {
-	Generate(ctx context.Context, request model.GenerationRequest) (string, error)
+	Generate(ctx context.Context, request model.GenerationRequest) (model.GenerationResult, error)
 }
 
 type ModelServingLoadTrigger interface {

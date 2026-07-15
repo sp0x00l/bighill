@@ -37,7 +37,7 @@ var _ = Describe("HTTPGenerator", func() {
 			Expect(json.NewDecoder(r.Body).Decode(&received)).To(Succeed())
 		})
 
-		answer, err := generator.Generate(context.Background(), model.GenerationRequest{
+		result, err := generator.Generate(context.Background(), model.GenerationRequest{
 			Query:  "question",
 			Prompt: "prompt text",
 			Model: &model.InferenceModel{
@@ -47,7 +47,7 @@ var _ = Describe("HTTPGenerator", func() {
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(answer).To(Equal("generated from ollama"))
+		Expect(result.Content).To(Equal("generated from ollama"))
 		Expect(received.Model).To(Equal("local-test-model:latest"))
 		Expect(received.Prompt).To(Equal("prompt text"))
 		Expect(received.Stream).To(BeFalse())
@@ -107,7 +107,7 @@ var _ = Describe("HTTPGenerator", func() {
 			Expect(json.NewDecoder(r.Body).Decode(&received)).To(Succeed())
 		})
 
-		answer, err := generator.Generate(context.Background(), model.GenerationRequest{
+		result, err := generator.Generate(context.Background(), model.GenerationRequest{
 			Query:  "question",
 			Prompt: "prompt text",
 			Model: &model.InferenceModel{
@@ -117,7 +117,7 @@ var _ = Describe("HTTPGenerator", func() {
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(answer).To(Equal("generated from vllm"))
+		Expect(result.Content).To(Equal("generated from vllm"))
 		Expect(received.Model).To(Equal("movie-ranker-lora"))
 		Expect(received.Messages).To(HaveLen(1))
 		Expect(received.Messages[0].Role).To(Equal("user"))
@@ -133,7 +133,7 @@ var _ = Describe("HTTPGenerator", func() {
 			Expect(r.URL.Path).To(Equal("/v1/chat/completions"))
 		})
 
-		answer, err := generator.Generate(context.Background(), model.GenerationRequest{
+		result, err := generator.Generate(context.Background(), model.GenerationRequest{
 			Query:  "question",
 			Prompt: "prompt text",
 			Model: &model.InferenceModel{
@@ -143,7 +143,7 @@ var _ = Describe("HTTPGenerator", func() {
 		})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(answer).To(Equal("generated from served model"))
+		Expect(result.Content).To(Equal("generated from served model"))
 	})
 })
 

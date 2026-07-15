@@ -46,7 +46,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 
 		modelID := uploadBaseModelThroughIngestion(user, datasetID)
 		selectedModel := assertModelSelectable(user, modelID, "UPLOAD", "rag-e2e-uploaded-base")
-		endpointID := waitForPublishedEndpoint(user.Token, "rag-e2e-uploaded-base")
+		endpointID := publishRAGEndpoint(user, modelID, datasetID, "rag-e2e-uploaded-base")
 
 		requestID := uuid.New()
 		generation := waitForEndpointRAGGeneration(user.Token, endpointID, requestID, "What phrase identifies the embedded knowledge base?")
@@ -139,7 +139,7 @@ var _ = Describe("RAG inference workflow", Ordered, func() {
 
 		modelID := uploadBaseModelThroughIngestion(user, datasetID)
 		selectedModel := assertModelSelectable(user, modelID, "UPLOAD", "rag-e2e-uploaded-base")
-		endpointID := waitForPublishedEndpoint(user.Token, "rag-e2e-uploaded-base")
+		endpointID := publishRAGEndpoint(user, modelID, datasetID, "rag-e2e-uploaded-base")
 
 		response := waitForEndpointRAGGeneration(user.Token, endpointID, uuid.New(), "Which phrase proves the uploaded base model can serve RAG?")
 
@@ -356,6 +356,24 @@ func waitForEndpointRAGGeneration(token string, endpointID uuid.UUID, requestID 
 		return true
 	}, ragE2EGenerateWaitTimeout, 1*time.Second).Should(BeTrue(), "endpoint generation failed: %v", lastErr)
 	return response
+}
+
+func publishRAGEndpoint(user profileTestUser, modelID uuid.UUID, datasetID string, displayName string) uuid.UUID {
+	status, body := doJSON(http.MethodPost, "/v1/private/inference/endpoints", map[string]any{
+		"model_id":       modelID.String(),
+		"dataset_ids":    []string{datasetID},
+		"display_name":   displayName,
+		"mode":           "rag",
+		"merge_strategy": "reranker",
+	}, user.Token, uuid.New())
+	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
+	endpoint := decodeSingleObject(body)
+	Expect(endpoint["display_name"]).To(Equal(displayName))
+	Expect(endpoint["status"]).To(Equal("ready"))
+	Expect(endpoint["mode"]).To(Equal("rag"))
+	endpointID, err := uuid.Parse(stringField(endpoint, "endpoint_id"))
+	Expect(err).NotTo(HaveOccurred())
+	return endpointID
 }
 
 func expectRAGVerificationContextObject(response map[string]any) {

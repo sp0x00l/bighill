@@ -13,7 +13,7 @@ import (
 )
 
 type QueryGenerator interface {
-	Generate(ctx context.Context, request model.GenerationRequest) (string, error)
+	Generate(ctx context.Context, request model.GenerationRequest) (model.GenerationResult, error)
 }
 
 type SelfQueryTransformer struct {
@@ -45,7 +45,7 @@ func (t *SelfQueryTransformer) TransformQuery(ctx context.Context, request model
 		return nil, fmt.Errorf("query transformer serving protocol %q is not supported", protocol)
 	}
 	prompt := selfQueryPrompt(request)
-	raw, err := generator.Generate(ctx, model.GenerationRequest{
+	result, err := generator.Generate(ctx, model.GenerationRequest{
 		RequestID: request.RequestID,
 		Query:     request.QueryText,
 		Prompt:    prompt,
@@ -55,7 +55,7 @@ func (t *SelfQueryTransformer) TransformQuery(ctx context.Context, request model
 		return nil, err
 	}
 	var parsed selfQueryResponse
-	if err := json.Unmarshal([]byte(extractJSONObject(raw)), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(extractJSONObject(result.Content)), &parsed); err != nil {
 		return nil, fmt.Errorf("decode self-query response: %w", err)
 	}
 	query := strings.TrimSpace(parsed.Query)

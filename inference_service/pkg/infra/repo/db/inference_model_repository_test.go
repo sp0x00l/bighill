@@ -26,10 +26,11 @@ func TestInferenceRepository(t *testing.T) {
 }
 
 type connectionPoolStub struct {
-	nextRows     []pgx.Row
-	nextQueryErr error
-	nextExecErr  error
-	execTag      pgconn.CommandTag
+	nextRows      []pgx.Row
+	nextQueryRows []pgx.Rows
+	nextQueryErr  error
+	nextExecErr   error
+	execTag       pgconn.CommandTag
 
 	queryRowCalled bool
 	queryCalled    bool
@@ -65,7 +66,12 @@ func (p *connectionPoolStub) Query(_ context.Context, sql string, args ...any) (
 	if p.nextQueryErr != nil {
 		return nil, p.nextQueryErr
 	}
-	return nil, nil
+	if len(p.nextQueryRows) == 0 {
+		return &repositoryRows{}, nil
+	}
+	rows := p.nextQueryRows[0]
+	p.nextQueryRows = p.nextQueryRows[1:]
+	return rows, nil
 }
 
 func (p *connectionPoolStub) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -144,6 +150,65 @@ func (p *connectionPoolStub) capture(sql string, args ...any) {
 type repositoryRow struct {
 	values []any
 	err    error
+}
+
+type repositoryRows struct {
+	rows   [][]any
+	index  int
+	closed bool
+	err    error
+}
+
+func (r *repositoryRows) Close() {
+	r.closed = true
+}
+
+func (r *repositoryRows) Err() error {
+	return r.err
+}
+
+func (r *repositoryRows) CommandTag() pgconn.CommandTag {
+	return pgconn.NewCommandTag("SELECT")
+}
+
+func (r *repositoryRows) FieldDescriptions() []pgconn.FieldDescription {
+	return nil
+}
+
+func (r *repositoryRows) Next() bool {
+	if r.index >= len(r.rows) {
+		r.closed = true
+		return false
+	}
+	r.index++
+	return true
+}
+
+func (r *repositoryRows) Scan(dest ...any) error {
+	if r.index == 0 || r.index > len(r.rows) {
+		return errors.New("repository rows scan before next")
+	}
+	values := r.rows[r.index-1]
+	Expect(dest).To(HaveLen(len(values)))
+	for i, value := range values {
+		assignScanValue(dest[i], value)
+	}
+	return nil
+}
+
+func (r *repositoryRows) Values() ([]any, error) {
+	if r.index == 0 || r.index > len(r.rows) {
+		return nil, errors.New("repository rows values before next")
+	}
+	return r.rows[r.index-1], nil
+}
+
+func (r *repositoryRows) RawValues() [][]byte {
+	return nil
+}
+
+func (r *repositoryRows) Conn() *pgx.Conn {
+	return nil
 }
 
 func (r *repositoryRow) Scan(dest ...any) error {

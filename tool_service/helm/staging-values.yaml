@@ -1,0 +1,8 @@
+replicaCount: 1
+image:
+  repository: "tool-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+env:
+  environment: "staging"
+  httpToolAllowedHosts: ""

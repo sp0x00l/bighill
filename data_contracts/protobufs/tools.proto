@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package tools;
+
+option go_package = "lib/data_contracts_lib/tools";
+
+service ToolService {
+  rpc ListAvailableTools(ListAvailableToolsRequest) returns (ListAvailableToolsResponse);
+  rpc Invoke(InvokeToolRequest) returns (InvokeToolResponse);
+}
+
+message ListAvailableToolsRequest {
+  string org_id = 1;
+  string user_id = 2;
+}
+
+message ListAvailableToolsResponse {
+  repeated ToolDefinition tools = 1;
+}
+
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  bytes parameters_json = 3;
+  string implementation_version = 4;
+}
+
+message InvokeToolRequest {
+  string tool_name = 1;
+  bytes arguments_json = 2;
+  string org_id = 3;
+  string user_id = 4;
+  string trace_id = 5;
+  string invocation_id = 6;
+}
+
+message InvokeToolResponse {
+  bytes result_json = 1;
+  bool is_error = 2;
+  string error_code = 3;
+  string error_message = 4;
+  string implementation_version = 5;
+  int64 latency_ms = 6;
+  string error_type = 7;
+}

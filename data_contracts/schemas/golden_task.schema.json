@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bighill.ai/schemas/golden_task.schema.json",
+  "title": "BigHill Golden Task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agent_lineage",
+    "split",
+    "split_version",
+    "input_hash",
+    "normalized_prompt_hash",
+    "content_fingerprint",
+    "expected_answer_rubric_id",
+    "labels_hash"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "agent_lineage": { "type": "string", "minLength": 1 },
+    "split": {
+      "type": "string",
+      "enum": ["seed_train", "dev_eval", "promotion_holdout"]
+    },
+    "split_version": { "type": "integer", "minimum": 1 },
+    "group_key": { "type": "string", "default": "" },
+    "input_hash": { "type": "string", "minLength": 1 },
+    "normalized_prompt_hash": { "type": "string", "minLength": 1 },
+    "content_fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["sha256", "simhash", "minhash", "embedding"]
+        },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    },
+    "expected_tool_plan_hash": { "type": "string", "default": "" },
+    "expected_answer_rubric_id": { "type": "string", "minLength": 1 },
+    "labels_hash": { "type": "string", "minLength": 1 },
+    "source_task_lineage": { "type": "string", "default": "" }
+  }
+}

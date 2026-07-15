@@ -106,7 +106,7 @@ func topicList(raw string) []string {
 }
 
 func newKafkaAssertsSubscriber(ctx context.Context, topics []string) (msgConn.Subscriber, func(), context.CancelFunc) {
-	return newKafkaAssertsSubscriberWithOffset(ctx, topics, "")
+	return newKafkaAssertsSubscriberWithOffset(ctx, topics, "earliest")
 }
 
 func newKafkaAssertsSubscriberWithOffset(ctx context.Context, topics []string, autoOffsetReset string) (msgConn.Subscriber, func(), context.CancelFunc) {
@@ -119,6 +119,8 @@ func newKafkaAssertsSubscriberWithOffset(ctx context.Context, topics []string, a
 		GroupID:         groupID,
 		Brokers:         brokers,
 		AutoOffsetReset: autoOffsetReset,
+		NumShards:       1,
+		ChannelBuffer:   32,
 	}, nil)
 
 	subscriber, err := factory.Subscriber(ctx)

@@ -55,7 +55,7 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 		materializeRAGInferenceDataset(admin, datasetID)
 		modelID := uploadBaseModelThroughIngestion(admin, datasetID)
 		selectedModel := assertModelSelectable(admin, modelID, "UPLOAD", "rag-e2e-uploaded-base")
-		endpointID := waitForPublishedEndpoint(consumer.Token, "rag-e2e-uploaded-base")
+		endpointID := publishRAGEndpoint(admin, modelID, datasetID, "rag-e2e-uploaded-base")
 
 		status, body := doJSONWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+endpointID.String()+"/generations", map[string]any{
 			"query_text": "What phrase identifies the embedded knowledge base?",
@@ -72,7 +72,7 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 		materializeRAGInferenceDataset(otherAdmin, otherDatasetID)
 		otherModelID := uploadBaseModelThroughIngestion(otherAdmin, otherDatasetID)
 		assertModelSelectable(otherAdmin, otherModelID, "UPLOAD", "rag-e2e-uploaded-base")
-		otherEndpointID := waitForPublishedEndpoint(otherAdmin.Token, "rag-e2e-uploaded-base")
+		otherEndpointID := publishRAGEndpoint(otherAdmin, otherModelID, otherDatasetID, "rag-e2e-uploaded-base")
 
 		status, body = doJSONWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+otherEndpointID.String()+"/generations", map[string]any{
 			"query_text": "What phrase identifies the embedded knowledge base?",

@@ -171,6 +171,9 @@ func requiredRoutePermission(request events.APIGatewayProxyRequest) string {
 		if len(afterResource) == 1 && afterResource[0] == "endpoints" && routeCtx.method == http.MethodPost {
 			return authz.PermissionModelWrite
 		}
+		if len(afterResource) == 1 && afterResource[0] == "agent-specs" && routeCtx.method == http.MethodPost {
+			return authz.PermissionModelWrite
+		}
 		if len(afterResource) >= 3 && afterResource[0] == "endpoints" && (afterResource[2] == "datasets" || afterResource[2] == "merge-strategy") && routeCtx.method == http.MethodPut {
 			return authz.PermissionModelWrite
 		}
@@ -181,6 +184,9 @@ func requiredRoutePermission(request events.APIGatewayProxyRequest) string {
 			return authz.PermissionModelWrite
 		}
 		if len(afterResource) >= 1 && afterResource[0] == "preference-datasets" && routeCtx.method == http.MethodGet {
+			return authz.PermissionInferenceEndpointsRead
+		}
+		if len(afterResource) >= 2 && afterResource[0] == "agent-runs" && routeCtx.method == http.MethodGet {
 			return authz.PermissionInferenceEndpointsRead
 		}
 		if len(afterResource) == 1 && afterResource[0] == "feedback" && routeCtx.method == http.MethodPost {

@@ -23,6 +23,7 @@ import (
 	inferencepreference "inference_service/pkg/infra/preference"
 	inferencedb "inference_service/pkg/infra/repo/db"
 	"inference_service/pkg/infra/retrieval"
+	inferencetools "inference_service/pkg/infra/tools"
 
 	coreBucket "lib/shared_lib/bucket"
 	coreDB "lib/shared_lib/db"
@@ -36,6 +37,7 @@ import (
 	trace "lib/shared_lib/trace"
 	"lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -52,10 +54,13 @@ type inferenceConfig struct {
 	Topics              inferencemessaging.InferenceTopics
 	TenantTopic         string
 	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
+	ToolService         inferencetools.ToolServiceClientConfig
 	Generation          generationConfig
 	Reranker            rerankerConfig
 	QueryTransformer    queryTransformerConfig
 	ModelServing        modelServingConfig
+	Agent               agentConfig
+	UserEvents          userevents.Config
 	PreferenceDataset   preferenceDatasetConfig
 	GRPCPort            int
 	HTTPPort            int
@@ -91,6 +96,11 @@ type modelServingConfig struct {
 	RequestTimeout time.Duration
 	LoadTimeout    time.Duration
 	PollInterval   time.Duration
+}
+
+type agentConfig struct {
+	MaxStepsCap    int
+	TokenBudgetCap int
 }
 
 type preferenceDatasetConfig struct {
@@ -170,7 +180,10 @@ func main() {
 	modelRepository := inferencedb.NewInferenceModelRepository(database)
 	datasetRepository := inferencedb.NewInferenceDatasetRepository(database)
 	endpointRepository := inferencedb.NewPublishedEndpointRepository(database)
+	agentSpecRepository := inferencedb.NewAgentSpecRepository(database)
+	capabilityReportRepository := inferencedb.NewCapabilityReportRepository(database)
 	requestRepository := inferencedb.NewInferenceRequestRepository(database)
+	trajectoryRepository := inferencedb.NewAgentTrajectoryRepository(database)
 	feedbackRepository := inferencedb.NewInferenceFeedbackRepository(database)
 	lineageEvalRepository := inferencedb.NewLineageEvalRepository(database)
 	inferenceUnitOfWork := shareduow.New(database.Pool,
@@ -184,6 +197,17 @@ func main() {
 	retrievalClient, err := inferencegrpc.NewFeatureMaterializerClient(cancelCtx, cfg.FeatureMaterializer)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create feature materializer client")
+	}
+	toolInvoker, closeToolInvoker, err := newToolInvoker(cancelCtx, cfg.ToolService, retrievalClient)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create tool invoker")
+	}
+	userEventPublisher := userevents.Publisher(userevents.NewNoopPublisher())
+	if cfg.UserEvents.Enabled {
+		userEventPublisher, err = userevents.NewRedisPublisher(cfg.UserEvents)
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatal("failed to initialize user event publisher")
+		}
 	}
 	generationAdapters := newGenerationAdapters(cfg.Generation)
 	reranker, err := newRerankerAdapter(cfg.Reranker)
@@ -205,11 +229,16 @@ func main() {
 	inferenceOptions := []app.InferenceOption{
 		app.WithInferenceDatasetRepository(datasetRepository),
 		app.WithPublishedEndpointRepository(endpointRepository),
+		app.WithAgentSpecRepository(agentSpecRepository),
+		app.WithCapabilityReportRepository(capabilityReportRepository),
 		app.WithInferenceRequestRepository(requestRepository),
+		app.WithAgentTrajectoryRepository(trajectoryRepository),
 		app.WithInferenceFeedbackRepository(feedbackRepository),
 		app.WithLineageEvalSetRepository(lineageEvalRepository),
 		app.WithInferenceUnitOfWork(inferenceUnitOfWork),
 		app.WithRetrievalClient(retrievalClient),
+		app.WithToolInvoker(toolInvoker),
+		app.WithUserEventPublisher(userEventPublisher),
 		app.WithGenerationAdapters(generationAdapters),
 		app.WithPromptStrategy(promptStrategy),
 		app.WithDefaultRAGMergeStrategy(defaultRAGMergeStrategy),
@@ -248,9 +277,25 @@ func main() {
 		inferenceOptions...,
 	)
 	grpcService := inferencegrpc.NewInferenceGrpcServer(inferenceUsecase)
-	inferenceDTOAdapter := inferenceadapter.NewInferenceDTOAdapter(serializers.NewJSONSerializer())
+	endpointDTOAdapter := inferenceadapter.NewEndpointDTOAdapter(serializers.NewJSONSerializer())
+	generationDTOAdapter := inferenceadapter.NewGenerationDTOAdapter(serializers.NewJSONSerializer())
+	feedbackDTOAdapter := inferenceadapter.NewFeedbackDTOAdapter(serializers.NewJSONSerializer())
+	agentSpecDTOAdapter := inferenceadapter.NewAgentSpecDTOAdapter(
+		serializers.NewJSONSerializer(),
+		inferenceadapter.WithAgentSpecBudgetCaps(cfg.Agent.MaxStepsCap, cfg.Agent.TokenBudgetCap),
+	)
+	preferenceDatasetDTOAdapter := inferenceadapter.NewPreferenceDatasetDTOAdapter(serializers.NewJSONSerializer())
+	agentTrajectoryDTOAdapter := inferenceadapter.NewAgentTrajectoryDTOAdapter(serializers.NewJSONSerializer())
 	restService := inferencerest.NewService(
-		inferencerest.NewInferenceHandlers(inferenceUsecase, inferenceDTOAdapter).GetRoutes(),
+		inferencerest.NewInferenceHandlers(
+			inferenceUsecase,
+			endpointDTOAdapter,
+			generationDTOAdapter,
+			feedbackDTOAdapter,
+			agentSpecDTOAdapter,
+			preferenceDatasetDTOAdapter,
+			agentTrajectoryDTOAdapter,
+		).GetRoutes(),
 		cfg.HTTPPort,
 		serviceName,
 		transport.WithServerTimeouts(cfg.HTTPServer.ReadTimeout, cfg.HTTPServer.WriteTimeout, cfg.HTTPServer.IdleTimeout),
@@ -269,8 +314,13 @@ func main() {
 			return nil
 		}),
 		lifecycle.CloserComponent("inference-feature-materializer-client", retrievalClient.Close),
+		lifecycle.CloserComponent("inference-tool-invoker", closeToolInvoker),
 		lifecycle.CloserComponent("inference-publisher", func() error {
 			outboxPublisher.Close()
+			return nil
+		}),
+		lifecycle.CloserComponent("inference-user-event-publisher", func() error {
+			userEventPublisher.Close()
 			return nil
 		}),
 		lifecycle.HealthCheckComponent("inference-healthcheck", healthCheck),
@@ -402,6 +452,12 @@ func readInferenceConfig() inferenceConfig {
 			CallTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_CALL_TIMEOUT_MS", "15000"),
 			RetryCount:    env.WithDefaultInt("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT", "3"),
 		},
+		ToolService: inferencetools.ToolServiceClientConfig{
+			Address:       env.WithDefaultString("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_ADDRESS", ""),
+			DialTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_DIAL_TIMEOUT_MS", "500"),
+			CallTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_CALL_TIMEOUT_MS", "5000"),
+			RetryCount:    env.WithDefaultInt("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_RETRY_COUNT", "3"),
+		},
 		Generation: generationConfig{
 			RequestTimeout:   secondsFromEnv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS", "60"),
 			MaxOutputTokens:  env.WithDefaultInt("INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS", "256"),
@@ -426,6 +482,20 @@ func readInferenceConfig() inferenceConfig {
 			RequestTimeout: secondsFromEnv("INFERENCE_SERVICE_MODEL_SERVING_REQUEST_TIMEOUT_SECONDS", "5"),
 			LoadTimeout:    secondsFromEnv("INFERENCE_SERVICE_MODEL_SERVING_LOAD_TIMEOUT_SECONDS", "60"),
 			PollInterval:   time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_MODEL_SERVING_LOAD_POLL_MS", "1000")) * time.Millisecond,
+		},
+		Agent: agentConfig{
+			MaxStepsCap:    env.WithDefaultInt("INFERENCE_SERVICE_AGENT_MAX_STEPS_CAP", "3"),
+			TokenBudgetCap: env.WithDefaultInt("INFERENCE_SERVICE_AGENT_TOKEN_BUDGET_CAP", "8192"),
+		},
+		UserEvents: userevents.Config{
+			Enabled:        env.WithDefaultBool("USER_EVENTS_ENABLED", false),
+			RedisAddress:   env.WithDefaultString("USER_EVENTS_REDIS_ADDRESS", ""),
+			RedisUsername:  env.WithDefaultString("USER_EVENTS_REDIS_USERNAME", ""),
+			RedisPassword:  env.WithDefaultString("USER_EVENTS_REDIS_PASSWORD", ""),
+			RedisTLS:       env.WithDefaultBool("USER_EVENTS_REDIS_TLS", false),
+			ChannelPrefix:  env.WithDefaultString("USER_EVENTS_CHANNEL_PREFIX", userevents.DefaultChannelPrefix),
+			PublishTimeout: time.Duration(env.WithDefaultInt("USER_EVENTS_PUBLISH_TIMEOUT_MS", "500")) * time.Millisecond,
+			StreamMaxLen:   int64(env.WithDefaultInt("USER_EVENTS_STREAM_MAX_LEN", "1000")),
 		},
 		PreferenceDataset: preferenceDatasetConfig{
 			ExportEnabled:    preferenceDatasetExportEnabled,
@@ -487,6 +557,12 @@ func validateInferenceConfig(cfg inferenceConfig) error {
 		return err
 	}
 	if err := validateModelServingConfig(cfg.ModelServing); err != nil {
+		return err
+	}
+	if err := validateToolServiceConfig(cfg.ToolService); err != nil {
+		return err
+	}
+	if err := validateAgentConfig(cfg.Agent); err != nil {
 		return err
 	}
 	if err := validateHTTPServerConfig(cfg.HTTPServer, cfg.Generation); err != nil {
@@ -571,6 +647,27 @@ func validateModelServingConfig(cfg modelServingConfig) error {
 	return nil
 }
 
+func validateToolServiceConfig(cfg inferencetools.ToolServiceClientConfig) error {
+	log.Trace("validateToolServiceConfig")
+
+	if strings.TrimSpace(cfg.Address) == "" {
+		return nil
+	}
+	return inferencetools.ValidateToolServiceClientConfig(cfg)
+}
+
+func validateAgentConfig(cfg agentConfig) error {
+	log.Trace("validateAgentConfig")
+
+	if cfg.MaxStepsCap <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_AGENT_MAX_STEPS_CAP must be greater than zero")
+	}
+	if cfg.TokenBudgetCap <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_AGENT_TOKEN_BUDGET_CAP must be greater than zero")
+	}
+	return nil
+}
+
 func validateHTTPServerConfig(cfg httpServerConfig, generation generationConfig) error {
 	log.Trace("validateHTTPServerConfig")
 
@@ -596,6 +693,39 @@ func newGenerationAdapters(cfg generationConfig) map[string]app.GenerationAdapte
 		model.ServingProtocolOpenAIChatCompletions.String(): generation.NewOpenAIChatCompletionsGenerator(cfg.RequestTimeout, cfg.MaxOutputTokens),
 		model.ServingProtocolOllamaGenerate.String():        generation.NewOllamaGenerateGenerator(cfg.RequestTimeout, cfg.MaxOutputTokens),
 	}
+}
+
+func newToolInvoker(ctx context.Context, cfg inferencetools.ToolServiceClientConfig, retrievalClient app.RetrievalClient) (app.ToolInvoker, func() error, error) {
+	log.Trace("newToolInvoker")
+
+	searchInvoker, err := inferencetools.NewSearchKnowledgeToolInvoker(retrievalClient)
+	if err != nil {
+		return nil, nil, err
+	}
+	var remoteInvoker app.ToolInvoker
+	var remoteCloser func() error
+	if strings.TrimSpace(cfg.Address) != "" {
+		remote, err := inferencetools.NewRemoteToolInvoker(ctx, cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		remoteInvoker = remote
+		remoteCloser = remote.Close
+	}
+	routedInvoker, err := inferencetools.NewRoutedToolInvoker(searchInvoker, remoteInvoker, []string{inferencetools.SearchKnowledgeToolName})
+	if err != nil {
+		if remoteCloser != nil {
+			_ = remoteCloser()
+		}
+		return nil, nil, err
+	}
+	closeFn := func() error {
+		if remoteCloser == nil {
+			return nil
+		}
+		return remoteCloser()
+	}
+	return routedInvoker, closeFn, nil
 }
 
 func newQueryTransformer(cfg queryTransformerConfig, adapters map[string]app.GenerationAdapter) (app.QueryTransformer, error) {

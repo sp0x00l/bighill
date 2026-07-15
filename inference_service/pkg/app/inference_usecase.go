@@ -15,6 +15,7 @@ import (
 	"inference_service/pkg/domain/model"
 	"lib/shared_lib/ctxutil"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,12 +26,14 @@ import (
 const (
 	maxConcurrentDatasetRetrievals = 4
 	minimumFrozenEvalExamples      = 1
+	capabilityProbeTimeout         = 3 * time.Second
 )
 
 type InferenceUsecase interface {
 	RecordModelUpdated(ctx context.Context, inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) (*model.InferenceModel, error)
 	RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error)
 	ReadModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
+	PublishAgentSpec(ctx context.Context, request model.AgentSpecPublication) (*model.AgentSpec, error)
 	ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error)
 	PublishEndpoint(ctx context.Context, request model.EndpointPublication) (*model.PublishedEndpoint, error)
 	SetEndpointDatasets(ctx context.Context, request model.EndpointDatasetBinding) (*model.PublishedEndpoint, error)
@@ -42,30 +45,36 @@ type InferenceUsecase interface {
 	ReadPreferenceDataset(ctx context.Context, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (*model.PreferenceDataset, error)
 	ListPreferenceDatasets(ctx context.Context, orgID uuid.UUID, filter model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error)
 	BuildPreferenceDataset(ctx context.Context, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error)
+	ReadAgentTrajectory(ctx context.Context, orgID uuid.UUID, runID uuid.UUID) (*model.AgentTrajectory, error)
 }
 
 type inferenceUsecase struct {
-	modelRepository           InferenceModelRepository
-	datasetRepository         InferenceDatasetRepository
-	endpointRepository        PublishedEndpointRepository
-	requestRepository         InferenceRequestRepository
-	feedbackRepository        InferenceFeedbackRepository
-	lineageEvalSetRepository  LineageEvalSetRepository
-	inferenceUnitOfWork       InferenceUnitOfWorkAdapter
-	retrievalClient           RetrievalClient
-	queryTransformer          QueryTransformer
-	contextPacker             ContextPacker
-	reranker                  Reranker
-	promptBuilder             PromptBuilder
-	generationAdapters        map[string]GenerationAdapter
-	modelServingLoadTrigger   ModelServingLoadTrigger
-	modelServingLoadTimeout   time.Duration
-	modelServingLoadPoll      time.Duration
-	preferenceDatasetWriter   PreferenceDatasetWriter
-	promptStrategy            model.PromptStrategy
-	queryTransformerTimeout   time.Duration
-	rerankCandidateMultiplier int
-	defaultRAGMergeStrategy   model.RAGMergeStrategy
+	modelRepository            InferenceModelRepository
+	datasetRepository          InferenceDatasetRepository
+	endpointRepository         PublishedEndpointRepository
+	agentSpecRepository        AgentSpecRepository
+	capabilityReportRepository CapabilityReportRepository
+	requestRepository          InferenceRequestRepository
+	trajectoryRepository       AgentTrajectoryRepository
+	feedbackRepository         InferenceFeedbackRepository
+	lineageEvalSetRepository   LineageEvalSetRepository
+	inferenceUnitOfWork        InferenceUnitOfWorkAdapter
+	retrievalClient            RetrievalClient
+	queryTransformer           QueryTransformer
+	contextPacker              ContextPacker
+	reranker                   Reranker
+	promptBuilder              PromptBuilder
+	generationAdapters         map[string]GenerationAdapter
+	toolInvoker                ToolInvoker
+	userEventPublisher         UserEventPublisher
+	modelServingLoadTrigger    ModelServingLoadTrigger
+	modelServingLoadTimeout    time.Duration
+	modelServingLoadPoll       time.Duration
+	preferenceDatasetWriter    PreferenceDatasetWriter
+	promptStrategy             model.PromptStrategy
+	queryTransformerTimeout    time.Duration
+	rerankCandidateMultiplier  int
+	defaultRAGMergeStrategy    model.RAGMergeStrategy
 }
 
 type preferenceEvalSetFreeze struct {
@@ -88,6 +97,22 @@ func WithPublishedEndpointRepository(repository PublishedEndpointRepository) Inf
 
 	return func(u *inferenceUsecase) {
 		u.endpointRepository = repository
+	}
+}
+
+func WithAgentSpecRepository(repository AgentSpecRepository) InferenceOption {
+	log.Trace("WithAgentSpecRepository")
+
+	return func(u *inferenceUsecase) {
+		u.agentSpecRepository = repository
+	}
+}
+
+func WithCapabilityReportRepository(repository CapabilityReportRepository) InferenceOption {
+	log.Trace("WithCapabilityReportRepository")
+
+	return func(u *inferenceUsecase) {
+		u.capabilityReportRepository = repository
 	}
 }
 
@@ -120,6 +145,14 @@ func WithInferenceRequestRepository(repository InferenceRequestRepository) Infer
 
 	return func(u *inferenceUsecase) {
 		u.requestRepository = repository
+	}
+}
+
+func WithAgentTrajectoryRepository(repository AgentTrajectoryRepository) InferenceOption {
+	log.Trace("WithAgentTrajectoryRepository")
+
+	return func(u *inferenceUsecase) {
+		u.trajectoryRepository = repository
 	}
 }
 
@@ -211,6 +244,22 @@ func WithGenerationAdapters(adapters map[string]GenerationAdapter) InferenceOpti
 	}
 }
 
+func WithToolInvoker(invoker ToolInvoker) InferenceOption {
+	log.Trace("WithToolInvoker")
+
+	return func(u *inferenceUsecase) {
+		u.toolInvoker = invoker
+	}
+}
+
+func WithUserEventPublisher(publisher UserEventPublisher) InferenceOption {
+	log.Trace("WithUserEventPublisher")
+
+	return func(u *inferenceUsecase) {
+		u.userEventPublisher = publisher
+	}
+}
+
 func WithModelServingLoadTrigger(trigger ModelServingLoadTrigger, timeout time.Duration, pollInterval time.Duration) InferenceOption {
 	log.Trace("WithModelServingLoadTrigger")
 
@@ -225,7 +274,8 @@ func NewInferenceUsecase(repository InferenceModelRepository, opts ...InferenceO
 	log.Trace("NewInferenceUsecase")
 
 	u := &inferenceUsecase{
-		modelRepository: repository,
+		modelRepository:    repository,
+		userEventPublisher: userevents.NewNoopPublisher(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -250,6 +300,9 @@ func (u *inferenceUsecase) RecordModelUpdated(ctx context.Context, inferenceMode
 	}
 	if err := u.upsertEndpointProjection(ctx, record); err != nil {
 		return nil, err
+	}
+	if err := u.recordCapabilityReportProjection(ctx, record); err != nil {
+		log.WithContext(ctx).WithError(err).Warn("capability report projection failed")
 	}
 	return record, nil
 }
@@ -320,6 +373,20 @@ func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.En
 	if inferenceModel.OrgID != request.OrgID {
 		return nil, domain.ErrModelNotFound
 	}
+	mode := request.Mode
+	agentSpecID := uuid.Nil
+	agentSpecHash := ""
+	if mode == model.AgentEndpointModeAgent {
+		spec, err := u.agentSpecRepository.ReadAgentSpecByHash(ctx, request.OrgID, request.AgentSpecHash)
+		if err != nil {
+			return nil, err
+		}
+		if spec.ModelID != request.ModelID {
+			return nil, domain.ErrModelMismatch.Extend("agent spec model does not match endpoint model")
+		}
+		agentSpecID = spec.AgentSpecID
+		agentSpecHash = spec.ContentHash
+	}
 	if err := u.ensureDatasetsExist(ctx, request.OrgID, request.DatasetIDs); err != nil {
 		return nil, err
 	}
@@ -328,7 +395,7 @@ func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.En
 		return nil, err
 	}
 	if strategy == model.RAGMergeStrategyReranker && u.reranker == nil {
-		return nil, domain.ErrValidationFailed.Extend("reranker merge strategy requires a configured reranker")
+		return nil, domain.ErrModelNotReady.Extend("reranker merge strategy requires a configured reranker")
 	}
 	displayName := strings.TrimSpace(request.DisplayName)
 	if displayName == "" {
@@ -337,6 +404,9 @@ func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.En
 	return u.endpointRepository.UpsertEndpoint(ctx, &model.PublishedEndpoint{
 		OrgID:           request.OrgID,
 		ModelID:         request.ModelID,
+		Mode:            mode,
+		AgentSpecID:     agentSpecID,
+		AgentSpecHash:   agentSpecHash,
 		DatasetIDs:      dedupeUUIDs(request.DatasetIDs),
 		MergeStrategy:   strategy,
 		Status:          model.PublishedEndpointStatusReady,
@@ -384,7 +454,7 @@ func (u *inferenceUsecase) SetEndpointMergeStrategy(ctx context.Context, request
 		return nil, err
 	}
 	if strategy == model.RAGMergeStrategyReranker && u.reranker == nil {
-		return nil, domain.ErrValidationFailed.Extend("reranker merge strategy requires a configured reranker")
+		return nil, domain.ErrModelNotReady.Extend("reranker merge strategy requires a configured reranker")
 	}
 	endpoint.MergeStrategy = strategy
 	return u.endpointRepository.UpsertEndpoint(ctx, endpoint)
@@ -410,6 +480,9 @@ func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID u
 		return nil, domain.ErrModelNotReady.Extend("inference endpoint is not ready")
 	}
 	request.ModelID = endpoint.ModelID
+	if endpoint.Mode == model.AgentEndpointModeAgent {
+		return u.generateAgent(ctx, request, endpoint)
+	}
 	return u.generate(ctx, request, endpoint)
 }
 
@@ -745,7 +818,7 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 		contexts = scoreNormalizedMerge(contexts, request.TopK)
 		mergeSpan.End()
 	default:
-		err = domain.ErrValidationFailed.Extend(fmt.Sprintf("unsupported rag merge strategy %q", mergeStrategy))
+		err = domain.ErrGenerationFailed.Extend(fmt.Sprintf("unsupported rag merge strategy %q", mergeStrategy))
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	contexts, err = u.contextPacker.Pack(ctx, model.ContextPackRequest{
@@ -772,7 +845,7 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 		attribute.String("generation_protocol", generationProtocol),
 		attribute.String("generation_model", generationModel),
 	)
-	answer, err := generator.Generate(generateCtx, model.GenerationRequest{
+	generationResult, err := generator.Generate(generateCtx, model.GenerationRequest{
 		RequestID:             request.RequestID,
 		Dataset:               dataset,
 		Model:                 inferenceModel,
@@ -784,6 +857,11 @@ func (u *inferenceUsecase) generate(ctx context.Context, request model.GenerateR
 	endInferenceSpanOnReturn(generateCtx, generateSpan, &err)
 	if err != nil {
 		err = fmt.Errorf("%w: %w", domain.ErrGenerationFailed, err)
+		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
+	}
+	answer := strings.TrimSpace(generationResult.Content)
+	if answer == "" {
+		err = fmt.Errorf("%w: generation returned an empty response", domain.ErrGenerationFailed)
 		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, contexts, promptText, answerText, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
 	}
 	answerText = answer
@@ -1344,6 +1422,7 @@ func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferen
 	_, err = u.endpointRepository.UpsertEndpoint(ctx, &model.PublishedEndpoint{
 		OrgID:           inferenceModel.OrgID,
 		ModelID:         inferenceModel.ModelID,
+		Mode:            model.AgentEndpointModeRAG,
 		DatasetIDs:      []uuid.UUID{inferenceModel.DatasetID},
 		MergeStrategy:   strategy,
 		Status:          status,
@@ -1351,6 +1430,119 @@ func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferen
 		CreatedByUserID: inferenceModel.UserID,
 	})
 	return err
+}
+
+func (u *inferenceUsecase) recordCapabilityReportProjection(ctx context.Context, inferenceModel *model.InferenceModel) error {
+	log.Trace("InferenceUsecase recordCapabilityReportProjection")
+
+	if inferenceModel.OrgID == uuid.Nil {
+		return nil
+	}
+	if u.capabilityReportRepository == nil {
+		return nil
+	}
+	if inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded || inferenceModel.ServingProtocol == model.ServingProtocolUnknown {
+		return nil
+	}
+	return nil
+}
+
+func (u *inferenceUsecase) probeAndRecordCapabilityReport(ctx context.Context, inferenceModel *model.InferenceModel) (*model.CapabilityReport, error) {
+	log.Trace("InferenceUsecase probeAndRecordCapabilityReport")
+
+	if u.capabilityReportRepository == nil {
+		return nil, domain.ErrModelNotReady.Extend("model capability report repository is not configured")
+	}
+	report := &model.CapabilityReport{
+		OrgID:                    inferenceModel.OrgID,
+		EffectiveBaseID:          inferenceModel.EffectiveBaseID,
+		ModelID:                  inferenceModel.ModelID,
+		SupportsChat:             u.probeChatCapability(ctx, inferenceModel),
+		SupportsToolCalls:        u.probeToolCallCapability(ctx, inferenceModel),
+		SupportsJSONSchemaOutput: false,
+		SupportsSystemPrompt:     u.probeSystemPromptCapability(ctx, inferenceModel),
+	}
+	return u.capabilityReportRepository.RecordCapabilityReport(ctx, report)
+}
+
+func (u *inferenceUsecase) probeChatCapability(ctx context.Context, inferenceModel *model.InferenceModel) bool {
+	log.Trace("InferenceUsecase probeChatCapability")
+
+	result, err := u.probeGenerationCapability(ctx, inferenceModel, model.GenerationRequest{
+		Model: inferenceModel,
+		Query: "Respond with ok.",
+		Messages: []model.ChatMessage{
+			{Role: model.ChatMessageRoleUser, Content: "Respond with ok."},
+		},
+		Options: model.GenerationOptions{
+			Temperature:     0,
+			TopP:            1,
+			MaxOutputTokens: 8,
+		},
+	})
+	return err == nil && strings.TrimSpace(result.Content) != ""
+}
+
+func (u *inferenceUsecase) probeSystemPromptCapability(ctx context.Context, inferenceModel *model.InferenceModel) bool {
+	log.Trace("InferenceUsecase probeSystemPromptCapability")
+
+	result, err := u.probeGenerationCapability(ctx, inferenceModel, model.GenerationRequest{
+		Model: inferenceModel,
+		Query: "Respond with ok.",
+		Messages: []model.ChatMessage{
+			{Role: model.ChatMessageRoleSystem, Content: "You are a capability probe."},
+			{Role: model.ChatMessageRoleUser, Content: "Respond with ok."},
+		},
+		Options: model.GenerationOptions{
+			Temperature:     0,
+			TopP:            1,
+			MaxOutputTokens: 8,
+		},
+	})
+	return err == nil && strings.TrimSpace(result.Content) != ""
+}
+
+func (u *inferenceUsecase) probeToolCallCapability(ctx context.Context, inferenceModel *model.InferenceModel) bool {
+	log.Trace("InferenceUsecase probeToolCallCapability")
+
+	result, err := u.probeGenerationCapability(ctx, inferenceModel, model.GenerationRequest{
+		Model: inferenceModel,
+		Query: "Call the capability_probe tool with an empty JSON object.",
+		Messages: []model.ChatMessage{
+			{Role: model.ChatMessageRoleUser, Content: "Call the capability_probe tool with an empty JSON object."},
+		},
+		Tools: []model.ToolSpec{{
+			Name:        "capability_probe",
+			Description: "Capability probe; returns no user data.",
+			Parameters:  json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{}}`),
+		}},
+		ToolChoice: agentToolChoiceRequired,
+		Options: model.GenerationOptions{
+			Temperature:     0,
+			TopP:            1,
+			MaxOutputTokens: 32,
+		},
+	})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Warn("tool-call capability probe failed")
+		return false
+	}
+	return len(result.ToolCalls) > 0
+}
+
+func (u *inferenceUsecase) probeGenerationCapability(ctx context.Context, inferenceModel *model.InferenceModel, request model.GenerationRequest) (model.GenerationResult, error) {
+	log.Trace("InferenceUsecase probeGenerationCapability")
+
+	if inferenceModel == nil || inferenceModel.ServingProtocol == model.ServingProtocolUnknown {
+		return model.GenerationResult{}, domain.ErrModelNotReady.Extend("serving protocol is unknown")
+	}
+	generator := u.generationAdapters[inferenceModel.ServingProtocol.String()]
+	if generator == nil {
+		return model.GenerationResult{}, domain.ErrModelNotReady.Extend("generation adapter is not configured")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, capabilityProbeTimeout)
+	defer cancel()
+	return generator.Generate(probeCtx, request)
 }
 
 func contextForActorOrg(ctx context.Context, userID uuid.UUID, orgID uuid.UUID) context.Context {

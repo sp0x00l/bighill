@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -20,6 +21,7 @@ type GenerateRequest struct {
 
 type GenerateResponse struct {
 	RequestID             uuid.UUID
+	AgentRunID            uuid.UUID
 	OrgID                 uuid.UUID
 	DatasetID             uuid.UUID
 	DatasetIDs            []uuid.UUID
@@ -68,6 +70,68 @@ type GenerationRequest struct {
 	Prompt                string
 	PromptStrategyVersion string
 	Contexts              []RetrievedContext
+	Messages              []ChatMessage
+	Tools                 []ToolSpec
+	ToolChoice            string
+	Options               GenerationOptions
+}
+
+type ChatMessageRole string
+
+const (
+	ChatMessageRoleSystem    ChatMessageRole = "system"
+	ChatMessageRoleUser      ChatMessageRole = "user"
+	ChatMessageRoleAssistant ChatMessageRole = "assistant"
+	ChatMessageRoleTool      ChatMessageRole = "tool"
+)
+
+type ChatMessage struct {
+	Role       ChatMessageRole `json:"role"`
+	Content    string          `json:"content"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Name       string          `json:"name,omitempty"`
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+}
+
+type ToolSpec struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+type ToolCall struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type TokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type GenerationOptions struct {
+	Temperature     float64 `json:"temperature"`
+	TopP            float64 `json:"top_p"`
+	Seed            int64   `json:"seed,omitempty"`
+	MaxOutputTokens int     `json:"max_output_tokens"`
+}
+
+type GenerationFinishReason string
+
+const (
+	GenerationFinishReasonStop      GenerationFinishReason = "stop"
+	GenerationFinishReasonToolCalls GenerationFinishReason = "tool_calls"
+	GenerationFinishReasonLength    GenerationFinishReason = "length"
+)
+
+type GenerationResult struct {
+	Content      string                 `json:"content"`
+	ToolCalls    []ToolCall             `json:"tool_calls,omitempty"`
+	FinishReason GenerationFinishReason `json:"finish_reason"`
+	Usage        TokenUsage             `json:"usage"`
+	Options      GenerationOptions      `json:"options"`
 }
 
 type PromptStrategy struct {

@@ -55,17 +55,25 @@ const (
 	EventTypeInferencePreferenceDatasetReady  = "inference.preference_dataset.ready"
 	EventTypeInferencePreferenceDatasetFailed = "inference.preference_dataset.failed"
 
+	EventTypeAgentRunStarted    = "agent.run.started"
+	EventTypeAgentStepCompleted = "agent.step.completed"
+	EventTypeAgentToolResult    = "agent.tool.result"
+	EventTypeAgentRunCompleted  = "agent.run.completed"
+	EventTypeAgentRunFailed     = "agent.run.failed"
+
 	ResourceTypeModel    = "model"
 	ResourceTypeTraining = "training_run"
 	ResourceTypeDataset  = "dataset"
 	ResourceTypeSnapshot = "snapshot"
 	ResourceTypeUpload   = "upload"
+	ResourceTypeAgentRun = "agent_run"
 
 	StatusPhaseServing         = "SERVING"
 	StatusPhaseTraining        = "TRAINING"
 	StatusPhaseMaterialization = "MATERIALIZATION"
 	StatusPhaseUpload          = "UPLOAD"
 	StatusPhasePromotion       = "PROMOTION"
+	StatusPhaseAgent           = "AGENT"
 )
 
 var (
@@ -252,6 +260,13 @@ func HashString(value string) string {
 
 	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
 	return hex.EncodeToString(sum[:8])
+}
+
+func SHA256String(value string) string {
+	log.Trace("SHA256String")
+
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(sum[:])
 }
 
 func LogPublishFailure(ctx context.Context, err error, event Event) {

@@ -36,6 +36,7 @@ var (
 	ErrModelMismatch    = &ServiceError{Code: "model_mismatch", Message: "model mismatch"}
 	ErrDatasetNotFound  = &ServiceError{Code: "dataset_not_found", Message: "dataset not found"}
 	ErrDatasetNotReady  = &ServiceError{Code: "dataset_not_ready", Message: "dataset not ready"}
+	ErrAgentRunNotFound = &ServiceError{Code: "agent_run_not_found", Message: "agent run not found"}
 	ErrEvalSetNotFound  = &ServiceError{Code: "eval_set_not_found", Message: "eval set not found"}
 	ErrRetrievalFailed  = &ServiceError{Code: "retrieval_failed", Message: "retrieval failed"}
 	ErrRerankFailed     = &ServiceError{Code: "rerank_failed", Message: "rerank failed"}

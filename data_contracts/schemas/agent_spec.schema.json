@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bighill.ai/schemas/agent_spec.schema.json",
+  "title": "BigHill Agent Spec",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agent_lineage",
+    "model_binding",
+    "budgets",
+    "runtime_mode",
+    "tools"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "agent_lineage": { "type": "string", "minLength": 1 },
+    "system_prompt": { "type": "string", "default": "" },
+    "runtime_mode": {
+      "type": "string",
+      "enum": ["interactive", "durable"]
+    },
+    "model_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_id", "effective_base_id"],
+      "properties": {
+        "model_id": { "type": "string", "format": "uuid" },
+        "effective_base_id": { "type": "string", "format": "uuid" }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool_binding" },
+      "default": []
+    },
+    "retrieval_config": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_steps", "token"],
+      "properties": {
+        "max_steps": { "type": "integer", "minimum": 1 },
+        "token": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "stop_conditions": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "guardrails": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    }
+  },
+  "$defs": {
+    "tool_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required": { "type": "boolean", "default": false },
+        "tool_choice": { "type": "string", "default": "" },
+        "config": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    }
+  }
+}

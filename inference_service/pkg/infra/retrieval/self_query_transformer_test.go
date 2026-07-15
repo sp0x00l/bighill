@@ -18,12 +18,12 @@ type queryGeneratorStub struct {
 	err     error
 }
 
-func (s *queryGeneratorStub) Generate(_ context.Context, request model.GenerationRequest) (string, error) {
+func (s *queryGeneratorStub) Generate(_ context.Context, request model.GenerationRequest) (model.GenerationResult, error) {
 	s.request = request
 	if s.err != nil {
-		return "", s.err
+		return model.GenerationResult{}, s.err
 	}
-	return s.answer, nil
+	return model.GenerationResult{Content: s.answer, FinishReason: model.GenerationFinishReasonStop}, nil
 }
 
 var _ = Describe("SelfQueryTransformer", func() {

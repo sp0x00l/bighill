@@ -64,6 +64,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 		models = repo.NewInferenceModelRepository(database)
 		datasets = repo.NewInferenceDatasetRepository(database)
 		endpoints := repo.NewPublishedEndpointRepository(database)
+		capabilities := repo.NewCapabilityReportRepository(database)
 		requests := repo.NewInferenceRequestRepository(database)
 		feedbacks := repo.NewInferenceFeedbackRepository(database)
 		promptStrategy := model.PromptStrategy{
@@ -76,6 +77,7 @@ var _ = Describe("Inference service integration", Ordered, func() {
 			models,
 			app.WithInferenceDatasetRepository(datasets),
 			app.WithPublishedEndpointRepository(endpoints),
+			app.WithCapabilityReportRepository(capabilities),
 			app.WithInferenceRequestRepository(requests),
 			app.WithInferenceFeedbackRepository(feedbacks),
 			app.WithInferenceUnitOfWork(shareduow.New(database.Pool)),
@@ -478,11 +480,14 @@ func (c *integrationRetrievalClient) Close() error {
 
 type integrationGenerationAdapter struct{}
 
-func (a integrationGenerationAdapter) Generate(_ context.Context, request model.GenerationRequest) (string, error) {
+func (a integrationGenerationAdapter) Generate(_ context.Context, request model.GenerationRequest) (model.GenerationResult, error) {
 	if len(request.Contexts) == 0 {
-		return "", fmt.Errorf("retrieved context is required")
+		return model.GenerationResult{}, fmt.Errorf("retrieved context is required")
 	}
-	return "Based on the retrieved context: " + request.Contexts[0].SourceText, nil
+	return model.GenerationResult{
+		Content:      "Based on the retrieved context: " + request.Contexts[0].SourceText,
+		FinishReason: model.GenerationFinishReasonStop,
+	}, nil
 }
 
 type rerankIntegrationRetrievalClient struct {
@@ -524,6 +529,16 @@ func (r *rerankIntegrationReranker) Rerank(_ context.Context, _ string, candidat
 
 func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error {
 	for _, table := range []string{
+		"agent_run_labels",
+		"agent_tool_invocations",
+		"agent_steps",
+		"agent_runs",
+		"golden_tasks",
+		"agent_adapters",
+		"agent_champion_states",
+		"agent_specs",
+		"capability_reports",
+		"effective_base_versions",
 		"lineage_eval_examples",
 		"lineage_eval_sets",
 		"preference_dataset_snapshots",

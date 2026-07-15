@@ -9,6 +9,105 @@ Postgres databases, pgvector for retrieval, Ray/KubeRay for training jobs, and K
 serving. Python is confined to the GPU batch jobs. It owns the whole lifecycle — data, models,
 inference, feedback, and retraining.
 
+## Tech Stack
+
+### Languages / Runtimes
+
+- Go: main language for microservices, shared libraries, Lambda handlers, operators, Kafka tooling, and control-plane logic.
+- Python: training/evaluation jobs, Hugging Face onboarding helpers, artifact validation, infra bootstrap scripts, and local test stubs.
+- Rust: DataFusion query-engine subprocess used by data_stream_service.
+- C++ / Poppler: native PDF extraction through pdf_extractor_lib.
+- SQL: per-service schema migrations and database state.
+- Shell / Make: local development, build, test, and deployment orchestration.
+
+### APIs / Service Communication
+
+- HTTP / REST: external and private service APIs.
+- gRPC / Protocol Buffers: internal service contracts and strongly typed service calls.
+- Arrow Flight: high-throughput columnar query API for data_stream_service.
+- WebSockets: socket_service pushes user-visible status and error events to subscribed clients.
+- AWS Lambda + API Gateway: edge API and request authorizer runtime.
+- AWS SAM / OpenAPI / CloudFormation: local Lambda/API Gateway development and gateway deployment wiring.
+
+### Persistence / State / Messaging / Workflow
+
+- PostgreSQL: service-owned source-of-truth databases.
+- Aurora PostgreSQL: managed Postgres target in AWS environments.
+- pgvector: vector storage and similarity search for retrieval.
+- Postgres transactional outbox: publishes events atomically with database writes.
+- Kafka: asynchronous domain events between services.
+- Redis: sessions, token revocation, OAuth state, socket tickets, and user-event streams/pubsub.
+- Temporal: durable long-running workflows, especially training/materialization orchestration.
+- AWS SQS: dead-letter queues for failed async processing paths.
+- AWS KMS: JWT signing/key integration for auth.
+- JWT / OAuth / Argon2id: authentication, sessions, OAuth login, and password hashing.
+
+### ML / RAG / Model Runtime
+
+- vLLM: production/staging model serving runtime with OpenAI-compatible APIs (alternatives: TensorRT-LLM, SGLang).
+- Ollama: local-dev/CI model runtime and GGUF/chat-template validation path; not the production serving layer.
+- LoRA / Multi-LoRA: serves many fine-tuned adapters on shared base model runtimes.
+- QLoRA: supported training recipe style for efficient fine-tuning.
+- GGUF: local model artifact format validated for Ollama-compatible serving.
+- Hugging Face Hub: model onboarding/download source.
+- Ray / KubeRay: distributed training and evaluation job execution (alternative scheduler: SLURM).
+- Axolotl-style recipes: generated SFT/DPO/LoRA training configuration (alternative framework: NVIDIA NeMo).
+- SFT: supervised fine-tuning workflow.
+- DPO: preference-based retraining workflow.
+- TEI-compatible endpoints: embeddings and reranking providers.
+- Ragas: RAG evaluation tooling.
+- Deepchecks / Evidently: promotion/evaluation evidence for model registry gates (alternative/adjacent tracking layer: MLflow).
+- OpenAI-compatible chat completions: common generation protocol for vLLM and compatible runtimes.
+- Ollama generate API: local generation protocol for Ollama-backed models.
+- tiktoken-go: token-aware prompt/context budgeting.
+- JSON Schema: validation for structured tool/inference payloads.
+
+### Data / Lakehouse / Query
+
+- Apache Arrow: columnar in-memory/data exchange format.
+- Arrow IPC: framed columnar output from the Rust query engine.
+- Apache DataFusion: SQL/query execution engine for local/lakehouse-style reads.
+- Apache Parquet: snapshot and feature data storage format.
+- Apache Iceberg: lakehouse table format target.
+- Apache Polaris: Iceberg REST catalog integration.
+- Project Nessie: local/lakehouse catalog source used in data-source compose setup.
+- OpenDAL S3 storage: Rust Iceberg/DataFusion S3-backed storage integration.
+- S3 / S3-compatible storage: raw uploads, snapshots, model artifacts, evaluations, and preference datasets.
+- MinIO: local S3-compatible object storage.
+- Postgres / MySQL / MongoDB / ClickHouse / Oracle: supported local datasource fixtures/connectors.
+- PDF / HTML / Markdown / text / JSON / CSV: input formats handled by ingestion/materialization.
+
+### Infrastructure / Deployment
+
+- Docker: service images.
+- Docker Compose: local infra and service stack.
+- Kubernetes: service, training, and serving orchestration.
+- Helm: Kubernetes packaging for services and platform dependencies.
+- Terraform / OpenTofu: AWS infrastructure provisioning.
+- AWS EKS: Kubernetes runtime in AWS.
+- AWS ECR: container image repository.
+- AWS S3: object storage.
+- AWS IAM / IRSA: service identity and AWS access from Kubernetes.
+- AWS VPC / subnets / NAT / VPC endpoints: network substrate.
+- AWS Secrets Manager: deployment-time secret discovery/sync.
+- NVIDIA device plugin: GPU scheduling in Kubernetes.
+- AWS Load Balancer Controller: Kubernetes ingress/load balancer integration.
+- ExternalDNS: Kubernetes-driven DNS records.
+- CodeArtifact: native artifact repository, especially for PDF extraction builds.
+
+### Observability / Testing
+
+- OpenTelemetry / OTLP: traces and metrics export.
+- Prometheus / Grafana: metrics collection and dashboards.
+- Loki / Promtail / Tempo: logs and traces in the observability stack.
+- Logrus: structured Go logging.
+- Ginkgo / Gomega: Go integration and behavior tests.
+- testify: Go assertions/helpers where used.
+- go-playground/validator: request/config DTO validation.
+- pgx: Go PostgreSQL driver.
+- rueidis: Go Redis client.
+- confluent-kafka-go: Go Kafka client.
+
 ---
 
 ## Why BigHill?

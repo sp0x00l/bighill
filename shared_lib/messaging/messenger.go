@@ -19,6 +19,8 @@ type MessengerConfig struct {
 	GroupID         string
 	DlqURL          string
 	AutoOffsetReset string
+	NumShards       int
+	ChannelBuffer   int
 }
 
 type messenger struct {
@@ -28,6 +30,8 @@ type messenger struct {
 	groupID          string
 	dlqURL           string
 	autoOffsetReset  string
+	numShards        int
+	channelBuffer    int
 	subscriberCancel context.CancelFunc
 	subscriberDone   <-chan struct{}
 }
@@ -48,6 +52,8 @@ func NewMessenger(cfg MessengerConfig, cancel context.CancelFunc) Messenger {
 		groupID:          cfg.GroupID,
 		dlqURL:           cfg.DlqURL,
 		autoOffsetReset:  cfg.AutoOffsetReset,
+		numShards:        cfg.NumShards,
+		channelBuffer:    cfg.ChannelBuffer,
 		subscriberCancel: cancel,
 	}
 }
@@ -61,7 +67,7 @@ func (m *messenger) Subscriber(ctx context.Context) (Subscriber, error) {
 		if m.autoOffsetReset != "" {
 			opts = append(opts, WithAutoOffsetReset(m.autoOffsetReset))
 		}
-		sub, err := NewSubscriber(m.brokers, m.groupID, dlq, exponentialBackOffFactory, DefaultNumShards, DefaultChannelBuffer, opts...)
+		sub, err := NewSubscriber(m.brokers, m.groupID, dlq, exponentialBackOffFactory, m.numShards, m.channelBuffer, opts...)
 		if err != nil {
 			return nil, err
 		}

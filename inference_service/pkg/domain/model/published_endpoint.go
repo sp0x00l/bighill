@@ -25,6 +25,9 @@ type PublishedEndpoint struct {
 	EndpointID      uuid.UUID
 	OrgID           uuid.UUID
 	ModelID         uuid.UUID
+	Mode            AgentEndpointMode
+	AgentSpecID     uuid.UUID
+	AgentSpecHash   string
 	DatasetIDs      []uuid.UUID
 	MergeStrategy   RAGMergeStrategy
 	Status          PublishedEndpointStatus
@@ -40,6 +43,9 @@ type EndpointPublication struct {
 	UserID        uuid.UUID
 	OrgID         uuid.UUID
 	ModelID       uuid.UUID
+	Mode          AgentEndpointMode
+	AgentSpecID   uuid.UUID
+	AgentSpecHash string
 	DatasetIDs    []uuid.UUID
 	MergeStrategy RAGMergeStrategy
 	DisplayName   string
