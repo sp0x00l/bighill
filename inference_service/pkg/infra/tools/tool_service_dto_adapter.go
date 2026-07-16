@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"inference_service/pkg/app"
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
 
@@ -35,15 +36,15 @@ func newToolServiceDTOAdapter(v *validator.Validate) *toolServiceDTOAdapter {
 	return &toolServiceDTOAdapter{validator: v}
 }
 
-func (a *toolServiceDTOAdapter) ToListAvailableToolsRequest(session *model.AgentSession) (*toolspb.ListAvailableToolsRequest, error) {
+func (a *toolServiceDTOAdapter) ToListAvailableToolsRequest(resolution app.ToolResolutionContext) (*toolspb.ListAvailableToolsRequest, error) {
 	log.Trace("toolServiceDTOAdapter ToListAvailableToolsRequest")
 
-	if session == nil {
-		return nil, domain.ErrValidationFailed.Extend("agent session is required")
+	if resolution.OrgID == uuid.Nil || resolution.UserID == uuid.Nil {
+		return nil, domain.ErrValidationFailed.Extend("tool resolution context requires org_id and user_id")
 	}
 	return &toolspb.ListAvailableToolsRequest{
-		OrgId:  session.OrgID.String(),
-		UserId: session.UserID.String(),
+		OrgId:  resolution.OrgID.String(),
+		UserId: resolution.UserID.String(),
 	}, nil
 }
 
@@ -71,9 +72,11 @@ func (a *toolServiceDTOAdapter) FromListAvailableToolsResponse(resp *toolspb.Lis
 			return nil, domain.ErrValidationFailed.Extend("tool service parameters_json must contain valid JSON")
 		}
 		available[toolNameKey(dto.Name)] = model.ToolSpec{
-			Name:        dto.Name,
-			Description: dto.Description,
-			Parameters:  json.RawMessage(dto.ParametersJSON),
+			Name:                  dto.Name,
+			Description:           dto.Description,
+			Parameters:            json.RawMessage(dto.ParametersJSON),
+			ImplementationVersion: dto.ImplementationVersion,
+			Locality:              "remote",
 		}
 	}
 	specs := make([]model.ToolSpec, 0, len(bindings))
@@ -88,11 +91,11 @@ func (a *toolServiceDTOAdapter) FromListAvailableToolsResponse(resp *toolspb.Lis
 	return specs, nil
 }
 
-func (a *toolServiceDTOAdapter) ToInvokeToolRequest(session *model.AgentSession, call model.ToolCall, invocationID uuid.UUID) (*toolspb.InvokeToolRequest, error) {
+func (a *toolServiceDTOAdapter) ToInvokeToolRequest(invocation app.ToolInvocationContext, call model.ToolCall, invocationID uuid.UUID) (*toolspb.InvokeToolRequest, error) {
 	log.Trace("toolServiceDTOAdapter ToInvokeToolRequest")
 
-	if session == nil {
-		return nil, domain.ErrValidationFailed.Extend("agent session is required")
+	if invocation.OrgID == uuid.Nil || invocation.UserID == uuid.Nil || invocation.RunID == uuid.Nil {
+		return nil, domain.ErrValidationFailed.Extend("tool invocation context requires org_id, user_id, and run_id")
 	}
 	if strings.TrimSpace(call.Name) == "" {
 		return nil, domain.ErrValidationFailed.Extend("tool call name is required")
@@ -103,9 +106,9 @@ func (a *toolServiceDTOAdapter) ToInvokeToolRequest(session *model.AgentSession,
 	return &toolspb.InvokeToolRequest{
 		ToolName:      strings.TrimSpace(call.Name),
 		ArgumentsJson: call.Arguments,
-		OrgId:         session.OrgID.String(),
-		UserId:        session.UserID.String(),
-		TraceId:       session.RunID.String(),
+		OrgId:         invocation.OrgID.String(),
+		UserId:        invocation.UserID.String(),
+		TraceId:       invocation.RunID.String(),
 		InvocationId:  invocationID.String(),
 	}, nil
 }

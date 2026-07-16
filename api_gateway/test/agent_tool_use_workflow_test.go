@@ -69,7 +69,6 @@ var _ = Describe("Agent tool-use workflow", Label("agent"), func() {
 		run := trajectoryObject(trajectory, "run")
 		Expect(run["agent_spec_hash"]).To(Equal(agentSpecHash))
 		Expect(run["status"]).To(Equal("COMPLETED"))
-		Expect(run["effective_base_id"]).NotTo(BeNil())
 		Expect(run["decoding_params"]).To(HaveKey("seed"))
 		Expect(run["decoding_params"]).To(HaveKeyWithValue("temperature", BeNumerically("==", 0)))
 
@@ -149,10 +148,8 @@ func agentSpecPayload(modelID uuid.UUID, lineage string) map[string]any {
 		"schema_version": "agent_spec_v1",
 		"agent_lineage":  lineage,
 		"system_prompt":  "Use tools when they are available. Do not answer until the required tool result has been observed.",
-		"runtime_mode":   "interactive",
 		"model_binding": map[string]any{
-			"model_id":          modelID.String(),
-			"effective_base_id": modelID.String(),
+			"model_id": modelID.String(),
 		},
 		"tools": []map[string]any{
 			{
@@ -166,6 +163,7 @@ func agentSpecPayload(modelID uuid.UUID, lineage string) map[string]any {
 		"budgets": map[string]any{
 			"max_steps": 3,
 			"token":     128,
+			"wall_ms":   60000,
 		},
 		"stop_conditions": map[string]any{},
 		"guardrails":      map[string]any{},

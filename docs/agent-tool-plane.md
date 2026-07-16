@@ -156,6 +156,8 @@ Documented honestly so they are fixed deliberately, not discovered later:
 
 ## See Also
 
+- [Agent Extension Architecture](agent-extension-architecture.md) — how the agent core stays small
+  while memory, eval, training, approvals, and durable workflows attach as extension services.
 - [Multi-LoRA Serving](multi-lora-serving.md) — the serving substrate that lets each tenant/agent run
   a cheap specialized adapter over a shared base.
 - [Self-Improving Loop](self-improving-loop.md) — how evaluated, promoted, feedback-improved artifacts

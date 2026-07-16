@@ -187,7 +187,7 @@ func requiredRoutePermission(request events.APIGatewayProxyRequest) string {
 			return authz.PermissionInferenceEndpointsRead
 		}
 		if len(afterResource) >= 2 && afterResource[0] == "agent-runs" && routeCtx.method == http.MethodGet {
-			return authz.PermissionInferenceEndpointsRead
+			return authz.PermissionInferenceAgentRunsRead
 		}
 		if len(afterResource) == 1 && afterResource[0] == "feedback" && routeCtx.method == http.MethodPost {
 			return authz.PermissionInferenceFeedback

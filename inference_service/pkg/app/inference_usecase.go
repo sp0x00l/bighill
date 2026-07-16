@@ -46,6 +46,7 @@ type InferenceUsecase interface {
 	ListPreferenceDatasets(ctx context.Context, orgID uuid.UUID, filter model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error)
 	BuildPreferenceDataset(ctx context.Context, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error)
 	ReadAgentTrajectory(ctx context.Context, orgID uuid.UUID, runID uuid.UUID) (*model.AgentTrajectory, error)
+	ReapExpiredAgentRuns(ctx context.Context, safetyMultiplier int) (int64, error)
 }
 
 type inferenceUsecase struct {
@@ -1436,13 +1437,11 @@ func (u *inferenceUsecase) probeAndRecordCapabilityReport(ctx context.Context, i
 		return nil, domain.ErrModelNotReady.Extend("model capability report repository is not configured")
 	}
 	report := &model.CapabilityReport{
-		OrgID:                    inferenceModel.OrgID,
-		EffectiveBaseID:          inferenceModel.EffectiveBaseID,
-		ModelID:                  inferenceModel.ModelID,
-		SupportsChat:             u.probeChatCapability(ctx, inferenceModel),
-		SupportsToolCalls:        u.probeToolCallCapability(ctx, inferenceModel),
-		SupportsJSONSchemaOutput: false,
-		SupportsSystemPrompt:     u.probeSystemPromptCapability(ctx, inferenceModel),
+		OrgID:                inferenceModel.OrgID,
+		ModelID:              inferenceModel.ModelID,
+		SupportsChat:         u.probeChatCapability(ctx, inferenceModel),
+		SupportsToolCalls:    u.probeToolCallCapability(ctx, inferenceModel),
+		SupportsSystemPrompt: u.probeSystemPromptCapability(ctx, inferenceModel),
 	}
 	return u.capabilityReportRepository.RecordCapabilityReport(ctx, report)
 }

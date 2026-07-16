@@ -103,6 +103,10 @@ func (s *inferenceUsecaseStub) ReadAgentTrajectory(context.Context, uuid.UUID, u
 	return nil, nil
 }
 
+func (s *inferenceUsecaseStub) ReapExpiredAgentRuns(context.Context, int) (int64, error) {
+	return 0, nil
+}
+
 type featureMaterializerServiceClientStub struct {
 	request *featurepb.SearchEmbeddingsRequest
 	resp    *featurepb.SearchEmbeddingsResponse

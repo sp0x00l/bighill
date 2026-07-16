@@ -14,6 +14,7 @@ import (
 	"lib/shared_lib/ctxutil"
 	msgConn "lib/shared_lib/messaging"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -230,7 +231,7 @@ func (s *capabilityReportRepositoryStub) RecordCapabilityReport(_ context.Contex
 	return report, nil
 }
 
-func (s *capabilityReportRepositoryStub) ReadCapabilityReportForModel(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID) (*model.CapabilityReport, error) {
+func (s *capabilityReportRepositoryStub) ReadCapabilityReportForModel(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*model.CapabilityReport, error) {
 	if s.readErr != nil {
 		return nil, s.readErr
 	}
@@ -308,13 +309,20 @@ func (s *agentTrajectoryRepositoryStub) ReadAgentTrajectory(_ context.Context, _
 	return &model.AgentTrajectory{}, nil
 }
 
+func (s *agentTrajectoryRepositoryStub) FailExpiredAgentRuns(_ context.Context, _ int) (int64, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	return 0, nil
+}
+
 type toolInvokerStub struct {
 	tools  []model.ToolSpec
 	result model.ToolResult
 	err    error
 }
 
-func (s *toolInvokerStub) Available(_ context.Context, _ *model.AgentSession, bindings []model.ToolBinding) ([]model.ToolSpec, error) {
+func (s *toolInvokerStub) Available(_ context.Context, _ app.ToolResolutionContext, bindings []model.ToolBinding) ([]model.ToolSpec, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -333,7 +341,7 @@ func (s *toolInvokerStub) Available(_ context.Context, _ *model.AgentSession, bi
 	return s.tools, s.err
 }
 
-func (s *toolInvokerStub) Invoke(_ context.Context, _ *model.AgentSession, call model.ToolCall) (model.ToolResult, error) {
+func (s *toolInvokerStub) Invoke(_ context.Context, _ app.ToolInvocationContext, call model.ToolCall) (model.ToolResult, error) {
 	if s.result.CallID == "" {
 		s.result.CallID = call.ID
 	}
@@ -555,7 +563,7 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(capabilityRepository.recorded).To(BeNil())
 	})
 
-	It("does not fabricate an effective base id when the model projection has none", func() {
+	It("does not fabricate capability reports during model projection", func() {
 		repository := &inferenceModelRepositoryStub{}
 		capabilityRepository := &capabilityReportRepositoryStub{}
 		uc := app.NewInferenceUsecase(
@@ -563,7 +571,6 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithCapabilityReportRepository(capabilityRepository),
 		)
 		inferenceModel := validInferenceModel()
-		inferenceModel.EffectiveBaseID = uuid.Nil
 		inferenceModel.DatasetID = uuid.Nil
 
 		_, err := uc.RecordModelUpdated(context.Background(), inferenceModel, uuid.New())
@@ -752,6 +759,138 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(terminal.Status).To(Equal(model.AgentRunStatusFailed))
 		Expect(terminal.StopReason).To(Equal(model.AgentStopReasonBudget))
 		Expect(terminal.TotalTokens).To(BeNumerically(">", 0))
+	})
+
+	It("records the canonical empty resolved toolset hash", func() {
+		hash := runAgentAndReturnFirstToolsetHash(nil, nil)
+
+		Expect(hash).NotTo(BeEmpty())
+		Expect(hash).NotTo(Equal(userevents.SHA256String("")))
+	})
+
+	It("records toolset_hash from resolved tool definitions", func() {
+		bindings := []model.ToolBinding{{Name: "http_get"}}
+		first := runAgentAndReturnFirstToolsetHash([]model.ToolSpec{{
+			Name:                  "http_get",
+			Description:           "Fetch an HTTP resource",
+			Parameters:            []byte(`{"type":"object","properties":{"url":{"type":"string"}}}`),
+			ImplementationVersion: "http_get:v1",
+			Locality:              "remote",
+		}}, bindings)
+		second := runAgentAndReturnFirstToolsetHash([]model.ToolSpec{{
+			Name:                  "http_get",
+			Description:           "Fetch an HTTP resource",
+			Parameters:            []byte(`{"type":"object","properties":{"url":{"type":"string"}}}`),
+			ImplementationVersion: "http_get:v2",
+			Locality:              "remote",
+		}}, bindings)
+
+		Expect(first).NotTo(Equal(second))
+	})
+
+	It("does not record an agent run when tool resolution fails before the run starts", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		spec := validToolUsingAgentSpec(inferenceModel)
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: spec.ContentHash,
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{err: domain.ErrValidationFailed.Extend("tool resolution failed")}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{answer: "not reached"},
+			}),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "answer with tools",
+			TopK:      2,
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(response).To(BeNil())
+		Expect(trajectoryRepository.runs).To(BeEmpty())
+		Expect(trajectoryRepository.steps).To(BeEmpty())
+		Expect(trajectoryRepository.invocations).To(BeEmpty())
+	})
+
+	It("records only model-facing tool schemas in the presented_tool_schemas trajectory field", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		spec := validToolUsingAgentSpec(inferenceModel)
+		spec.ToolBindings = []model.ToolBinding{{Name: "http_get"}}
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: spec.ContentHash,
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:                  "http_get",
+				Description:           "Fetch an HTTP resource",
+				Parameters:            []byte(`{"type":"object","properties":{"url":{"type":"string"}}}`),
+				ImplementationVersion: "http_get:v1",
+				Locality:              "remote",
+			}}}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{answer: "done"},
+			}),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "answer directly",
+			TopK:      2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response).NotTo(BeNil())
+		Expect(trajectoryRepository.steps).To(HaveLen(1))
+		Expect(string(trajectoryRepository.steps[0].PresentedToolSchemas)).NotTo(ContainSubstring("implementation_version"))
+		Expect(string(trajectoryRepository.steps[0].PresentedToolSchemas)).NotTo(ContainSubstring("locality"))
+		Expect(string(trajectoryRepository.steps[0].PresentedToolSchemas)).To(ContainSubstring("http_get"))
+		Expect(string(trajectoryRepository.steps[0].PresentedToolSchemas)).To(ContainSubstring("parameters"))
 	})
 
 	It("marks the agent run failed when a permanent tool invocation fails", func() {
@@ -2325,7 +2464,6 @@ func withRerankScore(context model.RetrievedContext, score float64) model.Retrie
 func validInferenceModel() *model.InferenceModel {
 	return &model.InferenceModel{
 		ModelID:           uuid.New(),
-		EffectiveBaseID:   uuid.New(),
 		UserID:            uuid.New(),
 		OrgID:             uuid.New(),
 		TrainingRunID:     uuid.New(),
@@ -2361,7 +2499,6 @@ func validToolUsingAgentSpec(inferenceModel *model.InferenceModel) *model.AgentS
 		ContentHash:      "sha256:agent-spec",
 		ValidationReport: "schema:passed;policy:passed",
 		ModelID:          inferenceModel.ModelID,
-		EffectiveBaseID:  inferenceModel.EffectiveBaseID,
 		ToolBindings: []model.ToolBinding{{
 			Name:       "search_knowledge",
 			Required:   true,
@@ -2372,12 +2509,60 @@ func validToolUsingAgentSpec(inferenceModel *model.InferenceModel) *model.AgentS
 		Budgets: model.AgentBudgets{
 			MaxSteps: 3,
 			Token:    128,
+			WallMs:   60000,
 		},
 		StopConditions: []byte(`{}`),
 		Guardrails:     []byte(`{}`),
-		RuntimeMode:    model.AgentRuntimeModeInteractive,
 		Status:         model.AgentSpecStatusValidated,
 	}
+}
+
+func runAgentAndReturnFirstToolsetHash(toolSpecs []model.ToolSpec, bindings []model.ToolBinding) string {
+	dataset := validInferenceDataset()
+	inferenceModel := validInferenceModel()
+	inferenceModel.UserID = dataset.UserID
+	inferenceModel.OrgID = dataset.OrgID
+	inferenceModel.ModelKind = model.ModelKindBase
+	inferenceModel.DatasetID = uuid.Nil
+	spec := validToolUsingAgentSpec(inferenceModel)
+	spec.ToolBindings = bindings
+	endpointID := uuid.New()
+	endpoint := &model.PublishedEndpoint{
+		EndpointID:    endpointID,
+		OrgID:         dataset.OrgID,
+		ModelID:       inferenceModel.ModelID,
+		Mode:          model.AgentEndpointModeAgent,
+		AgentSpecHash: spec.ContentHash,
+		DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+		MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+		Status:        model.PublishedEndpointStatusReady,
+	}
+	trajectoryRepository := &agentTrajectoryRepositoryStub{}
+	uc := app.NewInferenceUsecase(
+		&inferenceModelRepositoryStub{model: inferenceModel},
+		app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+		app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+		app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+		app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+		app.WithAgentTrajectoryRepository(trajectoryRepository),
+		app.WithToolInvoker(&toolInvokerStub{tools: toolSpecs}),
+		app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+			model.ServingProtocolOpenAIChatCompletions.String(): &generationAdapterStub{answer: "done"},
+		}),
+	)
+
+	response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+		RequestID: uuid.New(),
+		UserID:    dataset.UserID,
+		OrgID:     dataset.OrgID,
+		QueryText: "answer directly",
+		TopK:      2,
+	})
+
+	Expect(err).NotTo(HaveOccurred())
+	Expect(response).NotTo(BeNil())
+	Expect(trajectoryRepository.runs).NotTo(BeEmpty())
+	return trajectoryRepository.runs[0].ToolsetHash
 }
 
 func validInferenceDataset() *model.InferenceDataset {

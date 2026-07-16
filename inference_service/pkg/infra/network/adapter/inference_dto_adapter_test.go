@@ -161,15 +161,12 @@ var _ = Describe("Inference DTO adapters", func() {
 
 	It("maps a schema-validated agent spec to the domain model", func() {
 		modelID := uuid.New()
-		effectiveBaseID := uuid.New()
 		spec, err := specAdapter.FromDTO(context.Background(), []byte(`
 schema_version: agent_spec_v1
 agent_lineage: support-agent
 system_prompt: Use tools before answering.
-runtime_mode: interactive
 model_binding:
   model_id: "`+modelID.String()+`"
-  effective_base_id: "`+effectiveBaseID.String()+`"
 tools:
   - name: search_knowledge
     required: true
@@ -177,33 +174,32 @@ tools:
 budgets:
   max_steps: 3
   token: 512
+  wall_ms: 60000
 `))
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.Spec.ModelID).To(Equal(modelID))
-		Expect(spec.Spec.EffectiveBaseID).To(Equal(effectiveBaseID))
 		Expect(spec.Spec.SystemPrompt).To(Equal("Use tools before answering."))
 		Expect(spec.Spec.ToolBindings).To(HaveLen(1))
 		Expect(spec.Spec.ToolBindings[0].Name).To(Equal("search_knowledge"))
+		Expect(spec.Spec.Budgets.WallMs).To(Equal(60000))
 		Expect(spec.Spec.ContentHash).NotTo(BeEmpty())
 		Expect(spec.Spec.ValidationReport).To(ContainSubstring("schema_status=validated"))
 	})
 
 	It("accepts implemented remote tool bindings through the agent spec schema", func() {
 		modelID := uuid.New()
-		effectiveBaseID := uuid.New()
 		spec, err := specAdapter.FromDTO(context.Background(), []byte(`
 schema_version: agent_spec_v1
 agent_lineage: support-agent
-runtime_mode: interactive
 model_binding:
   model_id: "`+modelID.String()+`"
-  effective_base_id: "`+effectiveBaseID.String()+`"
 tools:
   - name: http_get
 budgets:
   max_steps: 2
   token: 512
+  wall_ms: 60000
 `))
 
 		Expect(err).NotTo(HaveOccurred())
@@ -213,19 +209,17 @@ budgets:
 
 	It("accepts syntactically valid remote tool names through the schema", func() {
 		modelID := uuid.New()
-		effectiveBaseID := uuid.New()
 		spec, err := specAdapter.FromDTO(context.Background(), []byte(`
 schema_version: agent_spec_v1
 agent_lineage: support-agent
-runtime_mode: interactive
 model_binding:
   model_id: "`+modelID.String()+`"
-  effective_base_id: "`+effectiveBaseID.String()+`"
 tools:
   - name: write_database
 budgets:
   max_steps: 2
   token: 512
+  wall_ms: 60000
 `))
 
 		Expect(err).NotTo(HaveOccurred())
@@ -233,87 +227,121 @@ budgets:
 		Expect(spec.Spec.ToolBindings[0].Name).To(Equal("write_database"))
 	})
 
-	It("rejects agent spec fields outside the JSON schema", func() {
+	It("rejects duplicate agent tool bindings at the DTO boundary", func() {
 		modelID := uuid.New()
-		effectiveBaseID := uuid.New()
+
 		_, err := specAdapter.FromDTO(context.Background(), []byte(`
 schema_version: agent_spec_v1
 agent_lineage: support-agent
-runtime_mode: interactive
 model_binding:
   model_id: "`+modelID.String()+`"
-  effective_base_id: "`+effectiveBaseID.String()+`"
+tools:
+  - name: search_knowledge
+  - name: Search_Knowledge
+budgets:
+  max_steps: 3
+  token: 512
+  wall_ms: 60000
+`))
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("tool names must be unique"))
+	})
+
+	It("rejects agent spec fields outside the JSON schema", func() {
+		modelID := uuid.New()
+		_, err := specAdapter.FromDTO(context.Background(), []byte(`
+schema_version: agent_spec_v1
+agent_lineage: support-agent
+model_binding:
+  model_id: "`+modelID.String()+`"
   requires_tool_calls: false
 tools:
   - name: search_knowledge
 budgets:
-  max_steps: 1
+  max_steps: 2
   token: 256
+  wall_ms: 60000
 `))
 
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("requires_tool_calls"))
 	})
 
-	It("rejects agent specs without an effective base id at the DTO boundary", func() {
+	It("accepts agent specs without an effective base id at the DTO boundary", func() {
 		modelID := uuid.New()
-		_, err := specAdapter.FromDTO(context.Background(), []byte(`
+		spec, err := specAdapter.FromDTO(context.Background(), []byte(`
 schema_version: agent_spec_v1
 agent_lineage: support-agent
-runtime_mode: interactive
 model_binding:
   model_id: "`+modelID.String()+`"
 tools:
   - name: search_knowledge
 budgets:
-  max_steps: 1
+  max_steps: 2
   token: 256
+  wall_ms: 60000
 `))
 
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("effective_base_id"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.Spec.ModelID).To(Equal(modelID))
 	})
 
 	It("rejects agent specs that exceed deployment budget caps at the DTO boundary", func() {
-		cappedAdapter := NewAgentSpecDTOAdapter(serializers.NewJSONSerializer(), WithAgentSpecBudgetCaps(2, 512))
+		cappedAdapter := NewAgentSpecDTOAdapter(serializers.NewJSONSerializer(), WithAgentSpecBudgetCaps(2, 512, 60000))
 		modelID := uuid.New()
-		effectiveBaseID := uuid.New()
 
 		_, err := cappedAdapter.FromDTO(context.Background(), []byte(`
 schema_version: agent_spec_v1
 agent_lineage: support-agent
-runtime_mode: interactive
 model_binding:
   model_id: "`+modelID.String()+`"
-  effective_base_id: "`+effectiveBaseID.String()+`"
 tools:
   - name: search_knowledge
 budgets:
   max_steps: 3
   token: 256
+  wall_ms: 60000
 `))
 
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("max_steps exceeds deployment cap"))
 	})
 
-	It("rejects tool-bound agent specs with only one step at the DTO boundary", func() {
+	It("rejects sub-second wall budgets at the DTO boundary", func() {
 		modelID := uuid.New()
-		effectiveBaseID := uuid.New()
 
 		_, err := specAdapter.FromDTO(context.Background(), []byte(`
 schema_version: agent_spec_v1
 agent_lineage: support-agent
-runtime_mode: interactive
 model_binding:
   model_id: "`+modelID.String()+`"
-  effective_base_id: "`+effectiveBaseID.String()+`"
+tools: []
+budgets:
+  max_steps: 1
+  token: 256
+  wall_ms: 1
+`))
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("WallMs"))
+	})
+
+	It("rejects tool-bound agent specs with only one step at the DTO boundary", func() {
+		modelID := uuid.New()
+
+		_, err := specAdapter.FromDTO(context.Background(), []byte(`
+schema_version: agent_spec_v1
+agent_lineage: support-agent
+model_binding:
+  model_id: "`+modelID.String()+`"
 tools:
   - name: search_knowledge
     required: true
 budgets:
   max_steps: 1
   token: 256
+  wall_ms: 60000
 `))
 
 		Expect(err).To(HaveOccurred())
@@ -390,10 +418,10 @@ budgets:
 		orgID := uuid.New()
 		userID := uuid.New()
 		endpointID := uuid.New()
-		effectiveBaseID := uuid.New()
 		stepID := uuid.New()
 		invocationID := uuid.New()
 		startedAt := time.Date(2026, 7, 15, 10, 11, 12, 0, time.UTC)
+		deadlineAt := startedAt.Add(60 * time.Second)
 		payload, err := trajectoryAdapter.ToDTO(context.Background(), &model.AgentTrajectory{
 			Run: &model.AgentRun{
 				RunID:                   runID,
@@ -401,17 +429,15 @@ budgets:
 				UserID:                  userID,
 				EndpointID:              endpointID,
 				AgentSpecHash:           "sha256:agent-spec",
-				EffectiveBaseID:         effectiveBaseID,
-				ModelVersion:            7,
 				ToolsetHash:             "sha256:toolset",
 				TrajectorySchemaVersion: "agent_trajectory_v1",
-				SystemTemplateVersion:   "sha256:prompt",
 				DecodingParams:          []byte(`{"temperature":0,"seed":123}`),
 				Status:                  model.AgentRunStatusCompleted,
 				StopReason:              model.AgentStopReasonFinalAnswer,
 				StartedAt:               startedAt,
+				DeadlineAt:              deadlineAt,
 				TotalTokens:             19,
-				TrainingEligibility:     model.AgentTrainingEligibilityTenantOnly,
+				WallMs:                  60000,
 			},
 			Steps: []*model.AgentStep{{
 				StepID:               stepID,
@@ -444,8 +470,9 @@ budgets:
 		Expect(json.Unmarshal(payload, &dto)).To(Succeed())
 		run := dto["run"].(map[string]any)
 		Expect(run).To(HaveKeyWithValue("run_id", runID.String()))
-		Expect(run).To(HaveKeyWithValue("effective_base_id", effectiveBaseID.String()))
 		Expect(run).To(HaveKeyWithValue("agent_spec_hash", "sha256:agent-spec"))
+		Expect(run).To(HaveKeyWithValue("wall_ms", BeNumerically("==", 60000)))
+		Expect(run).To(HaveKeyWithValue("deadline_at", deadlineAt.Format(time.RFC3339Nano)))
 		Expect(run["decoding_params"]).To(HaveKeyWithValue("seed", BeNumerically("==", 123)))
 		steps := dto["steps"].([]any)
 		Expect(steps).To(HaveLen(1))

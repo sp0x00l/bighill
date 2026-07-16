@@ -99,8 +99,11 @@ type modelServingConfig struct {
 }
 
 type agentConfig struct {
-	MaxStepsCap    int
-	TokenBudgetCap int
+	MaxStepsCap           int
+	TokenBudgetCap        int
+	WallMsCap             int
+	RunReaperInterval     time.Duration
+	RunReaperSafetyFactor int
 }
 
 type preferenceDatasetConfig struct {
@@ -282,7 +285,7 @@ func main() {
 	feedbackDTOAdapter := inferenceadapter.NewFeedbackDTOAdapter(serializers.NewJSONSerializer())
 	agentSpecDTOAdapter := inferenceadapter.NewAgentSpecDTOAdapter(
 		serializers.NewJSONSerializer(),
-		inferenceadapter.WithAgentSpecBudgetCaps(cfg.Agent.MaxStepsCap, cfg.Agent.TokenBudgetCap),
+		inferenceadapter.WithAgentSpecBudgetCaps(cfg.Agent.MaxStepsCap, cfg.Agent.TokenBudgetCap, cfg.Agent.WallMsCap),
 	)
 	preferenceDatasetDTOAdapter := inferenceadapter.NewPreferenceDatasetDTOAdapter(serializers.NewJSONSerializer())
 	agentTrajectoryDTOAdapter := inferenceadapter.NewAgentTrajectoryDTOAdapter(serializers.NewJSONSerializer())
@@ -340,6 +343,9 @@ func main() {
 				return err
 			}
 			return nil
+		}),
+		lifecycle.WorkerComponent("inference-agent-run-reaper", func(ctx context.Context) error {
+			return runAgentRunReaper(ctx, inferenceUsecase, cfg.Agent.RunReaperInterval, cfg.Agent.RunReaperSafetyFactor)
 		}),
 	}
 
@@ -484,8 +490,11 @@ func readInferenceConfig() inferenceConfig {
 			PollInterval:   time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_MODEL_SERVING_LOAD_POLL_MS", "1000")) * time.Millisecond,
 		},
 		Agent: agentConfig{
-			MaxStepsCap:    env.WithDefaultInt("INFERENCE_SERVICE_AGENT_MAX_STEPS_CAP", "3"),
-			TokenBudgetCap: env.WithDefaultInt("INFERENCE_SERVICE_AGENT_TOKEN_BUDGET_CAP", "8192"),
+			MaxStepsCap:           env.WithDefaultInt("INFERENCE_SERVICE_AGENT_MAX_STEPS_CAP", "3"),
+			TokenBudgetCap:        env.WithDefaultInt("INFERENCE_SERVICE_AGENT_TOKEN_BUDGET_CAP", "8192"),
+			WallMsCap:             env.WithDefaultInt("INFERENCE_SERVICE_AGENT_WALL_MS_CAP", "120000"),
+			RunReaperInterval:     time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_AGENT_RUN_REAPER_INTERVAL_SECONDS", "30")) * time.Second,
+			RunReaperSafetyFactor: env.WithDefaultInt("INFERENCE_SERVICE_AGENT_RUN_REAPER_SAFETY_FACTOR", "2"),
 		},
 		UserEvents: userevents.Config{
 			Enabled:        env.WithDefaultBool("USER_EVENTS_ENABLED", false),
@@ -665,7 +674,42 @@ func validateAgentConfig(cfg agentConfig) error {
 	if cfg.TokenBudgetCap <= 0 {
 		return fmt.Errorf("INFERENCE_SERVICE_AGENT_TOKEN_BUDGET_CAP must be greater than zero")
 	}
+	if cfg.WallMsCap <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_AGENT_WALL_MS_CAP must be greater than zero")
+	}
+	if cfg.RunReaperInterval <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_AGENT_RUN_REAPER_INTERVAL_SECONDS must be greater than zero")
+	}
+	if cfg.RunReaperSafetyFactor <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_AGENT_RUN_REAPER_SAFETY_FACTOR must be greater than zero")
+	}
 	return nil
+}
+
+func runAgentRunReaper(ctx context.Context, inferenceUsecase app.InferenceUsecase, interval time.Duration, safetyFactor int) error {
+	log.Trace("runAgentRunReaper")
+
+	reap := func() {
+		count, err := inferenceUsecase.ReapExpiredAgentRuns(ctx, safetyFactor)
+		if err != nil {
+			log.WithContext(ctx).WithError(err).Error("agent run reaper failed")
+			return
+		}
+		if count > 0 {
+			log.WithContext(ctx).WithField("count", count).Warn("marked expired agent runs failed")
+		}
+	}
+	reap()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			reap()
+		}
+	}
 }
 
 func validateHTTPServerConfig(cfg httpServerConfig, generation generationConfig) error {

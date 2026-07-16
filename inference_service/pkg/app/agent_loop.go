@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -98,6 +97,9 @@ func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.Gene
 func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint, spec *model.AgentSpec, inferenceModel *model.InferenceModel, datasets []*model.InferenceDataset, generator GenerationAdapter) (model.AgentResult, error) {
 	log.Trace("InferenceUsecase runAgentLoop")
 
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(spec.Budgets.WallMs)*time.Millisecond)
+	defer cancel()
+
 	session := &model.AgentSession{
 		OrgID:           request.OrgID,
 		UserID:          request.UserID,
@@ -108,28 +110,32 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 		Messages:        agentInitialMessages(spec, request.QueryText),
 		DecodingOptions: agentDecodingOptions(spec, request),
 	}
+	toolSpecs, err := u.toolInvoker.Available(runCtx, appToolResolutionContext(session), spec.ToolBindings)
+	if err != nil {
+		return model.AgentResult{}, err
+	}
+	session.ResolvedToolSpecs = toolSpecs
 	run, err := u.recordAgentRun(ctx, session, model.AgentRunStatusRunning, model.AgentStopReasonUnknown)
 	if err != nil {
 		return model.AgentResult{}, err
 	}
 	session.RunID = run.RunID
-	toolSpecs, err := u.toolInvoker.Available(ctx, session, spec.ToolBindings)
-	if err != nil {
-		return model.AgentResult{RunID: session.RunID}, u.failAgentRun(ctx, session, model.AgentStopReasonRuntimeError, err)
-	}
 	maxSteps := spec.Budgets.MaxSteps
 	var contexts []model.RetrievedContext
 	lastToolCallSignature := ""
 	repeatedToolCallCount := 0
 	transientToolFailures := map[string]int{}
 	for step := 0; step < maxSteps; step++ {
+		if err := runCtx.Err(); err != nil {
+			return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonDeadline, Steps: step}, u.failAgentRun(ctx, session, model.AgentStopReasonDeadline, err)
+		}
 		toolChoice := agentToolChoice(spec.ToolBindings, step)
 		generationOptions := agentStepGenerationOptions(session)
 		if agentTokenBudgetWouldExceed(session, estimateAgentPromptTokens(session.Messages, toolSpecs)) {
 			err := domain.ErrGenerationFailed.Extend("agent reached its token budget before generation")
 			return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonBudget, Steps: step}, u.failAgentRun(ctx, session, model.AgentStopReasonBudget, err)
 		}
-		gen, err := generator.Generate(ctx, model.GenerationRequest{
+		gen, err := generator.Generate(runCtx, model.GenerationRequest{
 			RequestID:  request.RequestID,
 			Model:      inferenceModel,
 			Query:      request.QueryText,
@@ -139,7 +145,8 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 			Options:    generationOptions,
 		})
 		if err != nil {
-			return model.AgentResult{RunID: session.RunID, Contexts: contexts, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonRuntimeError, err)
+			reason := agentRuntimeStopReason(err)
+			return model.AgentResult{RunID: session.RunID, Contexts: contexts, StopReason: reason, Steps: step + 1}, u.failAgentRun(ctx, session, reason, err)
 		}
 		session.TotalTokens += agentGenerationTokenUsage(gen.Usage, session.Messages, toolSpecs, gen)
 		stepID, err := u.recordAgentStep(ctx, session, step, toolSpecs, gen)
@@ -177,7 +184,7 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 				err := domain.ErrGenerationFailed.Extend("agent repeated the same tool call")
 				return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonLoopDetected, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonLoopDetected, err)
 			}
-			toolResult, err := u.toolInvoker.Invoke(ctx, session, call)
+			toolResult, err := u.toolInvoker.Invoke(runCtx, appToolInvocationContext(session), call)
 			if err != nil && toolResult.CallID == "" {
 				toolResult = model.ToolResult{
 					CallID:    call.ID,
@@ -197,9 +204,7 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 			if toolResult.IsError && toolResult.ErrorType == model.ToolErrorTypeUnknown {
 				toolResult.ErrorType = model.ToolErrorTypePermanent
 			}
-			if searchContexts, ok := agentToolContexts(toolResult); ok {
-				contexts = append(contexts, searchContexts...)
-			}
+			contexts = append(contexts, toolResult.Contexts...)
 			session.TotalTokens += toolResult.TokenEstimate
 			if err := u.recordAgentToolInvocation(ctx, session, stepID, call, toolResult); err != nil {
 				return model.AgentResult{RunID: session.RunID, Contexts: contexts, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonRuntimeError, err)
@@ -210,13 +215,15 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 					if err == nil {
 						err = domain.ErrGenerationFailed.Extend("agent transient tool failure retry limit exceeded")
 					}
-					return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonToolError, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonToolError, err)
+					reason := agentToolStopReason(err)
+					return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: reason, Steps: step + 1}, u.failAgentRun(ctx, session, reason, err)
 				}
 			} else if err != nil || toolResult.IsError || toolResult.ErrorType != model.ToolErrorTypeUnknown {
 				if err == nil {
 					err = domain.ErrGenerationFailed.Extend("agent tool call failed")
 				}
-				return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonToolError, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonToolError, err)
+				reason := agentToolStopReason(err)
+				return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: reason, Steps: step + 1}, u.failAgentRun(ctx, session, reason, err)
 			}
 			if agentTokenBudgetExceeded(session) {
 				err := domain.ErrGenerationFailed.Extend("agent reached its token budget before producing a final answer")
@@ -238,6 +245,45 @@ func agentToolResultIsTransient(result model.ToolResult) bool {
 	log.Trace("agentToolResultIsTransient")
 
 	return result.IsError && result.ErrorType == model.ToolErrorTypeTransient
+}
+
+func appToolResolutionContext(session *model.AgentSession) ToolResolutionContext {
+	log.Trace("appToolResolutionContext")
+
+	return ToolResolutionContext{
+		OrgID:  session.OrgID,
+		UserID: session.UserID,
+		Spec:   session.Spec,
+	}
+}
+
+func appToolInvocationContext(session *model.AgentSession) ToolInvocationContext {
+	log.Trace("appToolInvocationContext")
+
+	return ToolInvocationContext{
+		OrgID:    session.OrgID,
+		UserID:   session.UserID,
+		RunID:    session.RunID,
+		Datasets: session.Datasets,
+	}
+}
+
+func agentRuntimeStopReason(err error) model.AgentStopReason {
+	log.Trace("agentRuntimeStopReason")
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return model.AgentStopReasonDeadline
+	}
+	return model.AgentStopReasonRuntimeError
+}
+
+func agentToolStopReason(err error) model.AgentStopReason {
+	log.Trace("agentToolStopReason")
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return model.AgentStopReasonDeadline
+	}
+	return model.AgentStopReasonToolError
 }
 
 func (u *inferenceUsecase) failAgentRun(ctx context.Context, session *model.AgentSession, reason model.AgentStopReason, err error) error {
@@ -428,16 +474,4 @@ func agentToolChoice(bindings []model.ToolBinding, step int) string {
 		}
 	}
 	return ""
-}
-
-func agentToolContexts(result model.ToolResult) ([]model.RetrievedContext, bool) {
-	log.Trace("agentToolContexts")
-
-	var payload struct {
-		Contexts []model.RetrievedContext `json:"contexts"`
-	}
-	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
-		return nil, false
-	}
-	return payload.Contexts, len(payload.Contexts) > 0
 }

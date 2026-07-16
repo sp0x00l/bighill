@@ -43,18 +43,17 @@ func (u *inferenceUsecase) ensureAgentSpecPublishable(ctx context.Context, userI
 		if u.toolInvoker == nil {
 			return domain.ErrModelNotReady.Extend("agent tool invoker is not configured")
 		}
-		if _, err := u.toolInvoker.Available(ctx, &model.AgentSession{
+		if _, err := u.toolInvoker.Available(ctx, ToolResolutionContext{
 			OrgID:  spec.OrgID,
 			UserID: userID,
 			Spec:   spec,
-			Model:  inferenceModel,
 		}, spec.ToolBindings); err != nil {
 			return err
 		}
 		if u.capabilityReportRepository == nil {
 			return domain.ErrModelNotReady.Extend("model capability report repository is not configured")
 		}
-		report, err := u.capabilityReportRepository.ReadCapabilityReportForModel(ctx, spec.OrgID, spec.ModelID, spec.EffectiveBaseID)
+		report, err := u.capabilityReportRepository.ReadCapabilityReportForModel(ctx, spec.OrgID, spec.ModelID)
 		if err != nil && !errors.Is(err, domain.ErrModelNotReady) {
 			return err
 		}

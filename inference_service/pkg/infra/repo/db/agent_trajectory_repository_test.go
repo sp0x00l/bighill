@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -33,14 +34,16 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 	It("records agent runs using database-owned ids and timestamps", func() {
 		runID := uuid.New()
 		startedAt := time.Now().UTC()
+		deadlineAt := startedAt.Add(time.Duration(validAgentRun().WallMs) * time.Millisecond)
 		run := validAgentRun()
-		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{runID.String(), startedAt}}}
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{runID.String(), startedAt, deadlineAt}}}
 
 		recorded, err := repository.RecordAgentRun(ctx, run)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(recorded.RunID).To(Equal(runID))
 		Expect(recorded.StartedAt).To(Equal(startedAt))
+		Expect(recorded.DeadlineAt).To(Equal(deadlineAt))
 		Expect(pool.lastQuery).To(ContainSubstring("INSERT INTO test_db.agent_runs"))
 		Expect(pool.lastQuery).To(ContainSubstring("RETURNING run_id::text, started_at"))
 		Expect(pool.lastQuery).NotTo(ContainSubstring("started_at, finished_at"))
@@ -50,6 +53,7 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 			HaveKeyWithValue("user_id", pgtype.UUID{Bytes: run.UserID, Valid: true}),
 			HaveKeyWithValue("agent_spec_hash", run.AgentSpecHash),
 			HaveKeyWithValue("status", model.AgentRunStatusRunning.String()),
+			HaveKeyWithValue("wall_ms", run.WallMs),
 		))
 	})
 
@@ -59,13 +63,15 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 		startedAt := time.Now().UTC()
 		run.Status = model.AgentRunStatusCompleted
 		run.StopReason = model.AgentStopReasonFinalAnswer
-		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{run.RunID.String(), startedAt}}}
+		deadlineAt := startedAt.Add(time.Duration(run.WallMs) * time.Millisecond)
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{run.RunID.String(), startedAt, deadlineAt}}}
 
 		recorded, err := repository.RecordAgentRun(ctx, run)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(recorded.RunID).To(Equal(run.RunID))
 		Expect(recorded.StartedAt).To(Equal(startedAt))
+		Expect(recorded.DeadlineAt).To(Equal(deadlineAt))
 		Expect(pool.lastQuery).To(ContainSubstring("UPDATE test_db.agent_runs SET"))
 		Expect(pool.lastQuery).To(ContainSubstring("finished_at = CASE"))
 		Expect(pool.lastQuery).NotTo(ContainSubstring("started_at ="))
@@ -165,10 +171,10 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 		orgID := uuid.New()
 		userID := uuid.New()
 		endpointID := uuid.New()
-		effectiveBaseID := uuid.New()
 		stepID := uuid.New()
 		invocationID := uuid.New()
 		startedAt := time.Now().UTC()
+		deadlineAt := startedAt.Add(60 * time.Second)
 		finishedAt := startedAt.Add(time.Second)
 		createdAt := startedAt.Add(500 * time.Millisecond)
 		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{
@@ -177,19 +183,16 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 			userID.String(),
 			endpointID.String(),
 			"spec-hash",
-			effectiveBaseID.String(),
-			4,
 			"toolset-hash",
-			"rubric-v1",
 			"trajectory-v1",
-			"template-v1",
 			`{"temperature":0}`,
 			model.AgentRunStatusCompleted.String(),
 			model.AgentStopReasonFinalAnswer.String(),
 			startedAt,
+			deadlineAt,
 			finishedAt,
 			18,
-			model.AgentTrainingEligibilityTenantOnly.String(),
+			60000,
 		}}}
 		pool.nextQueryRows = []pgx.Rows{
 			&repositoryRows{rows: [][]any{{
@@ -227,6 +230,8 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 		Expect(trajectory.Run.Status).To(Equal(model.AgentRunStatusCompleted))
 		Expect(trajectory.Run.StopReason).To(Equal(model.AgentStopReasonFinalAnswer))
 		Expect(trajectory.Run.DecodingParams).To(MatchJSON(`{"temperature":0}`))
+		Expect(trajectory.Run.DeadlineAt).To(Equal(deadlineAt))
+		Expect(trajectory.Run.WallMs).To(Equal(60000))
 		Expect(trajectory.Steps).To(HaveLen(1))
 		Expect(trajectory.Steps[0].StepID).To(Equal(stepID))
 		Expect(trajectory.Steps[0].FinishReason).To(Equal(model.GenerationFinishReasonToolCalls))
@@ -246,6 +251,21 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 		Expect(errors.Is(err, domain.ErrAgentRunNotFound)).To(BeTrue())
 		Expect(pool.queryCalled).To(BeFalse())
 	})
+
+	It("marks expired running agent runs failed using the stored wall budget", func() {
+		pool.execTag = pgconn.NewCommandTag("UPDATE 3")
+
+		count, err := repository.FailExpiredAgentRuns(ctx, 2)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(count).To(Equal(int64(3)))
+		Expect(pool.execCalled).To(BeTrue())
+		Expect(pool.lastQuery).To(ContainSubstring("status = 'FAILED'::agent_run_status_enum"))
+		Expect(pool.lastQuery).To(ContainSubstring("stop_reason = 'RUNTIME_ERROR'::agent_stop_reason_enum"))
+		Expect(pool.lastQuery).To(ContainSubstring("WHERE status = 'RUNNING'::agent_run_status_enum"))
+		Expect(pool.lastQuery).To(ContainSubstring("wall_ms * @safety_multiplier"))
+		Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("safety_multiplier", 2))
+	})
 })
 
 func validAgentRun() *model.AgentRun {
@@ -254,13 +274,11 @@ func validAgentRun() *model.AgentRun {
 		UserID:                  uuid.New(),
 		EndpointID:              uuid.New(),
 		AgentSpecHash:           "sha256:spec",
-		ModelVersion:            3,
 		ToolsetHash:             "sha256:toolset",
 		TrajectorySchemaVersion: "agent_trajectory_v1",
-		SystemTemplateVersion:   "sha256:template",
 		DecodingParams:          []byte(`{"temperature":0}`),
 		Status:                  model.AgentRunStatusRunning,
-		TrainingEligibility:     model.AgentTrainingEligibilityTenantOnly,
+		WallMs:                  60000,
 	}
 }
 

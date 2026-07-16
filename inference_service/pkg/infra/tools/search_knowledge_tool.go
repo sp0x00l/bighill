@@ -75,26 +75,28 @@ func NewSearchKnowledgeToolInvoker(retrievalClient app.RetrievalClient) (*Search
 	}, nil
 }
 
-func (i *SearchKnowledgeToolInvoker) Available(ctx context.Context, session *model.AgentSession, bindings []model.ToolBinding) ([]model.ToolSpec, error) {
+func (i *SearchKnowledgeToolInvoker) Available(ctx context.Context, resolution app.ToolResolutionContext, bindings []model.ToolBinding) ([]model.ToolSpec, error) {
 	log.Trace("SearchKnowledgeToolInvoker Available")
 
 	_ = ctx
-	_ = session
+	_ = resolution
 	specs := make([]model.ToolSpec, 0, len(bindings))
 	for _, binding := range bindings {
 		if binding.Name != searchKnowledgeToolName {
 			return nil, domain.ErrValidationFailed.Extend("unknown agent tool binding")
 		}
 		specs = append(specs, model.ToolSpec{
-			Name:        searchKnowledgeToolName,
-			Description: "Search the endpoint's materialized knowledge datasets and return grounded context chunks.",
-			Parameters:  json.RawMessage(searchKnowledgeParametersSchema),
+			Name:                  searchKnowledgeToolName,
+			Description:           "Search the endpoint's materialized knowledge datasets and return grounded context chunks.",
+			Parameters:            json.RawMessage(searchKnowledgeParametersSchema),
+			ImplementationVersion: searchKnowledgeToolImplVersion,
+			Locality:              "local",
 		})
 	}
 	return specs, nil
 }
 
-func (i *SearchKnowledgeToolInvoker) Invoke(ctx context.Context, session *model.AgentSession, call model.ToolCall) (model.ToolResult, error) {
+func (i *SearchKnowledgeToolInvoker) Invoke(ctx context.Context, invocation app.ToolInvocationContext, call model.ToolCall) (model.ToolResult, error) {
 	log.Trace("SearchKnowledgeToolInvoker Invoke")
 
 	if call.Name != searchKnowledgeToolName {
@@ -118,9 +120,9 @@ func (i *SearchKnowledgeToolInvoker) Invoke(ctx context.Context, session *model.
 			ToolImplVersion: searchKnowledgeToolImplVersion,
 		}, err
 	}
-	contexts := make([]model.RetrievedContext, 0, len(session.Datasets)*args.TopK)
-	for _, dataset := range session.Datasets {
-		matches, err := i.retrievalClient.SearchEmbeddings(ctx, session.UserID, dataset.DatasetID, args.QueryText, args.TopK, args.MetadataFilters)
+	contexts := make([]model.RetrievedContext, 0, len(invocation.Datasets)*args.TopK)
+	for _, dataset := range invocation.Datasets {
+		matches, err := i.retrievalClient.SearchEmbeddings(ctx, invocation.UserID, dataset.DatasetID, args.QueryText, args.TopK, args.MetadataFilters)
 		if err != nil {
 			return model.ToolResult{
 				CallID:          call.ID,
@@ -145,6 +147,7 @@ func (i *SearchKnowledgeToolInvoker) Invoke(ctx context.Context, session *model.
 		CallID:          call.ID,
 		Name:            call.Name,
 		Content:         string(payload),
+		Contexts:        contexts,
 		ToolImplVersion: searchKnowledgeToolImplVersion,
 	}, nil
 }

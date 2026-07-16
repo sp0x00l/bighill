@@ -21,6 +21,7 @@ var _ = Describe("Role permissions", func() {
 		permissions := authz.PermissionsForRole(authz.RoleConsumer)
 
 		Expect(authz.HasPermission(permissions, authz.PermissionInferenceInvoke)).To(BeTrue())
+		Expect(authz.HasPermission(permissions, authz.PermissionInferenceAgentRunsRead)).To(BeTrue())
 		Expect(authz.HasPermission(permissions, authz.PermissionTrainingStart)).To(BeFalse())
 	})
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"inference_service/pkg/app"
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
 	toolspb "lib/data_contracts_lib/tools"
@@ -48,7 +49,7 @@ var _ = Describe("SearchKnowledgeToolInvoker", func() {
 		invoker, err := NewSearchKnowledgeToolInvoker(&retrievalClientStub{})
 		Expect(err).NotTo(HaveOccurred())
 
-		specs, err := invoker.Available(context.Background(), &model.AgentSession{OrgID: uuid.New(), UserID: uuid.New()}, []model.ToolBinding{{Name: "search_knowledge"}})
+		specs, err := invoker.Available(context.Background(), app.ToolResolutionContext{OrgID: uuid.New(), UserID: uuid.New()}, []model.ToolBinding{{Name: "search_knowledge"}})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(specs).To(HaveLen(1))
@@ -60,7 +61,7 @@ var _ = Describe("SearchKnowledgeToolInvoker", func() {
 		invoker, err := NewSearchKnowledgeToolInvoker(&retrievalClientStub{})
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = invoker.Available(context.Background(), &model.AgentSession{OrgID: uuid.New(), UserID: uuid.New()}, []model.ToolBinding{{Name: "http_get"}})
+		_, err = invoker.Available(context.Background(), app.ToolResolutionContext{OrgID: uuid.New(), UserID: uuid.New()}, []model.ToolBinding{{Name: "http_get"}})
 
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("unknown agent tool binding"))
@@ -69,9 +70,9 @@ var _ = Describe("SearchKnowledgeToolInvoker", func() {
 	It("validates tool-call arguments before retrieval", func() {
 		invoker, err := NewSearchKnowledgeToolInvoker(&retrievalClientStub{})
 		Expect(err).NotTo(HaveOccurred())
-		session := &model.AgentSession{UserID: uuid.New(), Datasets: []*model.InferenceDataset{{DatasetID: uuid.New()}}}
+		invocation := app.ToolInvocationContext{UserID: uuid.New(), Datasets: []*model.InferenceDataset{{DatasetID: uuid.New()}}}
 
-		result, err := invoker.Invoke(context.Background(), session, model.ToolCall{Name: "search_knowledge", Arguments: []byte(`{"top_k":1}`)})
+		result, err := invoker.Invoke(context.Background(), invocation, model.ToolCall{Name: "search_knowledge", Arguments: []byte(`{"top_k":1}`)})
 
 		Expect(err).To(HaveOccurred())
 		Expect(result.IsError).To(BeTrue())
@@ -88,9 +89,9 @@ var _ = Describe("SearchKnowledgeToolInvoker", func() {
 		}}}
 		invoker, err := NewSearchKnowledgeToolInvoker(retrieval)
 		Expect(err).NotTo(HaveOccurred())
-		session := &model.AgentSession{UserID: userID, Datasets: []*model.InferenceDataset{{DatasetID: datasetID}}}
+		invocation := app.ToolInvocationContext{UserID: userID, Datasets: []*model.InferenceDataset{{DatasetID: datasetID}}}
 
-		result, err := invoker.Invoke(context.Background(), session, model.ToolCall{
+		result, err := invoker.Invoke(context.Background(), invocation, model.ToolCall{
 			ID:        "call-1",
 			Name:      "search_knowledge",
 			Arguments: []byte(`{"query_text":"contract terms","top_k":4,"metadata_filters":{"section":"legal"}}`),
@@ -100,6 +101,8 @@ var _ = Describe("SearchKnowledgeToolInvoker", func() {
 		Expect(result.IsError).To(BeFalse())
 		Expect(result.ToolImplVersion).To(Equal(searchKnowledgeToolImplVersion))
 		Expect(result.Content).To(ContainSubstring("grounded context"))
+		Expect(result.Contexts).To(HaveLen(1))
+		Expect(result.Contexts[0].SourceText).To(Equal("grounded context"))
 		Expect(retrieval.userID).To(Equal(userID))
 		Expect(retrieval.datasetID).To(Equal(datasetID))
 		Expect(retrieval.queryText).To(Equal("contract terms"))
@@ -135,16 +138,17 @@ var _ = Describe("RoutedToolInvoker", func() {
 		Expect(err).NotTo(HaveOccurred())
 		routed, err := NewRoutedToolInvoker(searchInvoker, remoteInvoker, []string{SearchKnowledgeToolName})
 		Expect(err).NotTo(HaveOccurred())
-		session := &model.AgentSession{OrgID: uuid.New(), UserID: uuid.New()}
+		resolution := app.ToolResolutionContext{OrgID: uuid.New(), UserID: uuid.New()}
+		invocation := app.ToolInvocationContext{OrgID: resolution.OrgID, UserID: resolution.UserID, RunID: uuid.New()}
 
-		specs, err := routed.Available(context.Background(), session, []model.ToolBinding{{Name: "search_knowledge"}, {Name: "http_get"}})
+		specs, err := routed.Available(context.Background(), resolution, []model.ToolBinding{{Name: "search_knowledge"}, {Name: "http_get"}})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(specs).To(HaveLen(2))
-		Expect(remoteClient.listRequest.GetOrgId()).To(Equal(session.OrgID.String()))
-		Expect(remoteClient.listRequest.GetUserId()).To(Equal(session.UserID.String()))
+		Expect(remoteClient.listRequest.GetOrgId()).To(Equal(resolution.OrgID.String()))
+		Expect(remoteClient.listRequest.GetUserId()).To(Equal(resolution.UserID.String()))
 
-		result, err := routed.Invoke(context.Background(), session, model.ToolCall{
+		result, err := routed.Invoke(context.Background(), invocation, model.ToolCall{
 			ID:        "call-http",
 			Name:      "http_get",
 			Arguments: []byte(`{"url":"http://localhost/tool"}`),
@@ -165,10 +169,32 @@ var _ = Describe("RoutedToolInvoker", func() {
 		routed, err := NewRoutedToolInvoker(searchInvoker, nil, []string{SearchKnowledgeToolName})
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = routed.Available(context.Background(), &model.AgentSession{OrgID: uuid.New(), UserID: uuid.New()}, []model.ToolBinding{{Name: "http_get"}})
+		_, err = routed.Available(context.Background(), app.ToolResolutionContext{OrgID: uuid.New(), UserID: uuid.New()}, []model.ToolBinding{{Name: "http_get"}})
 
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("remote tool service is not configured"))
+	})
+
+	It("rejects duplicate requested tool names defensively", func() {
+		searchInvoker, err := NewSearchKnowledgeToolInvoker(&retrievalClientStub{})
+		Expect(err).NotTo(HaveOccurred())
+		remoteClient := &toolServiceClientStub{
+			listResponse: &toolspb.ListAvailableToolsResponse{Tools: []*toolspb.ToolDefinition{{
+				Name:                  "http_get",
+				Description:           "Fetch HTTP content.",
+				ParametersJson:        []byte(`{"type":"object"}`),
+				ImplementationVersion: "http_get:v1",
+			}}},
+		}
+		remoteInvoker, err := NewRemoteToolInvokerWithClient(remoteClient, newToolServiceDTOAdapter(validator.New()))
+		Expect(err).NotTo(HaveOccurred())
+		routed, err := NewRoutedToolInvoker(searchInvoker, remoteInvoker, []string{SearchKnowledgeToolName})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = routed.Available(context.Background(), app.ToolResolutionContext{OrgID: uuid.New(), UserID: uuid.New()}, []model.ToolBinding{{Name: "http_get"}, {Name: "HTTP_GET"}})
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("requested tool names must be unique"))
 	})
 })
 

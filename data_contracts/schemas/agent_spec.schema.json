@@ -9,24 +9,18 @@
     "agent_lineage",
     "model_binding",
     "budgets",
-    "runtime_mode",
     "tools"
   ],
   "properties": {
     "schema_version": { "type": "string", "minLength": 1 },
     "agent_lineage": { "type": "string", "minLength": 1 },
     "system_prompt": { "type": "string", "default": "" },
-    "runtime_mode": {
-      "type": "string",
-      "enum": ["interactive", "durable"]
-    },
     "model_binding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["model_id", "effective_base_id"],
+      "required": ["model_id"],
       "properties": {
-        "model_id": { "type": "string", "format": "uuid" },
-        "effective_base_id": { "type": "string", "format": "uuid" }
+        "model_id": { "type": "string", "format": "uuid" }
       }
     },
     "tools": {
@@ -42,10 +36,11 @@
     "budgets": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["max_steps", "token"],
+      "required": ["max_steps", "token", "wall_ms"],
       "properties": {
         "max_steps": { "type": "integer", "minimum": 1 },
-        "token": { "type": "integer", "minimum": 1 }
+        "token": { "type": "integer", "minimum": 1 },
+        "wall_ms": { "type": "integer", "minimum": 1000 }
       }
     },
     "stop_conditions": {

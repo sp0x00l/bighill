@@ -96,6 +96,10 @@ func (u *recordingInferenceUsecase) ReadAgentTrajectory(context.Context, uuid.UU
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) ReapExpiredAgentRuns(context.Context, int) (int64, error) {
+	return 0, nil
+}
+
 var _ = Describe("InferenceTopics", func() {
 	It("subscribes to registry topics", func() {
 		Expect(inferencemessaging.InferenceTopics{

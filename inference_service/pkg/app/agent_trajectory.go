@@ -10,6 +10,7 @@ import (
 	"inference_service/pkg/domain/model"
 	"lib/shared_lib/authz"
 	"lib/shared_lib/ctxutil"
+	serializers "lib/shared_lib/serializer"
 	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
@@ -28,22 +29,23 @@ func (u *inferenceUsecase) recordAgentRun(ctx context.Context, session *model.Ag
 	if err != nil {
 		return nil, fmt.Errorf("marshal decoding params: %w", err)
 	}
+	toolsetHash, err := agentToolsetHash(session.ResolvedToolSpecs)
+	if err != nil {
+		return nil, err
+	}
 	run := &model.AgentRun{
 		RunID:                   session.RunID,
 		OrgID:                   session.OrgID,
 		UserID:                  session.UserID,
 		EndpointID:              session.Endpoint.EndpointID,
 		AgentSpecHash:           session.Spec.ContentHash,
-		EffectiveBaseID:         session.Spec.EffectiveBaseID,
-		ModelVersion:            session.Model.ModelVersion,
-		ToolsetHash:             agentToolsetHash(session.Spec.ToolBindings),
+		ToolsetHash:             toolsetHash,
 		TrajectorySchemaVersion: agentTrajectorySchemaVersion,
-		SystemTemplateVersion:   agentSystemTemplateVersion(session.Spec),
 		DecodingParams:          decodingParams,
 		Status:                  status,
 		StopReason:              stopReason,
 		TotalTokens:             session.TotalTokens,
-		TrainingEligibility:     model.AgentTrainingEligibilityTenantOnly,
+		WallMs:                  session.Spec.Budgets.WallMs,
 	}
 	recorded, err := u.trajectoryRepository.RecordAgentRun(ctx, run)
 	if err != nil {
@@ -56,7 +58,7 @@ func (u *inferenceUsecase) recordAgentRun(ctx context.Context, session *model.Ag
 func (u *inferenceUsecase) recordAgentStep(ctx context.Context, session *model.AgentSession, stepIndex int, toolSpecs []model.ToolSpec, generationResult model.GenerationResult) (uuid.UUID, error) {
 	log.Trace("InferenceUsecase recordAgentStep")
 
-	presentedToolSchemas, err := json.Marshal(toolSpecs)
+	presentedToolSchemas, err := agentPresentedToolSchemas(toolSpecs)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("marshal presented tool schemas: %w", err)
 	}
@@ -123,6 +125,12 @@ func (u *inferenceUsecase) ReadAgentTrajectory(ctx context.Context, orgID uuid.U
 	return u.trajectoryRepository.ReadAgentTrajectory(ctx, orgID, runID)
 }
 
+func (u *inferenceUsecase) ReapExpiredAgentRuns(ctx context.Context, safetyMultiplier int) (int64, error) {
+	log.Trace("InferenceUsecase ReapExpiredAgentRuns")
+
+	return u.trajectoryRepository.FailExpiredAgentRuns(ctx, safetyMultiplier)
+}
+
 func (u *inferenceUsecase) publishAgentRunUserEvent(ctx context.Context, run *model.AgentRun) {
 	log.Trace("InferenceUsecase publishAgentRunUserEvent")
 
@@ -155,7 +163,7 @@ func (u *inferenceUsecase) publishAgentRunUserEvent(ctx context.Context, run *mo
 		SourceService:      "inference_service",
 		EventType:          eventType,
 		Severity:           severity,
-		RequiredPermission: authz.PermissionInferenceInvoke,
+		RequiredPermission: authz.PermissionInferenceAgentRunsRead,
 		UserID:             optionalAgentEventUUID(run.UserID),
 		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, run.RunID, "", "/v1/inference/agent-runs/"+run.RunID.String()),
 		Status: userevents.Status{
@@ -191,7 +199,7 @@ func (u *inferenceUsecase) publishAgentStepUserEvent(ctx context.Context, sessio
 		SourceService:      "inference_service",
 		EventType:          userevents.EventTypeAgentStepCompleted,
 		Severity:           userevents.SeverityInfo,
-		RequiredPermission: authz.PermissionInferenceInvoke,
+		RequiredPermission: authz.PermissionInferenceAgentRunsRead,
 		UserID:             optionalAgentEventUUID(session.UserID),
 		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, step.RunID, "", "/v1/inference/agent-runs/"+step.RunID.String()),
 		Status:             userevents.Status{State: string(step.FinishReason), Phase: userevents.StatusPhaseAgent},
@@ -231,7 +239,7 @@ func (u *inferenceUsecase) publishAgentToolResultUserEvent(ctx context.Context, 
 		SourceService:      "inference_service",
 		EventType:          userevents.EventTypeAgentToolResult,
 		Severity:           severity,
-		RequiredPermission: authz.PermissionInferenceInvoke,
+		RequiredPermission: authz.PermissionInferenceAgentRunsRead,
 		UserID:             optionalAgentEventUUID(session.UserID),
 		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, invocation.RunID, "", "/v1/inference/agent-runs/"+invocation.RunID.String()),
 		Status:             userevents.Status{State: state, Phase: userevents.StatusPhaseAgent},
@@ -260,35 +268,67 @@ func optionalAgentEventUUID(value uuid.UUID) string {
 	return value.String()
 }
 
-func agentSystemTemplateVersion(spec *model.AgentSpec) string {
-	log.Trace("agentSystemTemplateVersion")
-
-	if spec == nil {
-		return ""
-	}
-	if strings.TrimSpace(spec.SystemPrompt) == "" {
-		return spec.ContentHash
-	}
-	return userevents.SHA256String(strings.TrimSpace(spec.SystemPrompt))
-}
-
-func agentToolsetHash(bindings []model.ToolBinding) string {
+func agentToolsetHash(toolSpecs []model.ToolSpec) (string, error) {
 	log.Trace("agentToolsetHash")
 
-	parts := make([]string, 0, len(bindings))
-	for _, binding := range bindings {
-		config := strings.TrimSpace(string(binding.Config))
-		parts = append(parts, strings.Join([]string{
-			strings.TrimSpace(binding.Name),
-			fmt.Sprintf("%t", binding.Required),
-			strings.TrimSpace(binding.ToolChoice),
-			config,
-		}, "\x00"))
+	type hashedToolSpec struct {
+		Name                  string `json:"name"`
+		Description           string `json:"description"`
+		Parameters            any    `json:"parameters"`
+		Locality              string `json:"locality"`
+		ImplementationVersion string `json:"implementation_version"`
 	}
-	sort.Strings(parts)
-	sum := userevents.SHA256String(strings.Join(parts, "\x1f"))
-	if sum == "" {
-		return userevents.SHA256String("")
+	resolved := make([]hashedToolSpec, 0, len(toolSpecs))
+	for _, tool := range toolSpecs {
+		var parameters any
+		if len(tool.Parameters) == 0 {
+			parameters = map[string]any{}
+		} else if err := json.Unmarshal(tool.Parameters, &parameters); err != nil {
+			return "", fmt.Errorf("canonicalize tool parameters for %s: %w", tool.Name, err)
+		}
+		resolved = append(resolved, hashedToolSpec{
+			Name:                  strings.TrimSpace(tool.Name),
+			Description:           strings.TrimSpace(tool.Description),
+			Parameters:            parameters,
+			Locality:              strings.TrimSpace(tool.Locality),
+			ImplementationVersion: strings.TrimSpace(tool.ImplementationVersion),
+		})
 	}
-	return sum
+	sort.Slice(resolved, func(i, j int) bool {
+		if resolved[i].Name != resolved[j].Name {
+			return resolved[i].Name < resolved[j].Name
+		}
+		if resolved[i].Locality != resolved[j].Locality {
+			return resolved[i].Locality < resolved[j].Locality
+		}
+		return resolved[i].ImplementationVersion < resolved[j].ImplementationVersion
+	})
+	canonical, err := serializers.NewJSONSerializer().Serialize(resolved)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize resolved toolset: %w", err)
+	}
+	return userevents.SHA256String(string(canonical)), nil
+}
+
+func agentPresentedToolSchemas(toolSpecs []model.ToolSpec) ([]byte, error) {
+	log.Trace("agentPresentedToolSchemas")
+
+	type presentedToolSpec struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+	}
+	presented := make([]presentedToolSpec, 0, len(toolSpecs))
+	for _, tool := range toolSpecs {
+		parameters := tool.Parameters
+		if len(parameters) == 0 {
+			parameters = json.RawMessage(`{}`)
+		}
+		presented = append(presented, presentedToolSpec{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  parameters,
+		})
+	}
+	return json.Marshal(presented)
 }

@@ -78,29 +78,21 @@ Schemas live in [data_contracts/schemas](../data_contracts/schemas).
 `agent_spec.schema.json`
 
 - user-authored YAML/JSON contract for an agent spec
-- requires `schema_version`, `agent_lineage`, `runtime_mode`, `model_binding`, `tools`, and `budgets`
-- `model_binding` requires both `model_id` and `effective_base_id`
+- requires `schema_version`, `agent_lineage`, `model_binding`, `tools`, and `budgets`
+- `model_binding` requires `model_id`
 - `tools` must have non-empty names; the schema does not own the tool catalog
 - publish-time policy resolves those tool names against the configured local/remote tool registries
-- `budgets` requires `max_steps` and `token`
+- `budgets` requires `max_steps`, `token`, and `wall_ms`
 - the DTO adapter also enforces platform policy, such as tool-bound agents needing at least two steps
 
-`golden_task.schema.json`
+Trajectory persistence is service-owned database state, not a standalone cross-language schema in V1.
+It records the current interactive run tuple: `agent_spec_hash`, resolved `toolset_hash`, trajectory
+schema version, decoding params, status, stop reason, presented tool schemas, generation result, and
+tool invocation arguments/results. Future eval/training schemas are added with their own runtime
+slices rather than shipped as unused contracts.
 
-- describes eval/training seed tasks for future agent promotion
-- each task belongs to a split: `seed_train`, `dev_eval`, or `promotion_holdout`
-- carries hashes and fingerprints used to prevent train/eval leakage
-- `group_key` is a hint; `content_fingerprint` is the stronger anti-leak signal
-
-`trajectory.schema.json`
-
-- describes the durable run record used for audit and future training
-- requires a run tuple: `agent_spec_hash`, `effective_base_id`, `toolset_hash`, schema version, status, stop reason, and training eligibility
-- each step stores presented tool schemas, the generation result, finish reason, and tool invocations
-- tool invocations include tool name, implementation version, arguments, result, and error type
-
-The schema files are the contract source. Go validates at the service boundary; Python jobs may use
-generated Pydantic models as readers, not as the control-plane authority.
+The schema files are the contract source. Go validates at the service boundary; generated readers in
+other languages may consume them, but the control-plane authority stays in Go.
 
 ## Runtime Configuration
 

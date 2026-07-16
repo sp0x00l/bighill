@@ -35,7 +35,7 @@ type AgentSpecRepository interface {
 
 type CapabilityReportRepository interface {
 	RecordCapabilityReport(ctx context.Context, report *model.CapabilityReport) (*model.CapabilityReport, error)
-	ReadCapabilityReportForModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID, effectiveBaseID uuid.UUID) (*model.CapabilityReport, error)
+	ReadCapabilityReportForModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.CapabilityReport, error)
 }
 
 type InferenceRequestRepository interface {
@@ -47,15 +47,29 @@ type AgentTrajectoryRepository interface {
 	RecordAgentStep(ctx context.Context, step *model.AgentStep) (*model.AgentStep, error)
 	RecordToolInvocation(ctx context.Context, invocation *model.AgentToolInvocation) (*model.AgentToolInvocation, error)
 	ReadAgentTrajectory(ctx context.Context, orgID uuid.UUID, runID uuid.UUID) (*model.AgentTrajectory, error)
+	FailExpiredAgentRuns(ctx context.Context, safetyMultiplier int) (int64, error)
 }
 
 type UserEventPublisher interface {
 	Publish(ctx context.Context, event userevents.Event) error
 }
 
+type ToolResolutionContext struct {
+	OrgID  uuid.UUID
+	UserID uuid.UUID
+	Spec   *model.AgentSpec
+}
+
+type ToolInvocationContext struct {
+	OrgID    uuid.UUID
+	UserID   uuid.UUID
+	RunID    uuid.UUID
+	Datasets []*model.InferenceDataset
+}
+
 type ToolInvoker interface {
-	Available(ctx context.Context, session *model.AgentSession, bindings []model.ToolBinding) ([]model.ToolSpec, error)
-	Invoke(ctx context.Context, session *model.AgentSession, call model.ToolCall) (model.ToolResult, error)
+	Available(ctx context.Context, resolution ToolResolutionContext, bindings []model.ToolBinding) ([]model.ToolSpec, error)
+	Invoke(ctx context.Context, invocation ToolInvocationContext, call model.ToolCall) (model.ToolResult, error)
 }
 
 type InferenceFeedbackRepository interface {

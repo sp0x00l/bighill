@@ -27,11 +27,12 @@ var _ = Describe("Organization RBAC inference facade", Ordered, func() {
 		claims := decodeAccessTokenClaims(consumer.Token)
 		Expect(claims["orgId"]).To(Equal(admin.OrgID.String()))
 		Expect(claims["roles"]).To(Equal([]any{authz.RoleConsumer}))
-		Expect(claims["permissions"]).To(ConsistOf(
-			authz.PermissionInferenceEndpointsRead,
-			authz.PermissionInferenceInvoke,
-			authz.PermissionInferenceFeedback,
-		))
+			Expect(claims["permissions"]).To(ConsistOf(
+				authz.PermissionInferenceAgentRunsRead,
+				authz.PermissionInferenceEndpointsRead,
+				authz.PermissionInferenceInvoke,
+				authz.PermissionInferenceFeedback,
+			))
 
 		assertConsumerDeniedWriteRoutes(consumer)
 

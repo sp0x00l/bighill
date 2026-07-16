@@ -10,6 +10,7 @@ import (
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
 
+	"lib/shared_lib/ctxutil"
 	coreDB "lib/shared_lib/db"
 
 	"github.com/google/uuid"
@@ -35,16 +36,16 @@ func (r *AgentTrajectoryRepository) RecordAgentRun(ctx context.Context, run *mod
 		return r.updateAgentRun(ctx, run)
 	}
 	query := `INSERT INTO ` + r.Name + `.agent_runs (
-		org_id, user_id, endpoint_id, agent_spec_hash, effective_base_id, model_version,
-		toolset_hash, rubric_version, trajectory_schema_version, system_template_version, decoding_params,
-		status, stop_reason, total_tokens, training_eligibility
+		org_id, user_id, endpoint_id, agent_spec_hash,
+		toolset_hash, trajectory_schema_version, decoding_params,
+		status, stop_reason, total_tokens, wall_ms
 	) VALUES (
-		@org_id, @user_id, @endpoint_id, @agent_spec_hash, @effective_base_id, @model_version,
-		@toolset_hash, @rubric_version, @trajectory_schema_version, @system_template_version, @decoding_params::jsonb,
+		@org_id, @user_id, @endpoint_id, @agent_spec_hash,
+		@toolset_hash, @trajectory_schema_version, @decoding_params::jsonb,
 		@status::agent_run_status_enum, @stop_reason::agent_stop_reason_enum,
-		@total_tokens, @training_eligibility::agent_training_eligibility_enum
+		@total_tokens, @wall_ms
 	)
-	RETURNING run_id::text, started_at`
+	RETURNING run_id::text, started_at, started_at + (wall_ms * interval '1 millisecond')`
 	args, err := agentRunArgs(run)
 	if err != nil {
 		return nil, err
@@ -67,10 +68,9 @@ func (r *AgentTrajectoryRepository) updateAgentRun(ctx context.Context, run *mod
 		status = @status::agent_run_status_enum,
 		stop_reason = @stop_reason::agent_stop_reason_enum,
 		finished_at = CASE WHEN @status::text = 'RUNNING' THEN NULL ELSE now() END,
-		total_tokens = @total_tokens,
-		training_eligibility = @training_eligibility::agent_training_eligibility_enum
+		total_tokens = @total_tokens
 	WHERE run_id = @run_id AND org_id = @org_id
-	RETURNING run_id::text, started_at`
+	RETURNING run_id::text, started_at, started_at + (wall_ms * interval '1 millisecond')`
 	args, err := agentRunArgs(run)
 	if err != nil {
 		return nil, err
@@ -160,16 +160,35 @@ func (r *AgentTrajectoryRepository) ReadAgentTrajectory(ctx context.Context, org
 	}, nil
 }
 
+func (r *AgentTrajectoryRepository) FailExpiredAgentRuns(ctx context.Context, safetyMultiplier int) (int64, error) {
+	log.Trace("AgentTrajectoryRepository FailExpiredAgentRuns")
+
+	query := `UPDATE ` + r.Name + `.agent_runs SET
+		status = 'FAILED'::agent_run_status_enum,
+		stop_reason = 'RUNTIME_ERROR'::agent_stop_reason_enum,
+		finished_at = now()
+	WHERE status = 'RUNNING'::agent_run_status_enum
+		AND started_at + (wall_ms * @safety_multiplier * interval '1 millisecond') < now()`
+	tag, err := r.Pool.Exec(ctxutil.WithSystemContext(ctx), query, pgx.NamedArgs{
+		"safety_multiplier": safetyMultiplier,
+	})
+	if err != nil {
+		r.LogPoolStatsOnError(ctx, "fail expired agent runs failed", err)
+		return 0, fmt.Errorf("fail expired agent runs: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (r *AgentTrajectoryRepository) readAgentRun(ctx context.Context, orgID uuid.UUID, runID uuid.UUID) (*model.AgentRun, error) {
 	log.Trace("AgentTrajectoryRepository readAgentRun")
 
 	query := `SELECT
 		run_id::text, org_id::text, user_id::text, COALESCE(endpoint_id::text, ''),
-		agent_spec_hash, effective_base_id::text, model_version,
-		toolset_hash, rubric_version, trajectory_schema_version, system_template_version,
+		agent_spec_hash,
+		toolset_hash, trajectory_schema_version,
 		decoding_params::text, status::text, COALESCE(stop_reason::text, ''),
-		started_at, COALESCE(finished_at, 'epoch'::timestamptz), total_tokens,
-		training_eligibility::text
+		started_at, started_at + (wall_ms * interval '1 millisecond'),
+		COALESCE(finished_at, 'epoch'::timestamptz), total_tokens, wall_ms
 	FROM ` + r.Name + `.agent_runs
 	WHERE org_id = @org_id AND run_id = @run_id`
 	record, err := scanAgentRun(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
@@ -265,17 +284,13 @@ func agentRunArgs(run *model.AgentRun) (pgx.NamedArgs, error) {
 		"user_id":                   nullableUUID(run.UserID),
 		"endpoint_id":               nullableUUID(run.EndpointID),
 		"agent_spec_hash":           run.AgentSpecHash,
-		"effective_base_id":         nullableUUID(run.EffectiveBaseID),
-		"model_version":             run.ModelVersion,
 		"toolset_hash":              run.ToolsetHash,
-		"rubric_version":            run.RubricVersion,
 		"trajectory_schema_version": run.TrajectorySchemaVersion,
-		"system_template_version":   run.SystemTemplateVersion,
 		"decoding_params":           decodingParams,
 		"status":                    run.Status.String(),
 		"stop_reason":               nullableAgentStopReason(run.StopReason),
 		"total_tokens":              run.TotalTokens,
-		"training_eligibility":      run.TrainingEligibility.String(),
+		"wall_ms":                   run.WallMs,
 	}, nil
 }
 
@@ -362,7 +377,7 @@ func scanReturnedAgentRunIdentity(row pgx.Row, target *model.AgentRun) error {
 	log.Trace("scanReturnedAgentRunIdentity")
 
 	var raw string
-	if err := row.Scan(&raw, &target.StartedAt); err != nil {
+	if err := row.Scan(&raw, &target.StartedAt, &target.DeadlineAt); err != nil {
 		return err
 	}
 	id, err := uuid.Parse(raw)
@@ -407,16 +422,14 @@ func scanAgentRun(row pgx.Row) (*model.AgentRun, error) {
 	log.Trace("scanAgentRun")
 
 	var (
-		runIDRaw           string
-		orgIDRaw           string
-		userIDRaw          string
-		endpointIDRaw      string
-		effectiveBaseIDRaw string
-		decodingParamsRaw  string
-		statusRaw          string
-		stopReasonRaw      string
-		eligibilityRaw     string
-		run                model.AgentRun
+		runIDRaw          string
+		orgIDRaw          string
+		userIDRaw         string
+		endpointIDRaw     string
+		decodingParamsRaw string
+		statusRaw         string
+		stopReasonRaw     string
+		run               model.AgentRun
 	)
 	if err := row.Scan(
 		&runIDRaw,
@@ -424,19 +437,16 @@ func scanAgentRun(row pgx.Row) (*model.AgentRun, error) {
 		&userIDRaw,
 		&endpointIDRaw,
 		&run.AgentSpecHash,
-		&effectiveBaseIDRaw,
-		&run.ModelVersion,
 		&run.ToolsetHash,
-		&run.RubricVersion,
 		&run.TrajectorySchemaVersion,
-		&run.SystemTemplateVersion,
 		&decodingParamsRaw,
 		&statusRaw,
 		&stopReasonRaw,
 		&run.StartedAt,
+		&run.DeadlineAt,
 		&run.FinishedAt,
 		&run.TotalTokens,
-		&eligibilityRaw,
+		&run.WallMs,
 	); err != nil {
 		return nil, err
 	}
@@ -457,10 +467,6 @@ func scanAgentRun(row pgx.Row) (*model.AgentRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	run.EffectiveBaseID, err = parseAgentUUID(effectiveBaseIDRaw, "effective_base_id")
-	if err != nil {
-		return nil, err
-	}
 	run.Status, err = model.ToAgentRunStatus(statusRaw)
 	if err != nil {
 		return nil, err
@@ -470,10 +476,6 @@ func scanAgentRun(row pgx.Row) (*model.AgentRun, error) {
 		if err != nil {
 			return nil, err
 		}
-	}
-	run.TrainingEligibility, err = model.ToAgentTrainingEligibility(eligibilityRaw)
-	if err != nil {
-		return nil, err
 	}
 	run.DecodingParams = []byte(decodingParamsRaw)
 	return &run, nil

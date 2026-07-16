@@ -28,6 +28,7 @@ const (
 
 const (
 	PermissionInferenceEndpointsRead = "inference:endpoints:read"
+	PermissionInferenceAgentRunsRead = "inference:agent-runs:read"
 	PermissionInferenceInvoke        = "inference:invoke"
 	PermissionInferenceFeedback      = "inference:feedback"
 	PermissionDataRead               = "data:read"
@@ -44,11 +45,13 @@ const (
 var rolePermissions = map[string][]string{
 	RoleConsumer: {
 		PermissionInferenceEndpointsRead,
+		PermissionInferenceAgentRunsRead,
 		PermissionInferenceInvoke,
 		PermissionInferenceFeedback,
 	},
 	RoleMLResearcher: {
 		PermissionInferenceEndpointsRead,
+		PermissionInferenceAgentRunsRead,
 		PermissionInferenceInvoke,
 		PermissionInferenceFeedback,
 		PermissionDataRead,
@@ -61,6 +64,7 @@ var rolePermissions = map[string][]string{
 	},
 	RoleOrgAdmin: {
 		PermissionInferenceEndpointsRead,
+		PermissionInferenceAgentRunsRead,
 		PermissionInferenceInvoke,
 		PermissionInferenceFeedback,
 		PermissionDataRead,

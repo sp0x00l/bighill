@@ -237,8 +237,11 @@ var _ = Describe("runtime ML provider validation", func() {
 				IdleTimeout:  time.Second,
 			},
 			Agent: agentConfig{
-				MaxStepsCap:    3,
-				TokenBudgetCap: 512,
+				MaxStepsCap:           3,
+				TokenBudgetCap:        512,
+				WallMsCap:             60000,
+				RunReaperInterval:     time.Second,
+				RunReaperSafetyFactor: 2,
 			},
 		})
 
@@ -258,12 +261,26 @@ var _ = Describe("runtime ML provider validation", func() {
 				IdleTimeout:  time.Second,
 			},
 			Agent: agentConfig{
-				MaxStepsCap:    3,
-				TokenBudgetCap: 512,
+				MaxStepsCap:           3,
+				TokenBudgetCap:        512,
+				WallMsCap:             60000,
+				RunReaperInterval:     time.Second,
+				RunReaperSafetyFactor: 2,
 			},
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_RAG_MERGE_STRATEGY=reranker requires INFERENCE_SERVICE_RERANKER_PROVIDER")))
+	})
+
+	It("rejects non-positive agent wall clock caps", func() {
+		err := validateAgentConfig(agentConfig{
+			MaxStepsCap:           3,
+			TokenBudgetCap:        512,
+			RunReaperInterval:     time.Second,
+			RunReaperSafetyFactor: 2,
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_AGENT_WALL_MS_CAP must be greater than zero")))
 	})
 
 	It("rejects unknown query transformation providers", func() {

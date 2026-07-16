@@ -31,19 +31,16 @@ type AgentRunDTO struct {
 	OrgID                   string          `json:"org_id"`
 	EndpointID              string          `json:"endpoint_id,omitempty"`
 	AgentSpecHash           string          `json:"agent_spec_hash"`
-	EffectiveBaseID         string          `json:"effective_base_id,omitempty"`
-	ModelVersion            int             `json:"model_version"`
 	ToolsetHash             string          `json:"toolset_hash"`
-	RubricVersion           string          `json:"rubric_version"`
 	TrajectorySchemaVersion string          `json:"trajectory_schema_version"`
-	SystemTemplateVersion   string          `json:"system_template_version"`
 	DecodingParams          json.RawMessage `json:"decoding_params"`
 	Status                  string          `json:"status"`
 	StopReason              string          `json:"stop_reason,omitempty"`
 	StartedAt               string          `json:"started_at"`
+	DeadlineAt              string          `json:"deadline_at"`
 	FinishedAt              string          `json:"finished_at,omitempty"`
 	TotalTokens             int             `json:"total_tokens"`
-	TrainingEligibility     string          `json:"training_eligibility"`
+	WallMs                  int             `json:"wall_ms"`
 }
 
 type AgentStepDTO struct {
@@ -116,19 +113,16 @@ func agentRunDTO(run *model.AgentRun) AgentRunDTO {
 		OrgID:                   run.OrgID.String(),
 		EndpointID:              optionalUUIDString(run.EndpointID),
 		AgentSpecHash:           run.AgentSpecHash,
-		EffectiveBaseID:         optionalUUIDString(run.EffectiveBaseID),
-		ModelVersion:            run.ModelVersion,
 		ToolsetHash:             run.ToolsetHash,
-		RubricVersion:           run.RubricVersion,
 		TrajectorySchemaVersion: run.TrajectorySchemaVersion,
-		SystemTemplateVersion:   run.SystemTemplateVersion,
 		DecodingParams:          jsonRawOrEmptyObject(run.DecodingParams),
 		Status:                  run.Status.String(),
 		StopReason:              optionalStopReason(run.StopReason),
 		StartedAt:               timeString(run.StartedAt),
+		DeadlineAt:              timeString(run.DeadlineAt),
 		FinishedAt:              timeString(run.FinishedAt),
 		TotalTokens:             run.TotalTokens,
-		TrainingEligibility:     run.TrainingEligibility.String(),
+		WallMs:                  run.WallMs,
 	}
 }
 

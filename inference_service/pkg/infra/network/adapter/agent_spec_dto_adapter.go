@@ -32,6 +32,7 @@ type agentSpecDTOAdapter struct {
 	encoder             *serializers.Encoder
 	agentMaxStepsCap    int
 	agentTokenBudgetCap int
+	agentWallMsCap      int
 }
 
 type AgentSpecDTOAdapterOption func(*agentSpecDTOAdapter)
@@ -43,8 +44,6 @@ type AgentSpecDTO struct {
 	ContentHash      string `json:"content_hash"`
 	ValidationReport string `json:"validation_report"`
 	ModelID          string `json:"model_id"`
-	EffectiveBaseID  string `json:"effective_base_id,omitempty"`
-	RuntimeMode      string `json:"runtime_mode"`
 	Status           string `json:"status"`
 }
 
@@ -52,7 +51,6 @@ type agentSpecDocumentDTO struct {
 	SchemaVersion   string                `json:"schema_version" yaml:"schema_version" validate:"required"`
 	AgentLineage    string                `json:"agent_lineage" yaml:"agent_lineage" validate:"required"`
 	SystemPrompt    string                `json:"system_prompt,omitempty" yaml:"system_prompt"`
-	RuntimeMode     string                `json:"runtime_mode" yaml:"runtime_mode" validate:"required,oneof=interactive durable"`
 	ModelBinding    agentModelBindingDTO  `json:"model_binding" yaml:"model_binding" validate:"required"`
 	Tools           []agentToolBindingDTO `json:"tools" yaml:"tools" validate:"omitempty,dive"`
 	RetrievalConfig map[string]any        `json:"retrieval_config,omitempty" yaml:"retrieval_config"`
@@ -64,11 +62,11 @@ type agentSpecDocumentDTO struct {
 type agentBudgetsDTO struct {
 	MaxSteps int `json:"max_steps" yaml:"max_steps" validate:"required,min=1"`
 	Token    int `json:"token" yaml:"token" validate:"required,min=1"`
+	WallMs   int `json:"wall_ms" yaml:"wall_ms" validate:"required,min=1000"`
 }
 
 type agentModelBindingDTO struct {
-	ModelID         string `json:"model_id" yaml:"model_id" validate:"required,uuid,ne=00000000-0000-0000-0000-000000000000"`
-	EffectiveBaseID string `json:"effective_base_id" yaml:"effective_base_id" validate:"required,uuid,ne=00000000-0000-0000-0000-000000000000"`
+	ModelID string `json:"model_id" yaml:"model_id" validate:"required,uuid,ne=00000000-0000-0000-0000-000000000000"`
 }
 
 type agentToolBindingDTO struct {
@@ -78,12 +76,13 @@ type agentToolBindingDTO struct {
 	Config     map[string]any `json:"config,omitempty" yaml:"config"`
 }
 
-func WithAgentSpecBudgetCaps(maxSteps int, tokenBudget int) AgentSpecDTOAdapterOption {
+func WithAgentSpecBudgetCaps(maxSteps int, tokenBudget int, wallMs int) AgentSpecDTOAdapterOption {
 	log.Trace("WithAgentSpecBudgetCaps")
 
 	return func(a *agentSpecDTOAdapter) {
 		a.agentMaxStepsCap = maxSteps
 		a.agentTokenBudgetCap = tokenBudget
+		a.agentWallMsCap = wallMs
 	}
 }
 
@@ -143,8 +142,6 @@ func (a *agentSpecDTOAdapter) ToDTO(ctx context.Context, spec *model.AgentSpec) 
 			ContentHash:      spec.ContentHash,
 			ValidationReport: spec.ValidationReport,
 			ModelID:          spec.ModelID.String(),
-			EffectiveBaseID:  optionalUUIDString(spec.EffectiveBaseID),
-			RuntimeMode:      spec.RuntimeMode.String(),
 			Status:           spec.Status.String(),
 		})
 	}
@@ -160,10 +157,6 @@ func (a *agentSpecDTOAdapter) fromDTO(dto agentSpecDocumentDTO, sourceYAML strin
 	log.Trace("AgentSpecDTOAdapter fromDTO")
 
 	modelID, err := parseRequiredUUID(dto.ModelBinding.ModelID, "agent spec model_binding.model_id is invalid")
-	if err != nil {
-		return model.AgentSpecPublication{}, err
-	}
-	effectiveBaseID, err := parseRequiredUUID(dto.ModelBinding.EffectiveBaseID, "agent spec model_binding.effective_base_id is invalid")
 	if err != nil {
 		return model.AgentSpecPublication{}, err
 	}
@@ -186,10 +179,6 @@ func (a *agentSpecDTOAdapter) fromDTO(dto agentSpecDocumentDTO, sourceYAML strin
 	if err := a.validateBudgetCaps(dto.Budgets, toolBindings); err != nil {
 		return model.AgentSpecPublication{}, err
 	}
-	runtimeMode, err := agentRuntimeModeFromDTO(dto.RuntimeMode)
-	if err != nil {
-		return model.AgentSpecPublication{}, err
-	}
 	validationReport = validationReport + ";policy_status=validated"
 	spec := &model.AgentSpec{
 		AgentLineage:     strings.TrimSpace(dto.AgentLineage),
@@ -200,16 +189,15 @@ func (a *agentSpecDTOAdapter) fromDTO(dto agentSpecDocumentDTO, sourceYAML strin
 		ContentHash:      model.CanonicalAgentSpecHash(canonical),
 		ValidationReport: validationReport,
 		ModelID:          modelID,
-		EffectiveBaseID:  effectiveBaseID,
 		ToolBindings:     toolBindings,
 		RetrievalConfig:  retrievalConfig,
 		Budgets: model.AgentBudgets{
 			MaxSteps: dto.Budgets.MaxSteps,
 			Token:    dto.Budgets.Token,
+			WallMs:   dto.Budgets.WallMs,
 		},
 		StopConditions: stopConditions,
 		Guardrails:     guardrails,
-		RuntimeMode:    runtimeMode,
 		Status:         model.AgentSpecStatusValidated,
 	}
 	return model.AgentSpecPublication{Spec: spec}, nil
@@ -226,6 +214,9 @@ func (a *agentSpecDTOAdapter) validateBudgetCaps(dto agentBudgetsDTO, toolBindin
 	}
 	if a.agentTokenBudgetCap > 0 && dto.Token > a.agentTokenBudgetCap {
 		return domain.ErrValidationFailed.Extend("agent spec token budget exceeds deployment cap")
+	}
+	if a.agentWallMsCap > 0 && dto.WallMs > a.agentWallMsCap {
+		return domain.ErrValidationFailed.Extend("agent spec wall_ms exceeds deployment cap")
 	}
 	return nil
 }
@@ -322,22 +313,18 @@ func normalizeYAMLValue(value any) any {
 	}
 }
 
-func agentRuntimeModeFromDTO(value string) (model.AgentRuntimeMode, error) {
-	log.Trace("agentRuntimeModeFromDTO")
-
-	runtimeMode, err := model.ToAgentRuntimeMode(value)
-	if err != nil {
-		return model.AgentRuntimeModeUnknown, domain.ErrValidationFailed.Extend(err.Error())
-	}
-	return runtimeMode, nil
-}
-
 func toolBindingsFromDTO(dtos []agentToolBindingDTO) ([]model.ToolBinding, error) {
 	log.Trace("toolBindingsFromDTO")
 
 	out := make([]model.ToolBinding, 0, len(dtos))
+	seen := make(map[string]struct{}, len(dtos))
 	for _, dto := range dtos {
 		name := strings.TrimSpace(dto.Name)
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			return nil, domain.ErrValidationFailed.Extend("agent spec tool names must be unique")
+		}
+		seen[key] = struct{}{}
 		config, err := marshalMap(dto.Config)
 		if err != nil {
 			return nil, err

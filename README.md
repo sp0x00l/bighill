@@ -5,9 +5,9 @@
 **A self-hosted platform for building RAG and fine-tuned LLM systems.**
 
 BigHill is a set of Go microservices tied together with Temporal workflows, Kafka events, per-service
-Postgres databases, pgvector for retrieval, Ray/KubeRay for training jobs, and Kubernetes-backed vLLM
-serving. Python is confined to the GPU batch jobs. It owns the whole lifecycle — data, models,
-inference, feedback, and retraining.
+Postgres databases, pgvector for retrieval, Ray/KubeRay for training jobs, Kubernetes-backed vLLM
+serving, and guarded agent/tool execution. Python is confined to the GPU batch jobs. It owns the
+whole lifecycle — data, models, inference, feedback, agent trajectories, and retraining.
 
 ## Tech Stack
 
@@ -60,7 +60,9 @@ inference, feedback, and retraining.
 - OpenAI-compatible chat completions: common generation protocol for vLLM and compatible runtimes.
 - Ollama generate API: local generation protocol for Ollama-backed models.
 - tiktoken-go: token-aware prompt/context budgeting.
-- JSON Schema: validation for structured tool/inference payloads.
+- Agent loop: guarded generate -> tool -> observe -> generate runtime for agent-mode endpoints.
+- tool_service: isolated execution boundary for world-acting tools, starting with allowlisted `http_get`.
+- JSON Schema: source-of-truth contract for agent specs; future eval/training schemas land with their runtimes.
 
 ### Data / Lakehouse / Query
 
@@ -143,7 +145,8 @@ Data flows through the platform roughly like this:
 ```
 data ─▶ registry ─▶ ingestion ─▶ feature materialization ─▶ embeddings
      ─▶ training / evaluation ─▶ model registry ─▶ serving ─▶ inference
-     ─▶ feedback ─▶ preference datasets ─▶ DPO / retrain
+     ├▶ RAG answers ─▶ feedback ─▶ preference datasets ─▶ DPO / retrain
+     └▶ agent loop ─▶ tools ─▶ trajectories ─▶ future agent eval / retrain
 ```
 
 The design follows the **FTI split — Feature, Training, Inference** — as an event-driven platform:
@@ -152,10 +155,11 @@ durable Temporal workflows. Kubernetes, Ray, and vLLM handle the ML runtime; the
 stays in batch jobs behind clean boundaries.
 
 > **Maturity:** the core lifecycle is implemented and covered by end-to-end tests — ingestion,
-> materialization, training, champion/challenger promotion, serving, RAG inference, and the
-> feedback-driven DPO retrain loop all run. The areas still maturing are **multi-LoRA serving**,
-> **deeper evaluation** (Ragas/DeepEval, golden sets, drift), and the **full lakehouse path**
-> (Iceberg / Polaris / Nessie). See [Where it's headed](#where-its-headed).
+> materialization, training, champion/challenger promotion, serving, RAG inference, agent spec
+> publishing, guarded tool calls, and the feedback-driven DPO retrain loop all run. The areas still
+> maturing are **multi-LoRA serving**, **agent evaluation/training**, **deeper evaluation**
+> (Ragas/DeepEval, golden sets, drift), and the **full lakehouse path** (Iceberg / Polaris / Nessie).
+> See [Where it's headed](#where-its-headed).
 
 ---
 
@@ -170,6 +174,14 @@ stays in batch jobs behind clean boundaries.
 - Serves **RAG inference** across **one or more datasets per endpoint**, with a configurable merge
   strategy (`reranker` or `score_normalized`): retrieval, reranking, query rewriting, prompt packing,
   generation, and a full audit trail of every request.
+- Publishes **agent specs** as immutable, content-addressed YAML/JSON artifacts that bind a model,
+  tools, budgets, and guardrails.
+- Runs **agent-mode endpoints** through a bounded loop: generate, execute authorized tools, feed tool
+  results back, and stop on a final answer, budget, loop detection, or failure.
+- Executes **world-acting tools** through `tool_service`, which enforces tenant allowlists, argument
+  validation, egress controls, timeouts, response caps, and boundary audit.
+- Records **agent trajectories** as structured run/step/tool-invocation state for audit and future
+  trajectory evaluation or training.
 - Captures **feedback** and turns it into **preference datasets** for alignment.
 - Runs **SFT and DPO training** on Ray/KubeRay using Axolotl-style recipes.
 - **Evaluates models and gates promotion** through the model registry (absolute floors +
@@ -196,6 +208,49 @@ The recurring discipline: **Postgres for each service's state, Kafka for events 
 Temporal for durable workflows, and Kubernetes/Ray/vLLM for the ML runtime.** Every service uses the
 same hexagonal layering — `pkg/domain` (the model), `pkg/app` (the logic and its interfaces),
 `pkg/infra` (the adapters: DB, messaging, network) — and ships its own Helm chart.
+
+The agent/tool design is described in [Agent Tool Plane](docs/agent-tool-plane.md). The short version:
+`inference_service` owns the loop and durable trajectory state; `tool_service` owns execution of
+tools that can reach outside inference; `data_contracts/schemas` owns the JSON Schema contracts.
+
+---
+
+## Agent rails
+
+The agent work in this repo is deliberately a set of rails, not an unbounded autonomous runtime.
+An endpoint can still be ordinary RAG, but it can also bind an agent spec and run in agent mode. In
+agent mode the runtime asks the model for either a final answer or structured tool calls. Tool calls
+are validated, executed, recorded, and fed back into the next generation step until the run ends.
+
+The first local tool is `search_knowledge`, which wraps the same tenant-scoped pgvector retrieval used
+by RAG. Tools that act outside inference go through `tool_service`; the current remote tool is
+`http_get`. That service is intentionally narrow: it validates the caller org/user, rejects unknown
+or disabled tools, validates arguments, allows only configured hosts, blocks internal network targets,
+disables redirects and environment proxies, caps response size, applies timeouts, and writes a
+boundary audit record. The point is capability containment: even if a prompt injection convinces the
+model to ask for a dangerous call, the tool can only do what tenant policy permits.
+
+Agent runs are not just logged as text. They are persisted as trajectories: a run row, ordered step
+rows, and tool invocation rows. The trajectory pins the tuple that produced the behavior, including
+the agent spec hash, resolved toolset hash, decoding params, presented tool schemas, generation
+result, tool arguments/results, implementation version, error type, status, and stop reason. This
+makes a run refetchable for debugging now without declaring unbuilt training lifecycle state.
+
+### Schema design
+
+The agent contracts live in [`data_contracts/schemas`](data_contracts/schemas):
+
+- [`agent_spec.schema.json`](data_contracts/schemas/agent_spec.schema.json) is the authoring contract.
+  Users can write YAML, but the service converts it to JSON, validates it against this schema, then
+  canonicalizes and hashes it. The spec must name a lineage, model binding (`model_id`), tools, and
+  budgets (`max_steps`, `token`, `wall_ms`). The schema owns shape; publish-time policy owns
+  decisions such as budget caps, tool availability, and model capability.
+
+The schema file is the cross-language contract. Go enforces it at the DTO adapter boundary before
+app code receives domain objects, then applies service policy. The original YAML is retained for
+human diffing, and the canonical JSON is the executed artifact. Python jobs can consume generated
+read-only models from the same schemas, but the control-plane authority stays in Go and the JSON
+Schemas.
 
 ---
 
@@ -233,9 +288,10 @@ Two operational limits are worth calling out:
   `INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS` — otherwise the gateway sees an EOF even
   though generation finishes in the inference handler.
 
-The API e2e suite is split for local capacity. `make test-api` runs the core gateway/service workflows
-without loading the external datasource fixtures. Run `make test-api-data-sources` when you explicitly
-want the datasource stack and the `external-datasource` API specs.
+The test suite runs against the datasource compose stack by default. `make test` includes the
+`data_stream_service` datasource integration specs, and `make test-api` starts the Postgres, MySQL,
+MongoDB, and ClickHouse datasource fixtures before running the `external-datasource` API specs. Use
+`make test-api-data-sources` when you only want the datasource-backed API specs.
 
 Serving detail (the local Ollama backend, GGUF onboarding, and the model-family / chat-template
 boundary) lives in [`model_serving_service/README.md`](model_serving_service/README.md). One trap is
@@ -410,10 +466,11 @@ sequenceDiagram
 | `training_service/training_jobs/` | Python GPU jobs (Axolotl train, evaluation) run by Ray |
 | `model_registry_service/` | Model records, promotion gating, serving intent + status, outbox |
 | `model_serving_service/` | K8s operator that reconciles serving to vLLM; `localserving` for dev |
-| `inference_service/` | RAG inference, retrieval/rerank/query-rewrite, generation, auditing, feedback |
+| `inference_service/` | RAG inference, agent loop, retrieval/rerank/query-rewrite, generation, trajectories, feedback |
+| `tool_service/` | Isolated execution boundary for world-acting agent tools |
 | `tenant_service/` | Auth (OAuth / password) and user profiles |
 | `api_gateway/` | Edge (Lambda auth/api) and end-to-end API tests |
-| `data_contracts/` | Protobuf event and service contracts |
+| `data_contracts/` | Protobuf event/service contracts and JSON Schema agent contracts |
 | `shared_lib/` | Shared plumbing: messaging, outbox, DB, metrics/tracing, auth, object storage, K8s client |
 | `infra/`, `database/`, `scripts/` | Infra manifests, DB, tooling |
 | `docs/adr/` | Design docs |
@@ -467,6 +524,8 @@ The next work is depth and reliability, not first light:
 - **Mature multi-LoRA serving** so one base model can serve many tenant adapters cheaply.
 - **Better RAG:** structure-aware chunking, hybrid BM25 + vector search, self-querying, HyDE, query
   expansion.
+- **Agent lifecycle:** trajectory eval, golden task promotion gates, and agent adapter retraining on
+  the same feedback-driven spine as model DPO.
 - **Push the lakehouse path:** Iceberg, Polaris / Nessie, DataFusion, Arrow Flight.
 - **Product surfaces:** lineage UI, feedback review, eval dashboards, deployment status, tenant controls.
 - **Harden the Kubernetes controller**, leaning more on standard controller-runtime / KServe / KubeRay

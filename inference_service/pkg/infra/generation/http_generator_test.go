@@ -145,6 +145,48 @@ var _ = Describe("HTTPGenerator", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Content).To(Equal("generated from served model"))
 	})
+
+	It("does not serialize tool provenance into the model-facing OpenAI tool payload", func() {
+		var received map[string]any
+		generator := NewHTTPGenerator("OPENAI_CHAT_COMPLETIONS", time.Second, 128)
+		generator.client = httpGeneratorTestClient(`{"choices":[{"message":{"content":"generated with tool schema"}}]}`, func(r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(body)).NotTo(ContainSubstring("implementation_version"))
+			Expect(string(body)).NotTo(ContainSubstring("locality"))
+			Expect(json.Unmarshal(body, &received)).To(Succeed())
+		})
+
+		result, err := generator.Generate(context.Background(), model.GenerationRequest{
+			Model: &model.InferenceModel{
+				ServingTarget: "http://vllm.local",
+				ServingModel:  "tool-model",
+			},
+			Messages: []model.ChatMessage{{
+				Role:    model.ChatMessageRoleUser,
+				Content: "use a tool",
+			}},
+			Tools: []model.ToolSpec{{
+				Name:                  "search_knowledge",
+				Description:           "Search tenant knowledge.",
+				Parameters:            []byte(`{"type":"object","properties":{"query":{"type":"string"}}}`),
+				ImplementationVersion: "search_knowledge:v1",
+				Locality:              "local",
+			}},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Content).To(Equal("generated with tool schema"))
+		tools, ok := received["tools"].([]any)
+		Expect(ok).To(BeTrue())
+		Expect(tools).To(HaveLen(1))
+		tool := tools[0].(map[string]any)
+		Expect(tool).To(HaveKeyWithValue("type", "function"))
+		function := tool["function"].(map[string]any)
+		Expect(function).To(HaveKeyWithValue("name", "search_knowledge"))
+		Expect(function).NotTo(HaveKey("implementation_version"))
+		Expect(function).NotTo(HaveKey("locality"))
+	})
 })
 
 type httpGeneratorRoundTripFunc func(*http.Request) (*http.Response, error)

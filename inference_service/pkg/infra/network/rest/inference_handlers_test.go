@@ -166,6 +166,10 @@ func (s *inferenceUsecaseStub) ReadAgentTrajectory(context.Context, uuid.UUID, u
 	return s.agentTrajectory, s.err
 }
 
+func (s *inferenceUsecaseStub) ReapExpiredAgentRuns(context.Context, int) (int64, error) {
+	return 0, nil
+}
+
 var _ = Describe("InferenceHandlers", func() {
 	var (
 		usecase    *inferenceUsecaseStub
@@ -274,15 +278,11 @@ var _ = Describe("InferenceHandlers", func() {
 				OrgID:                   orgID,
 				EndpointID:              endpointID,
 				AgentSpecHash:           "spec-hash",
-				ModelVersion:            2,
 				ToolsetHash:             "toolset-hash",
-				RubricVersion:           "rubric-v1",
 				TrajectorySchemaVersion: "trajectory-v1",
-				SystemTemplateVersion:   "template-v1",
 				DecodingParams:          []byte(`{"temperature":0}`),
 				Status:                  model.AgentRunStatusCompleted,
 				StopReason:              model.AgentStopReasonFinalAnswer,
-				TrainingEligibility:     model.AgentTrainingEligibilityTenantOnly,
 			},
 			Steps: []*model.AgentStep{{
 				StepID:               stepID,

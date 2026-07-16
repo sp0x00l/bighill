@@ -529,16 +529,11 @@ func (r *rerankIntegrationReranker) Rerank(_ context.Context, _ string, candidat
 
 func cleanInferenceTables(ctx context.Context, database *dbconn.Database) error {
 	for _, table := range []string{
-		"agent_run_labels",
 		"agent_tool_invocations",
 		"agent_steps",
 		"agent_runs",
-		"golden_tasks",
-		"agent_adapters",
-		"agent_champion_states",
 		"agent_specs",
 		"capability_reports",
-		"effective_base_versions",
 		"lineage_eval_examples",
 		"lineage_eval_sets",
 		"preference_dataset_snapshots",

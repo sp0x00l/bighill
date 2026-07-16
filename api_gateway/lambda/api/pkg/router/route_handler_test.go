@@ -426,7 +426,7 @@ var _ = Describe("NewRouter", func() {
 		agentRunResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod:     http.MethodGet,
 			Path:           "/v1/private/inference/agent-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
-			RequestContext: authorizerContext(authz.PermissionInferenceEndpointsRead),
+			RequestContext: authorizerContext(authz.PermissionInferenceAgentRunsRead),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(agentRunResp.StatusCode).To(Equal(http.StatusOK))

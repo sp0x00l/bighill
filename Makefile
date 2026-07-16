@@ -88,12 +88,13 @@ test-servers:
 
 test-api:
 	@set -e; \
-	cleanup() { cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; cd "$(CURDIR)" && scripts/stop-servers.sh || true; cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; }; \
+	cleanup() { cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; cd "$(CURDIR)" && scripts/stop-data-sources.sh || true; cd "$(CURDIR)" && scripts/stop-servers.sh || true; cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; }; \
 	trap cleanup EXIT; \
 	cd "$(CURDIR)/api_gateway" && ./scripts/stop.sh || true; \
+	cd "$(CURDIR)" && scripts/stop-data-sources.sh || true; \
 	cd "$(CURDIR)" && scripts/stop-servers.sh || true; \
 	cd "$(CURDIR)" && scripts/stop-infra.sh $(ENV) || true; \
-	cd "$(CURDIR)" && BIGHILL_START_DATA_SOURCES=false scripts/start-infra.sh $(ENV); \
+	cd "$(CURDIR)" && BIGHILL_START_DATA_SOURCES=true scripts/start-infra.sh $(ENV); \
 	cd "$(CURDIR)" && scripts/kafka/kafka-clean-topics.sh $(ENV); \
 	cd "$(CURDIR)" && scripts/kafka/kafka-create-topics.sh $(ENV); \
 	cd "$(CURDIR)" && api_gateway/scripts/check-docker.sh; \

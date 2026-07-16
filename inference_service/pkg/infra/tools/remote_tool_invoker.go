@@ -97,13 +97,13 @@ func (i *RemoteToolInvoker) Close() error {
 	return i.conn.Close()
 }
 
-func (i *RemoteToolInvoker) Available(ctx context.Context, session *model.AgentSession, bindings []model.ToolBinding) ([]model.ToolSpec, error) {
+func (i *RemoteToolInvoker) Available(ctx context.Context, resolution app.ToolResolutionContext, bindings []model.ToolBinding) ([]model.ToolSpec, error) {
 	log.Trace("RemoteToolInvoker Available")
 
 	if len(bindings) == 0 {
 		return nil, nil
 	}
-	req, err := i.adapter.ToListAvailableToolsRequest(session)
+	req, err := i.adapter.ToListAvailableToolsRequest(resolution)
 	if err != nil {
 		return nil, err
 	}
@@ -115,11 +115,11 @@ func (i *RemoteToolInvoker) Available(ctx context.Context, session *model.AgentS
 	return i.adapter.FromListAvailableToolsResponse(resp, bindings)
 }
 
-func (i *RemoteToolInvoker) Invoke(ctx context.Context, session *model.AgentSession, call model.ToolCall) (model.ToolResult, error) {
+func (i *RemoteToolInvoker) Invoke(ctx context.Context, invocation app.ToolInvocationContext, call model.ToolCall) (model.ToolResult, error) {
 	log.Trace("RemoteToolInvoker Invoke")
 
 	invocationID := uuid.New()
-	req, err := i.adapter.ToInvokeToolRequest(session, call, invocationID)
+	req, err := i.adapter.ToInvokeToolRequest(invocation, call, invocationID)
 	if err != nil {
 		return model.ToolResult{
 			InvocationID: invocationID,

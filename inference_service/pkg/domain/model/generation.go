@@ -94,9 +94,11 @@ type ChatMessage struct {
 }
 
 type ToolSpec struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
+	Name                  string          `json:"name"`
+	Description           string          `json:"description"`
+	Parameters            json.RawMessage `json:"parameters"`
+	ImplementationVersion string          `json:"implementation_version,omitempty"`
+	Locality              string          `json:"locality,omitempty"`
 }
 
 type ToolCall struct {

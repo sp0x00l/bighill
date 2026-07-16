@@ -28,7 +28,7 @@ run_api_gateway_tests()
         ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1 --label-filter='!real-huggingface && !external-datasource'
     fi
 
-    if [ "${API_GATEWAY_RUN_DATASOURCE_TESTS:-false}" = "true" ]; then
+    if [ "${API_GATEWAY_RUN_DATASOURCE_TESTS:-true}" = "true" ]; then
         "$PROJECT_ROOT/scripts/start-data-sources.sh"
         ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1 --label-filter='external-datasource'
     fi
