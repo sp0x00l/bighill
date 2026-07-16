@@ -165,6 +165,7 @@ func (s *rerankerStub) Rerank(_ context.Context, query string, candidates []mode
 type generationAdapterStub struct {
 	request   model.GenerationRequest
 	requests  []model.GenerationRequest
+	results   []model.GenerationResult
 	answer    string
 	toolCalls []model.ToolCall
 	err       error
@@ -175,6 +176,11 @@ func (s *generationAdapterStub) Generate(_ context.Context, request model.Genera
 	s.requests = append(s.requests, request)
 	if s.err != nil {
 		return model.GenerationResult{}, s.err
+	}
+	if len(s.results) > 0 {
+		result := s.results[0]
+		s.results = s.results[1:]
+		return result, nil
 	}
 	if len(request.Tools) > 0 && len(s.toolCalls) > 0 {
 		return model.GenerationResult{ToolCalls: s.toolCalls, FinishReason: model.GenerationFinishReasonToolCalls}, nil
@@ -748,7 +754,7 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(terminal.TotalTokens).To(BeNumerically(">", 0))
 	})
 
-	It("marks the agent run failed when a tool invocation fails", func() {
+	It("marks the agent run failed when a permanent tool invocation fails", func() {
 		dataset := validInferenceDataset()
 		inferenceModel := validInferenceModel()
 		inferenceModel.UserID = dataset.UserID
@@ -793,9 +799,9 @@ var _ = Describe("InferenceUsecase", func() {
 					Parameters: []byte(`{"type":"object"}`),
 				}},
 				result: model.ToolResult{
-					Content:         `{"status":500}`,
+					Content:         `{"status":400}`,
 					IsError:         true,
-					ErrorType:       model.ToolErrorTypeTransient,
+					ErrorType:       model.ToolErrorTypePermanent,
 					ToolImplVersion: "http_get:test",
 				},
 			}),
@@ -817,10 +823,99 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(requestRepository.request).NotTo(BeNil())
 		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusFailed))
 		Expect(trajectoryRepository.invocations).To(HaveLen(1))
-		Expect(trajectoryRepository.invocations[0].ErrorType).To(Equal(model.ToolErrorTypeTransient))
+		Expect(trajectoryRepository.invocations[0].ErrorType).To(Equal(model.ToolErrorTypePermanent))
 		terminal := trajectoryRepository.runs[len(trajectoryRepository.runs)-1]
 		Expect(terminal.Status).To(Equal(model.AgentRunStatusFailed))
 		Expect(terminal.StopReason).To(Equal(model.AgentStopReasonToolError))
+	})
+
+	It("feeds transient tool errors back so the agent can recover", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		spec := validToolUsingAgentSpec(inferenceModel)
+		spec.ToolBindings = []model.ToolBinding{{
+			Name:       "http_get",
+			Required:   true,
+			ToolChoice: "required",
+			Config:     []byte(`{}`),
+		}}
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: spec.ContentHash,
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		requestRepository := &inferenceRequestRepositoryStub{}
+		generator := &generationAdapterStub{results: []model.GenerationResult{
+			{
+				ToolCalls: []model.ToolCall{{
+					ID:        "call-http",
+					Name:      "http_get",
+					Arguments: []byte(`{"url":"https://example.com"}`),
+				}},
+				FinishReason: model.GenerationFinishReasonToolCalls,
+			},
+			{
+				Content:      "recovered after the transient tool failure",
+				FinishReason: model.GenerationFinishReasonStop,
+			},
+		}}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(requestRepository),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{
+				tools: []model.ToolSpec{{
+					Name:       "http_get",
+					Parameters: []byte(`{"type":"object"}`),
+				}},
+				result: model.ToolResult{
+					Content:         `{"status":503}`,
+					IsError:         true,
+					ErrorType:       model.ToolErrorTypeTransient,
+					ToolImplVersion: "http_get:test",
+				},
+			}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "fetch the tool",
+			TopK:      2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Answer).To(Equal("recovered after the transient tool failure"))
+		Expect(requestRepository.request).NotTo(BeNil())
+		Expect(requestRepository.request.Status).To(Equal(model.InferenceRequestStatusCompleted))
+		Expect(trajectoryRepository.invocations).To(HaveLen(1))
+		Expect(trajectoryRepository.invocations[0].ErrorType).To(Equal(model.ToolErrorTypeTransient))
+		terminal := trajectoryRepository.runs[len(trajectoryRepository.runs)-1]
+		Expect(terminal.Status).To(Equal(model.AgentRunStatusCompleted))
+		Expect(terminal.StopReason).To(Equal(model.AgentStopReasonFinalAnswer))
+		Expect(generator.requests).To(HaveLen(2))
+		Expect(generator.requests[1].Messages).To(ContainElement(SatisfyAll(
+			HaveField("Role", model.ChatMessageRoleTool),
+			HaveField("Content", `{"status":503}`),
+		)))
 	})
 
 	It("does not grant system context when a model update is missing actor and org", func() {

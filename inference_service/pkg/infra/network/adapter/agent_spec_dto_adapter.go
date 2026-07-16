@@ -1,7 +1,6 @@
 package adapter
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -91,6 +90,9 @@ func WithAgentSpecBudgetCaps(maxSteps int, tokenBudget int) AgentSpecDTOAdapterO
 func NewAgentSpecDTOAdapter(encoder *serializers.Encoder, opts ...AgentSpecDTOAdapterOption) *agentSpecDTOAdapter {
 	log.Trace("NewAgentSpecDTOAdapter")
 
+	if encoder == nil {
+		encoder = serializers.NewJSONSerializer()
+	}
 	adapter := &agentSpecDTOAdapter{
 		validator: validator.New(),
 		encoder:   encoder,
@@ -106,7 +108,7 @@ func NewAgentSpecDTOAdapter(encoder *serializers.Encoder, opts ...AgentSpecDTOAd
 func (a *agentSpecDTOAdapter) FromDTO(ctx context.Context, body []byte) (model.AgentSpecPublication, error) {
 	log.Trace("AgentSpecDTOAdapter FromDTO")
 
-	sourceCanonical, report, err := validateAgentSpecSchema(body)
+	sourceCanonical, report, err := a.validateAgentSpecSchema(body)
 	if err != nil {
 		return model.AgentSpecPublication{}, domain.ErrValidationFailed.Extend(err.Error())
 	}
@@ -118,7 +120,7 @@ func (a *agentSpecDTOAdapter) FromDTO(ctx context.Context, body []byte) (model.A
 		log.WithContext(ctx).WithError(err).Error("AgentSpecDocumentDTO validation failed")
 		return model.AgentSpecPublication{}, domain.ErrValidationFailed.Extend(err.Error())
 	}
-	canonical, err := canonicalAgentSpecJSON(dto)
+	canonical, err := a.canonicalAgentSpecJSON(dto)
 	if err != nil {
 		return model.AgentSpecPublication{}, domain.ErrValidationFailed.Extend(err.Error())
 	}
@@ -228,15 +230,15 @@ func (a *agentSpecDTOAdapter) validateBudgetCaps(dto agentBudgetsDTO, toolBindin
 	return nil
 }
 
-func validateAgentSpecSchema(sourceYAML []byte) ([]byte, string, error) {
-	log.Trace("validateAgentSpecSchema")
+func (a *agentSpecDTOAdapter) validateAgentSpecSchema(sourceYAML []byte) ([]byte, string, error) {
+	log.Trace("AgentSpecDTOAdapter validateAgentSpecSchema")
 
 	var document any
 	if err := yaml.Unmarshal(sourceYAML, &document); err != nil {
 		return nil, "", err
 	}
 	normalized := normalizeYAMLValue(document)
-	canonical, err := canonicalJSON(normalized)
+	canonical, err := a.encoder.Serialize(normalized)
 	if err != nil {
 		return nil, "", err
 	}
@@ -270,13 +272,13 @@ func validateAgentSpecInstance(instance any) error {
 	return schema.Validate(instance)
 }
 
-func canonicalAgentSpecJSON(dto agentSpecDocumentDTO) ([]byte, error) {
-	log.Trace("canonicalAgentSpecJSON")
+func (a *agentSpecDTOAdapter) canonicalAgentSpecJSON(dto agentSpecDocumentDTO) ([]byte, error) {
+	log.Trace("AgentSpecDTOAdapter canonicalAgentSpecJSON")
 
 	if dto.Tools == nil {
 		dto.Tools = []agentToolBindingDTO{}
 	}
-	return canonicalJSON(dto)
+	return a.encoder.Serialize(dto)
 }
 
 func compileAgentSpecSchema() (*jsonschema.Schema, error) {
@@ -291,18 +293,6 @@ func compileAgentSpecSchema() (*jsonschema.Schema, error) {
 		return nil, err
 	}
 	return compiler.Compile(agentSpecSchemaResource)
-}
-
-func canonicalJSON(value any) ([]byte, error) {
-	log.Trace("canonicalJSON")
-
-	buffer := &bytes.Buffer{}
-	encoder := json.NewEncoder(buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSpace(buffer.Bytes()), nil
 }
 
 func normalizeYAMLValue(value any) any {

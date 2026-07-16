@@ -301,9 +301,6 @@ func (u *inferenceUsecase) RecordModelUpdated(ctx context.Context, inferenceMode
 	if err := u.upsertEndpointProjection(ctx, record); err != nil {
 		return nil, err
 	}
-	if err := u.recordCapabilityReportProjection(ctx, record); err != nil {
-		log.WithContext(ctx).WithError(err).Warn("capability report projection failed")
-	}
 	return record, nil
 }
 
@@ -1430,21 +1427,6 @@ func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferen
 		CreatedByUserID: inferenceModel.UserID,
 	})
 	return err
-}
-
-func (u *inferenceUsecase) recordCapabilityReportProjection(ctx context.Context, inferenceModel *model.InferenceModel) error {
-	log.Trace("InferenceUsecase recordCapabilityReportProjection")
-
-	if inferenceModel.OrgID == uuid.Nil {
-		return nil
-	}
-	if u.capabilityReportRepository == nil {
-		return nil
-	}
-	if inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded || inferenceModel.ServingProtocol == model.ServingProtocolUnknown {
-		return nil
-	}
-	return nil
 }
 
 func (u *inferenceUsecase) probeAndRecordCapabilityReport(ctx context.Context, inferenceModel *model.InferenceModel) (*model.CapabilityReport, error) {

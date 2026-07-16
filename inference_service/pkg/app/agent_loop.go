@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	agentToolChoiceRequired = "required"
+	agentToolChoiceRequired          = "required"
+	agentTransientToolFailureRetries = 1
 )
 
 func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint) (response *model.GenerateResponse, err error) {
@@ -120,6 +121,7 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 	var contexts []model.RetrievedContext
 	lastToolCallSignature := ""
 	repeatedToolCallCount := 0
+	transientToolFailures := map[string]int{}
 	for step := 0; step < maxSteps; step++ {
 		toolChoice := agentToolChoice(spec.ToolBindings, step)
 		generationOptions := agentStepGenerationOptions(session)
@@ -202,7 +204,15 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 			if err := u.recordAgentToolInvocation(ctx, session, stepID, call, toolResult); err != nil {
 				return model.AgentResult{RunID: session.RunID, Contexts: contexts, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonRuntimeError, err)
 			}
-			if err != nil || toolResult.IsError || toolResult.ErrorType != model.ToolErrorTypeUnknown {
+			if agentToolResultIsTransient(toolResult) {
+				transientToolFailures[signature]++
+				if transientToolFailures[signature] > agentTransientToolFailureRetries {
+					if err == nil {
+						err = domain.ErrGenerationFailed.Extend("agent transient tool failure retry limit exceeded")
+					}
+					return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonToolError, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonToolError, err)
+				}
+			} else if err != nil || toolResult.IsError || toolResult.ErrorType != model.ToolErrorTypeUnknown {
 				if err == nil {
 					err = domain.ErrGenerationFailed.Extend("agent tool call failed")
 				}
@@ -222,6 +232,12 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 	}
 	err = domain.ErrGenerationFailed.Extend("agent reached its step limit before producing a final answer")
 	return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonMaxSteps, Steps: maxSteps}, u.failAgentRun(ctx, session, model.AgentStopReasonMaxSteps, err)
+}
+
+func agentToolResultIsTransient(result model.ToolResult) bool {
+	log.Trace("agentToolResultIsTransient")
+
+	return result.IsError && result.ErrorType == model.ToolErrorTypeTransient
 }
 
 func (u *inferenceUsecase) failAgentRun(ctx context.Context, session *model.AgentSession, reason model.AgentStopReason, err error) error {
