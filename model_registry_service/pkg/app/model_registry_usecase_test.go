@@ -143,10 +143,11 @@ type modelServingDeployerStub struct {
 }
 
 type effectiveBaseRepositoryStub struct {
-	recorded *model.EffectiveBaseVersion
-	read     *model.EffectiveBaseVersion
-	readID   uuid.UUID
-	err      error
+	recorded              *model.EffectiveBaseVersion
+	read                  *model.EffectiveBaseVersion
+	readEffectiveBaseID   string
+	readFoundationModelID uuid.UUID
+	err                   error
 }
 
 func (s *effectiveBaseRepositoryStub) RecordEffectiveBase(_ context.Context, _ pgx.Tx, effectiveBase *model.EffectiveBaseVersion) (*model.EffectiveBaseVersion, error) {
@@ -155,14 +156,22 @@ func (s *effectiveBaseRepositoryStub) RecordEffectiveBase(_ context.Context, _ p
 		return nil, s.err
 	}
 	record := *effectiveBase
-	if record.EffectiveBaseID == uuid.Nil {
-		record.EffectiveBaseID = uuid.New()
+	if record.EffectiveBaseID == "" {
+		record.EffectiveBaseID = "sha256-recorded-effective-base"
 	}
 	return &record, nil
 }
 
-func (s *effectiveBaseRepositoryStub) ReadLatestByModelID(_ context.Context, modelID uuid.UUID) (*model.EffectiveBaseVersion, error) {
-	s.readID = modelID
+func (s *effectiveBaseRepositoryStub) ReadByID(_ context.Context, effectiveBaseID string) (*model.EffectiveBaseVersion, error) {
+	s.readEffectiveBaseID = effectiveBaseID
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.read, nil
+}
+
+func (s *effectiveBaseRepositoryStub) ReadLatestByFoundationModelID(_ context.Context, modelID uuid.UUID) (*model.EffectiveBaseVersion, error) {
+	s.readFoundationModelID = modelID
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -488,15 +497,19 @@ var _ = Describe("ModelRegistryUsecase", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(effectiveBases.recorded).NotTo(BeNil())
-		Expect(effectiveBases.recorded.ModelID).To(Equal(modelRecord.ModelID))
-		Expect(effectiveBases.recorded.OrgID).To(Equal(modelRecord.OrgID))
-		Expect(effectiveBases.recorded.BaseModel).To(Equal(modelRecord.BaseModel))
-		Expect(effectiveBases.recorded.SourceArtifactLocation).To(Equal(modelRecord.ArtifactLocation))
-		Expect(effectiveBases.recorded.SourceArtifactFormat).To(Equal("GGUF"))
-		Expect(effectiveBases.recorded.SourceArtifactChecksum).To(Equal("sha256:base-artifact"))
-		Expect(effectiveBases.recorded.ServingTarget).To(Equal("http://vllm-runtime"))
-		Expect(effectiveBases.recorded.ServingModel).To(Equal("base-mistral"))
-		Expect(effectiveBases.recorded.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
+		Expect(effectiveBases.recorded.EffectiveBaseID).NotTo(BeEmpty())
+		Expect(effectiveBases.recorded.FoundationModelID).To(Equal(modelRecord.ModelID))
+		Expect(effectiveBases.recorded.DescriptorSchemaVersion).To(Equal(model.EffectiveBaseDescriptorSchemaVersion))
+		Expect(effectiveBases.recorded.FoundationChecksum).To(Equal("sha256:base-artifact"))
+		Expect(effectiveBases.recorded.Descriptor).To(MatchJSON(`{
+			"descriptor_schema_version": 1,
+			"foundation_model_id": "` + modelRecord.ModelID.String() + `",
+			"artifact_uri": "` + modelRecord.ArtifactLocation + `",
+			"artifact_format": "GGUF",
+			"foundation_checksum": "sha256:base-artifact",
+			"serving_protocol": "OPENAI_CHAT_COMPLETIONS",
+			"serving_model": "base-mistral"
+		}`))
 	})
 
 	It("does not record an effective base for a fine tuned adapter", func() {
@@ -519,21 +532,41 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(effectiveBases.recorded).To(BeNil())
 	})
 
-	It("reads the latest effective base for a model", func() {
-		modelID := uuid.New()
+	It("reads an effective base by digest", func() {
 		readRecord := &model.EffectiveBaseVersion{
-			EffectiveBaseID: uuid.New(),
-			ModelID:         modelID,
-			ServingModel:    "base-mistral",
+			EffectiveBaseID:         "sha256-effective-base",
+			FoundationModelID:       uuid.New(),
+			DescriptorSchemaVersion: model.EffectiveBaseDescriptorSchemaVersion,
+			FoundationChecksum:      "sha256:base",
+			Descriptor:              `{"descriptor_schema_version":1}`,
 		}
 		effectiveBases := &effectiveBaseRepositoryStub{read: readRecord}
 		uc := app.NewModelRegistryUsecase(&modelRepositoryStub{}, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithEffectiveBaseRepository(effectiveBases))
 
-		result, err := uc.ReadEffectiveBaseForModel(context.Background(), uuid.New(), modelID)
+		result, err := uc.ReadEffectiveBase(context.Background(), uuid.New(), "sha256-effective-base")
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result).To(Equal(readRecord))
-		Expect(effectiveBases.readID).To(Equal(modelID))
+		Expect(effectiveBases.readEffectiveBaseID).To(Equal("sha256-effective-base"))
+	})
+
+	It("reads the latest effective base for a model", func() {
+		modelID := uuid.New()
+		readRecord := &model.EffectiveBaseVersion{
+			EffectiveBaseID:         "sha256-effective-base",
+			FoundationModelID:       modelID,
+			DescriptorSchemaVersion: model.EffectiveBaseDescriptorSchemaVersion,
+			FoundationChecksum:      "sha256:base",
+			Descriptor:              `{"descriptor_schema_version":1}`,
+		}
+		effectiveBases := &effectiveBaseRepositoryStub{read: readRecord}
+		uc := app.NewModelRegistryUsecase(&modelRepositoryStub{}, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithEffectiveBaseRepository(effectiveBases))
+
+		result, err := uc.ReadLatestEffectiveBaseForModel(context.Background(), uuid.New(), modelID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(readRecord))
+		Expect(effectiveBases.readFoundationModelID).To(Equal(modelID))
 	})
 
 	It("publishes a user event when serving status loads", func() {

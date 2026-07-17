@@ -30,6 +30,7 @@ message ModelUpdatedEvent {
   string org_id = 25;
   string serving_protocol = 26;
   string lineage_name = 27;
+  string effective_base_id = 28;
 }
 
 message PromotionRequestedEvent {

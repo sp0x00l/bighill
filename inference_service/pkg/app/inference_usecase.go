@@ -1436,9 +1436,12 @@ func (u *inferenceUsecase) probeAndRecordCapabilityReport(ctx context.Context, i
 	if u.capabilityReportRepository == nil {
 		return nil, domain.ErrModelNotReady.Extend("model capability report repository is not configured")
 	}
+	effectiveBaseID := strings.TrimSpace(inferenceModel.EffectiveBaseID)
+	if effectiveBaseID == "" {
+		return nil, domain.ErrModelNotReady.Extend("model effective base is required for capability probing")
+	}
 	report := &model.CapabilityReport{
-		OrgID:                inferenceModel.OrgID,
-		ModelID:              inferenceModel.ModelID,
+		EffectiveBaseID:      effectiveBaseID,
 		SupportsChat:         u.probeChatCapability(ctx, inferenceModel),
 		SupportsToolCalls:    u.probeToolCallCapability(ctx, inferenceModel),
 		SupportsSystemPrompt: u.probeSystemPromptCapability(ctx, inferenceModel),

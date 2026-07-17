@@ -26,6 +26,7 @@ type Model struct {
 	ServingModel       string
 	ServingProtocol    ServingProtocol
 	ServingLoadStatus  ModelLoadStatus
+	EffectiveBaseID    string
 	MetricsMetadata    string
 	PromotionReportURI string
 	PromotionDeltas    string

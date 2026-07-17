@@ -216,13 +216,17 @@ sequenceDiagram
     participant MR as model_registry_service
     participant MS as model_serving_service
     participant DB as model_registry DB
+    participant IF as inference_service
 
     MR->>MS: Ensure served model for base model
     MS->>MS: Reconcile local/vLLM runtime
     MS-->>MR: ServedModelStatus(LOADED, target, model, protocol)
     MR->>DB: Update model serving status
+    MR->>MR: Build canonical descriptor + digest
     MR->>DB: Upsert effective_base_versions row
-    Note over DB: source artifact + observed serving identity only
+    Note over DB: artifact URI/format/checksum + serving model/protocol
+    MR-->>IF: model.updated(effective_base_id)
+    IF->>IF: Probe artifact-intrinsic capabilities by effective_base_id
 ```
 
 | Extension service | Adds | Attaches to |
@@ -295,13 +299,15 @@ JSON-schema-output capability probes are future slices. They are not represented
 until their writer, reader, policy, and tests ship with them.
 
 Effective-base identity is the exception because it is core serving state, not agent lifecycle state.
-The first serving slice records only values the platform can observe today: the loaded base model,
-the source artifact identity, and the observed serving target/model/protocol. Tokenizer,
-chat-template, quantization, and served-artifact checksum fields are added only when
-`model_serving_service` can measure and publish them.
+The first serving slice records only values the platform can observe today: descriptor schema
+version, foundation model id, artifact URI, artifact format, artifact checksum, serving protocol,
+and serving model. Tokenizer, chat-template, quantization, context-window, and served-artifact
+checksum fields are added only when a producer can measure and publish them.
 
-The V1 agent spec binds to a real model by `model_id`. Capability reports key on `(org_id,
-model_id)` and store only measured capabilities used by current policy.
+The V1 agent spec binds to a real model by `model_id`. Capability reports key on
+`effective_base_id` and store only artifact-intrinsic capabilities that are actually measured and
+used by current policy: chat, tool calls, and system prompt support. Runtime or org policy caps such
+as max output tokens do not live in capability reports.
 
 The V1 trajectory should record observability data that exists today:
 
@@ -324,7 +330,7 @@ stack, and agent extensions consume it after it is real.
 
 | Slice | Adds | Why it is now honest |
 |-------|------|----------------------|
-| Effective-base identity | Core serving primitive from `model_serving_service` / `model_registry_service`: `effective_base_versions` writer and reader for loaded base model source artifact plus observed serving target/model/protocol | The base anchor has a producer and compatibility meaning beyond agents |
+| Effective-base identity | Core serving primitive in `model_registry_service`: `effective_base_versions` writer and reader for loaded base model artifact URI/format/checksum plus observed serving model/protocol | The base anchor has a producer and compatibility meaning beyond agents |
 | Agent registry | Champion/candidate state and spec versioning, projected into core endpoint binding state | Endpoint binding has a writer; inference still reads only its own rows on the run path |
 | Golden tasks | CRUD/import, split-aware authoring, fingerprints, anti-leak | Eval inputs have a source and reader |
 | Eval runner | Temporal/Ray evaluation against dev/holdout tasks, rubric versions, eval reports | Rubric/version fields have a producer |
@@ -418,3 +424,9 @@ platform can execute it.
 
 The tradeoff is that future features require explicit vertical slices. That is intentional. It makes
 extensions slower to start but cheaper to trust.
+
+## See Also
+
+- [ADR-0004 — Agent Authoring and Extensibility](adr/0004-agent-authoring-and-extensibility.md) —
+  records the authoring decision behind this extension model: agents stay declarative, and developer
+  code enters through sandboxed tool-authoring over `tool_service` and MCP.

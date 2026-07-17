@@ -12,6 +12,7 @@ import (
 
 	"lib/shared_lib/authz"
 	"lib/shared_lib/ctxutil"
+	serializers "lib/shared_lib/serializer"
 	transport "lib/shared_lib/transport"
 	shareduow "lib/shared_lib/uow"
 	usecasetrace "lib/shared_lib/usecasetrace"
@@ -27,7 +28,8 @@ type ModelRegistryUsecase interface {
 	RegisterModel(ctx context.Context, registeredModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
 	ReadModelSystem(ctx context.Context, modelID uuid.UUID) (*model.Model, error)
 	ReadModelForUser(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.Model, error)
-	ReadEffectiveBaseForModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.EffectiveBaseVersion, error)
+	ReadEffectiveBase(ctx context.Context, userID uuid.UUID, effectiveBaseID string) (*model.EffectiveBaseVersion, error)
+	ReadLatestEffectiveBaseForModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.EffectiveBaseVersion, error)
 	ListModels(ctx context.Context, userID uuid.UUID, pagination transport.Pagination, filter model.ListFilter) ([]*model.Model, int, error)
 	MarkModelReady(ctx context.Context, modelID uuid.UUID, artifactLocation string) (*model.Model, error)
 	MarkModelFailed(ctx context.Context, modelID uuid.UUID, failureReason string) (*model.Model, error)
@@ -153,11 +155,27 @@ func (u *modelRegistryUsecase) ReadModelForUser(ctx context.Context, userID uuid
 	return u.repo.ReadByID(ctx, modelID)
 }
 
-func (u *modelRegistryUsecase) ReadEffectiveBaseForModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (out *model.EffectiveBaseVersion, err error) {
-	log.Trace("ModelRegistryUsecase ReadEffectiveBaseForModel")
+func (u *modelRegistryUsecase) ReadEffectiveBase(ctx context.Context, userID uuid.UUID, effectiveBaseID string) (out *model.EffectiveBaseVersion, err error) {
+	log.Trace("ModelRegistryUsecase ReadEffectiveBase")
 
 	ctx = ensureActorContext(ctx, userID)
-	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "effective_base.read_for_model",
+	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "effective_base.read",
+		attribute.String("user_id", userID.String()),
+		attribute.String("effective_base_id", effectiveBaseID),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	if u.effectiveBases == nil {
+		return nil, fmt.Errorf("%w: effective base repository is not configured", domain.ErrValidationFailed)
+	}
+	return u.effectiveBases.ReadByID(ctx, strings.TrimSpace(effectiveBaseID))
+}
+
+func (u *modelRegistryUsecase) ReadLatestEffectiveBaseForModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (out *model.EffectiveBaseVersion, err error) {
+	log.Trace("ModelRegistryUsecase ReadLatestEffectiveBaseForModel")
+
+	ctx = ensureActorContext(ctx, userID)
+	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "effective_base.read_latest_for_model",
 		attribute.String("user_id", userID.String()),
 		attribute.String("model_id", modelID.String()),
 	)
@@ -166,7 +184,7 @@ func (u *modelRegistryUsecase) ReadEffectiveBaseForModel(ctx context.Context, us
 	if u.effectiveBases == nil {
 		return nil, fmt.Errorf("%w: effective base repository is not configured", domain.ErrValidationFailed)
 	}
-	return u.effectiveBases.ReadLatestByModelID(ctx, modelID)
+	return u.effectiveBases.ReadLatestByFoundationModelID(ctx, modelID)
 }
 
 func (u *modelRegistryUsecase) ListModels(ctx context.Context, userID uuid.UUID, pagination transport.Pagination, filter model.ListFilter) (out []*model.Model, total int, err error) {
@@ -582,7 +600,7 @@ func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedMo
 		if err := u.recordEffectiveBaseVersion(ctx, tx, updated); err != nil {
 			return err
 		}
-		if changed {
+		if changed || strings.TrimSpace(updated.EffectiveBaseID) != "" {
 			if err := enqueue(u.eventBuilder.ModelUpdatedMessage(updated)); err != nil {
 				return fmt.Errorf("enqueue model updated: %w", err)
 			}
@@ -614,17 +632,30 @@ func (u *modelRegistryUsecase) recordEffectiveBaseVersion(ctx context.Context, t
 		strings.TrimSpace(modelRecord.ServingProtocol.String()) == "" {
 		return nil
 	}
-	_, err := u.effectiveBases.RecordEffectiveBase(ctx, tx, &model.EffectiveBaseVersion{
-		ModelID:                modelRecord.ModelID,
-		OrgID:                  modelRecord.OrgID,
-		BaseModel:              strings.TrimSpace(modelRecord.BaseModel),
-		SourceArtifactLocation: strings.TrimSpace(modelRecord.ArtifactLocation),
-		SourceArtifactFormat:   strings.TrimSpace(modelRecord.ArtifactFormat),
-		SourceArtifactChecksum: strings.TrimSpace(modelRecord.ArtifactChecksum),
-		ServingTarget:          strings.TrimSpace(modelRecord.ServingTarget),
-		ServingModel:           strings.TrimSpace(modelRecord.ServingModel),
-		ServingProtocol:        modelRecord.ServingProtocol,
+	descriptor := model.EffectiveBaseDescriptor{
+		DescriptorSchemaVersion: model.EffectiveBaseDescriptorSchemaVersion,
+		FoundationModelID:       modelRecord.ModelID.String(),
+		ArtifactURI:             strings.TrimSpace(modelRecord.ArtifactLocation),
+		ArtifactFormat:          strings.TrimSpace(modelRecord.ArtifactFormat),
+		FoundationChecksum:      strings.TrimSpace(modelRecord.ArtifactChecksum),
+		ServingProtocol:         modelRecord.ServingProtocol.String(),
+		ServingModel:            strings.TrimSpace(modelRecord.ServingModel),
+	}
+	descriptorJSON, err := serializers.NewJSONSerializer().Serialize(descriptor)
+	if err != nil {
+		return fmt.Errorf("%w: serialize effective base descriptor: %w", domain.ErrValidationFailed, err)
+	}
+	effectiveBaseID := userevents.SHA256String(string(descriptorJSON))
+	record, err := u.effectiveBases.RecordEffectiveBase(ctx, tx, &model.EffectiveBaseVersion{
+		EffectiveBaseID:         effectiveBaseID,
+		FoundationModelID:       modelRecord.ModelID,
+		DescriptorSchemaVersion: model.EffectiveBaseDescriptorSchemaVersion,
+		FoundationChecksum:      strings.TrimSpace(modelRecord.ArtifactChecksum),
+		Descriptor:              string(descriptorJSON),
 	})
+	if record != nil {
+		modelRecord.EffectiveBaseID = record.EffectiveBaseID
+	}
 	return err
 }
 

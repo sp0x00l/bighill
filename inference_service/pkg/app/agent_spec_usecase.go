@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
@@ -53,7 +54,11 @@ func (u *inferenceUsecase) ensureAgentSpecPublishable(ctx context.Context, userI
 		if u.capabilityReportRepository == nil {
 			return domain.ErrModelNotReady.Extend("model capability report repository is not configured")
 		}
-		report, err := u.capabilityReportRepository.ReadCapabilityReportForModel(ctx, spec.OrgID, spec.ModelID)
+		effectiveBaseID := strings.TrimSpace(inferenceModel.EffectiveBaseID)
+		if effectiveBaseID == "" {
+			return domain.ErrModelNotReady.Extend("model effective base is required for tool-call capability")
+		}
+		report, err := u.capabilityReportRepository.ReadCapabilityReportForEffectiveBase(ctx, effectiveBaseID)
 		if err != nil && !errors.Is(err, domain.ErrModelNotReady) {
 			return err
 		}

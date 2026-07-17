@@ -35,7 +35,7 @@ type AgentSpecRepository interface {
 
 type CapabilityReportRepository interface {
 	RecordCapabilityReport(ctx context.Context, report *model.CapabilityReport) (*model.CapabilityReport, error)
-	ReadCapabilityReportForModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.CapabilityReport, error)
+	ReadCapabilityReportForEffectiveBase(ctx context.Context, effectiveBaseID string) (*model.CapabilityReport, error)
 }
 
 type InferenceRequestRepository interface {

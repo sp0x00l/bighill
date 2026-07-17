@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_models (
     serving_model text NOT NULL DEFAULT '',
     serving_protocol serving_protocol_enum,
     serving_load_status inference_model_load_status_enum NOT NULL DEFAULT 'NOT_LOADED',
+    effective_base_id text NOT NULL DEFAULT '',
     metrics_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     status inference_model_status_enum NOT NULL,
     failure_reason text NOT NULL DEFAULT '',
@@ -102,6 +103,10 @@ ON bighill_inference_db.inference_models(dataset_id);
 
 CREATE INDEX IF NOT EXISTS index_inference_models_status
 ON bighill_inference_db.inference_models(status);
+
+CREATE INDEX IF NOT EXISTS index_inference_models_effective_base_id
+ON bighill_inference_db.inference_models(effective_base_id)
+WHERE btrim(effective_base_id) <> '';
 
 CREATE TRIGGER inference_models_updated_at
 BEFORE UPDATE ON bighill_inference_db.inference_models
@@ -372,22 +377,20 @@ ON bighill_inference_db.published_endpoint_datasets(dataset_id);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.capability_reports (
     capability_report_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-    org_id uuid NOT NULL,
-    model_id uuid NOT NULL,
+    effective_base_id text NOT NULL,
     supports_chat boolean NOT NULL DEFAULT false,
     supports_tool_calls boolean NOT NULL DEFAULT false,
     supports_system_prompt boolean NOT NULL DEFAULT false,
-    context_window_tokens integer NOT NULL DEFAULT 0,
-    max_output_tokens integer NOT NULL DEFAULT 0,
     raw_report jsonb NOT NULL DEFAULT '{}'::jsonb,
-    created_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT capability_reports_effective_base_id_ck CHECK (btrim(effective_base_id) <> '')
 );
 
-CREATE INDEX IF NOT EXISTS index_capability_reports_org_model_id
-ON bighill_inference_db.capability_reports(org_id, model_id, created_at);
+CREATE INDEX IF NOT EXISTS index_capability_reports_effective_base_id
+ON bighill_inference_db.capability_reports(effective_base_id, created_at);
 
-CREATE UNIQUE INDEX IF NOT EXISTS index_capability_reports_org_model_unique
-ON bighill_inference_db.capability_reports(org_id, model_id);
+CREATE UNIQUE INDEX IF NOT EXISTS index_capability_reports_effective_base_unique
+ON bighill_inference_db.capability_reports(effective_base_id);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_specs (
     agent_spec_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -668,18 +671,6 @@ WITH CHECK (
         WHERE endpoint.endpoint_id = published_endpoint_datasets.endpoint_id
           AND NULLIF(current_setting('app.current_org_id', true), '')::uuid = endpoint.org_id
     )
-);
-
-ALTER TABLE bighill_inference_db.capability_reports ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bighill_inference_db.capability_reports FORCE ROW LEVEL SECURITY;
-CREATE POLICY capability_reports_tenant_isolation ON bighill_inference_db.capability_reports
-USING (
-    current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
-)
-WITH CHECK (
-    current_setting('app.system_context', true) = 'true'
-    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
 ALTER TABLE bighill_inference_db.agent_specs ENABLE ROW LEVEL SECURITY;

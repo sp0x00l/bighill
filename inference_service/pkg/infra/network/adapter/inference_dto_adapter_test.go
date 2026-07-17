@@ -324,7 +324,8 @@ budgets:
 `))
 
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("WallMs"))
+		Expect(err.Error()).To(ContainSubstring("/budgets/wall_ms"))
+		Expect(err.Error()).To(ContainSubstring("minimum"))
 	})
 
 	It("rejects tool-bound agent specs with only one step at the DTO boundary", func() {

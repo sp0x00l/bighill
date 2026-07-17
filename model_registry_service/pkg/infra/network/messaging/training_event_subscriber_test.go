@@ -46,7 +46,11 @@ func (r *recordingModelRegistryUsecase) ReadModelForUser(context.Context, uuid.U
 	return nil, nil
 }
 
-func (r *recordingModelRegistryUsecase) ReadEffectiveBaseForModel(context.Context, uuid.UUID, uuid.UUID) (*model.EffectiveBaseVersion, error) {
+func (r *recordingModelRegistryUsecase) ReadEffectiveBase(context.Context, uuid.UUID, string) (*model.EffectiveBaseVersion, error) {
+	return nil, nil
+}
+
+func (r *recordingModelRegistryUsecase) ReadLatestEffectiveBaseForModel(context.Context, uuid.UUID, uuid.UUID) (*model.EffectiveBaseVersion, error) {
 	return nil, nil
 }
 

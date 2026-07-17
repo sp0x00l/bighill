@@ -52,7 +52,11 @@ func (s *modelUsecaseStub) ReadModelForUser(_ context.Context, userID uuid.UUID,
 	return s.model, s.readErr
 }
 
-func (s *modelUsecaseStub) ReadEffectiveBaseForModel(context.Context, uuid.UUID, uuid.UUID) (*model.EffectiveBaseVersion, error) {
+func (s *modelUsecaseStub) ReadEffectiveBase(context.Context, uuid.UUID, string) (*model.EffectiveBaseVersion, error) {
+	return nil, nil
+}
+
+func (s *modelUsecaseStub) ReadLatestEffectiveBaseForModel(context.Context, uuid.UUID, uuid.UUID) (*model.EffectiveBaseVersion, error) {
 	return nil, nil
 }
 

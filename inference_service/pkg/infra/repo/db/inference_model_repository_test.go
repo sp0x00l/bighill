@@ -276,6 +276,7 @@ func validInferenceModel() *model.InferenceModel {
 		ServingModel:      "fraud-rag-ranker-v7",
 		ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 		ServingLoadStatus: model.ModelLoadStatusLoaded,
+		EffectiveBaseID:   "sha256-effective-base",
 		MetricsMetadata:   `{"accuracy":0.93}`,
 		Status:            model.ModelStatusReady,
 		FailureReason:     "",
@@ -306,6 +307,7 @@ func inferenceModelRow(inferenceModel *model.InferenceModel) pgx.Row {
 		inferenceModel.ServingModel,
 		inferenceModel.ServingProtocol.String(),
 		inferenceModel.ServingLoadStatus.String(),
+		inferenceModel.EffectiveBaseID,
 		inferenceModel.MetricsMetadata,
 		inferenceModel.Status.String(),
 		inferenceModel.FailureReason,
@@ -365,6 +367,7 @@ var _ = Describe("InferenceModelRepository", func() {
 				HaveKeyWithValue("serving_model", inferenceModel.ServingModel),
 				HaveKeyWithValue("serving_protocol", inferenceModel.ServingProtocol.String()),
 				HaveKeyWithValue("serving_load_status", model.ModelLoadStatusLoaded.String()),
+				HaveKeyWithValue("effective_base_id", inferenceModel.EffectiveBaseID),
 				HaveKeyWithValue("metrics_metadata", inferenceModel.MetricsMetadata),
 				HaveKeyWithValue("status", model.ModelStatusReady.String()),
 			))
@@ -457,7 +460,7 @@ var _ = Describe("InferenceModelRepository", func() {
 		It("surfaces invalid persisted status values", func() {
 			inferenceModel := validInferenceModel()
 			row := inferenceModelRow(inferenceModel).(*repositoryRow)
-			row.values[23] = "BROKEN"
+			row.values[24] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
 			record, err := repository.ReadByID(ctx, inferenceModel.OrgID, inferenceModel.ModelID)
@@ -477,5 +480,78 @@ var _ = Describe("InferenceModelRepository", func() {
 			Expect(record).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring(`invalid model load status "BROKEN"`)))
 		})
+	})
+})
+
+func capabilityReportRow(report *model.CapabilityReport) pgx.Row {
+	return &repositoryRow{values: []any{
+		report.CapabilityReportID.String(),
+		report.EffectiveBaseID,
+		report.SupportsChat,
+		report.SupportsToolCalls,
+		report.SupportsSystemPrompt,
+		report.CreatedAt,
+	}}
+}
+
+var _ = Describe("CapabilityReportRepository", func() {
+	var (
+		ctx        context.Context
+		pool       *connectionPoolStub
+		repository *inferencedb.CapabilityReportRepository
+		report     *model.CapabilityReport
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		pool = &connectionPoolStub{}
+		repository = inferencedb.NewCapabilityReportRepository(coreDB.NewDatabase(pool, "test_db"))
+		report = &model.CapabilityReport{
+			CapabilityReportID:   uuid.New(),
+			EffectiveBaseID:      "sha256-effective-base",
+			SupportsChat:         true,
+			SupportsToolCalls:    true,
+			SupportsSystemPrompt: true,
+			CreatedAt:            time.Now().UTC(),
+		}
+	})
+
+	It("records artifact-intrinsic capabilities keyed by effective base", func() {
+		pool.nextRows = []pgx.Row{capabilityReportRow(report)}
+
+		record, err := repository.RecordCapabilityReport(ctx, report)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(record).To(Equal(report))
+		Expect(pool.lastQuery).To(ContainSubstring("INSERT INTO test_db.capability_reports"))
+		Expect(pool.lastQuery).To(ContainSubstring("ON CONFLICT (effective_base_id) DO UPDATE SET"))
+		Expect(pool.lastQuery).NotTo(ContainSubstring("org_id"))
+		Expect(pool.lastQuery).NotTo(ContainSubstring("model_id"))
+		Expect(pool.lastQuery).NotTo(ContainSubstring("max_output_tokens"))
+		Expect(pool.lastQuery).NotTo(ContainSubstring("context_window_tokens"))
+		Expect(namedArgs(pool.lastArgs)).To(SatisfyAll(
+			HaveKeyWithValue("effective_base_id", "sha256-effective-base"),
+			HaveKeyWithValue("supports_chat", true),
+			HaveKeyWithValue("supports_tool_calls", true),
+			HaveKeyWithValue("supports_system_prompt", true),
+		))
+	})
+
+	It("reads capability by effective base digest", func() {
+		pool.nextRows = []pgx.Row{capabilityReportRow(report)}
+
+		record, err := repository.ReadCapabilityReportForEffectiveBase(ctx, "sha256-effective-base")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(record).To(Equal(report))
+		Expect(pool.lastQuery).To(ContainSubstring("WHERE effective_base_id = @effective_base_id"))
+		Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("effective_base_id", "sha256-effective-base"))
+	})
+
+	It("fails closed when no measured capability exists for the effective base", func() {
+		record, err := repository.ReadCapabilityReportForEffectiveBase(ctx, "sha256-missing-base")
+
+		Expect(record).To(BeNil())
+		Expect(errors.Is(err, domain.ErrModelNotReady)).To(BeTrue())
 	})
 })

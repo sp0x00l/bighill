@@ -6,17 +6,24 @@ import (
 	"github.com/google/uuid"
 )
 
+const EffectiveBaseDescriptorSchemaVersion = 1
+
 type EffectiveBaseVersion struct {
-	EffectiveBaseID        uuid.UUID
-	ModelID                uuid.UUID
-	OrgID                  uuid.UUID
-	BaseModel              string
-	SourceArtifactLocation string
-	SourceArtifactFormat   string
-	SourceArtifactChecksum string
-	ServingTarget          string
-	ServingModel           string
-	ServingProtocol        ServingProtocol
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	EffectiveBaseID         string
+	FoundationModelID       uuid.UUID
+	DescriptorSchemaVersion int
+	FoundationChecksum      string
+	Descriptor              string
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
+}
+
+type EffectiveBaseDescriptor struct {
+	DescriptorSchemaVersion int    `json:"descriptor_schema_version"`
+	FoundationModelID       string `json:"foundation_model_id"`
+	ArtifactURI             string `json:"artifact_uri"`
+	ArtifactFormat          string `json:"artifact_format"`
+	FoundationChecksum      string `json:"foundation_checksum"`
+	ServingProtocol         string `json:"serving_protocol"`
+	ServingModel            string `json:"serving_model"`
 }

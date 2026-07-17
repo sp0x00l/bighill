@@ -53,6 +53,7 @@ func (b *ModelEventBuilder) ModelUpdatedMessage(modelRecord *model.Model) msgCon
 		ServingModel:       modelRecord.ServingModel,
 		ServingProtocol:    modelRecord.ServingProtocol.String(),
 		ServingLoadStatus:  modelRecord.ServingLoadStatus.String(),
+		EffectiveBaseId:    modelRecord.EffectiveBaseID,
 		MetricsMetadata:    modelRecord.MetricsMetadata,
 		Status:             modelRecord.Status.String(),
 		FailureReason:      modelRecord.FailureReason,

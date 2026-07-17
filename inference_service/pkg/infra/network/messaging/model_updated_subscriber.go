@@ -208,6 +208,7 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		ServingModel:      strings.TrimSpace(payload.GetServingModel()),
 		ServingProtocol:   servingProtocol,
 		ServingLoadStatus: servingLoadStatus,
+		EffectiveBaseID:   strings.TrimSpace(payload.GetEffectiveBaseId()),
 		MetricsMetadata:   withDefaultJSON(payload.GetMetricsMetadata()),
 		Status:            status,
 		FailureReason:     strings.TrimSpace(payload.GetFailureReason()),
@@ -224,6 +225,7 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		status.String(),
 		inferenceModel.ArtifactChecksum,
 		inferenceModel.ServingProtocol.String(),
+		inferenceModel.EffectiveBaseID,
 	}, ":")))
 	return inferenceModel, idempotencyKey, nil
 }

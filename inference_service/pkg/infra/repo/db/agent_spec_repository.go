@@ -180,26 +180,21 @@ func (r *CapabilityReportRepository) RecordCapabilityReport(ctx context.Context,
 	log.Trace("CapabilityReportRepository RecordCapabilityReport")
 
 	query := `INSERT INTO ` + r.Name + `.capability_reports (
-		org_id, model_id, supports_chat, supports_tool_calls,
-		supports_system_prompt, context_window_tokens, max_output_tokens
+		effective_base_id, supports_chat, supports_tool_calls,
+		supports_system_prompt
 	) VALUES (
-		@org_id, @model_id, @supports_chat, @supports_tool_calls,
-		@supports_system_prompt, @context_window_tokens, @max_output_tokens
+		@effective_base_id, @supports_chat, @supports_tool_calls,
+		@supports_system_prompt
 	)
-	ON CONFLICT (org_id, model_id) DO UPDATE SET
+	ON CONFLICT (effective_base_id) DO UPDATE SET
 		supports_chat = EXCLUDED.supports_chat,
 		supports_tool_calls = EXCLUDED.supports_tool_calls,
-		supports_system_prompt = EXCLUDED.supports_system_prompt,
-		context_window_tokens = EXCLUDED.context_window_tokens,
-		max_output_tokens = EXCLUDED.max_output_tokens
+		supports_system_prompt = EXCLUDED.supports_system_prompt
 	RETURNING capability_report_id::text,
-		org_id::text,
-		COALESCE(model_id::text, ''),
+		effective_base_id,
 		supports_chat,
 		supports_tool_calls,
 		supports_system_prompt,
-		context_window_tokens,
-		max_output_tokens,
 		created_at`
 	record, err := scanCapabilityReport(r.Pool.QueryRow(ctx, query, capabilityReportArgs(report)))
 	if err != nil {
@@ -209,25 +204,21 @@ func (r *CapabilityReportRepository) RecordCapabilityReport(ctx context.Context,
 	return record, nil
 }
 
-func (r *CapabilityReportRepository) ReadCapabilityReportForModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.CapabilityReport, error) {
-	log.Trace("CapabilityReportRepository ReadCapabilityReportForModel")
+func (r *CapabilityReportRepository) ReadCapabilityReportForEffectiveBase(ctx context.Context, effectiveBaseID string) (*model.CapabilityReport, error) {
+	log.Trace("CapabilityReportRepository ReadCapabilityReportForEffectiveBase")
 
 	query := `SELECT capability_report_id::text,
-			org_id::text,
-			COALESCE(model_id::text, ''),
+			effective_base_id,
 			supports_chat,
 			supports_tool_calls,
 			supports_system_prompt,
-			context_window_tokens,
-			max_output_tokens,
 			created_at
 		FROM ` + r.Name + `.capability_reports
-		WHERE org_id = @org_id AND model_id = @model_id
+		WHERE effective_base_id = @effective_base_id
 		ORDER BY created_at DESC
 		LIMIT 1`
 	record, err := scanCapabilityReport(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
-		"model_id": nullableUUID(modelID),
-		"org_id":   nullableUUID(orgID),
+		"effective_base_id": effectiveBaseID,
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -242,30 +233,24 @@ func capabilityReportArgs(report *model.CapabilityReport) pgx.NamedArgs {
 	log.Trace("capabilityReportArgs")
 
 	return pgx.NamedArgs{
-		"org_id":                 nullableUUID(report.OrgID),
-		"model_id":               nullableUUID(report.ModelID),
+		"effective_base_id":      report.EffectiveBaseID,
 		"supports_chat":          report.SupportsChat,
 		"supports_tool_calls":    report.SupportsToolCalls,
 		"supports_system_prompt": report.SupportsSystemPrompt,
-		"context_window_tokens":  report.ContextWindowTokens,
-		"max_output_tokens":      report.MaxOutputTokens,
 	}
 }
 
 func scanCapabilityReport(row pgx.Row) (*model.CapabilityReport, error) {
 	log.Trace("scanCapabilityReport")
 
-	var capabilityReportID, orgID, modelID string
+	var capabilityReportID, effectiveBaseID string
 	record := &model.CapabilityReport{}
 	if err := row.Scan(
 		&capabilityReportID,
-		&orgID,
-		&modelID,
+		&effectiveBaseID,
 		&record.SupportsChat,
 		&record.SupportsToolCalls,
 		&record.SupportsSystemPrompt,
-		&record.ContextWindowTokens,
-		&record.MaxOutputTokens,
 		&record.CreatedAt,
 	); err != nil {
 		return nil, err
@@ -274,19 +259,8 @@ func scanCapabilityReport(row pgx.Row) (*model.CapabilityReport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse capability report id: %w", err)
 	}
-	parsedOrgID, err := uuid.Parse(orgID)
-	if err != nil {
-		return nil, fmt.Errorf("parse capability report org id: %w", err)
-	}
 	record.CapabilityReportID = parsedCapabilityReportID
-	record.OrgID = parsedOrgID
-	if modelID != "" {
-		parsedModelID, err := uuid.Parse(modelID)
-		if err != nil {
-			return nil, fmt.Errorf("parse capability report model id: %w", err)
-		}
-		record.ModelID = parsedModelID
-	}
+	record.EffectiveBaseID = effectiveBaseID
 	return record, nil
 }
 

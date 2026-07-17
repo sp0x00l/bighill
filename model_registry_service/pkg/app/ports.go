@@ -31,7 +31,8 @@ type PublishedEndpointRepository interface {
 
 type EffectiveBaseRepository interface {
 	RecordEffectiveBase(ctx context.Context, tx pgx.Tx, effectiveBase *model.EffectiveBaseVersion) (*model.EffectiveBaseVersion, error)
-	ReadLatestByModelID(ctx context.Context, modelID uuid.UUID) (*model.EffectiveBaseVersion, error)
+	ReadByID(ctx context.Context, effectiveBaseID string) (*model.EffectiveBaseVersion, error)
+	ReadLatestByFoundationModelID(ctx context.Context, modelID uuid.UUID) (*model.EffectiveBaseVersion, error)
 }
 
 type ModelUnitOfWorkAdapter interface {

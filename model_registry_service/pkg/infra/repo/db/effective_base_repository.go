@@ -31,26 +31,21 @@ func (r *EffectiveBaseRepository) RecordEffectiveBase(ctx context.Context, tx pg
 	log.Trace("EffectiveBaseRepository RecordEffectiveBase")
 
 	query := `INSERT INTO ` + r.Name + `.effective_base_versions (
-		model_id, org_id, base_model,
-		source_artifact_location, source_artifact_format, source_artifact_checksum,
-		serving_target, serving_model, serving_protocol
+		effective_base_id, foundation_model_id, descriptor_schema_version,
+		foundation_checksum, descriptor
 	)
 	VALUES (
-		@model_id, @org_id, @base_model,
-		@source_artifact_location, @source_artifact_format, @source_artifact_checksum,
-		@serving_target, @serving_model, @serving_protocol::serving_protocol_enum
+		@effective_base_id, @foundation_model_id, @descriptor_schema_version,
+		@foundation_checksum, @descriptor::jsonb
 	)
-	ON CONFLICT (model_id, source_artifact_checksum, serving_target, serving_model, serving_protocol)
-	DO UPDATE SET
-		org_id = EXCLUDED.org_id,
-		base_model = EXCLUDED.base_model,
-		source_artifact_location = EXCLUDED.source_artifact_location,
-		source_artifact_format = EXCLUDED.source_artifact_format,
-		updated_at = now()
+	ON CONFLICT (effective_base_id) DO NOTHING
 	RETURNING ` + effectiveBaseColumns()
 
 	record, err := scanEffectiveBase(tx.QueryRow(ctx, query, effectiveBaseArgs(effectiveBase)))
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return r.ReadByIDTx(ctx, tx, effectiveBase.EffectiveBaseID)
+		}
 		if coreDB.IsForeignKeyViolation(err) {
 			return nil, fmt.Errorf("%w: effective base references an unknown model", domain.ErrValidationFailed)
 		}
@@ -60,15 +55,52 @@ func (r *EffectiveBaseRepository) RecordEffectiveBase(ctx context.Context, tx pg
 	return record, nil
 }
 
-func (r *EffectiveBaseRepository) ReadLatestByModelID(ctx context.Context, modelID uuid.UUID) (*model.EffectiveBaseVersion, error) {
-	log.Trace("EffectiveBaseRepository ReadLatestByModelID")
+func (r *EffectiveBaseRepository) ReadByID(ctx context.Context, effectiveBaseID string) (*model.EffectiveBaseVersion, error) {
+	log.Trace("EffectiveBaseRepository ReadByID")
 
 	query := `SELECT ` + effectiveBaseColumns() + ` FROM ` + r.Name + `.effective_base_versions
-		WHERE model_id = @model_id
+		WHERE effective_base_id = @effective_base_id
+		LIMIT 1`
+	record, err := scanEffectiveBase(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
+		"effective_base_id": effectiveBaseID,
+	}))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrModelNotFound
+		}
+		r.LogPoolStatsOnError(ctx, "read effective base failed", err)
+		return nil, fmt.Errorf("read effective base: %w", err)
+	}
+	return record, nil
+}
+
+func (r *EffectiveBaseRepository) ReadByIDTx(ctx context.Context, tx pgx.Tx, effectiveBaseID string) (*model.EffectiveBaseVersion, error) {
+	log.Trace("EffectiveBaseRepository ReadByIDTx")
+
+	query := `SELECT ` + effectiveBaseColumns() + ` FROM ` + r.Name + `.effective_base_versions
+		WHERE effective_base_id = @effective_base_id
+		LIMIT 1`
+	record, err := scanEffectiveBase(tx.QueryRow(ctx, query, pgx.NamedArgs{
+		"effective_base_id": effectiveBaseID,
+	}))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrModelNotFound
+		}
+		return nil, fmt.Errorf("read effective base in transaction: %w", err)
+	}
+	return record, nil
+}
+
+func (r *EffectiveBaseRepository) ReadLatestByFoundationModelID(ctx context.Context, modelID uuid.UUID) (*model.EffectiveBaseVersion, error) {
+	log.Trace("EffectiveBaseRepository ReadLatestByFoundationModelID")
+
+	query := `SELECT ` + effectiveBaseColumns() + ` FROM ` + r.Name + `.effective_base_versions
+		WHERE foundation_model_id = @foundation_model_id
 		ORDER BY updated_at DESC, created_at DESC, effective_base_id DESC
 		LIMIT 1`
 	record, err := scanEffectiveBase(r.Pool.QueryRow(ctx, query, pgx.NamedArgs{
-		"model_id": pgtype.UUID{Bytes: modelID, Valid: true},
+		"foundation_model_id": pgtype.UUID{Bytes: modelID, Valid: true},
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -84,56 +116,44 @@ func effectiveBaseArgs(effectiveBase *model.EffectiveBaseVersion) pgx.NamedArgs 
 	log.Trace("effectiveBaseArgs")
 
 	return pgx.NamedArgs{
-		"model_id":                 pgtype.UUID{Bytes: effectiveBase.ModelID, Valid: true},
-		"org_id":                   pgtype.UUID{Bytes: effectiveBase.OrgID, Valid: effectiveBase.OrgID != uuid.Nil},
-		"base_model":               effectiveBase.BaseModel,
-		"source_artifact_location": effectiveBase.SourceArtifactLocation,
-		"source_artifact_format":   effectiveBase.SourceArtifactFormat,
-		"source_artifact_checksum": effectiveBase.SourceArtifactChecksum,
-		"serving_target":           effectiveBase.ServingTarget,
-		"serving_model":            effectiveBase.ServingModel,
-		"serving_protocol":         effectiveBase.ServingProtocol.String(),
+		"effective_base_id":         effectiveBase.EffectiveBaseID,
+		"foundation_model_id":       pgtype.UUID{Bytes: effectiveBase.FoundationModelID, Valid: true},
+		"descriptor_schema_version": effectiveBase.DescriptorSchemaVersion,
+		"foundation_checksum":       effectiveBase.FoundationChecksum,
+		"descriptor":                effectiveBase.Descriptor,
 	}
 }
 
 func effectiveBaseColumns() string {
 	log.Trace("effectiveBaseColumns")
 
-	return `effective_base_id::text, model_id::text, org_id::text, base_model,
-		source_artifact_location, source_artifact_format, source_artifact_checksum,
-		serving_target, serving_model, serving_protocol::text, created_at, updated_at`
+	return `effective_base_id, foundation_model_id::text, descriptor_schema_version,
+		foundation_checksum, descriptor::text, created_at, updated_at`
 }
 
 func scanEffectiveBase(row pgx.Row) (*model.EffectiveBaseVersion, error) {
 	log.Trace("scanEffectiveBase")
 
-	var effectiveBaseID, modelID, orgID, servingProtocolRaw string
+	var effectiveBaseID, foundationModelID string
 	var createdAt, updatedAt time.Time
 	record := &model.EffectiveBaseVersion{}
 	if err := row.Scan(
 		&effectiveBaseID,
-		&modelID,
-		&orgID,
-		&record.BaseModel,
-		&record.SourceArtifactLocation,
-		&record.SourceArtifactFormat,
-		&record.SourceArtifactChecksum,
-		&record.ServingTarget,
-		&record.ServingModel,
-		&servingProtocolRaw,
+		&foundationModelID,
+		&record.DescriptorSchemaVersion,
+		&record.FoundationChecksum,
+		&record.Descriptor,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
 		return nil, err
 	}
-	servingProtocol, err := model.ToServingProtocol(servingProtocolRaw)
+	parsedFoundationModelID, err := uuid.Parse(foundationModelID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse foundation model id: %w", err)
 	}
-	record.EffectiveBaseID = uuid.MustParse(effectiveBaseID)
-	record.ModelID = uuid.MustParse(modelID)
-	record.OrgID = uuid.MustParse(orgID)
-	record.ServingProtocol = servingProtocol
+	record.EffectiveBaseID = effectiveBaseID
+	record.FoundationModelID = parsedFoundationModelID
 	record.CreatedAt = createdAt
 	record.UpdatedAt = updatedAt
 	return record, nil

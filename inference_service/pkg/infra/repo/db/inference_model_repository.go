@@ -37,14 +37,14 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 		name, lineage_name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
 		adapter_uri, serving_target, serving_model, serving_protocol, serving_load_status,
-		metrics_metadata, status, failure_reason
+		effective_base_id, metrics_metadata, status, failure_reason
 	) VALUES (
 		@model_id, @user_id, @org_id, @training_run_id, @dataset_id, @idempotency_key,
 		@model_kind::inference_model_kind_enum, @source::inference_model_source_enum, @source_uri, @source_metadata::jsonb,
 		@name, @lineage_name, @model_version, @base_model,
 		@artifact_location, @artifact_format, @artifact_checksum, @artifact_size_bytes,
 		@adapter_uri, @serving_target, @serving_model, NULLIF(@serving_protocol, '')::serving_protocol_enum, @serving_load_status::inference_model_load_status_enum,
-		@metrics_metadata::jsonb, @status::inference_model_status_enum, @failure_reason
+		@effective_base_id, @metrics_metadata::jsonb, @status::inference_model_status_enum, @failure_reason
 	)
 	ON CONFLICT (model_id) DO UPDATE SET
 		training_run_id = EXCLUDED.training_run_id,
@@ -69,6 +69,7 @@ func (r *InferenceModelRepository) UpsertModel(ctx context.Context, inferenceMod
 		serving_model = EXCLUDED.serving_model,
 		serving_protocol = EXCLUDED.serving_protocol,
 		serving_load_status = EXCLUDED.serving_load_status,
+		effective_base_id = EXCLUDED.effective_base_id,
 		metrics_metadata = EXCLUDED.metrics_metadata,
 		status = EXCLUDED.status,
 		failure_reason = EXCLUDED.failure_reason
@@ -110,7 +111,7 @@ func modelColumns() string {
 		model_kind::text, source::text, source_uri, source_metadata::text,
 		name, lineage_name, model_version, base_model,
 		artifact_location, artifact_format, artifact_checksum, artifact_size_bytes,
-		adapter_uri, serving_target, serving_model, COALESCE(serving_protocol::text, ''), serving_load_status::text, metrics_metadata::text,
+		adapter_uri, serving_target, serving_model, COALESCE(serving_protocol::text, ''), serving_load_status::text, effective_base_id, metrics_metadata::text,
 		status::text, failure_reason`
 }
 
@@ -141,6 +142,7 @@ func modelArgs(inferenceModel *model.InferenceModel, idempotencyKey uuid.UUID) p
 		"serving_model":       inferenceModel.ServingModel,
 		"serving_protocol":    inferenceModel.ServingProtocol.String(),
 		"serving_load_status": inferenceModel.ServingLoadStatus.String(),
+		"effective_base_id":   inferenceModel.EffectiveBaseID,
 		"metrics_metadata":    inferenceModel.MetricsMetadata,
 		"status":              inferenceModel.Status.String(),
 		"failure_reason":      inferenceModel.FailureReason,
@@ -194,6 +196,7 @@ func scanInferenceModel(row pgx.Row) (*model.InferenceModel, error) {
 		&record.ServingModel,
 		&servingProtocolRaw,
 		&servingLoadStatusRaw,
+		&record.EffectiveBaseID,
 		&record.MetricsMetadata,
 		&statusRaw,
 		&record.FailureReason,

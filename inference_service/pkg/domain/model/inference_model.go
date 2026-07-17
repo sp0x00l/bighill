@@ -63,6 +63,7 @@ type InferenceModel struct {
 	ServingModel      string
 	ServingProtocol   ServingProtocol
 	ServingLoadStatus ModelLoadStatus
+	EffectiveBaseID   string
 	MetricsMetadata   string
 	Status            ModelStatus
 	FailureReason     string

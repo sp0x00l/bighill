@@ -21,33 +21,23 @@ import (
 )
 
 type effectiveBaseRow struct {
-	EffectiveBaseID        uuid.UUID
-	ModelID                uuid.UUID
-	OrgID                  uuid.UUID
-	BaseModel              string
-	SourceArtifactLocation string
-	SourceArtifactFormat   string
-	SourceArtifactChecksum string
-	ServingTarget          string
-	ServingModel           string
-	ServingProtocol        string
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	EffectiveBaseID         string
+	FoundationModelID       uuid.UUID
+	DescriptorSchemaVersion int
+	FoundationChecksum      string
+	Descriptor              string
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 func (r effectiveBaseRow) Scan(dest ...any) error {
-	*(dest[0].(*string)) = r.EffectiveBaseID.String()
-	*(dest[1].(*string)) = r.ModelID.String()
-	*(dest[2].(*string)) = r.OrgID.String()
-	*(dest[3].(*string)) = r.BaseModel
-	*(dest[4].(*string)) = r.SourceArtifactLocation
-	*(dest[5].(*string)) = r.SourceArtifactFormat
-	*(dest[6].(*string)) = r.SourceArtifactChecksum
-	*(dest[7].(*string)) = r.ServingTarget
-	*(dest[8].(*string)) = r.ServingModel
-	*(dest[9].(*string)) = r.ServingProtocol
-	*(dest[10].(*time.Time)) = r.CreatedAt
-	*(dest[11].(*time.Time)) = r.UpdatedAt
+	*(dest[0].(*string)) = r.EffectiveBaseID
+	*(dest[1].(*string)) = r.FoundationModelID.String()
+	*(dest[2].(*int)) = r.DescriptorSchemaVersion
+	*(dest[3].(*string)) = r.FoundationChecksum
+	*(dest[4].(*string)) = r.Descriptor
+	*(dest[5].(*time.Time)) = r.CreatedAt
+	*(dest[6].(*time.Time)) = r.UpdatedAt
 	return nil
 }
 
@@ -58,7 +48,6 @@ var _ = Describe("EffectiveBaseRepository", func() {
 		tx         pgx.Tx
 		repository *modeldb.EffectiveBaseRepository
 		modelID    uuid.UUID
-		orgID      uuid.UUID
 		record     *model.EffectiveBaseVersion
 		row        effectiveBaseRow
 	)
@@ -70,54 +59,58 @@ var _ = Describe("EffectiveBaseRepository", func() {
 		dbCore := coreDB.NewDatabase(poolMock, "test_db")
 		repository = modeldb.NewEffectiveBaseRepository(dbCore)
 		modelID = uuid.New()
-		orgID = uuid.New()
 		now := time.Now().UTC()
+		descriptor := `{"descriptor_schema_version":1,"foundation_model_id":"` + modelID.String() + `","artifact_uri":"s3://local-dev-bucket/models/base.gguf","artifact_format":"GGUF","foundation_checksum":"sha256:base","serving_protocol":"OPENAI_CHAT_COMPLETIONS","serving_model":"base-mistral"}`
 		record = &model.EffectiveBaseVersion{
-			ModelID:                modelID,
-			OrgID:                  orgID,
-			BaseModel:              "mistral-7b",
-			SourceArtifactLocation: "s3://local-dev-bucket/models/base.gguf",
-			SourceArtifactFormat:   "GGUF",
-			SourceArtifactChecksum: "sha256:base",
-			ServingTarget:          "http://vllm-runtime",
-			ServingModel:           "base-mistral",
-			ServingProtocol:        model.ServingProtocolOpenAIChatCompletions,
+			EffectiveBaseID:         "sha256digest",
+			FoundationModelID:       modelID,
+			DescriptorSchemaVersion: model.EffectiveBaseDescriptorSchemaVersion,
+			FoundationChecksum:      "sha256:base",
+			Descriptor:              descriptor,
 		}
 		row = effectiveBaseRow{
-			EffectiveBaseID:        uuid.New(),
-			ModelID:                modelID,
-			OrgID:                  orgID,
-			BaseModel:              record.BaseModel,
-			SourceArtifactLocation: record.SourceArtifactLocation,
-			SourceArtifactFormat:   record.SourceArtifactFormat,
-			SourceArtifactChecksum: record.SourceArtifactChecksum,
-			ServingTarget:          record.ServingTarget,
-			ServingModel:           record.ServingModel,
-			ServingProtocol:        record.ServingProtocol.String(),
-			CreatedAt:              now,
-			UpdatedAt:              now,
+			EffectiveBaseID:         record.EffectiveBaseID,
+			FoundationModelID:       modelID,
+			DescriptorSchemaVersion: record.DescriptorSchemaVersion,
+			FoundationChecksum:      record.FoundationChecksum,
+			Descriptor:              record.Descriptor,
+			CreatedAt:               now,
+			UpdatedAt:               now,
 		}
 	})
 
 	Describe("RecordEffectiveBase", func() {
-		It("records an effective base with a database issued id", func() {
+		It("records an effective base by deterministic digest", func() {
 			poolMock.NextRows = []pgx.Row{row}
 
 			result, err := repository.RecordEffectiveBase(ctx, tx, record)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.EffectiveBaseID).To(Equal(row.EffectiveBaseID))
-			Expect(result.ModelID).To(Equal(modelID))
-			Expect(result.OrgID).To(Equal(orgID))
-			Expect(result.SourceArtifactChecksum).To(Equal("sha256:base"))
-			Expect(result.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
+			Expect(result.FoundationModelID).To(Equal(modelID))
+			Expect(result.DescriptorSchemaVersion).To(Equal(model.EffectiveBaseDescriptorSchemaVersion))
+			Expect(result.FoundationChecksum).To(Equal("sha256:base"))
+			Expect(result.Descriptor).To(MatchJSON(record.Descriptor))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("INSERT INTO test_db.effective_base_versions"))
-			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ON CONFLICT (model_id, source_artifact_checksum, serving_target, serving_model, serving_protocol)"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ON CONFLICT (effective_base_id) DO NOTHING"))
 			args := namedArgs(poolMock.QueryArgs[0])
-			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
-			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
-			Expect(args).To(HaveKeyWithValue("source_artifact_checksum", "sha256:base"))
-			Expect(args).To(HaveKeyWithValue("serving_protocol", model.ServingProtocolOpenAIChatCompletions.String()))
+			Expect(args).To(HaveKeyWithValue("effective_base_id", "sha256digest"))
+			Expect(args).To(HaveKeyWithValue("foundation_model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("descriptor_schema_version", model.EffectiveBaseDescriptorSchemaVersion))
+			Expect(args).To(HaveKeyWithValue("foundation_checksum", "sha256:base"))
+			Expect(args).To(HaveKeyWithValue("descriptor", record.Descriptor))
+		})
+
+		It("returns the existing immutable row when the digest already exists", func() {
+			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}, row}
+
+			result, err := repository.RecordEffectiveBase(ctx, tx, record)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.EffectiveBaseID).To(Equal("sha256digest"))
+			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
+			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("WHERE effective_base_id = @effective_base_id"))
+			Expect(namedArgs(poolMock.QueryArgs[1])).To(HaveKeyWithValue("effective_base_id", "sha256digest"))
 		})
 
 		It("maps a missing model foreign key to a validation error", func() {
@@ -131,49 +124,85 @@ var _ = Describe("EffectiveBaseRepository", func() {
 		})
 
 		It("does not return a record when row decoding fails", func() {
-			row.ServingProtocol = "NOT_A_PROTOCOL"
-			poolMock.NextRows = []pgx.Row{row}
+			badRow := errorRow{err: errors.New("scan failed")}
+			poolMock.NextRows = []pgx.Row{badRow}
 
 			result, err := repository.RecordEffectiveBase(ctx, tx, record)
 
 			Expect(result).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring("record effective base")))
-			Expect(err).To(MatchError(ContainSubstring("invalid serving protocol")))
+			Expect(err).To(MatchError(ContainSubstring("scan failed")))
+		})
+
+		It("wraps malformed persisted identifiers instead of panicking", func() {
+			badRow := row
+			poolMock.NextRows = []pgx.Row{effectiveBaseMalformedFoundationRow{effectiveBaseRow: badRow}}
+
+			result, err := repository.RecordEffectiveBase(ctx, tx, record)
+
+			Expect(result).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring("parse foundation model id")))
 		})
 	})
 
-	Describe("ReadLatestByModelID", func() {
+	Describe("ReadByID", func() {
+		It("reads an effective base by digest", func() {
+			poolMock.NextRows = []pgx.Row{row}
+
+			result, err := repository.ReadByID(ctx, "sha256digest")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.EffectiveBaseID).To(Equal("sha256digest"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WHERE effective_base_id = @effective_base_id"))
+			Expect(namedArgs(poolMock.QueryArgs[0])).To(HaveKeyWithValue("effective_base_id", "sha256digest"))
+		})
+	})
+
+	Describe("ReadLatestByFoundationModelID", func() {
 		It("reads the latest effective base for a model", func() {
 			poolMock.NextRows = []pgx.Row{row}
 
-			result, err := repository.ReadLatestByModelID(ctx, modelID)
+			result, err := repository.ReadLatestByFoundationModelID(ctx, modelID)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.EffectiveBaseID).To(Equal(row.EffectiveBaseID))
-			Expect(result.ServingModel).To(Equal("base-mistral"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY updated_at DESC, created_at DESC, effective_base_id DESC"))
 			args := namedArgs(poolMock.QueryArgs[0])
-			Expect(args).To(HaveKeyWithValue("model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("foundation_model_id", pgtype.UUID{Bytes: modelID, Valid: true}))
 		})
 
 		It("returns the domain not-found error when no effective base exists", func() {
 			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
 
-			result, err := repository.ReadLatestByModelID(ctx, modelID)
+			result, err := repository.ReadLatestByFoundationModelID(ctx, modelID)
 
 			Expect(result).To(BeNil())
 			Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
 		})
 
 		It("wraps scan failures", func() {
-			row.ServingProtocol = "NOT_A_PROTOCOL"
-			poolMock.NextRows = []pgx.Row{row}
+			poolMock.NextRows = []pgx.Row{errorRow{err: errors.New("scan failed")}}
 
-			result, err := repository.ReadLatestByModelID(ctx, modelID)
+			result, err := repository.ReadLatestByFoundationModelID(ctx, modelID)
 
 			Expect(result).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring("read effective base")))
-			Expect(err).To(MatchError(ContainSubstring("invalid serving protocol")))
+			Expect(err).To(MatchError(ContainSubstring("scan failed")))
 		})
 	})
 })
+
+type effectiveBaseMalformedFoundationRow struct {
+	effectiveBaseRow
+}
+
+func (r effectiveBaseMalformedFoundationRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.EffectiveBaseID
+	*(dest[1].(*string)) = "not-a-uuid"
+	*(dest[2].(*int)) = r.DescriptorSchemaVersion
+	*(dest[3].(*string)) = r.FoundationChecksum
+	*(dest[4].(*string)) = r.Descriptor
+	*(dest[5].(*time.Time)) = r.CreatedAt
+	*(dest[6].(*time.Time)) = r.UpdatedAt
+	return nil
+}

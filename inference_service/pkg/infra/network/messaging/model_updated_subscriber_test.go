@@ -147,6 +147,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 			ServingModel:      "movie-ranker-v2",
 			ServingProtocol:   "OPENAI_CHAT_COMPLETIONS",
 			ServingLoadStatus: "LOADED",
+			EffectiveBaseId:   "sha256-effective-base",
 			MetricsMetadata:   `{"accuracy":0.9}`,
 			Status:            "READY",
 		})
@@ -162,6 +163,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(uc.model.Status).To(Equal(model.ModelStatusReady))
 		Expect(uc.model.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
 		Expect(uc.model.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
+		Expect(uc.model.EffectiveBaseID).To(Equal("sha256-effective-base"))
 		Expect(uc.model.ArtifactLocation).To(Equal("s3://local-dev-bucket/models/model-1"))
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
@@ -192,6 +194,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 			ServingModel:      "uploaded-base-v1",
 			ServingProtocol:   "OPENAI_CHAT_COMPLETIONS",
 			ServingLoadStatus: "LOADED",
+			EffectiveBaseId:   "sha256-uploaded-base",
 			Status:            "READY",
 		})
 
@@ -204,6 +207,7 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(uc.model.ModelKind).To(Equal(model.ModelKindBase))
 		Expect(uc.model.Source).To(Equal(model.ModelSourceUpload))
 		Expect(uc.model.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
+		Expect(uc.model.EffectiveBaseID).To(Equal("sha256-uploaded-base"))
 		Expect(uc.model.SourceURI).To(Equal("s3://local-dev-bucket/models/base-model"))
 		Expect(uc.model.SourceMetadata).To(MatchJSON(`{"upload_id":"u1"}`))
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))

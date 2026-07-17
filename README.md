@@ -188,8 +188,8 @@ stays in batch jobs behind clean boundaries.
   no-regression-vs-champion + evidence).
 - **Reconciles serving** through a Kubernetes serving layer to vLLM.
 - Records **effective-base identity** for loaded base models in the model registry, using the
-  registered source artifact and observed serving target/model/protocol as the current compatibility
-  anchor.
+  registered source artifact and observed serving model/protocol to build a canonical descriptor
+  digest. Org access is a future binding; the effective-base row itself is platform-scoped.
 - Uses **Kafka events** and a **Postgres outbox** to keep services consistent without coupling them.
 - Ships with **local dev, Docker Compose, Helm, VS Code wiring, and end-to-end tests**.
 
@@ -197,7 +197,7 @@ stays in batch jobs behind clean boundaries.
 
 ## How it's put together
 
-Two short design docs cover the load-bearing choices — read these first:
+Four short design docs cover the load-bearing choices — read these first:
 
 - **[ADR-0001 — Open Lakehouse Query Stack](docs/adr/0001-open-lakehouse-query-stack.md):** Go owns the
   APIs, metadata, orchestration, events, and observability. The data side uses a vendor-neutral
@@ -206,6 +206,13 @@ Two short design docs cover the load-bearing choices — read these first:
   services that own data publish events through a **Postgres outbox** in the same transaction as the
   write, so an event never exists without the state behind it. Training workflows publish from
   Temporal activities. Consumers are built to handle duplicates.
+- **[ADR-0003 — Effective-Base Identity](docs/adr/0003-effective-base-identity.md):**
+  served base artifacts are content-addressed by a canonical descriptor digest, and measured
+  capabilities key off that artifact identity instead of tenant/model rows.
+- **[ADR-0004 — Agent Authoring and Extensibility](docs/adr/0004-agent-authoring-and-extensibility.md):**
+  agents stay declarative and content-addressed; developer extensibility is sandboxed tool-authoring
+  over `tool_service`/MCP, with the future SDK focused on tools and spec publishing rather than an
+  in-process agent runtime.
 
 The recurring discipline: **Postgres for each service's state, Kafka for events between services,
 Temporal for durable workflows, and Kubernetes/Ray/vLLM for the ML runtime.** Every service uses the

@@ -13,13 +13,10 @@ import (
 
 type CapabilityReport struct {
 	CapabilityReportID   uuid.UUID
-	OrgID                uuid.UUID
-	ModelID              uuid.UUID
+	EffectiveBaseID      string
 	SupportsChat         bool
 	SupportsToolCalls    bool
 	SupportsSystemPrompt bool
-	ContextWindowTokens  int
-	MaxOutputTokens      int
 	CreatedAt            time.Time
 }
 

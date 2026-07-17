@@ -36,11 +36,13 @@ var _ = Describe("ModelEventBuilder", func() {
 	It("includes org id in model updated and promotion requested payloads", func() {
 		builder := NewModelEventBuilder("model_registry")
 		modelRecord := validEventBuilderModel()
+		modelRecord.EffectiveBaseID = "sha256-effective-base"
 
 		modelUpdated := builder.ModelUpdatedMessage(modelRecord)
 		var updatedEvent modelregistrypb.ModelUpdatedEvent
 		Expect(proto.Unmarshal(modelUpdated.Message.Payload, &updatedEvent)).To(Succeed())
 		Expect(updatedEvent.GetOrgId()).To(Equal(modelRecord.OrgID.String()))
+		Expect(updatedEvent.GetEffectiveBaseId()).To(Equal("sha256-effective-base"))
 
 		promotionRequested := builder.PromotionRequestedMessage(modelRecord, nil)
 		var promotionEvent modelregistrypb.PromotionRequestedEvent

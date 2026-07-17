@@ -217,10 +217,11 @@ func (s *inferenceRequestRepositoryStub) RecordInferenceRequest(_ context.Contex
 }
 
 type capabilityReportRepositoryStub struct {
-	report   *model.CapabilityReport
-	recorded *model.CapabilityReport
-	readErr  error
-	err      error
+	report              *model.CapabilityReport
+	recorded            *model.CapabilityReport
+	readEffectiveBaseID string
+	readErr             error
+	err                 error
 }
 
 func (s *capabilityReportRepositoryStub) RecordCapabilityReport(_ context.Context, report *model.CapabilityReport) (*model.CapabilityReport, error) {
@@ -231,7 +232,8 @@ func (s *capabilityReportRepositoryStub) RecordCapabilityReport(_ context.Contex
 	return report, nil
 }
 
-func (s *capabilityReportRepositoryStub) ReadCapabilityReportForModel(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*model.CapabilityReport, error) {
+func (s *capabilityReportRepositoryStub) ReadCapabilityReportForEffectiveBase(_ context.Context, effectiveBaseID string) (*model.CapabilityReport, error) {
+	s.readEffectiveBaseID = effectiveBaseID
 	if s.readErr != nil {
 		return nil, s.readErr
 	}
@@ -241,7 +243,7 @@ func (s *capabilityReportRepositoryStub) ReadCapabilityReportForModel(_ context.
 	if s.report != nil {
 		return s.report, nil
 	}
-	return &model.CapabilityReport{SupportsToolCalls: true}, nil
+	return &model.CapabilityReport{EffectiveBaseID: effectiveBaseID, SupportsToolCalls: true}, nil
 }
 
 type agentSpecRepositoryStub struct {
@@ -642,7 +644,9 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec).To(Equal(agentSpecRepository.upserted))
 		Expect(capabilityRepository.recorded).NotTo(BeNil())
+		Expect(capabilityRepository.recorded.EffectiveBaseID).To(Equal(inferenceModel.EffectiveBaseID))
 		Expect(capabilityRepository.recorded.SupportsToolCalls).To(BeTrue())
+		Expect(capabilityRepository.readEffectiveBaseID).To(Equal(inferenceModel.EffectiveBaseID))
 		Expect(generator.requests).To(HaveLen(3))
 		Expect(generator.requests).To(ContainElement(SatisfyAll(
 			HaveField("ToolChoice", "required"),
@@ -672,6 +676,35 @@ var _ = Describe("InferenceUsecase", func() {
 		})
 
 		Expect(errors.Is(err, domain.ErrModelNotReady)).To(BeTrue())
+		Expect(agentSpecRepository.upserted).To(BeNil())
+	})
+
+	It("rejects tool-using agent specs when the model has no effective base identity", func() {
+		inferenceModel := validInferenceModel()
+		inferenceModel.EffectiveBaseID = ""
+		agentSpecRepository := &agentSpecRepositoryStub{}
+		capabilityRepository := &capabilityReportRepositoryStub{
+			report: &model.CapabilityReport{SupportsToolCalls: true},
+		}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithAgentSpecRepository(agentSpecRepository),
+			app.WithCapabilityReportRepository(capabilityRepository),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:       "search_knowledge",
+				Parameters: []byte(`{"type":"object"}`),
+			}}}),
+		)
+
+		_, err := uc.PublishAgentSpec(context.Background(), model.AgentSpecPublication{
+			UserID: inferenceModel.UserID,
+			OrgID:  inferenceModel.OrgID,
+			Spec:   validToolUsingAgentSpec(inferenceModel),
+		})
+
+		Expect(errors.Is(err, domain.ErrModelNotReady)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("effective base")))
+		Expect(capabilityRepository.readEffectiveBaseID).To(BeEmpty())
 		Expect(agentSpecRepository.upserted).To(BeNil())
 	})
 
@@ -2483,6 +2516,7 @@ func validInferenceModel() *model.InferenceModel {
 		ServingModel:      "sentence-transformer-v1",
 		ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
 		ServingLoadStatus: model.ModelLoadStatusLoaded,
+		EffectiveBaseID:   "sha256-effective-base",
 		MetricsMetadata:   "{}",
 		Status:            model.ModelStatusReady,
 	}
