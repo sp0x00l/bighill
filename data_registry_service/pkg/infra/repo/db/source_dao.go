@@ -51,6 +51,10 @@ type DatasetDAO struct {
 	EmbeddingChunkOverlap    pgtype.Int4
 	EmbeddingProvider        pgtype.Text
 	EmbeddingModel           pgtype.Text
+	GraphSnapshotID          pgtype.UUID
+	GraphProvenanceHash      pgtype.Text
+	GraphNodeCount           pgtype.Int8
+	GraphEdgeCount           pgtype.Int8
 }
 
 type Dataset struct {
@@ -103,6 +107,10 @@ func toDatasetDAO(row datasetScanner) (*DatasetDAO, error) {
 		&dataset.EmbeddingChunkOverlap,
 		&dataset.EmbeddingProvider,
 		&dataset.EmbeddingModel,
+		&dataset.GraphSnapshotID,
+		&dataset.GraphProvenanceHash,
+		&dataset.GraphNodeCount,
+		&dataset.GraphEdgeCount,
 	)
 	return &dataset, err
 }
@@ -172,6 +180,10 @@ func (d *Dataset) toDAO(dataset *model.Dataset) pgx.NamedArgs {
 		"embedding_chunk_overlap":    pgtype.Int4{Int32: int32(dataset.EmbeddingChunkOverlap), Valid: true},
 		"embedding_provider":         pgtype.Text{String: dataset.EmbeddingProvider, Valid: true},
 		"embedding_model":            pgtype.Text{String: dataset.EmbeddingModel, Valid: true},
+		"graph_snapshot_id":          pgtype.UUID{Bytes: dataset.GraphSnapshotID, Valid: dataset.GraphSnapshotID != uuid.Nil},
+		"graph_provenance_hash":      pgtype.Text{String: dataset.GraphProvenanceHash, Valid: true},
+		"graph_node_count":           pgtype.Int8{Int64: dataset.GraphNodeCount, Valid: true},
+		"graph_edge_count":           pgtype.Int8{Int64: dataset.GraphEdgeCount, Valid: true},
 	}
 
 	return dao
@@ -258,5 +270,9 @@ func fromDAO(ctx context.Context, dao *DatasetDAO) (*model.Dataset, error) {
 		EmbeddingChunkOverlap:    int(dao.EmbeddingChunkOverlap.Int32),
 		EmbeddingProvider:        dao.EmbeddingProvider.String,
 		EmbeddingModel:           dao.EmbeddingModel.String,
+		GraphSnapshotID:          dao.GraphSnapshotID.Bytes,
+		GraphProvenanceHash:      dao.GraphProvenanceHash.String,
+		GraphNodeCount:           dao.GraphNodeCount.Int64,
+		GraphEdgeCount:           dao.GraphEdgeCount.Int64,
 	}, nil
 }

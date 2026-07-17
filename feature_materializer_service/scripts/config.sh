@@ -17,6 +17,11 @@ if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_INSECURE=true
     export FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS=localhost:7233
     export FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE=default
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED=true
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR=heuristic
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL=cooccurrence-heuristic
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION=none
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION=graph_extraction_v1
 elif [ "$1" = "staging" ]; then
     export FEATURE_MATERIALIZER_SERVICE_DLQ=http://localhost:4566/feature-materializer-dev-env-queue/ # TODO
     export FEATURE_MATERIALIZER_SERVICE_DB_HOST=$PGHOST
@@ -30,6 +35,8 @@ elif [ "$1" = "staging" ]; then
     export FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_INSECURE=false
     export FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS=temporal:7233
     export FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE=default
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED=false
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR=disabled
 elif [ "$1" = "prod" ]; then
     export FEATURE_MATERIALIZER_SERVICE_DLQ="" # TODO
     export FEATURE_MATERIALIZER_SERVICE_DB_HOST=$PGHOST
@@ -43,6 +50,8 @@ elif [ "$1" = "prod" ]; then
     export FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_INSECURE=false
     export FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS=temporal:7233
     export FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE=default
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED=false
+    export FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR=disabled
 else
     echo "Error: Invalid environment provided to feature_materializer_service config"
     echo "Usage: './config.sh [local-dev|cicd|staging|prod]'"

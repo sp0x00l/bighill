@@ -118,6 +118,10 @@ func (s *featureMaterializerServiceClientStub) SearchEmbeddings(_ context.Contex
 	return s.resp, s.err
 }
 
+func (s *featureMaterializerServiceClientStub) SearchGraph(context.Context, *featurepb.SearchGraphRequest, ...stdgrpc.CallOption) (*featurepb.SearchGraphResponse, error) {
+	return &featurepb.SearchGraphResponse{}, nil
+}
+
 var _ = Describe("InferenceServer", func() {
 	It("maps generate requests and responses", func() {
 		requestID := uuid.New()

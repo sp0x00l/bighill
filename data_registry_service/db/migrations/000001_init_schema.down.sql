@@ -16,6 +16,7 @@ DROP INDEX IF EXISTS bighill_data_registry_db.index_dataset_table_ref;
 DROP INDEX IF EXISTS bighill_data_registry_db.index_dataset_raw_snapshot_id;
 DROP INDEX IF EXISTS bighill_data_registry_db.index_dataset_feature_snapshot_id;
 DROP INDEX IF EXISTS bighill_data_registry_db.index_dataset_embedding_snapshot_id;
+DROP INDEX IF EXISTS bighill_data_registry_db.index_dataset_graph_snapshot_id;
 DROP INDEX IF EXISTS bighill_data_registry_db.index_dataset_source_connector_id;
 DROP INDEX IF EXISTS bighill_data_registry_db.index_dataset_id_connectors;
 DROP INDEX IF EXISTS bighill_data_registry_db.index_dataset_id_metadata;

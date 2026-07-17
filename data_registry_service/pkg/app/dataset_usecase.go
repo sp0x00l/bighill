@@ -310,7 +310,8 @@ func isQueryableDatasetTable(dataset *model.Dataset) bool {
 		return false
 	}
 	if dataset.ProcessingState != model.DatasetProcessingFeatureMaterialized &&
-		dataset.ProcessingState != model.DatasetProcessingEmbeddingsMaterialized {
+		dataset.ProcessingState != model.DatasetProcessingEmbeddingsMaterialized &&
+		dataset.ProcessingState != model.DatasetProcessingGraphMaterialized {
 		return false
 	}
 	return strings.TrimSpace(dataset.Location) != "" &&

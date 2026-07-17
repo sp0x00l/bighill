@@ -14,6 +14,7 @@ const (
 	DatasetProcessingRawMaterialized
 	DatasetProcessingFeatureMaterialized
 	DatasetProcessingEmbeddingsMaterialized
+	DatasetProcessingGraphMaterialized
 	DatasetProcessingFailed
 )
 
@@ -21,7 +22,7 @@ func (s DatasetProcessingState) String() string {
 	if s < DatasetProcessingPending || s > DatasetProcessingFailed {
 		return "UNKNOWN"
 	}
-	return [...]string{"PENDING", "RAW_MATERIALIZED", "FEATURE_MATERIALIZED", "EMBEDDINGS_MATERIALIZED", "FAILED"}[s]
+	return [...]string{"PENDING", "RAW_MATERIALIZED", "FEATURE_MATERIALIZED", "EMBEDDINGS_MATERIALIZED", "GRAPH_MATERIALIZED", "FAILED"}[s]
 }
 
 func ToDatasetProcessingState(value string) (DatasetProcessingState, error) {
@@ -34,6 +35,8 @@ func ToDatasetProcessingState(value string) (DatasetProcessingState, error) {
 		return DatasetProcessingFeatureMaterialized, nil
 	case "EMBEDDINGS_MATERIALIZED":
 		return DatasetProcessingEmbeddingsMaterialized, nil
+	case "GRAPH_MATERIALIZED":
+		return DatasetProcessingGraphMaterialized, nil
 	case "FAILED":
 		return DatasetProcessingFailed, nil
 	default:
@@ -69,16 +72,29 @@ type InferenceDataset struct {
 	EmbeddingChunkOverlap    int
 	EmbeddingProvider        string
 	EmbeddingModel           string
+	GraphSnapshotID          uuid.UUID
+	GraphProvenanceHash      string
+	GraphNodeCount           int64
+	GraphEdgeCount           int64
 }
 
 func (d *InferenceDataset) IsRAGReady() bool {
 	if d == nil {
 		return false
 	}
-	return d.ProcessingState == DatasetProcessingEmbeddingsMaterialized &&
+	return (d.ProcessingState == DatasetProcessingEmbeddingsMaterialized || d.ProcessingState == DatasetProcessingGraphMaterialized) &&
 		d.EmbeddingSnapshotID != uuid.Nil &&
 		d.EmbeddingDimensions > 0 &&
 		d.EmbeddingCount > 0
+}
+
+func (d *InferenceDataset) IsGraphReady() bool {
+	if d == nil {
+		return false
+	}
+	return d.ProcessingState == DatasetProcessingGraphMaterialized &&
+		d.GraphSnapshotID != uuid.Nil &&
+		strings.TrimSpace(d.GraphProvenanceHash) != ""
 }
 
 func (d *InferenceDataset) HasSupportedEmbeddingProvider() bool {

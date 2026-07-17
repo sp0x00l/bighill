@@ -17,12 +17,14 @@ type MaterializationActivities struct {
 	rawSnapshotUsecase     usecase.RawSnapshotUsecase
 	featureSnapshotUsecase usecase.FeatureSnapshotUsecase
 	embeddingUsecase       usecase.EmbeddingMaterializationUsecase
+	graphUsecase           usecase.GraphMaterializationUsecase
 }
 
 func NewMaterializationActivities(
 	rawSnapshotUsecase usecase.RawSnapshotUsecase,
 	featureSnapshotUsecase usecase.FeatureSnapshotUsecase,
 	embeddingUsecase usecase.EmbeddingMaterializationUsecase,
+	graphUsecase usecase.GraphMaterializationUsecase,
 ) *MaterializationActivities {
 	log.Trace("NewMaterializationActivities")
 
@@ -30,6 +32,7 @@ func NewMaterializationActivities(
 		rawSnapshotUsecase:     rawSnapshotUsecase,
 		featureSnapshotUsecase: featureSnapshotUsecase,
 		embeddingUsecase:       embeddingUsecase,
+		graphUsecase:           graphUsecase,
 	}
 }
 
@@ -85,6 +88,24 @@ func (a *MaterializationActivities) MaterializeEmbeddings(ctx context.Context, i
 	return embeddingSnapshot, nil
 }
 
+func (a *MaterializationActivities) MaterializeGraph(ctx context.Context, input usecase.MaterializeGraphActivityInput) (*model.GraphSnapshot, error) {
+	log.Trace("MaterializationActivities MaterializeGraph")
+
+	input.Strategy = model.ApplyGraphExtractionStrategyDefaults(input.Strategy)
+	if err := validateMaterializeGraphInput(input); err != nil {
+		return nil, err
+	}
+	ctx = ctxutil.WithActorOrg(ctx, input.UserID, input.OrgID)
+	graphSnapshot, err := a.graphUsecase.MaterializeGraph(ctx, input.EmbeddingSnapshotID, input.IdempotencyKey, input.Strategy)
+	if err != nil {
+		if existing, ok := domain.IsGraphAlreadyMaterialized(err); ok {
+			return existing, nil
+		}
+		return nil, err
+	}
+	return graphSnapshot, nil
+}
+
 func validateMaterializeRawSnapshotInput(input usecase.MaterializeRawSnapshotActivityInput) error {
 	log.Trace("validateMaterializeRawSnapshotInput")
 
@@ -114,6 +135,27 @@ func validateMaterializeEmbeddingsInput(input usecase.MaterializeEmbeddingsActiv
 	}
 	if err := model.ValidateEmbeddingStrategy(input.Strategy); err != nil {
 		return domain.ErrValidationFailed.Extend(err.Error())
+	}
+	return nil
+}
+
+func validateMaterializeGraphInput(input usecase.MaterializeGraphActivityInput) error {
+	log.Trace("validateMaterializeGraphInput")
+
+	if input.EmbeddingSnapshotID == uuid.Nil {
+		return domain.ErrValidationFailed.Extend("embedding_snapshot_id is required")
+	}
+	if err := validateActivityActor(input.UserID, input.OrgID, input.IdempotencyKey); err != nil {
+		return err
+	}
+	if strings.TrimSpace(input.Strategy.ExtractionModel) == "" {
+		return domain.ErrValidationFailed.Extend("extraction_model is required")
+	}
+	if strings.TrimSpace(input.Strategy.ExtractionPromptVersion) == "" {
+		return domain.ErrValidationFailed.Extend("extraction_prompt_version is required")
+	}
+	if strings.TrimSpace(input.Strategy.ExtractionSchemaVersion) == "" {
+		return domain.ErrValidationFailed.Extend("extraction_schema_version is required")
 	}
 	return nil
 }

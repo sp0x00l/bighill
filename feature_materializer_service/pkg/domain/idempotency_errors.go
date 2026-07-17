@@ -53,3 +53,19 @@ func IsEmbeddingsAlreadyMaterialized(err error) (*model.EmbeddingSnapshot, bool)
 	}
 	return alreadyMaterialized.Record, true
 }
+
+type GraphAlreadyMaterializedError struct {
+	Record *model.GraphSnapshot
+}
+
+func (e *GraphAlreadyMaterializedError) Error() string {
+	return "graph already materialized"
+}
+
+func IsGraphAlreadyMaterialized(err error) (*model.GraphSnapshot, bool) {
+	var alreadyMaterialized *GraphAlreadyMaterializedError
+	if !errors.As(err, &alreadyMaterialized) {
+		return nil, false
+	}
+	return alreadyMaterialized.Record, true
+}

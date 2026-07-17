@@ -38,6 +38,7 @@ type testConnectionPool struct {
 	ExecArgs            [][]any
 	NextRows            []pgx.Row
 	NextQueryRows       pgx.Rows
+	NextQueryRowsQueue  []pgx.Rows
 	NextRowsAffected    int64
 	NextError           error
 	NextExecErrors      []error
@@ -66,6 +67,11 @@ func (p *testConnectionPool) Query(_ context.Context, sql string, args ...any) (
 	p.QueryCalled = true
 	p.QueryCalls = append(p.QueryCalls, sql)
 	p.QueryArgs = append(p.QueryArgs, args)
+	if len(p.NextQueryRowsQueue) > 0 {
+		nextRows := p.NextQueryRowsQueue[0]
+		p.NextQueryRowsQueue = p.NextQueryRowsQueue[1:]
+		return nextRows, p.NextError
+	}
 	if p.NextQueryRows != nil {
 		return p.NextQueryRows, p.NextError
 	}
@@ -365,6 +371,61 @@ func (r embeddingRecordSearchRow) Scan(dest ...any) error {
 	*(dest[3].(*int)) = r.ChunkIndex
 	*(dest[4].(*string)) = r.SourceText
 	*(dest[5].(*float64)) = r.Distance
+	return nil
+}
+
+type graphRetrievedContextRow struct {
+	GraphNodeChunkID    uuid.UUID
+	GraphNodeID         uuid.UUID
+	EmbeddingRecordID   uuid.UUID
+	EmbeddingSnapshotID uuid.UUID
+	DatasetID           uuid.UUID
+	ChunkIndex          int
+	SourceText          string
+	Score               float64
+	OrgID               uuid.UUID
+}
+
+func (r graphRetrievedContextRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.GraphNodeChunkID.String()
+	*(dest[1].(*string)) = r.GraphNodeID.String()
+	*(dest[2].(*string)) = r.EmbeddingRecordID.String()
+	*(dest[3].(*string)) = r.EmbeddingSnapshotID.String()
+	*(dest[4].(*string)) = r.DatasetID.String()
+	*(dest[5].(*int)) = r.ChunkIndex
+	*(dest[6].(*string)) = r.SourceText
+	*(dest[7].(*float64)) = r.Score
+	*(dest[8].(*string)) = r.OrgID.String()
+	return nil
+}
+
+type graphMatchedEntityRow struct {
+	GraphNodeID uuid.UUID
+	Name        string
+	Type        string
+	Description string
+	Score       float64
+}
+
+func (r graphMatchedEntityRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.GraphNodeID.String()
+	*(dest[1].(*string)) = r.Name
+	*(dest[2].(*string)) = r.Type
+	*(dest[3].(*string)) = r.Description
+	*(dest[4].(*float64)) = r.Score
+	return nil
+}
+
+type graphPathRow struct {
+	GraphNodeIDs  string
+	RelationTypes string
+	Score         float64
+}
+
+func (r graphPathRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.GraphNodeIDs
+	*(dest[1].(*string)) = r.RelationTypes
+	*(dest[2].(*float64)) = r.Score
 	return nil
 }
 
@@ -883,6 +944,73 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: activeSnapshot.OrgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("limit", 3))
+		})
+	})
+
+	Describe("SearchGraph", func() {
+		It("returns contexts, matched entities, and recursive graph paths", func() {
+			graphSnapshotID := uuid.New()
+			nodeA := uuid.New()
+			nodeB := uuid.New()
+			nodeC := uuid.New()
+			nodeChunkID := uuid.New()
+			recordID := uuid.New()
+			poolMock.NextQueryRowsQueue = []pgx.Rows{
+				&testRows{rows: []pgx.Row{
+					graphRetrievedContextRow{
+						GraphNodeChunkID:    nodeChunkID,
+						GraphNodeID:         nodeC,
+						EmbeddingRecordID:   recordID,
+						EmbeddingSnapshotID: embeddingID,
+						DatasetID:           datasetID,
+						ChunkIndex:          7,
+						SourceText:          "Alice introduced Beta Corp through Acme Corp.",
+						Score:               0.8,
+						OrgID:               orgID,
+					},
+				}},
+				&testRows{rows: []pgx.Row{
+					graphMatchedEntityRow{
+						GraphNodeID: nodeA,
+						Name:        "Alice",
+						Type:        "person",
+						Description: "Alice entity",
+						Score:       1,
+					},
+				}},
+				&testRows{rows: []pgx.Row{
+					graphPathRow{
+						GraphNodeIDs:  nodeA.String() + "," + nodeB.String() + "," + nodeC.String(),
+						RelationTypes: "WORKS_WITH,INTRODUCED_TO",
+						Score:         0.7,
+					},
+				}},
+			}
+
+			result, err := repository.SearchGraph(ctx, &model.GraphSnapshot{
+				GraphSnapshotID:     graphSnapshotID,
+				FeatureSnapshotID:   featureID,
+				EmbeddingSnapshotID: embeddingID,
+				DatasetID:           datasetID,
+				OrgID:               orgID,
+			}, "Alice", 5, 2)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Contexts).To(HaveLen(1))
+			Expect(result.Contexts[0].GraphNodeChunkID).To(Equal(nodeChunkID))
+			Expect(result.Contexts[0].SourceText).To(ContainSubstring("Beta Corp"))
+			Expect(result.MatchedEntities).To(HaveLen(1))
+			Expect(result.MatchedEntities[0].GraphNodeID).To(Equal(nodeA))
+			Expect(result.Paths).To(HaveLen(1))
+			Expect(result.Paths[0].GraphNodeIDs).To(Equal([]uuid.UUID{nodeA, nodeB, nodeC}))
+			Expect(result.Paths[0].RelationTypes).To(Equal([]string{"WORKS_WITH", "INTRODUCED_TO"}))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH RECURSIVE seed"))
+			Expect(poolMock.QueryCalls[2]).To(ContainSubstring("array_to_string(path, ',')"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("graph_snapshot_id", pgtype.UUID{Bytes: graphSnapshotID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("needle", "%alice%"))
+			Expect(args).To(HaveKeyWithValue("max_hops", 2))
 		})
 	})
 })

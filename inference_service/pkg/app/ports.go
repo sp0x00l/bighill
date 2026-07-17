@@ -55,9 +55,10 @@ type UserEventPublisher interface {
 }
 
 type ToolResolutionContext struct {
-	OrgID  uuid.UUID
-	UserID uuid.UUID
-	Spec   *model.AgentSpec
+	OrgID    uuid.UUID
+	UserID   uuid.UUID
+	Spec     *model.AgentSpec
+	Datasets []*model.InferenceDataset
 }
 
 type ToolInvocationContext struct {
@@ -96,6 +97,7 @@ type PreferenceDatasetWriter interface {
 
 type RetrievalClient interface {
 	SearchEmbeddings(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, metadataFilters map[string]string) ([]model.RetrievedContext, error)
+	SearchGraph(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int) ([]model.RetrievedContext, error)
 	Close() error
 }
 

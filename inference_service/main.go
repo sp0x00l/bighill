@@ -746,6 +746,17 @@ func newToolInvoker(ctx context.Context, cfg inferencetools.ToolServiceClientCon
 	if err != nil {
 		return nil, nil, err
 	}
+	graphInvoker, err := inferencetools.NewGraphSearchToolInvoker(retrievalClient)
+	if err != nil {
+		return nil, nil, err
+	}
+	localInvoker, err := inferencetools.NewCompositeLocalToolInvoker(map[string]app.ToolInvoker{
+		inferencetools.SearchKnowledgeToolName: searchInvoker,
+		inferencetools.GraphSearchToolName:     graphInvoker,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
 	var remoteInvoker app.ToolInvoker
 	var remoteCloser func() error
 	if strings.TrimSpace(cfg.Address) != "" {
@@ -756,7 +767,7 @@ func newToolInvoker(ctx context.Context, cfg inferencetools.ToolServiceClientCon
 		remoteInvoker = remote
 		remoteCloser = remote.Close
 	}
-	routedInvoker, err := inferencetools.NewRoutedToolInvoker(searchInvoker, remoteInvoker, []string{inferencetools.SearchKnowledgeToolName})
+	routedInvoker, err := inferencetools.NewRoutedToolInvoker(localInvoker, remoteInvoker, localInvoker.ToolNames())
 	if err != nil {
 		if remoteCloser != nil {
 			_ = remoteCloser()

@@ -43,6 +43,15 @@ type EmbeddingSnapshotRepository interface {
 	ReadEmbeddingByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (*model.EmbeddingSnapshot, error)
 }
 
+type GraphSnapshotRepository interface {
+	SavePendingGraphSnapshot(ctx context.Context, tx pgx.Tx, embeddingSnapshotID, idempotencyKey uuid.UUID, strategy model.GraphExtractionStrategy) (*model.GraphSnapshot, error)
+	ReadEmbeddingChunks(ctx context.Context, embeddingSnapshotID uuid.UUID) ([]model.GraphChunk, error)
+	SaveGraphMaterialization(ctx context.Context, tx pgx.Tx, materialization *model.GraphMaterialization) error
+	MarkGraphReady(ctx context.Context, tx pgx.Tx, graphSnapshot *model.GraphSnapshot) error
+	MarkGraphFailed(ctx context.Context, tx pgx.Tx, graphSnapshotID uuid.UUID, reason string) error
+	ReadGraphByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (*model.GraphSnapshot, error)
+}
+
 type SnapshotUnitOfWorkAdapter interface {
 	Do(ctx context.Context, fn shareduow.TxFunc) error
 }
@@ -51,6 +60,7 @@ type SnapshotEventBuilder interface {
 	RawSnapshotReadyMessage(rawSnapshot *model.RawSnapshot) (shareduow.OutboundMessage, error)
 	FeatureSnapshotReadyMessage(featureSnapshot *model.FeatureSnapshot) (shareduow.OutboundMessage, error)
 	EmbeddingSnapshotReadyMessage(embeddingSnapshot *model.EmbeddingSnapshot) (shareduow.OutboundMessage, error)
+	GraphSnapshotReadyMessage(graphSnapshot *model.GraphSnapshot) (shareduow.OutboundMessage, error)
 }
 
 type EmbeddingSearchRepository interface {
@@ -58,8 +68,17 @@ type EmbeddingSearchRepository interface {
 	SearchEmbeddingRecords(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, queryVector []float32, topK int) ([]model.EmbeddingRecord, error)
 }
 
+type GraphSearchRepository interface {
+	ReadActiveGraphSnapshot(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.GraphSnapshot, error)
+	SearchGraph(ctx context.Context, graphSnapshot *model.GraphSnapshot, queryText string, topK int, maxHops int) (*model.GraphSearchResult, error)
+}
+
 type EmbeddingWriter interface {
 	MaterializeEmbeddings(context.Context, *model.FeatureSnapshot, *model.EmbeddingSnapshot) (*model.EmbeddingSnapshot, []model.EmbeddingRecord, error)
+}
+
+type GraphExtractor interface {
+	ExtractGraph(context.Context, []model.GraphChunk, model.GraphExtractionStrategy) (*model.GraphExtraction, error)
 }
 
 type FeatureSnapshotReader interface {

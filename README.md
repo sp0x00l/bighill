@@ -209,10 +209,10 @@ Four short design docs cover the load-bearing choices — read these first:
 - **[ADR-0003 — Effective-Base Identity](docs/adr/0003-effective-base-identity.md):**
   served base artifacts are content-addressed by a canonical descriptor digest, and measured
   capabilities key off that artifact identity instead of tenant/model rows.
-- **[ADR-0004 — Agent Authoring and Extensibility](docs/adr/0004-agent-authoring-and-extensibility.md):**
-  agents stay declarative and content-addressed; developer extensibility is sandboxed tool-authoring
-  over `tool_service`/MCP, with the future SDK focused on tools and spec publishing rather than an
-  in-process agent runtime.
+- **[ADR-0004 — Extensibility & Authoring](docs/adr/0004-agent-authoring-and-extensibility.md):**
+  agents stay declarative and content-addressed, while developer code enters through governed
+  capability units behind typed ports and isolated hosts such as `tool_service`, Temporal workers,
+  memory/policy services, and future WASM/container runtimes.
 
 The recurring discipline: **Postgres for each service's state, Kafka for events between services,
 Temporal for durable workflows, and Kubernetes/Ray/vLLM for the ML runtime.** Every service uses the

@@ -101,6 +101,10 @@ type Dataset struct {
 	EmbeddingChunkOverlap    int
 	EmbeddingProvider        string
 	EmbeddingModel           string
+	GraphSnapshotID          uuid.UUID
+	GraphProvenanceHash      string
+	GraphNodeCount           int64
+	GraphEdgeCount           int64
 }
 
 func NewDataset(ID uuid.UUID) *Dataset {

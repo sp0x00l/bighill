@@ -71,6 +71,17 @@ func (snapshotEventBuilderStub) EmbeddingSnapshotReadyMessage(embeddingSnapshot 
 	}, nil
 }
 
+func (snapshotEventBuilderStub) GraphSnapshotReadyMessage(graphSnapshot *model.GraphSnapshot) (msgConn.OutboundMessage, error) {
+	return msgConn.OutboundMessage{
+		Topic: "feature_materializer",
+		Message: msgConn.Message{
+			ResourceKey: graphSnapshot.DatasetID,
+			MsgType:     msgConn.MsgTypeGraphSnapshotReady,
+		},
+		DispatchKey: "graph_snapshot_ready:" + graphSnapshot.GraphSnapshotID.String(),
+	}, nil
+}
+
 func (s *snapshotUnitOfWorkStub) Do(ctx context.Context, fn shareduow.TxFunc) error {
 	if s.err != nil {
 		return s.err

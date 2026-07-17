@@ -75,6 +75,10 @@ message DatasetUpdatedEvent {
   string source_database = 30;
   string source_collection = 31;
   string org_id = 32;
+  string graph_snapshot_id = 33;
+  string graph_provenance_hash = 34;
+  int64 graph_node_count = 35;
+  int64 graph_edge_count = 36;
 }
 
 message ReadSourceConnectorRequest {

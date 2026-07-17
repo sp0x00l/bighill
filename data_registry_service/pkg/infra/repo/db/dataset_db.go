@@ -122,7 +122,8 @@ func (db *datasetDB) Replace(ctx context.Context, tx pgx.Tx, dataset *model.Data
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
-		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model;`
+		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model,
+		graph_snapshot_id, graph_provenance_hash, graph_node_count, graph_edge_count;`
 	row := tx.QueryRow(ctx, sqlStatement, datasetDAO)
 
 	updated, err := fromDatasetRow(ctx, row)
@@ -168,7 +169,8 @@ func (db *datasetDB) UpdateProcessingState(ctx context.Context, tx pgx.Tx, datas
 		table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 		dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 		embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
-		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model;`
+		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model,
+		graph_snapshot_id, graph_provenance_hash, graph_node_count, graph_edge_count;`
 
 	updated, err := fromDatasetRow(ctx, tx.QueryRow(ctx, query, pgx.NamedArgs{
 		"id":               datasetID,
@@ -354,6 +356,10 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 	embeddingChunkOverlapValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN CASE WHEN @embedding_chunk_overlap > 0 THEN @embedding_chunk_overlap ELSE d.embedding_chunk_overlap END ELSE d.embedding_chunk_overlap END`
 	embeddingProviderValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@embedding_provider, ''), d.embedding_provider) ELSE d.embedding_provider END`
 	embeddingModelValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@embedding_model, ''), d.embedding_model) ELSE d.embedding_model END`
+	graphSnapshotIDValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(@graph_snapshot_id, d.graph_snapshot_id) ELSE d.graph_snapshot_id END`
+	graphProvenanceHashValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN COALESCE(NULLIF(@graph_provenance_hash, ''), d.graph_provenance_hash) ELSE d.graph_provenance_hash END`
+	graphNodeCountValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN CASE WHEN @graph_node_count > 0 THEN @graph_node_count ELSE d.graph_node_count END ELSE d.graph_node_count END`
+	graphEdgeCountValue := `CASE WHEN ` + metadataUpdateAllowed + ` THEN CASE WHEN @graph_edge_count > 0 THEN @graph_edge_count ELSE d.graph_edge_count END ELSE d.graph_edge_count END`
 	query := `UPDATE ` + db.Name + `.datasets d
 		SET location = ` + locationValue + `,
 			table_namespace = ` + tableNamespaceValue + `,
@@ -378,7 +384,11 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 			embedding_chunk_size = ` + embeddingChunkSizeValue + `,
 			embedding_chunk_overlap = ` + embeddingChunkOverlapValue + `,
 			embedding_provider = ` + embeddingProviderValue + `,
-			embedding_model = ` + embeddingModelValue + `
+			embedding_model = ` + embeddingModelValue + `,
+			graph_snapshot_id = ` + graphSnapshotIDValue + `,
+			graph_provenance_hash = ` + graphProvenanceHashValue + `,
+			graph_node_count = ` + graphNodeCountValue + `,
+			graph_edge_count = ` + graphEdgeCountValue + `
 		WHERE d.id = @id
 			AND d.org_id = @org_id
 			AND d.status != '` + model.Blacklisted.DBString() + `'::dataset_status_enum
@@ -407,12 +417,17 @@ func (db *datasetDB) recordMaterializationTx(ctx context.Context, tx pgx.Tx, mat
 				OR d.embedding_chunk_overlap IS DISTINCT FROM ` + embeddingChunkOverlapValue + `
 				OR d.embedding_provider IS DISTINCT FROM ` + embeddingProviderValue + `
 				OR d.embedding_model IS DISTINCT FROM ` + embeddingModelValue + `
+				OR d.graph_snapshot_id IS DISTINCT FROM ` + graphSnapshotIDValue + `
+				OR d.graph_provenance_hash IS DISTINCT FROM ` + graphProvenanceHashValue + `
+				OR d.graph_node_count IS DISTINCT FROM ` + graphNodeCountValue + `
+				OR d.graph_edge_count IS DISTINCT FROM ` + graphEdgeCountValue + `
 			)
 		RETURNING d.id, d.user_id, d.org_id, d.title, d.description, d.origin, d.location, d.source_type, d.source_connector_id, d.source_query, d.source_database, d.source_collection, d.status, d.category,
 			d.table_namespace, d.table_name, d.table_format, d.catalog_provider, d.processing_profile, d.schema_version, d.schema_metadata::text, d.processing_state::text,
 			d.dataset_version, d.raw_snapshot_id, d.feature_snapshot_id, d.embedding_snapshot_id, d.vector_store, d.collection_name,
 			d.embedding_dimensions, d.embedding_count, d.embedding_strategy_version, d.embedding_chunker_name, d.embedding_chunker_version,
-			d.embedding_chunk_size, d.embedding_chunk_overlap, d.embedding_provider, d.embedding_model`
+			d.embedding_chunk_size, d.embedding_chunk_overlap, d.embedding_provider, d.embedding_model,
+			d.graph_snapshot_id, d.graph_provenance_hash, d.graph_node_count, d.graph_edge_count`
 
 	updated, err := fromDatasetRow(ctx, tx.QueryRow(ctx, query, datasetDAO))
 	if err == nil {
@@ -593,7 +608,8 @@ func (db *datasetDB) getSelectSQL(filter string) string {
 	table_namespace, table_name, table_format, catalog_provider, processing_profile, schema_version, schema_metadata::text, processing_state::text,
 	dataset_version, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store, collection_name,
 	embedding_dimensions, embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
-	embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model
+	embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model,
+	graph_snapshot_id, graph_provenance_hash, graph_node_count, graph_edge_count
 	FROM %s.datasets WHERE %s;`, db.Name, filter)
 }
 

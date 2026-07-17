@@ -18,15 +18,17 @@ type MaterializationWorkflowStarter struct {
 	temporalClient client.Client
 	taskQueue      string
 	strategy       model.EmbeddingStrategy
+	graphConfig    usecase.GraphWorkflowConfig
 }
 
-func NewMaterializationWorkflowStarter(temporalClient client.Client, taskQueue string, strategy model.EmbeddingStrategy) *MaterializationWorkflowStarter {
+func NewMaterializationWorkflowStarter(temporalClient client.Client, taskQueue string, strategy model.EmbeddingStrategy, graphConfig usecase.GraphWorkflowConfig) *MaterializationWorkflowStarter {
 	log.Trace("NewMaterializationWorkflowStarter")
 
 	return &MaterializationWorkflowStarter{
 		temporalClient: temporalClient,
 		taskQueue:      taskQueue,
 		strategy:       model.NormalizeEmbeddingStrategy(strategy),
+		graphConfig:    graphConfig,
 	}
 }
 
@@ -43,9 +45,11 @@ func (s *MaterializationWorkflowStarter) StartMaterializationWorkflow(ctx contex
 		TaskQueue:             s.taskQueue,
 		WorkflowIDReusePolicy: enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
 	}, usecase.MaterializeWorkflowName, usecase.MaterializeWorkflowInput{
-		DatasetFile:       *datasetFile,
-		RawIdempotencyKey: rawIdempotencyKey,
-		EmbeddingStrategy: s.strategy,
+		DatasetFile:             *datasetFile,
+		RawIdempotencyKey:       rawIdempotencyKey,
+		EmbeddingStrategy:       s.strategy,
+		GraphEnabled:            s.graphConfig.Enabled,
+		GraphExtractionStrategy: s.graphConfig.Strategy,
 	})
 	if err == nil {
 		return nil

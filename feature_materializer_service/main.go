@@ -35,6 +35,11 @@ import (
 
 var Version string
 
+const (
+	graphExtractorDisabled  = "disabled"
+	graphExtractorHeuristic = "heuristic"
+)
+
 type materializerConfig struct {
 	ServiceName          string
 	DBName               string
@@ -44,6 +49,7 @@ type materializerConfig struct {
 	OutboxRelay          messagingConn.OutboxRelayConfig
 	ArtifactBucket       artifactBucketConfig
 	Embedding            embeddingConfig
+	Graph                graphConfig
 	DataStream           dataStreamConfig
 	Iceberg              icebergConfig
 	Temporal             temporalConfig
@@ -79,6 +85,14 @@ type embeddingConfig struct {
 	ChunkSize        int
 	ChunkOverlap     int
 	RequestTimeout   time.Duration
+}
+
+type graphConfig struct {
+	Enabled                 bool
+	Extractor               string
+	ExtractionModel         string
+	ExtractionPromptVersion string
+	ExtractionSchemaVersion string
 }
 
 type dataStreamConfig struct {
@@ -232,6 +246,10 @@ func main() {
 	}
 	embeddingChunker := materialization.NewTokenWindowChunker(embeddingStrategy)
 	embeddingWriter := materialization.NewEmbeddingWriter(artifactStore, embeddingProvider, embeddingChunker, embeddingStrategy, cfg.Embedding.VectorStore, cfg.Embedding.MaxRows)
+	graphExtractor, err := newGraphExtractor(cfg.Graph)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create graph extractor")
+	}
 	rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(dataStreamRawWriter, rawWriter)
 	featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 	embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
@@ -240,13 +258,15 @@ func main() {
 	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, rawDispatcher)
 	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, snapshotRepo, featureDispatcher)
 	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, snapshotRepo, embeddingDispatcher)
+	graphUsecase := usecase.NewGraphMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, graphExtractor)
 	embeddingSearchUsecase := usecase.NewEmbeddingSearchUsecase(snapshotRepo, newQueryEmbeddingProviderFactory(cfg.Embedding))
-	activities := featuretemporal.NewMaterializationActivities(rawSnapshotUsecase, featureSnapshotUsecase, embeddingUsecase)
+	graphSearchUsecase := usecase.NewGraphSearchUsecase(snapshotRepo)
+	activities := featuretemporal.NewMaterializationActivities(rawSnapshotUsecase, featureSnapshotUsecase, embeddingUsecase, graphUsecase)
 	materializationWorker := featuretemporal.NewMaterializationWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
 
-	workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue, embeddingStrategy)
+	workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue, embeddingStrategy, graphWorkflowConfig(cfg.Graph))
 
-	grpcService := featuregrpc.NewFeatureMaterializerGrpcServer(embeddingSearchUsecase)
+	grpcService := featuregrpc.NewFeatureMaterializerGrpcServer(embeddingSearchUsecase, graphSearchUsecase)
 
 	healthCheck := coreHealthCheck.NewMonitor(newHealthCheckConfig(cfg.Health))
 	healthCheck = healthCheck.WithCpuCheck().WithDatabaseCheck().WithMemoryCheck().WithMessageBrokerCheck()
@@ -446,6 +466,13 @@ func readMaterializerConfig() materializerConfig {
 			ChunkOverlap:     env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_CHUNK_OVERLAP", strconv.Itoa(model.DefaultChunkOverlap)),
 			RequestTimeout:   secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_REQUEST_TIMEOUT_SECONDS", "30"),
 		},
+		Graph: graphConfig{
+			Enabled:                 env.WithDefaultBool("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED", false),
+			Extractor:               env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR", graphExtractorDisabled),
+			ExtractionModel:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL", model.DefaultGraphExtractionModel),
+			ExtractionPromptVersion: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION", model.DefaultGraphExtractionPromptVersion),
+			ExtractionSchemaVersion: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION", model.DefaultGraphExtractionSchemaVersion),
+		},
 		DataStream: dataStreamConfig{
 			Address:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_GRPC_ADDRESS", "localhost:7070"),
 			RequestTimeout: secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_REQUEST_TIMEOUT_SECONDS", "60"),
@@ -573,7 +600,72 @@ func validateMaterializerConfig(cfg materializerConfig) error {
 	if err := validateEmbeddingConfig(cfg.Embedding); err != nil {
 		return err
 	}
+	if err := validateGraphConfig(cfg.Graph); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateGraphConfig(cfg graphConfig) error {
+	log.Trace("validateGraphConfig")
+
+	if !cfg.Enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Extractor)) {
+	case graphExtractorHeuristic:
+		if !env.IsDevEnv() {
+			return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR=heuristic is only allowed in dev environments")
+		}
+	case graphExtractorDisabled:
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR must not be disabled when graph materialization is enabled")
+	default:
+		return fmt.Errorf("unsupported FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR %q", cfg.Extractor)
+	}
+	strategy := graphStrategyFromConfig(cfg)
+	if strings.TrimSpace(strategy.ExtractionModel) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL is required")
+	}
+	if strings.TrimSpace(strategy.ExtractionPromptVersion) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION is required")
+	}
+	if strings.TrimSpace(strategy.ExtractionSchemaVersion) == "" {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION is required")
+	}
+	return nil
+}
+
+func newGraphExtractor(cfg graphConfig) (usecase.GraphExtractor, error) {
+	log.Trace("newGraphExtractor")
+
+	if !cfg.Enabled {
+		return materialization.NewDisabledGraphExtractor(), nil
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Extractor)) {
+	case graphExtractorHeuristic:
+		return materialization.NewLocalGraphExtractor()
+	default:
+		return nil, fmt.Errorf("unsupported FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR %q", cfg.Extractor)
+	}
+}
+
+func graphWorkflowConfig(cfg graphConfig) usecase.GraphWorkflowConfig {
+	log.Trace("graphWorkflowConfig")
+
+	return usecase.GraphWorkflowConfig{
+		Enabled:  cfg.Enabled,
+		Strategy: graphStrategyFromConfig(cfg),
+	}
+}
+
+func graphStrategyFromConfig(cfg graphConfig) model.GraphExtractionStrategy {
+	log.Trace("graphStrategyFromConfig")
+
+	return model.ApplyGraphExtractionStrategyDefaults(model.GraphExtractionStrategy{
+		ExtractionModel:         cfg.ExtractionModel,
+		ExtractionPromptVersion: cfg.ExtractionPromptVersion,
+		ExtractionSchemaVersion: cfg.ExtractionSchemaVersion,
+	})
 }
 
 func validateEmbeddingConfig(cfg embeddingConfig) error {

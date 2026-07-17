@@ -59,6 +59,36 @@ var _ = Describe("DatasetResolver", func() {
 		Expect(ref.DatasetURI).To(Equal("s3://lakehouse/features/movies.parquet"))
 	})
 
+	It("resolves graph-materialized datasets as trainable materialized datasets", func() {
+		userID := uuid.New()
+		orgID := uuid.New()
+		datasetID := uuid.New()
+		httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			Expect(req.Method).To(Equal(http.MethodGet))
+			Expect(req.URL.Path).To(Equal("/v1/data/registry/" + datasetID.String() + "/materialization"))
+			Expect(req.Header.Get(userIDHeader)).To(Equal(userID.String()))
+			Expect(req.Header.Get(orgIDHeader)).To(Equal(orgID.String()))
+			return jsonResponse(http.StatusOK, `{
+				"id":"`+datasetID.String()+`",
+				"userId":"`+userID.String()+`",
+				"orgId":"`+orgID.String()+`",
+				"storageLocation":"s3://lakehouse/features/movies.parquet",
+				"tableName":"movies",
+				"tableFormat":"PARQUET",
+				"processingState":"GRAPH_MATERIALIZED",
+				"datasetVersion":5,
+				"featureSnapshotId":"`+uuid.NewString()+`"
+			}`), nil
+		})}
+
+		ref, err := NewDatasetResolver("http://data-registry", httpClient).ResolveMaterializedDataset(context.Background(), userID, orgID, datasetID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ref.DatasetID).To(Equal(datasetID.String()))
+		Expect(ref.DatasetVersion).To(Equal("5"))
+		Expect(ref.ProcessingState).To(Equal("GRAPH_MATERIALIZED"))
+	})
+
 	It("maps missing datasets to validation errors", func() {
 		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return jsonResponse(http.StatusNotFound, `{"message":"missing"}`), nil

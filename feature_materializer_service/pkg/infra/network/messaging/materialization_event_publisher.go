@@ -17,6 +17,7 @@ type MaterializationEventPublisher interface {
 	PublishRawSnapshotReady(ctx context.Context, rawSnapshot *model.RawSnapshot) error
 	PublishFeatureSnapshotReady(ctx context.Context, featureSnapshot *model.FeatureSnapshot) error
 	PublishEmbeddingSnapshotReady(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot) error
+	PublishGraphSnapshotReady(ctx context.Context, graphSnapshot *model.GraphSnapshot) error
 }
 
 type MaterializationTopics struct {
@@ -117,6 +118,34 @@ func (p *materializationEventPublisher) PublishEmbeddingSnapshotReady(ctx contex
 		ChunkOverlap:            int32(embeddingSnapshot.ChunkOverlap),
 		EmbeddingProvider:       embeddingSnapshot.EmbeddingProvider,
 		EmbeddingModel:          embeddingSnapshot.EmbeddingModel,
+	})
+}
+
+func (p *materializationEventPublisher) PublishGraphSnapshotReady(ctx context.Context, graphSnapshot *model.GraphSnapshot) error {
+	log.Trace("materializationEventPublisher PublishGraphSnapshotReady")
+
+	if graphSnapshot == nil {
+		return msgConn.NonRetryable(fmt.Errorf("graph snapshot is required"))
+	}
+	if graphSnapshot.MaterializationEventSeq <= 0 {
+		return msgConn.NonRetryable(fmt.Errorf("graph snapshot materialization event sequence is required"))
+	}
+	return p.publish(ctx, graphSnapshot.DatasetID, msgConn.MsgTypeGraphSnapshotReady, &featurepb.GraphSnapshotReadyEvent{
+		DatasetId:               graphSnapshot.DatasetID.String(),
+		MaterializationEventSeq: graphSnapshot.MaterializationEventSeq,
+		FeatureSnapshotId:       graphSnapshot.FeatureSnapshotID.String(),
+		EmbeddingSnapshotId:     graphSnapshot.EmbeddingSnapshotID.String(),
+		GraphSnapshotId:         graphSnapshot.GraphSnapshotID.String(),
+		UserId:                  graphSnapshot.UserID.String(),
+		OrgId:                   graphSnapshot.OrgID.String(),
+		ProvenanceHash:          graphSnapshot.ProvenanceHash,
+		ExtractionModel:         graphSnapshot.ExtractionModel,
+		ExtractionPromptVersion: graphSnapshot.ExtractionPromptVersion,
+		ExtractionSchemaVersion: graphSnapshot.ExtractionSchemaVersion,
+		ChunkCount:              graphSnapshot.ChunkCount,
+		ChunksProcessed:         graphSnapshot.ChunksProcessed,
+		EntityCount:             graphSnapshot.EntityCount,
+		EdgeCount:               graphSnapshot.EdgeCount,
 	})
 }
 

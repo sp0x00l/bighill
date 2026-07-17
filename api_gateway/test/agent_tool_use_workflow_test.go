@@ -90,6 +90,50 @@ var _ = Describe("Agent tool-use workflow", Label("agent"), func() {
 		Expect(otherEventTypes).NotTo(ContainElement("agent.run.completed"))
 	})
 
+	It("records a graph_search trajectory after graph materialization is projected", Label("graph"), func() {
+		user := createVerifiedProfileAndLogin()
+		datasetID := createGraphRAGInferenceDataset(user)
+		graphSnapshotID := materializeGraphRAGInferenceDataset(user, datasetID)
+		Expect(strings.TrimSpace(graphSnapshotID)).NotTo(BeEmpty())
+		modelID := uploadBaseModelThroughIngestion(user, datasetID)
+		selectedModel := assertModelSelectable(user, modelID, "UPLOAD", "rag-e2e-uploaded-base")
+		if stringField(selectedModel, "serving_protocol") != "OPENAI_CHAT_COMPLETIONS" {
+			assertAgentSpecPublishRejectedWithPayload(user, agentGraphSpecPayload(modelID, "agent-graph-rag-e2e-unsupported"))
+			return
+		}
+
+		agentSpecHash, supported := tryPublishAgentSpecWithPayload(user, agentGraphSpecPayload(modelID, "agent-graph-rag-e2e"))
+		if !supported {
+			return
+		}
+		endpointID := publishAgentEndpoint(user, modelID, datasetID, agentSpecHash)
+
+		status, body := doJSONWithTimeout(http.MethodPost, "/v1/private/inference/endpoints/"+endpointID.String()+"/generations", map[string]any{
+			"query_text": "Call graph_search first with query_text Aurora Relay, top_k 3, and max_hops 2. Then answer from the returned context.",
+			"top_k":      3,
+		}, user.Token, uuid.New(), ragE2EGenerateCallTimeout)
+		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		generation := decodeObject(body)
+		runID := stringField(generation, "agent_run_id")
+		Expect(strings.TrimSpace(runID)).NotTo(BeEmpty())
+		Expect(strings.TrimSpace(stringField(generation, "answer"))).NotTo(BeEmpty())
+
+		trajectory := readAgentRun(user, runID)
+		run := trajectoryObject(trajectory, "run")
+		Expect(run["agent_spec_hash"]).To(Equal(agentSpecHash))
+		Expect(run["status"]).To(Equal("COMPLETED"))
+
+		invocations := trajectoryArray(trajectory, "tool_invocations")
+		Expect(invocations).NotTo(BeEmpty())
+		firstInvocation := invocations[0].(map[string]any)
+		Expect(firstInvocation["tool_name"]).To(Equal("graph_search"))
+		Expect(fmt.Sprint(firstInvocation["result"])).To(ContainSubstring("Graph e2e verification phrase"))
+
+		eventTypes := replayAgentRunSocketEvents(user, runID)
+		Expect(eventTypes).To(ContainElement("agent.tool.result"))
+		Expect(eventTypes).To(ContainElement("agent.run.completed"))
+	})
+
 	It("denies unallowlisted tenants at the tool service boundary", func() {
 		err := invokeHTTPGetTool(uuid.NewString(), "http://example.com")
 
@@ -110,7 +154,11 @@ var _ = Describe("Agent tool-use workflow", Label("agent"), func() {
 })
 
 func tryPublishAgentSpec(user profileTestUser, modelID uuid.UUID, lineage string) (string, bool) {
-	status, body := doJSON(http.MethodPost, "/v1/private/inference/agent-specs", agentSpecPayload(modelID, lineage), user.Token, uuid.New())
+	return tryPublishAgentSpecWithPayload(user, agentSpecPayload(modelID, lineage))
+}
+
+func tryPublishAgentSpecWithPayload(user profileTestUser, payload map[string]any) (string, bool) {
+	status, body := doJSON(http.MethodPost, "/v1/private/inference/agent-specs", payload, user.Token, uuid.New())
 	if status == http.StatusConflict {
 		Expect(agentSpecPublishRejectedReason(body)).To(BeTrue(), "body: %s", string(body))
 		return "", false
@@ -123,7 +171,11 @@ func tryPublishAgentSpec(user profileTestUser, modelID uuid.UUID, lineage string
 }
 
 func assertAgentSpecPublishRejected(user profileTestUser, modelID uuid.UUID, lineage string) {
-	status, body := doJSON(http.MethodPost, "/v1/private/inference/agent-specs", agentSpecPayload(modelID, lineage), user.Token, uuid.New())
+	assertAgentSpecPublishRejectedWithPayload(user, agentSpecPayload(modelID, lineage))
+}
+
+func assertAgentSpecPublishRejectedWithPayload(user profileTestUser, payload map[string]any) {
+	status, body := doJSON(http.MethodPost, "/v1/private/inference/agent-specs", payload, user.Token, uuid.New())
 	Expect(status).To(Equal(http.StatusConflict), "body: %s", string(body))
 	Expect(agentSpecPublishRejectedReason(body)).To(BeTrue(), "body: %s", string(body))
 }
@@ -144,16 +196,24 @@ func agentSpecPublishRejectedReason(body []byte) bool {
 }
 
 func agentSpecPayload(modelID uuid.UUID, lineage string) map[string]any {
+	return agentSpecPayloadForTool(modelID, lineage, "search_knowledge", "Use tools when they are available. Do not answer until the required tool result has been observed.")
+}
+
+func agentGraphSpecPayload(modelID uuid.UUID, lineage string) map[string]any {
+	return agentSpecPayloadForTool(modelID, lineage, "graph_search", "You must call graph_search first. Use query_text Aurora Relay, top_k 3, and max_hops 2. Do not answer until the graph_search result has been observed.")
+}
+
+func agentSpecPayloadForTool(modelID uuid.UUID, lineage string, toolName string, systemPrompt string) map[string]any {
 	return map[string]any{
 		"schema_version": "agent_spec_v1",
 		"agent_lineage":  lineage,
-		"system_prompt":  "Use tools when they are available. Do not answer until the required tool result has been observed.",
+		"system_prompt":  systemPrompt,
 		"model_binding": map[string]any{
 			"model_id": modelID.String(),
 		},
 		"tools": []map[string]any{
 			{
-				"name":        "search_knowledge",
+				"name":        toolName,
 				"required":    true,
 				"tool_choice": "required",
 				"config":      map[string]any{},

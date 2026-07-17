@@ -51,7 +51,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			read := decodeObject(body)
 			metadata, ok := schemaMetadataObjectOK(read)
 			return ok &&
-				read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+				isRAGDatasetProcessingStateReady(read["processingState"]) &&
 				isFeatureParquetLocation(read["storageLocation"]) &&
 				read["tableFormat"] == "PARQUET" &&
 				read["catalogProvider"] == "LOCAL" &&
@@ -183,7 +183,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			read := decodeObject(body)
 			metadata, ok := schemaMetadataObjectOK(read)
 			return ok &&
-				read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+				isRAGDatasetProcessingStateReady(read["processingState"]) &&
 				isFeatureParquetLocation(read["storageLocation"]) &&
 				read["tableFormat"] == "PARQUET" &&
 				read["catalogProvider"] == "LOCAL" &&
@@ -227,7 +227,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			read := decodeObject(body)
 			metadata, ok := schemaMetadataObjectOK(read)
 			return ok &&
-				read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+				isRAGDatasetProcessingStateReady(read["processingState"]) &&
 				isFeatureParquetLocation(read["storageLocation"]) &&
 				read["tableFormat"] == "PARQUET" &&
 				read["catalogProvider"] == "LOCAL" &&
@@ -276,7 +276,7 @@ var _ = Describe("Data materialization workflow", Ordered, func() {
 			read := decodeObject(body)
 			metadata, ok := schemaMetadataObjectOK(read)
 			return ok &&
-				read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+				isRAGDatasetProcessingStateReady(read["processingState"]) &&
 				isFeatureParquetLocation(read["storageLocation"]) &&
 				read["tableFormat"] == "PARQUET" &&
 				read["catalogProvider"] == "LOCAL" &&
@@ -329,6 +329,15 @@ func dataMaterializationSchemaMetadataHasField(metadata map[string]any, fieldNam
 		}
 	}
 	return false
+}
+
+func isRAGDatasetProcessingStateReady(value any) bool {
+	switch value {
+	case "EMBEDDINGS_MATERIALIZED", "GRAPH_MATERIALIZED":
+		return true
+	default:
+		return false
+	}
 }
 
 func isFeatureParquetLocation(value any) bool {

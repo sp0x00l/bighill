@@ -43,6 +43,7 @@ func ConfigureMaterializationSubscriber(subscriber msgConn.Subscriber, usecase u
 	msgConn.AddListener(subscriber, NewRawSnapshotReadyEventListener(usecase))
 	msgConn.AddListener(subscriber, NewFeatureSnapshotReadyEventListener(usecase))
 	msgConn.AddListener(subscriber, NewEmbeddingSnapshotReadyEventListener(usecase))
+	msgConn.AddListener(subscriber, NewGraphSnapshotReadyEventListener(usecase))
 }
 
 func (s *MaterializationSubscriber) Start(ctx context.Context) error {

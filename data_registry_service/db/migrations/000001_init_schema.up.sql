@@ -9,6 +9,7 @@ CREATE TYPE dataset_processing_state_enum AS ENUM (
     'RAW_MATERIALIZED',
     'FEATURE_MATERIALIZED',
     'EMBEDDINGS_MATERIALIZED',
+    'GRAPH_MATERIALIZED',
     'FAILED'
 );
 
@@ -71,6 +72,10 @@ CREATE TABLE IF NOT EXISTS bighill_data_registry_db.datasets(
     embedding_chunk_overlap INTEGER NOT NULL DEFAULT 0,
     embedding_provider TEXT NOT NULL DEFAULT '',
     embedding_model TEXT NOT NULL DEFAULT '',
+    graph_snapshot_id uuid,
+    graph_provenance_hash TEXT NOT NULL DEFAULT '',
+    graph_node_count BIGINT NOT NULL DEFAULT 0,
+    graph_edge_count BIGINT NOT NULL DEFAULT 0,
     published_at TIMESTAMP WITHOUT TIME ZONE, 
     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT LOCALTIMESTAMP,
     updated_at TIMESTAMP WITHOUT TIME ZONE,
@@ -143,6 +148,7 @@ CREATE INDEX index_dataset_table_ref ON bighill_data_registry_db.datasets(catalo
 CREATE INDEX index_dataset_raw_snapshot_id ON bighill_data_registry_db.datasets(raw_snapshot_id);
 CREATE INDEX index_dataset_feature_snapshot_id ON bighill_data_registry_db.datasets(feature_snapshot_id);
 CREATE INDEX index_dataset_embedding_snapshot_id ON bighill_data_registry_db.datasets(embedding_snapshot_id);
+CREATE INDEX index_dataset_graph_snapshot_id ON bighill_data_registry_db.datasets(graph_snapshot_id);
 CREATE INDEX index_dataset_source_connector_id ON bighill_data_registry_db.datasets(source_connector_id);
 CREATE INDEX index_dataset_id_connectors ON bighill_data_registry_db.connectors(user_id);
 CREATE INDEX index_connectors_org_id ON bighill_data_registry_db.connectors(org_id);

@@ -335,6 +335,10 @@ func (r *datasetRowStub) Scan(dest ...any) error {
 		r.dao.EmbeddingChunkOverlap,
 		r.dao.EmbeddingProvider,
 		r.dao.EmbeddingModel,
+		r.dao.GraphSnapshotID,
+		r.dao.GraphProvenanceHash,
+		r.dao.GraphNodeCount,
+		r.dao.GraphEdgeCount,
 	}
 	for i := range dest {
 		switch target := dest[i].(type) {

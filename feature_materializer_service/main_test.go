@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"feature_materializer_service/pkg/domain/model"
 	env "lib/shared_lib/env"
 
 	temporalclient "go.temporal.io/sdk/client"
@@ -55,6 +56,11 @@ var _ = Describe("readMaterializerConfig", func() {
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TENANT_SUBSCRIBER_TOPIC")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION")).To(Succeed())
 	})
 
 	It("uses the tenant service topic for tenant projections by default", func() {
@@ -64,6 +70,8 @@ var _ = Describe("readMaterializerConfig", func() {
 		Expect(cfg.Temporal.ConnectTimeout).To(Equal(60 * time.Second))
 		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(time.Second))
 		Expect(cfg.Embedding.VectorStore).To(Equal("pgvector"))
+		Expect(cfg.Graph.Enabled).To(BeFalse())
+		Expect(cfg.Graph.Extractor).To(Equal(graphExtractorDisabled))
 	})
 
 	It("allows service-specific Temporal connection retry overrides", func() {
@@ -74,6 +82,18 @@ var _ = Describe("readMaterializerConfig", func() {
 
 		Expect(cfg.Temporal.ConnectTimeout).To(Equal(90 * time.Second))
 		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(3 * time.Second))
+	})
+
+	It("allows heuristic graph extraction only as an explicit dev setting", func() {
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED", "true")).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR", graphExtractorHeuristic)).To(Succeed())
+
+		cfg := readMaterializerConfig()
+
+		Expect(cfg.Graph.Enabled).To(BeTrue())
+		Expect(cfg.Graph.Extractor).To(Equal(graphExtractorHeuristic))
+		Expect(cfg.Graph.ExtractionModel).To(Equal(model.DefaultGraphExtractionModel))
+		Expect(cfg.Graph.ExtractionPromptVersion).To(Equal(model.DefaultGraphExtractionPromptVersion))
 	})
 })
 
@@ -145,5 +165,17 @@ var _ = Describe("runtime embedding validation", func() {
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("must not be local-dev-bucket outside dev environments")))
+	})
+
+	It("rejects heuristic graph extraction outside dev environments", func() {
+		Expect(os.Setenv("ENVIRONMENT", "STAGING")).To(Succeed())
+		env.ResetEnvironmentCache()
+
+		err := validateGraphConfig(graphConfig{
+			Enabled:   true,
+			Extractor: graphExtractorHeuristic,
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("only allowed in dev environments")))
 	})
 })

@@ -30,6 +30,10 @@ func (p ProcessingProfile) RequiresEmbeddings() bool {
 	return p == ProcessingProfileTextRAG
 }
 
+func (p ProcessingProfile) RequiresGraph() bool {
+	return p == ProcessingProfileTextRAG
+}
+
 func ToProcessingProfile(value string) (ProcessingProfile, error) {
 	switch strings.ToUpper(strings.TrimSpace(value)) {
 	case "GENERIC_PARQUET_PROCESSING_PROFILE":

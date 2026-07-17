@@ -241,6 +241,44 @@ func materializeRAGInferenceDataset(user profileTestUser, datasetID string) {
 	waitForRAGDatasetMaterialized(user, datasetID, datasetUpdatedEvents, embeddingSnapshotReadyEvents)
 }
 
+func createGraphRAGInferenceDataset(user profileTestUser) string {
+	createPayload := map[string]any{
+		"title":             "Graph RAG Knowledge Upload",
+		"description":       "HTML document used by the end-to-end graph RAG workflow",
+		"category":          "documents",
+		"tableNamespace":    "features",
+		"tableName":         "graph_rag_knowledge_upload_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8],
+		"tableFormat":       "PARQUET",
+		"catalogProvider":   "LOCAL",
+		"processingProfile": "TEXT_RAG_PROCESSING_PROFILE",
+	}
+
+	created := createDataRegistryDataset(user, createPayload)
+	return stringField(created, "id")
+}
+
+func uploadGraphRAGInferenceDocument(user profileTestUser, datasetID string) {
+	html := []byte("<!doctype html><html><body><main><h1>Aurora Relay</h1><p>Aurora Relay connects Beacon Hub. Beacon Hub connects Citadel Index. Graph e2e verification phrase: the Aurora Relay graph path returns connected context.</p></main></body></html>")
+	var lastErr error
+	Eventually(func() bool {
+		status, body := doMultipartFile(http.MethodPost, "/v1/private/data/store/"+datasetID, "file", "graph-rag-inference.html", html, user.Token, uuid.New())
+		if status != http.StatusCreated {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
+		lastErr = nil
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue(), "Graph RAG document upload failed: %v", lastErr)
+}
+
+func materializeGraphRAGInferenceDataset(user profileTestUser, datasetID string) string {
+	datasetUpdatedEvents, embeddingSnapshotReadyEvents, graphSnapshotReadyEvents, stop := newGraphRAGMaterializationEventCollectors()
+	defer stop()
+
+	uploadGraphRAGInferenceDocument(user, datasetID)
+	return waitForGraphRAGDatasetMaterialized(user, datasetID, datasetUpdatedEvents, embeddingSnapshotReadyEvents, graphSnapshotReadyEvents)
+}
+
 func newRAGMaterializationEventCollectors() (*kafkaEventCollector[*dataregistrypb.DatasetUpdatedEvent], *kafkaEventCollector[*featurepb.EmbeddingSnapshotReadyEvent], context.CancelFunc) {
 	dataTopic := env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry")
 	featureTopic := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer")
@@ -255,6 +293,26 @@ func newRAGMaterializationEventCollectors() (*kafkaEventCollector[*dataregistryp
 	msgConn.AddListener(subscriber, embeddingSnapshotReadyEvents)
 	start()
 	return datasetUpdatedEvents, embeddingSnapshotReadyEvents, stop
+}
+
+func newGraphRAGMaterializationEventCollectors() (*kafkaEventCollector[*dataregistrypb.DatasetUpdatedEvent], *kafkaEventCollector[*featurepb.EmbeddingSnapshotReadyEvent], *kafkaEventCollector[*featurepb.GraphSnapshotReadyEvent], context.CancelFunc) {
+	dataTopic := env.WithDefaultString("DATA_REGISTRY_SERVICE_TOPIC", "data_registry")
+	featureTopic := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer")
+	subscriber, start, stop := newKafkaAssertsSubscriber(context.Background(), topicList(dataTopic+","+featureTopic))
+	datasetUpdatedEvents := newKafkaEventCollector(msgConn.MsgTypeDatasetUpdated, func() *dataregistrypb.DatasetUpdatedEvent {
+		return &dataregistrypb.DatasetUpdatedEvent{}
+	})
+	embeddingSnapshotReadyEvents := newKafkaEventCollector(msgConn.MsgTypeEmbeddingSnapshotReady, func() *featurepb.EmbeddingSnapshotReadyEvent {
+		return &featurepb.EmbeddingSnapshotReadyEvent{}
+	})
+	graphSnapshotReadyEvents := newKafkaEventCollector(msgConn.MsgTypeGraphSnapshotReady, func() *featurepb.GraphSnapshotReadyEvent {
+		return &featurepb.GraphSnapshotReadyEvent{}
+	})
+	msgConn.AddListener(subscriber, datasetUpdatedEvents)
+	msgConn.AddListener(subscriber, embeddingSnapshotReadyEvents)
+	msgConn.AddListener(subscriber, graphSnapshotReadyEvents)
+	start()
+	return datasetUpdatedEvents, embeddingSnapshotReadyEvents, graphSnapshotReadyEvents, stop
 }
 
 func waitForRAGDatasetMaterialized(
@@ -286,7 +344,7 @@ func waitForRAGDatasetMaterialized(
 		}
 
 		read := decodeObject(body)
-		if read["processingState"] != "EMBEDDINGS_MATERIALIZED" {
+		if !isRAGDatasetProcessingStateReady(read["processingState"]) {
 			lastErr = fmt.Errorf("dataset not materialized: %#v", read)
 			return false
 		}
@@ -311,6 +369,63 @@ func waitForRAGDatasetMaterialized(
 		lastErr = nil
 		return true
 	}, 30*time.Second, 1*time.Second).Should(BeTrue(), "RAG dataset was not materialized: %v", lastErr)
+}
+
+func waitForGraphRAGDatasetMaterialized(
+	user profileTestUser,
+	datasetID string,
+	datasetUpdatedEvents *kafkaEventCollector[*dataregistrypb.DatasetUpdatedEvent],
+	embeddingSnapshotReadyEvents *kafkaEventCollector[*featurepb.EmbeddingSnapshotReadyEvent],
+	graphSnapshotReadyEvents *kafkaEventCollector[*featurepb.GraphSnapshotReadyEvent],
+) string {
+	datasetUUID, err := uuid.Parse(datasetID)
+	Expect(err).NotTo(HaveOccurred())
+
+	embeddingEvent := embeddingSnapshotReadyEvents.waitFor(datasetUUID, 2*time.Minute, func(event *featurepb.EmbeddingSnapshotReadyEvent) bool {
+		return event.GetDatasetId() == datasetID &&
+			strings.TrimSpace(event.GetEmbeddingSnapshotId()) != "" &&
+			event.GetEmbeddingCount() > 0
+	})
+	graphEvent := graphSnapshotReadyEvents.waitFor(datasetUUID, 2*time.Minute, func(event *featurepb.GraphSnapshotReadyEvent) bool {
+		return event.GetDatasetId() == datasetID &&
+			strings.TrimSpace(event.GetGraphSnapshotId()) != "" &&
+			strings.TrimSpace(event.GetEmbeddingSnapshotId()) == embeddingEvent.GetEmbeddingSnapshotId() &&
+			strings.TrimSpace(event.GetProvenanceHash()) != "" &&
+			event.GetChunkCount() > 0 &&
+			event.GetChunksProcessed() == event.GetChunkCount() &&
+			event.GetEntityCount() > 0
+	})
+	datasetUpdatedEvents.waitFor(datasetUUID, 2*time.Minute, func(event *dataregistrypb.DatasetUpdatedEvent) bool {
+		return event.GetDatasetId() == datasetID &&
+			event.GetProcessingState() == "GRAPH_MATERIALIZED" &&
+			strings.TrimSpace(event.GetGraphSnapshotId()) == graphEvent.GetGraphSnapshotId()
+	})
+
+	var lastErr error
+	Eventually(func() bool {
+		status, body := doJSON(http.MethodGet, "/v1/private/data/registry/"+datasetID, nil, user.Token, uuid.Nil)
+		if status != http.StatusOK {
+			lastErr = fmt.Errorf("status %d body %s", status, string(body))
+			return false
+		}
+		read := decodeObject(body)
+		metadata, ok := read["schemaMetadata"].(map[string]any)
+		if !ok {
+			lastErr = fmt.Errorf("schemaMetadata: %#v", read["schemaMetadata"])
+			return false
+		}
+		if read["processingState"] != "GRAPH_MATERIALIZED" {
+			lastErr = fmt.Errorf("dataset not graph materialized: %#v", read)
+			return false
+		}
+		if metadata["source_format"] != "html" || !materializationSchemaMetadataHasField(metadata, "source_text") {
+			lastErr = fmt.Errorf("unexpected metadata: %#v", metadata)
+			return false
+		}
+		lastErr = nil
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue(), "Graph RAG dataset was not materialized: %v", lastErr)
+	return graphEvent.GetGraphSnapshotId()
 }
 
 func materializationSchemaMetadataHasField(metadata map[string]any, fieldName string) bool {

@@ -34,6 +34,7 @@ const (
 	MsgTypeModelArtifactIngested
 	MsgTypePromotionRequested
 	MsgTypePromotionReportReady
+	MsgTypeGraphSnapshotReady
 )
 
 var msgType = map[MsgType]string{
@@ -53,6 +54,7 @@ var msgType = map[MsgType]string{
 	MsgTypeModelArtifactIngested:  "model_artifact_ingested",
 	MsgTypePromotionRequested:     "promotion_requested",
 	MsgTypePromotionReportReady:   "promotion_report_ready",
+	MsgTypeGraphSnapshotReady:     "graph_snapshot_ready",
 }
 
 func (m MsgType) String() string {

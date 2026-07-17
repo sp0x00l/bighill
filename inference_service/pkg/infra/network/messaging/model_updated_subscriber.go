@@ -347,6 +347,10 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
+	graphSnapshotID, err := msgConn.ParseOptionalUUID("graph_snapshot_id", payload.GetGraphSnapshotId())
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
 
 	dataset := &model.InferenceDataset{
 		DatasetID:                datasetID,
@@ -376,6 +380,10 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 		EmbeddingChunkOverlap:    int(payload.GetEmbeddingChunkOverlap()),
 		EmbeddingProvider:        strings.TrimSpace(payload.GetEmbeddingProvider()),
 		EmbeddingModel:           strings.TrimSpace(payload.GetEmbeddingModel()),
+		GraphSnapshotID:          graphSnapshotID,
+		GraphProvenanceHash:      strings.TrimSpace(payload.GetGraphProvenanceHash()),
+		GraphNodeCount:           payload.GetGraphNodeCount(),
+		GraphEdgeCount:           payload.GetGraphEdgeCount(),
 	}
 	if err := validateDatasetUpdatedEvent(dataset); err != nil {
 		return nil, uuid.Nil, err
@@ -388,6 +396,8 @@ func datasetUpdatedEventToModel(resourceKey uuid.UUID, payload *datasetpb.Datase
 		dataset.RawSnapshotID.String(),
 		dataset.FeatureSnapshotID.String(),
 		dataset.EmbeddingSnapshotID.String(),
+		dataset.GraphSnapshotID.String(),
+		dataset.GraphProvenanceHash,
 	}, ":")))
 	return dataset, idempotencyKey, nil
 }
@@ -403,6 +413,14 @@ func validateDatasetUpdatedEvent(dataset *model.InferenceDataset) error {
 	}
 	if strings.TrimSpace(dataset.SchemaMetadata) == "" {
 		return fmt.Errorf("schema metadata is required")
+	}
+	if dataset.ProcessingState == model.DatasetProcessingGraphMaterialized {
+		if dataset.GraphSnapshotID == uuid.Nil {
+			return fmt.Errorf("graph snapshot id is required")
+		}
+		if strings.TrimSpace(dataset.GraphProvenanceHash) == "" {
+			return fmt.Errorf("graph provenance hash is required")
+		}
 	}
 	return nil
 }

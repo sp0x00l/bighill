@@ -474,6 +474,16 @@ func (c *integrationRetrievalClient) SearchEmbeddings(context.Context, uuid.UUID
 	}}, nil
 }
 
+func (c *integrationRetrievalClient) SearchGraph(context.Context, uuid.UUID, uuid.UUID, string, int, int) ([]model.RetrievedContext, error) {
+	return []model.RetrievedContext{{
+		EmbeddingRecordID:   uuid.New(),
+		EmbeddingSnapshotID: uuid.New(),
+		ChunkIndex:          1,
+		SourceText:          "integration graph retrieved context",
+		Similarity:          0.88,
+	}}, nil
+}
+
 func (c *integrationRetrievalClient) Close() error {
 	return nil
 }
@@ -509,6 +519,10 @@ func (c *rerankIntegrationRetrievalClient) SearchEmbeddings(_ context.Context, _
 	}
 	contexts[3].SourceText = "highest relevance context"
 	return contexts, nil
+}
+
+func (c *rerankIntegrationRetrievalClient) SearchGraph(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, _ int) ([]model.RetrievedContext, error) {
+	return c.SearchEmbeddings(ctx, userID, datasetID, queryText, topK, nil)
 }
 
 func (c *rerankIntegrationRetrievalClient) Close() error {

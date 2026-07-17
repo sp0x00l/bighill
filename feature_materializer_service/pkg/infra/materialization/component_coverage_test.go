@@ -79,4 +79,29 @@ var _ = Describe("Materialization components", func() {
 		Expect(writer.SupportsEmbeddings(generic)).To(BeFalse())
 		Expect(writer.SupportsEmbeddings(rag)).To(BeTrue())
 	})
+
+	It("extracts graph entities and relations from text chunks", func() {
+		extractor, err := materialization.NewLocalGraphExtractor()
+		Expect(err).NotTo(HaveOccurred())
+		chunks := []model.GraphChunk{{
+			ChunkIndex: 0,
+			SourceText: "Alice works with Acme Corp. Alice introduced Beta Corp to Acme Corp.",
+		}}
+
+		extraction, err := extractor.ExtractGraph(context.Background(), chunks, model.ApplyGraphExtractionStrategyDefaults(model.GraphExtractionStrategy{}))
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(extraction.Entities).NotTo(BeEmpty())
+		Expect(extraction.Relations).NotTo(BeEmpty())
+		entityNames := make([]string, 0, len(extraction.Entities))
+		for _, entity := range extraction.Entities {
+			entityNames = append(entityNames, entity.Name)
+		}
+		Expect(entityNames).To(ContainElement("Alice"))
+		Expect(entityNames).To(ContainElement("Acme Corp"))
+		Expect(entityNames).To(ContainElement("Beta Corp"))
+		for _, relation := range extraction.Relations {
+			Expect(relation.Weight).To(BeNumerically(">=", 0))
+		}
+	})
 })

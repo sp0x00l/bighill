@@ -6,36 +6,83 @@ Accepted.
 
 ## Context
 
-The self-improving agent lifecycle needs a stable identity for the *served artifact* — the concrete thing a model runs as: foundation model + quantization + tokenizer + chat template, and later a shared or tenant-merged adapter. Adapter training provenance, capability measurement, and serving compatibility all need to reference that identity.
+The self-improving agent loop needs a stable id for the thing that is actually served.
 
-The first attempt modeled it as a wide, UUID-keyed, org-scoped `effective_base_versions` table with many nullable attribute columns (merge recipe, shared adapter, tokenizer/template/quant hashes, capability report id) written by nothing. That is forward-schema: a table asserting a capability the platform did not have. It was removed in the V1 honesty remediation. We want the identity to be extensible without reintroducing dormant columns.
+That served artifact starts as a foundation model plus the serving details that affect behavior, such
+as artifact format and serving protocol. Later it may also include a shared or tenant-specific
+adapter.
+
+Training records, capability checks, and serving compatibility all need to point at the same served
+artifact id.
+
+The first attempt used a wide, UUID-keyed, org-scoped `effective_base_versions` table with many
+nullable columns. Most of those columns had no writer. That was forward schema: the database claimed
+the platform had capabilities that did not exist yet. It was removed.
+
+We still need the identity, but it must grow only when real producers and readers exist.
 
 ## Decision
 
-1. **Content-addressed identity.** `effective_base_id` is a digest over `(descriptor_schema_version + canonical descriptor)`, serialized through the shared serializer, and is the table's primary key. This is the same content-hash-as-reference pattern already used for `agent_spec_hash` on `agent_runs`; two byte-identical artifacts collapse to one row, and upsert is idempotent.
+1. **Use a content-addressed id.** `effective_base_id` is a digest over
+   `(descriptor_schema_version + canonical descriptor)`, serialized with the shared serializer. It
+   is the table primary key. Two byte-identical descriptors produce the same row, so upserts are
+   idempotent.
 
-2. **Minimal columns + versioned descriptor.** First-class columns exist only for what this slice writes and reads: `effective_base_id`, `foundation_model_id`, `descriptor_schema_version`, `foundation_checksum`, `descriptor`, and timestamps. The full composition lives in canonical `descriptor` JSONB whose v1 keys are all produced by model-registry serving reconciliation: `descriptor_schema_version`, `foundation_model_id`, `artifact_uri`, `artifact_format`, `foundation_checksum`, `serving_protocol`, and `serving_model`. The identity extends by bumping `descriptor_schema_version` and adding producer-written keys — never by adding empty columns.
+2. **Keep columns small and put the full shape in a versioned descriptor.** First-class columns exist
+   only for values this slice writes and reads: `effective_base_id`, `foundation_model_id`,
+   `descriptor_schema_version`, `foundation_checksum`, `descriptor`, and timestamps. The full
+   composition lives in canonical `descriptor` JSONB. V1 descriptor keys are produced by
+   model-registry serving reconciliation: `descriptor_schema_version`, `foundation_model_id`,
+   `artifact_uri`, `artifact_format`, `foundation_checksum`, `serving_protocol`, and
+   `serving_model`. To extend the identity, bump `descriptor_schema_version` and add keys that a
+   real producer writes. Do not add empty columns.
 
-3. **Platform-scoped, no `org_id`.** Effective bases are platform artifacts; identical artifacts deduplicate to one digest across tenants. Org access to future tenant-merged bases is modeled as a separate binding/grant relation ("org X may use base Y"), never as a column on the base row. A tenant-merged artifact has its own digest and is granted to its owning org.
+3. **Make it platform-scoped, not org-scoped.** Effective bases are platform artifacts. Identical
+   artifacts deduplicate to one digest across tenants. If an org may use a future tenant-merged base,
+   model that as a separate grant: "org X may use base Y." Do not put `org_id` on the base row. A
+   tenant-merged artifact gets its own digest and a grant to its owning org.
 
-4. **Ownership.** `model_registry_service` owns the `effective_base_versions` table (source of truth). In this slice, model-registry computes the v1 descriptor from the model record and observed serving status it already owns. A future model-serving producer can provide richer artifact measurements, but it must write real descriptor keys before the schema claims them. Model-registry stamps `effective_base_id` onto the model projection event it already emits.
+4. **Keep ownership in `model_registry_service`.** `model_registry_service` owns the
+   `effective_base_versions` table. In this slice, it computes the V1 descriptor from the model
+   record and observed serving status it already owns. A future model-serving producer can add richer
+   artifact measurements, but only by writing real descriptor keys. Model registry includes
+   `effective_base_id` on the model projection event it already emits.
 
-5. **Capability keyed on the digest, artifact-intrinsic only.** `capability_reports` keys on `effective_base_id`; capability is measured against the served artifact, once per digest, and shared across tenants. Only artifact-intrinsic signals that are actually probed belong here in V1: `supports_chat`, `supports_tool_calls`, and `supports_system_prompt`. `max_output_tokens` is a request/runtime policy cap and does not belong in this row. `context_window_tokens` can be added only when a real artifact probe or metadata reader produces it. Per-org RLS on capability is deliberately not used for this platform measurement.
+5. **Key capability checks on the digest.** `capability_reports` keys on `effective_base_id`.
+   Capability is measured once per served artifact and shared across tenants. V1 stores only signals
+   that are actually probed: `supports_chat`, `supports_tool_calls`, and `supports_system_prompt`.
+   `max_output_tokens` is request policy, not artifact capability, so it does not belong here.
+   `context_window_tokens` can be added only when a real probe or metadata reader produces it. Do
+   not use per-org RLS for this platform-level measurement.
 
-6. **Immutability.** Identity is never mutated. A corrected or recomposed base is a new digest that consumers re-point to. A change to the canonical form is a `descriptor_schema_version` bump, so ids stay stable within a version.
+6. **Never mutate identity.** A corrected or recomposed base creates a new digest. Consumers move to
+   the new id. If the canonical form changes, bump `descriptor_schema_version` so ids remain stable
+   within a descriptor version.
 
-### Deferred (no consumer yet — would be phantom)
+### Deferred
 
-- **Adapter/base compatibility function** (foundation match, tokenizer/template hash equality, quant compatibility) lands in the serving-compatibility slice, when adapters exist to check. It is a pure function over two descriptors, not stored flags.
-- **A standalone `effective_base.registered` event** lands when a second consumer (agent registry or eval) needs it. Until then the id rides the existing model-projection event that `inference_service` already consumes — same producer-push direction, no consumerless event.
+- **Adapter/base compatibility** lands when adapters exist to check. It should be a function over two
+  descriptors, not stored flags.
+- **A standalone `effective_base.registered` event** lands when a second consumer, such as agent
+  registry or eval, needs it. Until then the id rides the existing model-projection event that
+  `inference_service` already consumes. Do not add an event with no consumer.
 
 ### Guardrail
 
-Extensible means *versioned descriptor + computed functions + events*, not pre-declared columns. The descriptor grows; the column set stays query-driven. The honesty rule applies inside the JSONB: a key exists only if a producer wrote it, `false` means known-false, and `NULL` means unknown only where a reader handles unknown.
+Extensible means versioned descriptor, computed functions, and events when needed. It does not mean
+pre-declared empty columns.
+
+The descriptor can grow. The column set stays tied to real queries. The same rule applies inside
+JSONB: a key exists only if a producer wrote it; `false` means known false; `NULL` means unknown only
+where a reader handles unknown.
 
 ## Consequences
 
-- Identity is reversible and deduplicated: the same served artifact yields the same id everywhere, and capability is probed once per artifact rather than per tenant.
-- Foreign keys reference a digest string, consistent with `agent_spec_hash` on `agent_runs`; we accept a larger key than a UUID surrogate in exchange for content-addressed clarity and idempotent dedup.
-- `effective_base_versions` returns to the schema only in the slice that also ships its producer (`model_serving` → `model_registry`) and its reader (capability re-point), reversing the forward-schema pattern that removed it.
-- The compatibility function and the standalone registration event are recorded here as intended design but are not built until their consumers exist.
+- The same served artifact yields the same id everywhere.
+- Capability is probed once per artifact, not once per tenant.
+- Foreign keys reference a digest string, matching the `agent_spec_hash` pattern on `agent_runs`.
+  This is larger than a UUID, but it gives content-addressed clarity and idempotent deduplication.
+- `effective_base_versions` returns only with its producer and reader. This avoids the forward-schema
+  pattern that caused the earlier table to be removed.
+- Compatibility checks and the standalone registration event are recorded as intended design, but
+  are not built until their consumers exist.

@@ -251,9 +251,10 @@ func appToolResolutionContext(session *model.AgentSession) ToolResolutionContext
 	log.Trace("appToolResolutionContext")
 
 	return ToolResolutionContext{
-		OrgID:  session.OrgID,
-		UserID: session.UserID,
-		Spec:   session.Spec,
+		OrgID:    session.OrgID,
+		UserID:   session.UserID,
+		Spec:     session.Spec,
+		Datasets: session.Datasets,
 	}
 }
 

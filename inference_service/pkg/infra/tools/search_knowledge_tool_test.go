@@ -26,8 +26,11 @@ type retrievalClientStub struct {
 	datasetID       uuid.UUID
 	queryText       string
 	topK            int
+	maxHops         int
 	metadataFilters map[string]string
 	contexts        []model.RetrievedContext
+	graphContexts   []model.RetrievedContext
+	graphCalled     bool
 	err             error
 }
 
@@ -38,6 +41,20 @@ func (s *retrievalClientStub) SearchEmbeddings(_ context.Context, userID uuid.UU
 	s.topK = topK
 	s.metadataFilters = metadataFilters
 	return s.contexts, s.err
+}
+
+func (s *retrievalClientStub) SearchGraph(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int) ([]model.RetrievedContext, error) {
+	s.graphCalled = true
+	s.userID = userID
+	s.datasetID = datasetID
+	s.queryText = queryText
+	s.topK = topK
+	s.maxHops = maxHops
+	contexts := s.graphContexts
+	if contexts == nil {
+		contexts = s.contexts
+	}
+	return contexts, s.err
 }
 
 func (s *retrievalClientStub) Close() error {
@@ -115,6 +132,60 @@ var _ = Describe("SearchKnowledgeToolInvoker", func() {
 
 		Expect(invoker).To(BeNil())
 		Expect(err).To(MatchError(ContainSubstring(domain.ErrValidationFailed.Error())))
+	})
+})
+
+var _ = Describe("GraphSearchToolInvoker", func() {
+	It("does not advertise graph_search when runtime datasets have no ready graph", func() {
+		invoker, err := NewGraphSearchToolInvoker(&retrievalClientStub{})
+		Expect(err).NotTo(HaveOccurred())
+		resolution := app.ToolResolutionContext{
+			OrgID:    uuid.New(),
+			UserID:   uuid.New(),
+			Datasets: []*model.InferenceDataset{{DatasetID: uuid.New(), ProcessingState: model.DatasetProcessingEmbeddingsMaterialized}},
+		}
+
+		specs, err := invoker.Available(context.Background(), resolution, []model.ToolBinding{{Name: GraphSearchToolName}})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(specs).To(BeEmpty())
+	})
+
+	It("searches only graph-ready datasets and returns typed contexts", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		graphSnapshotID := uuid.New()
+		retrieval := &retrievalClientStub{graphContexts: []model.RetrievedContext{{
+			EmbeddingRecordID: uuid.New(),
+			DatasetID:         datasetID,
+			SourceText:        "two hop graph context",
+			Similarity:        0.75,
+		}}}
+		invoker, err := NewGraphSearchToolInvoker(retrieval)
+		Expect(err).NotTo(HaveOccurred())
+		invocation := app.ToolInvocationContext{UserID: userID, Datasets: []*model.InferenceDataset{
+			{DatasetID: uuid.New(), ProcessingState: model.DatasetProcessingEmbeddingsMaterialized},
+			{DatasetID: datasetID, ProcessingState: model.DatasetProcessingGraphMaterialized, GraphSnapshotID: graphSnapshotID, GraphProvenanceHash: "graph-hash"},
+		}}
+
+		result, err := invoker.Invoke(context.Background(), invocation, model.ToolCall{
+			ID:        "call-graph",
+			Name:      GraphSearchToolName,
+			Arguments: []byte(`{"query_text":"Acme","top_k":3,"max_hops":2}`),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.IsError).To(BeFalse())
+		Expect(result.ToolImplVersion).To(Equal(graphSearchToolImplVersion))
+		Expect(result.Contexts).To(HaveLen(1))
+		Expect(result.Contexts[0].SourceText).To(Equal("two hop graph context"))
+		Expect(result.Content).To(ContainSubstring("two hop graph context"))
+		Expect(retrieval.graphCalled).To(BeTrue())
+		Expect(retrieval.userID).To(Equal(userID))
+		Expect(retrieval.datasetID).To(Equal(datasetID))
+		Expect(retrieval.queryText).To(Equal("Acme"))
+		Expect(retrieval.topK).To(Equal(3))
+		Expect(retrieval.maxHops).To(Equal(2))
 	})
 })
 

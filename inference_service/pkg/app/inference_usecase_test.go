@@ -141,6 +141,10 @@ func (s *retrievalClientStub) SearchEmbeddings(_ context.Context, userID uuid.UU
 	return contexts, nil
 }
 
+func (s *retrievalClientStub) SearchGraph(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, _ int) ([]model.RetrievedContext, error) {
+	return s.SearchEmbeddings(context.Background(), userID, datasetID, queryText, topK, nil)
+}
+
 func (s *retrievalClientStub) Close() error {
 	return nil
 }

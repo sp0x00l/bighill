@@ -64,12 +64,29 @@ func (s *embeddingUsecaseStub) MaterializeEmbeddings(_ context.Context, _ uuid.U
 	return s.embeddingSnapshot, nil
 }
 
+type graphUsecaseStub struct {
+	graphSnapshot *model.GraphSnapshot
+	err           error
+	called        bool
+	strategy      model.GraphExtractionStrategy
+}
+
+func (s *graphUsecaseStub) MaterializeGraph(_ context.Context, _ uuid.UUID, _ uuid.UUID, strategy model.GraphExtractionStrategy) (*model.GraphSnapshot, error) {
+	s.called = true
+	s.strategy = strategy
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.graphSnapshot, nil
+}
+
 var _ = Describe("MaterializationActivities", func() {
 	It("returns existing raw snapshot records for idempotent activity replays", func() {
 		existing := validRawSnapshot()
 		rawUsecase := &rawUsecaseStub{err: &domain.RawSnapshotAlreadyMaterializedError{Record: existing}}
 		activities := featuretemporal.NewMaterializationActivities(
 			rawUsecase,
+			nil,
 			nil,
 			nil,
 		)
@@ -87,7 +104,7 @@ var _ = Describe("MaterializationActivities", func() {
 	It("returns transient raw snapshot errors for Temporal retry", func() {
 		expectedErr := errors.New("object store unavailable")
 		rawUsecase := &rawUsecaseStub{err: expectedErr}
-		activities := featuretemporal.NewMaterializationActivities(rawUsecase, nil, nil)
+		activities := featuretemporal.NewMaterializationActivities(rawUsecase, nil, nil, nil)
 
 		rawSnapshot, err := activities.MaterializeRawSnapshot(context.Background(), usecase.MaterializeRawSnapshotActivityInput{
 			DatasetFile:    validDatasetFile(),
@@ -101,7 +118,7 @@ var _ = Describe("MaterializationActivities", func() {
 
 	It("rejects invalid raw snapshot activity input at the Temporal boundary", func() {
 		rawUsecase := &rawUsecaseStub{rawSnapshot: validRawSnapshot()}
-		activities := featuretemporal.NewMaterializationActivities(rawUsecase, nil, nil)
+		activities := featuretemporal.NewMaterializationActivities(rawUsecase, nil, nil, nil)
 		input := usecase.MaterializeRawSnapshotActivityInput{
 			DatasetFile:    validDatasetFile(),
 			IdempotencyKey: uuid.New(),
@@ -118,7 +135,7 @@ var _ = Describe("MaterializationActivities", func() {
 
 	It("rejects invalid feature snapshot activity input at the Temporal boundary", func() {
 		featureUsecase := &featureUsecaseStub{featureSnapshot: validFeatureSnapshot(uuid.New())}
-		activities := featuretemporal.NewMaterializationActivities(nil, featureUsecase, nil)
+		activities := featuretemporal.NewMaterializationActivities(nil, featureUsecase, nil, nil)
 
 		featureSnapshot, err := activities.BuildFeatureSnapshot(context.Background(), usecase.BuildFeatureSnapshotActivityInput{
 			RawSnapshotID:  uuid.Nil,
@@ -135,7 +152,7 @@ var _ = Describe("MaterializationActivities", func() {
 
 	It("normalizes and validates embedding activity strategy at the Temporal boundary", func() {
 		embeddingUsecase := &embeddingUsecaseStub{embeddingSnapshot: validEmbeddingSnapshot(uuid.New())}
-		activities := featuretemporal.NewMaterializationActivities(nil, nil, embeddingUsecase)
+		activities := featuretemporal.NewMaterializationActivities(nil, nil, embeddingUsecase, nil)
 		featureSnapshotID := uuid.New()
 
 		embeddingSnapshot, err := activities.MaterializeEmbeddings(context.Background(), usecase.MaterializeEmbeddingsActivityInput{
@@ -157,7 +174,7 @@ var _ = Describe("MaterializationActivities", func() {
 
 	It("rejects invalid embedding activity strategy before invoking the usecase", func() {
 		embeddingUsecase := &embeddingUsecaseStub{embeddingSnapshot: validEmbeddingSnapshot(uuid.New())}
-		activities := featuretemporal.NewMaterializationActivities(nil, nil, embeddingUsecase)
+		activities := featuretemporal.NewMaterializationActivities(nil, nil, embeddingUsecase, nil)
 
 		embeddingSnapshot, err := activities.MaterializeEmbeddings(context.Background(), usecase.MaterializeEmbeddingsActivityInput{
 			FeatureSnapshotID: uuid.New(),

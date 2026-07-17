@@ -427,6 +427,6 @@ extensions slower to start but cheaper to trust.
 
 ## See Also
 
-- [ADR-0004 — Agent Authoring and Extensibility](adr/0004-agent-authoring-and-extensibility.md) —
+- [ADR-0004 — Extensibility & Authoring](adr/0004-agent-authoring-and-extensibility.md) —
   records the authoring decision behind this extension model: agents stay declarative, and developer
-  code enters through sandboxed tool-authoring over `tool_service` and MCP.
+  code enters through governed capability units behind typed ports and isolated hosts.

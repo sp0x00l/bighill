@@ -39,6 +39,25 @@ func (s *embeddingSearchUsecaseStub) SearchEmbeddings(_ context.Context, userID 
 	return s.result, s.err
 }
 
+type graphSearchUsecaseStub struct {
+	userID    uuid.UUID
+	datasetID uuid.UUID
+	queryText string
+	topK      int
+	maxHops   int
+	result    *model.GraphSearchResult
+	err       error
+}
+
+func (s *graphSearchUsecaseStub) SearchGraph(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int) (*model.GraphSearchResult, error) {
+	s.userID = userID
+	s.datasetID = datasetID
+	s.queryText = queryText
+	s.topK = topK
+	s.maxHops = maxHops
+	return s.result, s.err
+}
+
 var _ = Describe("FeatureMaterializerServer", func() {
 	It("maps search requests and responses", func() {
 		userID := uuid.New()
@@ -78,7 +97,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 				}},
 			},
 		}
-		server := featuregrpc.NewFeatureMaterializerGrpcServer(uc)
+		server := featuregrpc.NewFeatureMaterializerGrpcServer(uc, &graphSearchUsecaseStub{})
 
 		response, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
 			DatasetId: datasetID.String(),
@@ -105,7 +124,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 	})
 
 	It("rejects invalid requests", func() {
-		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{})
+		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{}, &graphSearchUsecaseStub{})
 
 		_, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
 			UserId:    uuid.NewString(),
@@ -118,7 +137,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 	})
 
 	It("requires top-k at the boundary", func() {
-		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{})
+		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{}, &graphSearchUsecaseStub{})
 
 		_, err := server.SearchEmbeddings(context.Background(), &featurepb.SearchEmbeddingsRequest{
 			UserId:    uuid.NewString(),
@@ -131,7 +150,7 @@ var _ = Describe("FeatureMaterializerServer", func() {
 	})
 
 	It("treats a stopped gRPC server as a clean shutdown", func() {
-		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{})
+		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{}, &graphSearchUsecaseStub{})
 		lis := bufconn.Listen(1024)
 		result := make(chan error, 1)
 

@@ -9,6 +9,7 @@ const (
 	DatasetProcessingRawMaterialized
 	DatasetProcessingFeatureMaterialized
 	DatasetProcessingEmbeddingsMaterialized
+	DatasetProcessingGraphMaterialized
 	DatasetProcessingFailed
 )
 
@@ -22,6 +23,8 @@ func (s ProcessingState) String() string {
 		return "FEATURE_MATERIALIZED"
 	case DatasetProcessingEmbeddingsMaterialized:
 		return "EMBEDDINGS_MATERIALIZED"
+	case DatasetProcessingGraphMaterialized:
+		return "GRAPH_MATERIALIZED"
 	case DatasetProcessingFailed:
 		return "FAILED"
 	default:
@@ -39,6 +42,8 @@ func ToProcessingState(s string) (ProcessingState, error) {
 		return DatasetProcessingFeatureMaterialized, nil
 	case "EMBEDDINGS_MATERIALIZED":
 		return DatasetProcessingEmbeddingsMaterialized, nil
+	case "GRAPH_MATERIALIZED":
+		return DatasetProcessingGraphMaterialized, nil
 	case "FAILED":
 		return DatasetProcessingFailed, nil
 	default:

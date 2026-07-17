@@ -223,7 +223,7 @@ func waitForTechniqueRAGPaperMaterialized(
 		read := decodeObject(body)
 		metadata, ok := schemaMetadataObjectOK(read)
 		return ok &&
-			read["processingState"] == "EMBEDDINGS_MATERIALIZED" &&
+			isRAGDatasetProcessingStateReady(read["processingState"]) &&
 			isFeatureParquetLocation(read["storageLocation"]) &&
 			read["tableFormat"] == "PARQUET" &&
 			read["catalogProvider"] == "LOCAL" &&

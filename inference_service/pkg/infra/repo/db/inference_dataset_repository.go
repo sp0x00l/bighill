@@ -44,14 +44,16 @@ func (r *InferenceDatasetRepository) UpsertDataset(ctx context.Context, dataset 
 		schema_metadata, raw_snapshot_id, feature_snapshot_id, embedding_snapshot_id, vector_store,
 		collection_name, embedding_dimensions, embedding_count, embedding_strategy_version,
 		embedding_chunker_name, embedding_chunker_version, embedding_chunk_size, embedding_chunk_overlap,
-		embedding_provider, embedding_model
+		embedding_provider, embedding_model, graph_snapshot_id, graph_provenance_hash, graph_node_count,
+		graph_edge_count
 	) VALUES (
 		@dataset_id, @user_id, @org_id, @idempotency_key, @dataset_version, @processing_state::inference_dataset_processing_state_enum, @storage_location,
 		@table_namespace, @table_name, @table_format::table_format_enum, @catalog_provider::catalog_provider_enum, @processing_profile::processing_profile_enum, @schema_version,
 		@schema_metadata::jsonb, @raw_snapshot_id, @feature_snapshot_id, @embedding_snapshot_id, @vector_store,
 		@collection_name, @embedding_dimensions, @embedding_count, @embedding_strategy_version,
 		@embedding_chunker_name, @embedding_chunker_version, @embedding_chunk_size, @embedding_chunk_overlap,
-		@embedding_provider, @embedding_model
+		@embedding_provider, @embedding_model, @graph_snapshot_id, @graph_provenance_hash, @graph_node_count,
+		@graph_edge_count
 	)
 	ON CONFLICT (dataset_id) DO UPDATE SET
 		user_id = EXCLUDED.user_id,
@@ -80,7 +82,11 @@ func (r *InferenceDatasetRepository) UpsertDataset(ctx context.Context, dataset 
 		embedding_chunk_size = EXCLUDED.embedding_chunk_size,
 		embedding_chunk_overlap = EXCLUDED.embedding_chunk_overlap,
 		embedding_provider = EXCLUDED.embedding_provider,
-		embedding_model = EXCLUDED.embedding_model
+		embedding_model = EXCLUDED.embedding_model,
+		graph_snapshot_id = EXCLUDED.graph_snapshot_id,
+		graph_provenance_hash = EXCLUDED.graph_provenance_hash,
+		graph_node_count = EXCLUDED.graph_node_count,
+		graph_edge_count = EXCLUDED.graph_edge_count
 	WHERE EXCLUDED.dataset_version >= ` + r.Name + `.inference_datasets.dataset_version
 	RETURNING ` + datasetColumns()
 
@@ -124,7 +130,8 @@ func datasetColumns() string {
 		schema_metadata::text, COALESCE(raw_snapshot_id::text, ''), COALESCE(feature_snapshot_id::text, ''),
 		COALESCE(embedding_snapshot_id::text, ''), vector_store, collection_name, embedding_dimensions,
 		embedding_count, embedding_strategy_version, embedding_chunker_name, embedding_chunker_version,
-		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model`
+		embedding_chunk_size, embedding_chunk_overlap, embedding_provider, embedding_model,
+		COALESCE(graph_snapshot_id::text, ''), graph_provenance_hash, graph_node_count, graph_edge_count`
 }
 
 func datasetArgs(dataset *model.InferenceDataset, idempotencyKey uuid.UUID) pgx.NamedArgs {
@@ -159,6 +166,10 @@ func datasetArgs(dataset *model.InferenceDataset, idempotencyKey uuid.UUID) pgx.
 		"embedding_chunk_overlap":    dataset.EmbeddingChunkOverlap,
 		"embedding_provider":         dataset.EmbeddingProvider,
 		"embedding_model":            dataset.EmbeddingModel,
+		"graph_snapshot_id":          nullableUUID(dataset.GraphSnapshotID),
+		"graph_provenance_hash":      dataset.GraphProvenanceHash,
+		"graph_node_count":           dataset.GraphNodeCount,
+		"graph_edge_count":           dataset.GraphEdgeCount,
 	}
 }
 
@@ -172,6 +183,7 @@ func scanInferenceDataset(row pgx.Row) (*model.InferenceDataset, error) {
 	var rawSnapshotID string
 	var featureSnapshotID string
 	var embeddingSnapshotID string
+	var graphSnapshotID string
 	record := &model.InferenceDataset{}
 	if err := row.Scan(
 		&datasetID,
@@ -201,6 +213,10 @@ func scanInferenceDataset(row pgx.Row) (*model.InferenceDataset, error) {
 		&record.EmbeddingChunkOverlap,
 		&record.EmbeddingProvider,
 		&record.EmbeddingModel,
+		&graphSnapshotID,
+		&record.GraphProvenanceHash,
+		&record.GraphNodeCount,
+		&record.GraphEdgeCount,
 	); err != nil {
 		return nil, err
 	}
@@ -215,6 +231,7 @@ func scanInferenceDataset(row pgx.Row) (*model.InferenceDataset, error) {
 	record.RawSnapshotID = parseOptionalUUID(rawSnapshotID)
 	record.FeatureSnapshotID = parseOptionalUUID(featureSnapshotID)
 	record.EmbeddingSnapshotID = parseOptionalUUID(embeddingSnapshotID)
+	record.GraphSnapshotID = parseOptionalUUID(graphSnapshotID)
 	return record, nil
 }
 

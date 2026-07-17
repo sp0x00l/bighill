@@ -18,5 +18,6 @@ func NewMaterializationWorker(temporalClient client.Client, taskQueue string, ac
 	materializationWorker.RegisterActivityWithOptions(activities.MaterializeRawSnapshot, activity.RegisterOptions{Name: usecase.MaterializeRawSnapshotActivityName})
 	materializationWorker.RegisterActivityWithOptions(activities.BuildFeatureSnapshot, activity.RegisterOptions{Name: usecase.BuildFeatureSnapshotActivityName})
 	materializationWorker.RegisterActivityWithOptions(activities.MaterializeEmbeddings, activity.RegisterOptions{Name: usecase.MaterializeEmbeddingsActivityName})
+	materializationWorker.RegisterActivityWithOptions(activities.MaterializeGraph, activity.RegisterOptions{Name: usecase.MaterializeGraphActivityName})
 	return materializationWorker
 }

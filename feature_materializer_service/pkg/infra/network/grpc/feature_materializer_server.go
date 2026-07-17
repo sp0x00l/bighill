@@ -27,20 +27,25 @@ import (
 
 type FeatureMaterializerServer struct {
 	featurepb.UnimplementedFeatureMaterializerServiceServer
-	searchUsecase usecase.EmbeddingSearchUsecase
-	mu            sync.Mutex
-	grpcServer    *grpc.Server
-	ready         atomic.Bool
+	searchUsecase      usecase.EmbeddingSearchUsecase
+	graphSearchUsecase usecase.GraphSearchUsecase
+	mu                 sync.Mutex
+	grpcServer         *grpc.Server
+	ready              atomic.Bool
 }
 
-func NewFeatureMaterializerGrpcServer(searchUsecase usecase.EmbeddingSearchUsecase) *FeatureMaterializerServer {
+func NewFeatureMaterializerGrpcServer(searchUsecase usecase.EmbeddingSearchUsecase, graphSearchUsecase usecase.GraphSearchUsecase) *FeatureMaterializerServer {
 	log.Trace("NewFeatureMaterializerGrpcServer")
 
 	if searchUsecase == nil {
 		log.Fatal("NewFeatureMaterializerGrpcServer: searchUsecase is required")
 	}
+	if graphSearchUsecase == nil {
+		log.Fatal("NewFeatureMaterializerGrpcServer: graphSearchUsecase is required")
+	}
 	return &FeatureMaterializerServer{
-		searchUsecase: searchUsecase,
+		searchUsecase:      searchUsecase,
+		graphSearchUsecase: graphSearchUsecase,
 	}
 }
 
@@ -166,6 +171,44 @@ func (s *FeatureMaterializerServer) SearchEmbeddings(ctx context.Context, req *f
 	return embeddingSearchResultToPB(result), nil
 }
 
+func (s *FeatureMaterializerServer) SearchGraph(ctx context.Context, req *featurepb.SearchGraphRequest) (*featurepb.SearchGraphResponse, error) {
+	log.Trace("FeatureMaterializerServer SearchGraph")
+
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "search graph request is required")
+	}
+	datasetID, err := uuid.Parse(req.GetDatasetId())
+	if err != nil || datasetID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid dataset_id")
+	}
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil || userID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_id")
+	}
+	orgID, err := uuid.Parse(req.GetOrgId())
+	if err != nil || orgID == uuid.Nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid org_id")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, userID, orgID)
+	queryText := strings.TrimSpace(req.GetQueryText())
+	if queryText == "" {
+		return nil, status.Error(codes.InvalidArgument, "query_text is required")
+	}
+	topK := int(req.GetTopK())
+	if topK <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "top_k must be greater than zero")
+	}
+	maxHops := int(req.GetMaxHops())
+	if maxHops <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "max_hops must be greater than zero")
+	}
+	result, err := s.graphSearchUsecase.SearchGraph(ctx, userID, datasetID, queryText, topK, maxHops)
+	if err != nil {
+		return nil, graphSearchStatusError(err)
+	}
+	return graphSearchResultToPB(result), nil
+}
+
 func embeddingSearchResultToPB(result *model.EmbeddingSearchResult) *featurepb.SearchEmbeddingsResponse {
 	log.Trace("embeddingSearchResultToPB")
 
@@ -206,6 +249,62 @@ func embeddingSearchResultToPB(result *model.EmbeddingSearchResult) *featurepb.S
 	}
 }
 
+func graphSearchResultToPB(result *model.GraphSearchResult) *featurepb.SearchGraphResponse {
+	log.Trace("graphSearchResultToPB")
+
+	if result == nil || result.GraphSnapshot == nil {
+		return &featurepb.SearchGraphResponse{}
+	}
+	snapshot := result.GraphSnapshot
+	contexts := make([]*featurepb.GraphRetrievedContext, len(result.Contexts))
+	for i, context := range result.Contexts {
+		contexts[i] = &featurepb.GraphRetrievedContext{
+			GraphNodeChunkId:    context.GraphNodeChunkID.String(),
+			GraphNodeId:         context.GraphNodeID.String(),
+			EmbeddingRecordId:   context.EmbeddingRecordID.String(),
+			EmbeddingSnapshotId: context.EmbeddingSnapshotID.String(),
+			DatasetId:           context.DatasetID.String(),
+			OrgId:               context.OrgID.String(),
+			ChunkIndex:          int32(context.ChunkIndex),
+			SourceText:          context.SourceText,
+			Score:               context.Score,
+		}
+	}
+	entities := make([]*featurepb.GraphMatchedEntity, len(result.MatchedEntities))
+	for i, entity := range result.MatchedEntities {
+		entities[i] = &featurepb.GraphMatchedEntity{
+			GraphNodeId: entity.GraphNodeID.String(),
+			Name:        entity.Name,
+			Type:        entity.Type,
+			Description: entity.Description,
+			Score:       entity.Score,
+		}
+	}
+	paths := make([]*featurepb.GraphPath, len(result.Paths))
+	for i, path := range result.Paths {
+		nodeIDs := make([]string, len(path.GraphNodeIDs))
+		for j, nodeID := range path.GraphNodeIDs {
+			nodeIDs[j] = nodeID.String()
+		}
+		paths[i] = &featurepb.GraphPath{
+			GraphNodeIds:  nodeIDs,
+			RelationTypes: path.RelationTypes,
+			Score:         path.Score,
+		}
+	}
+	return &featurepb.SearchGraphResponse{
+		DatasetId:           snapshot.DatasetID.String(),
+		OrgId:               snapshot.OrgID.String(),
+		GraphSnapshotId:     snapshot.GraphSnapshotID.String(),
+		FeatureSnapshotId:   snapshot.FeatureSnapshotID.String(),
+		EmbeddingSnapshotId: snapshot.EmbeddingSnapshotID.String(),
+		ProvenanceHash:      snapshot.ProvenanceHash,
+		Contexts:            contexts,
+		MatchedEntities:     entities,
+		Paths:               paths,
+	}
+}
+
 func embeddingSearchStatusError(err error) error {
 	log.Trace("embeddingSearchStatusError")
 
@@ -224,5 +323,26 @@ func embeddingSearchStatusError(err error) error {
 	if code == codes.Unknown {
 		code = codes.Internal
 	}
+	return status.Error(code, err.Error())
+}
+
+func graphSearchStatusError(err error) error {
+	log.Trace("graphSearchStatusError")
+
+	if err == nil {
+		return nil
+	}
+	code := rpcLib.MapToGRPCStatus(
+		err,
+		rpcLib.GRPCCode(codes.NotFound, domain.ErrGraphSnapshotNotFound),
+		rpcLib.GRPCCode(codes.InvalidArgument, domain.ErrValidationFailed),
+		rpcLib.GRPCCode(codes.FailedPrecondition, domain.ErrGraphSearch),
+		rpcLib.GRPCCodeFunc(codes.Canceled, func(err error) bool {
+			return errors.Is(err, context.Canceled)
+		}),
+		rpcLib.GRPCCodeFunc(codes.DeadlineExceeded, func(err error) bool {
+			return errors.Is(err, context.DeadlineExceeded)
+		}),
+	)
 	return status.Error(code, err.Error())
 }

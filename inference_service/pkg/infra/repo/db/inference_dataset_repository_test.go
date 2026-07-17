@@ -180,6 +180,10 @@ func validInferenceDataset() *model.InferenceDataset {
 		EmbeddingChunkOverlap:    64,
 		EmbeddingProvider:        "ollama",
 		EmbeddingModel:           "bge-small-en-v1.5",
+		GraphSnapshotID:          uuid.New(),
+		GraphProvenanceHash:      "graph-provenance",
+		GraphNodeCount:           12,
+		GraphEdgeCount:           9,
 	}
 }
 
@@ -212,5 +216,9 @@ func inferenceDatasetRow(dataset *model.InferenceDataset) pgx.Row {
 		dataset.EmbeddingChunkOverlap,
 		dataset.EmbeddingProvider,
 		dataset.EmbeddingModel,
+		uuidutil.StringOrEmpty(dataset.GraphSnapshotID),
+		dataset.GraphProvenanceHash,
+		dataset.GraphNodeCount,
+		dataset.GraphEdgeCount,
 	}}
 }

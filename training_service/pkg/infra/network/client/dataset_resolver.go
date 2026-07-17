@@ -24,6 +24,7 @@ const (
 	tableFormatParquet          = "PARQUET"
 	stateFeatureMaterialized    = "FEATURE_MATERIALIZED"
 	stateEmbeddingsMaterialized = "EMBEDDINGS_MATERIALIZED"
+	stateGraphMaterialized      = "GRAPH_MATERIALIZED"
 )
 
 type datasetDTO struct {
@@ -111,7 +112,7 @@ func (a *datasetDTOAdapter) FromDTO(ctx context.Context, dto datasetDTO, dataset
 		return model.MaterializedDatasetRef{}, domain.ErrValidationFailed.Extend("dataset does not belong to active org")
 	}
 	state := strings.TrimSpace(dto.ProcessingState)
-	if state != stateFeatureMaterialized && state != stateEmbeddingsMaterialized {
+	if state != stateFeatureMaterialized && state != stateEmbeddingsMaterialized && state != stateGraphMaterialized {
 		return model.MaterializedDatasetRef{}, domain.ErrValidationFailed.Extend("dataset is not materialized")
 	}
 	if strings.TrimSpace(dto.TableFormat) != tableFormatParquet {

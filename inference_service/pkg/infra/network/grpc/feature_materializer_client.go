@@ -102,6 +102,32 @@ func (c *featureMaterializerClient) SearchEmbeddings(ctx context.Context, userID
 	return contexts, nil
 }
 
+func (c *featureMaterializerClient) SearchGraph(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int) ([]model.RetrievedContext, error) {
+	log.Trace("featureMaterializerClient SearchGraph")
+
+	orgID, ok := ctxutil.OrgID(ctx)
+	if !ok {
+		return nil, fmt.Errorf("org id is required")
+	}
+	resp, err := c.client.SearchGraph(ctx, &featurepb.SearchGraphRequest{
+		DatasetId: datasetID.String(),
+		UserId:    userID.String(),
+		OrgId:     orgID.String(),
+		QueryText: queryText,
+		TopK:      int32(topK),
+		MaxHops:   int32(maxHops),
+	})
+	if err != nil {
+		log.WithContext(ctx).WithError(err).Error("feature materializer search graph failed")
+		return nil, fmt.Errorf("search graph: %w", rpcLib.ExtractGRPCErrMsg(err))
+	}
+	contexts, err := graphSearchContextsToRetrievedContexts(resp.GetContexts())
+	if err != nil {
+		return nil, err
+	}
+	return contexts, nil
+}
+
 func embeddingSearchMatchesToContexts(matches []*featurepb.EmbeddingSearchMatch) ([]model.RetrievedContext, error) {
 	log.Trace("embeddingSearchMatchesToContexts")
 
@@ -134,6 +160,38 @@ func embeddingSearchMatchesToContexts(matches []*featurepb.EmbeddingSearchMatch)
 			SourceText:          match.GetSourceText(),
 			Distance:            match.GetDistance(),
 			Similarity:          match.GetSimilarity(),
+		})
+	}
+	return contexts, nil
+}
+
+func graphSearchContextsToRetrievedContexts(matches []*featurepb.GraphRetrievedContext) ([]model.RetrievedContext, error) {
+	log.Trace("graphSearchContextsToRetrievedContexts")
+
+	contexts := make([]model.RetrievedContext, 0, len(matches))
+	for _, match := range matches {
+		if match == nil {
+			continue
+		}
+		recordID, err := uuid.Parse(match.GetEmbeddingRecordId())
+		if err != nil || recordID == uuid.Nil {
+			return nil, fmt.Errorf("feature materializer returned invalid embedding_record_id")
+		}
+		snapshotID, err := uuid.Parse(match.GetEmbeddingSnapshotId())
+		if err != nil || snapshotID == uuid.Nil {
+			return nil, fmt.Errorf("feature materializer returned invalid embedding_snapshot_id")
+		}
+		datasetID, err := uuid.Parse(match.GetDatasetId())
+		if err != nil || datasetID == uuid.Nil {
+			return nil, fmt.Errorf("feature materializer returned invalid dataset_id")
+		}
+		contexts = append(contexts, model.RetrievedContext{
+			EmbeddingRecordID:   recordID,
+			EmbeddingSnapshotID: snapshotID,
+			DatasetID:           datasetID,
+			ChunkIndex:          int(match.GetChunkIndex()),
+			SourceText:          match.GetSourceText(),
+			Similarity:          match.GetScore(),
 		})
 	}
 	return contexts, nil

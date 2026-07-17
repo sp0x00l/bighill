@@ -3,7 +3,7 @@ CREATE TYPE inference_model_load_status_enum AS ENUM ('NOT_LOADED', 'LOADED', 'F
 CREATE TYPE inference_model_kind_enum AS ENUM ('BASE', 'FINE_TUNED');
 CREATE TYPE inference_model_source_enum AS ENUM ('TRAINING', 'UPLOAD', 'HUGGING_FACE');
 CREATE TYPE serving_protocol_enum AS ENUM ('OLLAMA_GENERATE', 'OPENAI_CHAT_COMPLETIONS');
-CREATE TYPE inference_dataset_processing_state_enum AS ENUM ('PENDING', 'RAW_MATERIALIZED', 'FEATURE_MATERIALIZED', 'EMBEDDINGS_MATERIALIZED', 'FAILED');
+CREATE TYPE inference_dataset_processing_state_enum AS ENUM ('PENDING', 'RAW_MATERIALIZED', 'FEATURE_MATERIALIZED', 'EMBEDDINGS_MATERIALIZED', 'GRAPH_MATERIALIZED', 'FAILED');
 CREATE TYPE inference_request_status_enum AS ENUM ('COMPLETED', 'FAILED');
 CREATE TYPE table_format_enum AS ENUM ('PARQUET', 'ICEBERG');
 CREATE TYPE catalog_provider_enum AS ENUM ('LOCAL', 'POLARIS');
@@ -142,6 +142,10 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.inference_datasets (
     embedding_chunk_overlap integer NOT NULL DEFAULT 0,
     embedding_provider text NOT NULL DEFAULT '',
     embedding_model text NOT NULL DEFAULT '',
+    graph_snapshot_id uuid,
+    graph_provenance_hash text NOT NULL DEFAULT '',
+    graph_node_count bigint NOT NULL DEFAULT 0,
+    graph_edge_count bigint NOT NULL DEFAULT 0,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -154,6 +158,8 @@ ON bighill_inference_db.inference_datasets(org_id);
 
 CREATE INDEX IF NOT EXISTS index_inference_datasets_embedding_snapshot_id
 ON bighill_inference_db.inference_datasets(embedding_snapshot_id);
+CREATE INDEX IF NOT EXISTS index_inference_datasets_graph_snapshot_id
+ON bighill_inference_db.inference_datasets(graph_snapshot_id);
 
 CREATE TRIGGER inference_datasets_updated_at
 BEFORE UPDATE ON bighill_inference_db.inference_datasets

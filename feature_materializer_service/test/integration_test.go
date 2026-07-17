@@ -223,6 +223,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(rawWriter)
 		featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 		embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
+		graphExtractor := materialization.NewDisabledGraphExtractor()
 		snapshotEventBuilder := featuremessaging.NewSnapshotEventBuilder(featuremessaging.MaterializationTopics{
 			FeatureMaterializer: featureMaterializerTopic,
 		})
@@ -237,12 +238,13 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 			usecase.NewRawSnapshotUsecase(snapshots, workflowSnapshotUnitOfWork, snapshotEventBuilder, rawDispatcher),
 			usecase.NewFeatureSnapshotUsecase(snapshots, workflowSnapshotUnitOfWork, snapshotEventBuilder, snapshots, featureDispatcher),
 			usecase.NewEmbeddingMaterializationUsecase(snapshots, workflowSnapshotUnitOfWork, snapshotEventBuilder, snapshots, embeddingDispatcher),
+			usecase.NewGraphMaterializationUsecase(snapshots, workflowSnapshotUnitOfWork, snapshotEventBuilder, graphExtractor),
 		)
 		worker := featuretemporal.NewMaterializationWorker(temporalClient, taskQueue, activities)
 		Expect(worker.Start()).To(Succeed())
 		defer worker.Stop()
 
-		workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, taskQueue, embeddingStrategy)
+		workflowStarter := featuretemporal.NewMaterializationWorkflowStarter(temporalClient, taskQueue, embeddingStrategy, usecase.GraphWorkflowConfig{})
 		materializationSubscriber := featuremessaging.NewMaterializationSubscriber(
 			subscriber,
 			workflowStarter,
@@ -362,7 +364,18 @@ func (p integrationEmbeddingProvider) Embed(_ context.Context, texts []string) (
 }
 
 func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {
-	for _, table := range []string{"outbox_messages", "embedding_records", "embedding_snapshots", "feature_snapshots", "raw_snapshots", "tenants"} {
+	for _, table := range []string{
+		"outbox_messages",
+		"graph_node_chunks",
+		"graph_edges",
+		"graph_nodes",
+		"graph_snapshots",
+		"embedding_records",
+		"embedding_snapshots",
+		"feature_snapshots",
+		"raw_snapshots",
+		"tenants",
+	} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}
