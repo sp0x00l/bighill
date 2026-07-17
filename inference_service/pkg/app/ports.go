@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"inference_service/pkg/domain/model"
 	shareduow "lib/shared_lib/uow"
@@ -47,7 +48,11 @@ type AgentTrajectoryRepository interface {
 	RecordAgentStep(ctx context.Context, step *model.AgentStep) (*model.AgentStep, error)
 	RecordToolInvocation(ctx context.Context, invocation *model.AgentToolInvocation) (*model.AgentToolInvocation, error)
 	ReadAgentTrajectory(ctx context.Context, orgID uuid.UUID, runID uuid.UUID) (*model.AgentTrajectory, error)
-	FailExpiredAgentRuns(ctx context.Context, safetyMultiplier int) (int64, error)
+	FailExpiredAgentRuns(ctx context.Context, grace time.Duration) (int64, error)
+}
+
+type AgentRunWorkflowStarter interface {
+	StartAgentRunWorkflow(ctx context.Context, input AgentRunWorkflowInput) error
 }
 
 type UserEventPublisher interface {

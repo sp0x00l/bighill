@@ -57,6 +57,22 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 		))
 	})
 
+	It("records agent runs with a provided idempotency-derived run id", func() {
+		run := validAgentRun()
+		run.RunID = uuid.New()
+		startedAt := time.Now().UTC()
+		deadlineAt := startedAt.Add(time.Duration(run.WallMs) * time.Millisecond)
+		pool.nextRows = []pgx.Row{&repositoryRow{values: []any{run.RunID.String(), startedAt, deadlineAt}}}
+
+		recorded, err := repository.RecordAgentRun(ctx, run)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recorded.RunID).To(Equal(run.RunID))
+		Expect(pool.lastQuery).To(ContainSubstring("COALESCE(@run_id::uuid, uuid_generate_v4())"))
+		Expect(pool.lastQuery).To(ContainSubstring("ON CONFLICT (run_id) DO UPDATE"))
+		Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("run_id", pgtype.UUID{Bytes: run.RunID, Valid: true}))
+	})
+
 	It("updates agent runs without resetting the database-owned started_at", func() {
 		run := validAgentRun()
 		run.RunID = uuid.New()
@@ -153,6 +169,7 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 		Expect(recorded.CreatedAt).To(Equal(createdAt))
 		Expect(pool.lastQuery).To(ContainSubstring("INSERT INTO test_db.agent_tool_invocations"))
 		Expect(pool.lastQuery).To(ContainSubstring("invocation_id,"))
+		Expect(pool.lastQuery).To(ContainSubstring("ON CONFLICT (invocation_id) DO UPDATE"))
 		Expect(pool.lastQuery).To(ContainSubstring("RETURNING invocation_id::text, created_at"))
 	})
 
@@ -252,19 +269,19 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 		Expect(pool.queryCalled).To(BeFalse())
 	})
 
-	It("marks expired running agent runs failed using the stored wall budget", func() {
+	It("marks expired running agent runs abandoned using the stored deadline", func() {
 		pool.execTag = pgconn.NewCommandTag("UPDATE 3")
 
-		count, err := repository.FailExpiredAgentRuns(ctx, 2)
+		count, err := repository.FailExpiredAgentRuns(ctx, 45*time.Second)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(Equal(int64(3)))
 		Expect(pool.execCalled).To(BeTrue())
 		Expect(pool.lastQuery).To(ContainSubstring("status = 'FAILED'::agent_run_status_enum"))
-		Expect(pool.lastQuery).To(ContainSubstring("stop_reason = 'RUNTIME_ERROR'::agent_stop_reason_enum"))
+		Expect(pool.lastQuery).To(ContainSubstring("stop_reason = 'ABANDONED'::agent_stop_reason_enum"))
 		Expect(pool.lastQuery).To(ContainSubstring("WHERE status = 'RUNNING'::agent_run_status_enum"))
-		Expect(pool.lastQuery).To(ContainSubstring("wall_ms * @safety_multiplier"))
-		Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("safety_multiplier", 2))
+		Expect(pool.lastQuery).To(ContainSubstring("deadline_at < now() - (@grace_ms * interval '1 millisecond')"))
+		Expect(namedArgs(pool.lastArgs)).To(HaveKeyWithValue("grace_ms", int64(45000)))
 	})
 })
 

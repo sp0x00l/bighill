@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
@@ -32,20 +33,21 @@ func NewAgentTrajectoryRepository(db *coreDB.Database) *AgentTrajectoryRepositor
 func (r *AgentTrajectoryRepository) RecordAgentRun(ctx context.Context, run *model.AgentRun) (*model.AgentRun, error) {
 	log.Trace("AgentTrajectoryRepository RecordAgentRun")
 
-	if run.RunID != uuid.Nil {
+	if run.RunID != uuid.Nil && run.Status != model.AgentRunStatusRunning {
 		return r.updateAgentRun(ctx, run)
 	}
 	query := `INSERT INTO ` + r.Name + `.agent_runs (
-		org_id, user_id, endpoint_id, agent_spec_hash,
+		run_id, org_id, user_id, endpoint_id, agent_spec_hash,
 		toolset_hash, trajectory_schema_version, decoding_params,
-		status, stop_reason, total_tokens, wall_ms
+		status, stop_reason, total_tokens, wall_ms, started_at, deadline_at
 	) VALUES (
-		@org_id, @user_id, @endpoint_id, @agent_spec_hash,
+		COALESCE(@run_id::uuid, uuid_generate_v4()), @org_id, @user_id, @endpoint_id, @agent_spec_hash,
 		@toolset_hash, @trajectory_schema_version, @decoding_params::jsonb,
 		@status::agent_run_status_enum, @stop_reason::agent_stop_reason_enum,
-		@total_tokens, @wall_ms
+		@total_tokens, @wall_ms, now(), now() + (@wall_ms * interval '1 millisecond')
 	)
-	RETURNING run_id::text, started_at, started_at + (wall_ms * interval '1 millisecond')`
+	ON CONFLICT (run_id) DO UPDATE SET run_id = EXCLUDED.run_id
+	RETURNING run_id::text, started_at, deadline_at`
 	args, err := agentRunArgs(run)
 	if err != nil {
 		return nil, err
@@ -70,7 +72,7 @@ func (r *AgentTrajectoryRepository) updateAgentRun(ctx context.Context, run *mod
 		finished_at = CASE WHEN @status::text = 'RUNNING' THEN NULL ELSE now() END,
 		total_tokens = @total_tokens
 	WHERE run_id = @run_id AND org_id = @org_id
-	RETURNING run_id::text, started_at, started_at + (wall_ms * interval '1 millisecond')`
+	RETURNING run_id::text, started_at, deadline_at`
 	args, err := agentRunArgs(run)
 	if err != nil {
 		return nil, err
@@ -125,6 +127,16 @@ func (r *AgentTrajectoryRepository) RecordToolInvocation(ctx context.Context, in
 		COALESCE(@invocation_id::uuid, gen_random_uuid()), @step_id, @run_id, @org_id, @tool_name, @tool_impl_version,
 		@arguments::jsonb, @result::jsonb, @error_type::tool_error_type_enum, @latency_ms
 	)
+	ON CONFLICT (invocation_id) DO UPDATE SET
+		step_id = EXCLUDED.step_id,
+		run_id = EXCLUDED.run_id,
+		org_id = EXCLUDED.org_id,
+		tool_name = EXCLUDED.tool_name,
+		tool_impl_version = EXCLUDED.tool_impl_version,
+		arguments = EXCLUDED.arguments,
+		result = EXCLUDED.result,
+		error_type = EXCLUDED.error_type,
+		latency_ms = EXCLUDED.latency_ms
 	RETURNING invocation_id::text, created_at`
 	args, err := agentToolInvocationArgs(invocation)
 	if err != nil {
@@ -160,17 +172,17 @@ func (r *AgentTrajectoryRepository) ReadAgentTrajectory(ctx context.Context, org
 	}, nil
 }
 
-func (r *AgentTrajectoryRepository) FailExpiredAgentRuns(ctx context.Context, safetyMultiplier int) (int64, error) {
+func (r *AgentTrajectoryRepository) FailExpiredAgentRuns(ctx context.Context, grace time.Duration) (int64, error) {
 	log.Trace("AgentTrajectoryRepository FailExpiredAgentRuns")
 
 	query := `UPDATE ` + r.Name + `.agent_runs SET
 		status = 'FAILED'::agent_run_status_enum,
-		stop_reason = 'RUNTIME_ERROR'::agent_stop_reason_enum,
+		stop_reason = 'ABANDONED'::agent_stop_reason_enum,
 		finished_at = now()
 	WHERE status = 'RUNNING'::agent_run_status_enum
-		AND started_at + (wall_ms * @safety_multiplier * interval '1 millisecond') < now()`
+		AND deadline_at < now() - (@grace_ms * interval '1 millisecond')`
 	tag, err := r.Pool.Exec(ctxutil.WithSystemContext(ctx), query, pgx.NamedArgs{
-		"safety_multiplier": safetyMultiplier,
+		"grace_ms": grace.Milliseconds(),
 	})
 	if err != nil {
 		r.LogPoolStatsOnError(ctx, "fail expired agent runs failed", err)
@@ -187,7 +199,7 @@ func (r *AgentTrajectoryRepository) readAgentRun(ctx context.Context, orgID uuid
 		agent_spec_hash,
 		toolset_hash, trajectory_schema_version,
 		decoding_params::text, status::text, COALESCE(stop_reason::text, ''),
-		started_at, started_at + (wall_ms * interval '1 millisecond'),
+		started_at, deadline_at,
 		COALESCE(finished_at, 'epoch'::timestamptz), total_tokens, wall_ms
 	FROM ` + r.Name + `.agent_runs
 	WHERE org_id = @org_id AND run_id = @run_id`

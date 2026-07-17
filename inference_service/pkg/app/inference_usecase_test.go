@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -20,12 +21,114 @@ import (
 	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/testsuite"
 )
 
 func TestApp(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Inference service app unit test suite")
 }
+
+var _ = Describe("AgentRunWorkflow", func() {
+	var suite testsuite.WorkflowTestSuite
+
+	It("keeps large payloads out of workflow state", func() {
+		stateType := reflect.TypeOf(app.AgentRunWorkflowState{})
+		_, hasMessages := stateType.FieldByName("Messages")
+		_, hasContexts := stateType.FieldByName("Contexts")
+		_, hasResolvedToolSpecs := stateType.FieldByName("ResolvedToolSpecs")
+
+		Expect(hasMessages).To(BeFalse())
+		Expect(hasContexts).To(BeFalse())
+		Expect(hasResolvedToolSpecs).To(BeFalse())
+	})
+
+	It("orchestrates prepare, generate, record step, and completion as separate activities", func() {
+		env := suite.NewTestWorkflowEnvironment()
+		input := app.AgentRunWorkflowInput{
+			EndpointID: uuid.New(),
+			WallMs:     60000,
+			Request: model.GenerateRequest{
+				RequestID:  uuid.New(),
+				AgentRunID: uuid.New(),
+				OrgID:      uuid.New(),
+			},
+		}
+		order := []string{}
+		env.RegisterActivityWithOptions(func(app.PrepareAgentRunActivityInput) (app.AgentRunWorkflowState, error) {
+			order = append(order, "prepare")
+			return app.AgentRunWorkflowState{
+				Request: input.Request,
+				Budgets: model.AgentBudgets{
+					MaxSteps: 1,
+					Token:    1000,
+					WallMs:   60000,
+				},
+				TransientToolFailureCount: map[string]int{},
+			}, nil
+		}, activity.RegisterOptions{Name: app.PrepareAgentRunActivityName})
+		env.RegisterActivityWithOptions(func(app.GenerateAgentStepActivityInput) (app.GenerateAgentStepActivityOutput, error) {
+			order = append(order, "generate")
+			return app.GenerateAgentStepActivityOutput{Result: model.GenerationResult{
+				Content:      "answer",
+				FinishReason: model.GenerationFinishReasonStop,
+			}, PromptTokenEstimate: 8, TokenUsage: 12}, nil
+		}, activity.RegisterOptions{Name: app.GenerateAgentStepActivityName})
+		env.RegisterActivityWithOptions(func(app.RecordAgentStepActivityInput) (uuid.UUID, error) {
+			order = append(order, "record-step")
+			return uuid.New(), nil
+		}, activity.RegisterOptions{Name: app.RecordAgentStepActivityName})
+		env.RegisterActivityWithOptions(func(app.CompleteAgentRunActivityInput) error {
+			order = append(order, "complete")
+			return nil
+		}, activity.RegisterOptions{Name: app.CompleteAgentRunActivityName})
+
+		env.ExecuteWorkflow(app.AgentRunWorkflow, input)
+
+		Expect(env.IsWorkflowCompleted()).To(BeTrue())
+		Expect(env.GetWorkflowError()).NotTo(HaveOccurred())
+		Expect(order).To(Equal([]string{"prepare", "generate", "record-step", "complete"}))
+	})
+
+	It("does not retry non-idempotent generation activities", func() {
+		env := suite.NewTestWorkflowEnvironment()
+		input := app.AgentRunWorkflowInput{
+			EndpointID: uuid.New(),
+			WallMs:     60000,
+			Request: model.GenerateRequest{
+				RequestID:  uuid.New(),
+				AgentRunID: uuid.New(),
+				OrgID:      uuid.New(),
+			},
+		}
+		generateAttempts := 0
+		env.RegisterActivityWithOptions(func(app.PrepareAgentRunActivityInput) (app.AgentRunWorkflowState, error) {
+			return app.AgentRunWorkflowState{
+				Request: input.Request,
+				Budgets: model.AgentBudgets{
+					MaxSteps: 1,
+					Token:    1000,
+					WallMs:   60000,
+				},
+				TransientToolFailureCount: map[string]int{},
+			}, nil
+		}, activity.RegisterOptions{Name: app.PrepareAgentRunActivityName})
+		env.RegisterActivityWithOptions(func(app.GenerateAgentStepActivityInput) (app.GenerateAgentStepActivityOutput, error) {
+			generateAttempts++
+			return app.GenerateAgentStepActivityOutput{}, errors.New("generation failed")
+		}, activity.RegisterOptions{Name: app.GenerateAgentStepActivityName})
+		env.RegisterActivityWithOptions(func(app.FailAgentRunActivityInput) error {
+			return nil
+		}, activity.RegisterOptions{Name: app.FailAgentRunActivityName})
+
+		env.ExecuteWorkflow(app.AgentRunWorkflow, input)
+
+		Expect(env.IsWorkflowCompleted()).To(BeTrue())
+		Expect(env.GetWorkflowError()).To(HaveOccurred())
+		Expect(generateAttempts).To(Equal(1))
+	})
+})
 
 type inferenceModelRepositoryStub struct {
 	model          *model.InferenceModel
@@ -315,11 +418,21 @@ func (s *agentTrajectoryRepositoryStub) ReadAgentTrajectory(_ context.Context, _
 	return &model.AgentTrajectory{}, nil
 }
 
-func (s *agentTrajectoryRepositoryStub) FailExpiredAgentRuns(_ context.Context, _ int) (int64, error) {
+func (s *agentTrajectoryRepositoryStub) FailExpiredAgentRuns(_ context.Context, _ time.Duration) (int64, error) {
 	if s.err != nil {
 		return 0, s.err
 	}
 	return 0, nil
+}
+
+type agentRunWorkflowStarterStub struct {
+	inputs []app.AgentRunWorkflowInput
+	err    error
+}
+
+func (s *agentRunWorkflowStarterStub) StartAgentRunWorkflow(_ context.Context, input app.AgentRunWorkflowInput) error {
+	s.inputs = append(s.inputs, input)
+	return s.err
 }
 
 type toolInvokerStub struct {
@@ -744,6 +857,65 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(agentSpecRepository.upserted).To(BeNil())
 	})
 
+	It("starts agent endpoints asynchronously through the workflow starter", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		spec := validToolUsingAgentSpec(inferenceModel)
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: spec.ContentHash,
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		workflowStarter := &agentRunWorkflowStarterStub{}
+		requestID := uuid.New()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:                  "search_knowledge",
+				Description:           "Search knowledge",
+				Parameters:            []byte(`{"type":"object"}`),
+				ImplementationVersion: "search_knowledge:v1",
+				Locality:              "local",
+			}}}),
+			app.WithAgentRunWorkflowStarter(workflowStarter),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: requestID,
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "answer with tools",
+			TopK:      2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Accepted).To(BeTrue())
+		Expect(response.AgentRunID).To(Equal(requestID))
+		Expect(workflowStarter.inputs).To(HaveLen(1))
+		Expect(workflowStarter.inputs[0].Request.AgentRunID).To(Equal(requestID))
+		Expect(workflowStarter.inputs[0].WallMs).To(Equal(spec.Budgets.WallMs))
+		Expect(trajectoryRepository.runs).To(HaveLen(1))
+		Expect(trajectoryRepository.runs[0].RunID).To(Equal(requestID))
+		Expect(trajectoryRepository.runs[0].Status).To(Equal(model.AgentRunStatusRunning))
+		Expect(trajectoryRepository.steps).To(BeEmpty())
+	})
+
 	It("enforces agent token budget even when the backend omits usage", func() {
 		dataset := validInferenceDataset()
 		inferenceModel := validInferenceModel()
@@ -1092,6 +1264,81 @@ var _ = Describe("InferenceUsecase", func() {
 			HaveField("Role", model.ChatMessageRoleTool),
 			HaveField("Content", `{"status":503}`),
 		)))
+	})
+
+	It("uses the per-step call key for deterministic invocation IDs when tool call IDs are empty", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		spec := validToolUsingAgentSpec(inferenceModel)
+		spec.ToolBindings = []model.ToolBinding{{
+			Name:       "http_get",
+			Required:   true,
+			ToolChoice: "required",
+			Config:     []byte(`{}`),
+		}}
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: spec.ContentHash,
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		generator := &generationAdapterStub{results: []model.GenerationResult{
+			{
+				ToolCalls: []model.ToolCall{
+					{Name: "http_get", Arguments: []byte(`{"url":"https://example.com/one"}`)},
+					{Name: "http_get", Arguments: []byte(`{"url":"https://example.com/two"}`)},
+				},
+				FinishReason: model.GenerationFinishReasonToolCalls,
+			},
+			{
+				Content:      "done",
+				FinishReason: model.GenerationFinishReasonStop,
+			},
+		}}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{
+				tools: []model.ToolSpec{{
+					Name:       "http_get",
+					Parameters: []byte(`{"type":"object"}`),
+				}},
+				result: model.ToolResult{
+					Content:         `{"status":200}`,
+					ToolImplVersion: "http_get:test",
+				},
+			}),
+			app.WithGenerationAdapters(map[string]app.GenerationAdapter{
+				model.ServingProtocolOpenAIChatCompletions.String(): generator,
+			}),
+		)
+
+		response, err := uc.GenerateForEndpoint(context.Background(), endpointID, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "fetch twice",
+			TopK:      2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Answer).To(Equal("done"))
+		Expect(trajectoryRepository.invocations).To(HaveLen(2))
+		Expect(trajectoryRepository.invocations[0].InvocationID).NotTo(Equal(trajectoryRepository.invocations[1].InvocationID))
 	})
 
 	It("does not grant system context when a model update is missing actor and org", func() {

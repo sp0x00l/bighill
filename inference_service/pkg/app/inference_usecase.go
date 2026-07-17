@@ -40,13 +40,19 @@ type InferenceUsecase interface {
 	SetEndpointMergeStrategy(ctx context.Context, request model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error)
 	GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error)
 	Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error)
+	PrepareAgentRunActivity(ctx context.Context, input PrepareAgentRunActivityInput) (AgentRunWorkflowState, error)
+	GenerateAgentStepActivity(ctx context.Context, input GenerateAgentStepActivityInput) (GenerateAgentStepActivityOutput, error)
+	RecordAgentStepActivity(ctx context.Context, input RecordAgentStepActivityInput) (uuid.UUID, error)
+	InvokeAgentToolActivity(ctx context.Context, input InvokeAgentToolActivityInput) (InvokeAgentToolActivityOutput, error)
+	CompleteAgentRunActivity(ctx context.Context, input CompleteAgentRunActivityInput) error
+	FailAgentRunActivity(ctx context.Context, input FailAgentRunActivityInput) error
 	RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error)
 	BuildPreferenceDatasetForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error)
 	ReadPreferenceDataset(ctx context.Context, orgID uuid.UUID, preferenceDatasetID uuid.UUID) (*model.PreferenceDataset, error)
 	ListPreferenceDatasets(ctx context.Context, orgID uuid.UUID, filter model.PreferenceDatasetFilter) ([]*model.PreferenceDataset, error)
 	BuildPreferenceDataset(ctx context.Context, request model.PreferenceDatasetBuildRequest) (*model.PreferenceDataset, error)
 	ReadAgentTrajectory(ctx context.Context, orgID uuid.UUID, runID uuid.UUID) (*model.AgentTrajectory, error)
-	ReapExpiredAgentRuns(ctx context.Context, safetyMultiplier int) (int64, error)
+	ReapExpiredAgentRuns(ctx context.Context, grace time.Duration) (int64, error)
 }
 
 type inferenceUsecase struct {
@@ -67,6 +73,7 @@ type inferenceUsecase struct {
 	promptBuilder              PromptBuilder
 	generationAdapters         map[string]GenerationAdapter
 	toolInvoker                ToolInvoker
+	agentRunWorkflowStarter    AgentRunWorkflowStarter
 	userEventPublisher         UserEventPublisher
 	modelServingLoadTrigger    ModelServingLoadTrigger
 	modelServingLoadTimeout    time.Duration
@@ -250,6 +257,14 @@ func WithToolInvoker(invoker ToolInvoker) InferenceOption {
 
 	return func(u *inferenceUsecase) {
 		u.toolInvoker = invoker
+	}
+}
+
+func WithAgentRunWorkflowStarter(starter AgentRunWorkflowStarter) InferenceOption {
+	log.Trace("WithAgentRunWorkflowStarter")
+
+	return func(u *inferenceUsecase) {
+		u.agentRunWorkflowStarter = starter
 	}
 }
 
@@ -479,6 +494,9 @@ func (u *inferenceUsecase) GenerateForEndpoint(ctx context.Context, endpointID u
 	}
 	request.ModelID = endpoint.ModelID
 	if endpoint.Mode == model.AgentEndpointModeAgent {
+		if u.agentRunWorkflowStarter != nil {
+			return u.startAgentRunWorkflow(ctx, request, endpoint)
+		}
 		return u.generateAgent(ctx, request, endpoint)
 	}
 	return u.generate(ctx, request, endpoint)

@@ -10,6 +10,7 @@ import (
 
 type GenerateRequest struct {
 	RequestID       uuid.UUID
+	AgentRunID      uuid.UUID
 	UserID          uuid.UUID
 	OrgID           uuid.UUID
 	DatasetID       uuid.UUID
@@ -22,6 +23,7 @@ type GenerateRequest struct {
 type GenerateResponse struct {
 	RequestID             uuid.UUID
 	AgentRunID            uuid.UUID
+	Accepted              bool
 	OrgID                 uuid.UUID
 	DatasetID             uuid.UUID
 	DatasetIDs            []uuid.UUID
@@ -86,38 +88,38 @@ const (
 )
 
 type ChatMessage struct {
-	Role       ChatMessageRole `json:"role"`
-	Content    string          `json:"content"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	Role       ChatMessageRole
+	Content    string
+	ToolCallID string
+	Name       string
+	ToolCalls  []ToolCall
 }
 
 type ToolSpec struct {
-	Name                  string          `json:"name"`
-	Description           string          `json:"description"`
-	Parameters            json.RawMessage `json:"parameters"`
-	ImplementationVersion string          `json:"implementation_version,omitempty"`
-	Locality              string          `json:"locality,omitempty"`
+	Name                  string
+	Description           string
+	Parameters            json.RawMessage
+	ImplementationVersion string
+	Locality              string
 }
 
 type ToolCall struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	ID        string
+	Name      string
+	Arguments json.RawMessage
 }
 
 type TokenUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
 }
 
 type GenerationOptions struct {
-	Temperature     float64 `json:"temperature"`
-	TopP            float64 `json:"top_p"`
-	Seed            int64   `json:"seed,omitempty"`
-	MaxOutputTokens int     `json:"max_output_tokens"`
+	Temperature     float64
+	TopP            float64
+	Seed            int64
+	MaxOutputTokens int
 }
 
 type GenerationFinishReason string
@@ -129,11 +131,11 @@ const (
 )
 
 type GenerationResult struct {
-	Content      string                 `json:"content"`
-	ToolCalls    []ToolCall             `json:"tool_calls,omitempty"`
-	FinishReason GenerationFinishReason `json:"finish_reason"`
-	Usage        TokenUsage             `json:"usage"`
-	Options      GenerationOptions      `json:"options"`
+	Content      string
+	ToolCalls    []ToolCall
+	FinishReason GenerationFinishReason
+	Usage        TokenUsage
+	Options      GenerationOptions
 }
 
 type PromptStrategy struct {

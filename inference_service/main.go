@@ -23,6 +23,7 @@ import (
 	inferencepreference "inference_service/pkg/infra/preference"
 	inferencedb "inference_service/pkg/infra/repo/db"
 	"inference_service/pkg/infra/retrieval"
+	inferencetemporal "inference_service/pkg/infra/temporalworker"
 	inferencetools "inference_service/pkg/infra/tools"
 
 	coreBucket "lib/shared_lib/bucket"
@@ -40,6 +41,7 @@ import (
 	"lib/shared_lib/userevents"
 
 	log "github.com/sirupsen/logrus"
+	"go.temporal.io/sdk/client"
 )
 
 var Version string
@@ -60,6 +62,7 @@ type inferenceConfig struct {
 	QueryTransformer    queryTransformerConfig
 	ModelServing        modelServingConfig
 	Agent               agentConfig
+	Temporal            temporalConfig
 	UserEvents          userevents.Config
 	PreferenceDataset   preferenceDatasetConfig
 	GRPCPort            int
@@ -99,11 +102,19 @@ type modelServingConfig struct {
 }
 
 type agentConfig struct {
-	MaxStepsCap           int
-	TokenBudgetCap        int
-	WallMsCap             int
-	RunReaperInterval     time.Duration
-	RunReaperSafetyFactor int
+	MaxStepsCap       int
+	TokenBudgetCap    int
+	WallMsCap         int
+	RunReaperInterval time.Duration
+	RunReaperGrace    time.Duration
+}
+
+type temporalConfig struct {
+	Address              string
+	Namespace            string
+	TaskQueue            string
+	ConnectTimeout       time.Duration
+	ConnectRetryInterval time.Duration
 }
 
 type preferenceDatasetConfig struct {
@@ -135,8 +146,44 @@ type healthConfig struct {
 	MessageBrokerSubscriberMaxLag             int64
 }
 
+type temporalDialFunc func(client.Options) (client.Client, error)
+
 func init() {
 	logs.Init()
+}
+
+func dialTemporalClient(ctx context.Context, cfg temporalConfig) (client.Client, error) {
+	log.Trace("dialTemporalClient")
+
+	return dialTemporalClientWith(ctx, cfg, client.Dial)
+}
+
+func dialTemporalClientWith(ctx context.Context, cfg temporalConfig, dial temporalDialFunc) (client.Client, error) {
+	log.Trace("dialTemporalClientWith")
+
+	dialCtx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
+	defer cancel()
+	options := client.Options{
+		HostPort:  cfg.Address,
+		Namespace: cfg.Namespace,
+	}
+	var lastErr error
+	for {
+		temporalClient, err := dial(options)
+		if err == nil {
+			return temporalClient, nil
+		}
+		lastErr = err
+		log.WithContext(ctx).WithError(err).WithFields(log.Fields{
+			"temporal_address":   cfg.Address,
+			"temporal_namespace": cfg.Namespace,
+		}).Warn("Temporal not ready; retrying")
+		select {
+		case <-dialCtx.Done():
+			return nil, fmt.Errorf("connect to Temporal at %s namespace %s: %w: %v", cfg.Address, cfg.Namespace, dialCtx.Err(), lastErr)
+		case <-time.After(cfg.ConnectRetryInterval):
+		}
+	}
 }
 
 func main() {
@@ -213,6 +260,11 @@ func main() {
 		}
 	}
 	generationAdapters := newGenerationAdapters(cfg.Generation)
+	temporalClient, err := dialTemporalClient(cancelCtx, cfg.Temporal)
+	if err != nil {
+		log.WithContext(cancelCtx).WithError(err).Fatal("unable to connect to Temporal")
+	}
+	agentRunWorkflowStarter := inferencetemporal.NewAgentRunWorkflowStarter(temporalClient, cfg.Temporal.TaskQueue)
 	reranker, err := newRerankerAdapter(cfg.Reranker)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create reranker adapter")
@@ -241,6 +293,7 @@ func main() {
 		app.WithInferenceUnitOfWork(inferenceUnitOfWork),
 		app.WithRetrievalClient(retrievalClient),
 		app.WithToolInvoker(toolInvoker),
+		app.WithAgentRunWorkflowStarter(agentRunWorkflowStarter),
 		app.WithUserEventPublisher(userEventPublisher),
 		app.WithGenerationAdapters(generationAdapters),
 		app.WithPromptStrategy(promptStrategy),
@@ -279,6 +332,8 @@ func main() {
 		modelRepository,
 		inferenceOptions...,
 	)
+	agentRunActivities := inferencetemporal.NewAgentRunActivities(inferenceUsecase)
+	agentRunWorker := inferencetemporal.NewAgentRunWorker(temporalClient, cfg.Temporal.TaskQueue, agentRunActivities)
 	grpcService := inferencegrpc.NewInferenceGrpcServer(inferenceUsecase)
 	endpointDTOAdapter := inferenceadapter.NewEndpointDTOAdapter(serializers.NewJSONSerializer())
 	generationDTOAdapter := inferenceadapter.NewGenerationDTOAdapter(serializers.NewJSONSerializer())
@@ -316,6 +371,10 @@ func main() {
 			database.Close()
 			return nil
 		}),
+		lifecycle.CloserComponent("inference-temporal-client", func() error {
+			temporalClient.Close()
+			return nil
+		}),
 		lifecycle.CloserComponent("inference-feature-materializer-client", retrievalClient.Close),
 		lifecycle.CloserComponent("inference-tool-invoker", closeToolInvoker),
 		lifecycle.CloserComponent("inference-publisher", func() error {
@@ -345,8 +404,9 @@ func main() {
 			return nil
 		}),
 		lifecycle.WorkerComponent("inference-agent-run-reaper", func(ctx context.Context) error {
-			return runAgentRunReaper(ctx, inferenceUsecase, cfg.Agent.RunReaperInterval, cfg.Agent.RunReaperSafetyFactor)
+			return runAgentRunReaper(ctx, inferenceUsecase, cfg.Agent.RunReaperInterval, cfg.Agent.RunReaperGrace)
 		}),
+		lifecycle.TemporalWorkerComponent("inference-agent-run-worker", agentRunWorker),
 	}
 
 	startSubscriber := func(name string, topics []string, configure func(messagingConn.Subscriber)) {
@@ -490,11 +550,18 @@ func readInferenceConfig() inferenceConfig {
 			PollInterval:   time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_MODEL_SERVING_LOAD_POLL_MS", "1000")) * time.Millisecond,
 		},
 		Agent: agentConfig{
-			MaxStepsCap:           env.WithDefaultInt("INFERENCE_SERVICE_AGENT_MAX_STEPS_CAP", "3"),
-			TokenBudgetCap:        env.WithDefaultInt("INFERENCE_SERVICE_AGENT_TOKEN_BUDGET_CAP", "8192"),
-			WallMsCap:             env.WithDefaultInt("INFERENCE_SERVICE_AGENT_WALL_MS_CAP", "120000"),
-			RunReaperInterval:     time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_AGENT_RUN_REAPER_INTERVAL_SECONDS", "30")) * time.Second,
-			RunReaperSafetyFactor: env.WithDefaultInt("INFERENCE_SERVICE_AGENT_RUN_REAPER_SAFETY_FACTOR", "2"),
+			MaxStepsCap:       env.WithDefaultInt("INFERENCE_SERVICE_AGENT_MAX_STEPS_CAP", "3"),
+			TokenBudgetCap:    env.WithDefaultInt("INFERENCE_SERVICE_AGENT_TOKEN_BUDGET_CAP", "8192"),
+			WallMsCap:         env.WithDefaultInt("INFERENCE_SERVICE_AGENT_WALL_MS_CAP", "120000"),
+			RunReaperInterval: time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_AGENT_RUN_REAPER_INTERVAL_SECONDS", "30")) * time.Second,
+			RunReaperGrace:    time.Duration(env.WithDefaultInt("INFERENCE_SERVICE_AGENT_RUN_REAPER_GRACE_SECONDS", "30")) * time.Second,
+		},
+		Temporal: temporalConfig{
+			Address:              env.MustString("INFERENCE_SERVICE_TEMPORAL_ADDRESS"),
+			Namespace:            env.MustString("INFERENCE_SERVICE_TEMPORAL_NAMESPACE"),
+			TaskQueue:            env.MustString("INFERENCE_SERVICE_TEMPORAL_TASK_QUEUE"),
+			ConnectTimeout:       time.Duration(env.MustInt("INFERENCE_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS")) * time.Second,
+			ConnectRetryInterval: time.Duration(env.MustInt("INFERENCE_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS")) * time.Second,
 		},
 		UserEvents: userevents.Config{
 			Enabled:        env.WithDefaultBool("USER_EVENTS_ENABLED", false),
@@ -572,6 +639,9 @@ func validateInferenceConfig(cfg inferenceConfig) error {
 		return err
 	}
 	if err := validateAgentConfig(cfg.Agent); err != nil {
+		return err
+	}
+	if err := validateTemporalConfig(cfg.Temporal); err != nil {
 		return err
 	}
 	if err := validateHTTPServerConfig(cfg.HTTPServer, cfg.Generation); err != nil {
@@ -680,17 +750,38 @@ func validateAgentConfig(cfg agentConfig) error {
 	if cfg.RunReaperInterval <= 0 {
 		return fmt.Errorf("INFERENCE_SERVICE_AGENT_RUN_REAPER_INTERVAL_SECONDS must be greater than zero")
 	}
-	if cfg.RunReaperSafetyFactor <= 0 {
-		return fmt.Errorf("INFERENCE_SERVICE_AGENT_RUN_REAPER_SAFETY_FACTOR must be greater than zero")
+	if cfg.RunReaperGrace <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_AGENT_RUN_REAPER_GRACE_SECONDS must be greater than zero")
 	}
 	return nil
 }
 
-func runAgentRunReaper(ctx context.Context, inferenceUsecase app.InferenceUsecase, interval time.Duration, safetyFactor int) error {
+func validateTemporalConfig(cfg temporalConfig) error {
+	log.Trace("validateTemporalConfig")
+
+	if strings.TrimSpace(cfg.Address) == "" {
+		return fmt.Errorf("INFERENCE_SERVICE_TEMPORAL_ADDRESS is required")
+	}
+	if strings.TrimSpace(cfg.Namespace) == "" {
+		return fmt.Errorf("INFERENCE_SERVICE_TEMPORAL_NAMESPACE is required")
+	}
+	if strings.TrimSpace(cfg.TaskQueue) == "" {
+		return fmt.Errorf("INFERENCE_SERVICE_TEMPORAL_TASK_QUEUE is required")
+	}
+	if cfg.ConnectTimeout <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.ConnectRetryInterval <= 0 {
+		return fmt.Errorf("INFERENCE_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS must be greater than zero")
+	}
+	return nil
+}
+
+func runAgentRunReaper(ctx context.Context, inferenceUsecase app.InferenceUsecase, interval time.Duration, grace time.Duration) error {
 	log.Trace("runAgentRunReaper")
 
 	reap := func() {
-		count, err := inferenceUsecase.ReapExpiredAgentRuns(ctx, safetyFactor)
+		count, err := inferenceUsecase.ReapExpiredAgentRuns(ctx, grace)
 		if err != nil {
 			log.WithContext(ctx).WithError(err).Error("agent run reaper failed")
 			return

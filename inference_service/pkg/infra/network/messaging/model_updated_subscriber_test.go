@@ -3,7 +3,9 @@ package messaging_test
 import (
 	"context"
 	"testing"
+	"time"
 
+	"inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
 
@@ -72,6 +74,30 @@ func (u *recordingInferenceUsecase) Generate(context.Context, model.GenerateRequ
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) PrepareAgentRunActivity(context.Context, app.PrepareAgentRunActivityInput) (app.AgentRunWorkflowState, error) {
+	return app.AgentRunWorkflowState{}, nil
+}
+
+func (u *recordingInferenceUsecase) GenerateAgentStepActivity(context.Context, app.GenerateAgentStepActivityInput) (app.GenerateAgentStepActivityOutput, error) {
+	return app.GenerateAgentStepActivityOutput{}, nil
+}
+
+func (u *recordingInferenceUsecase) RecordAgentStepActivity(context.Context, app.RecordAgentStepActivityInput) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+
+func (u *recordingInferenceUsecase) InvokeAgentToolActivity(context.Context, app.InvokeAgentToolActivityInput) (app.InvokeAgentToolActivityOutput, error) {
+	return app.InvokeAgentToolActivityOutput{}, nil
+}
+
+func (u *recordingInferenceUsecase) CompleteAgentRunActivity(context.Context, app.CompleteAgentRunActivityInput) error {
+	return nil
+}
+
+func (u *recordingInferenceUsecase) FailAgentRunActivity(context.Context, app.FailAgentRunActivityInput) error {
+	return nil
+}
+
 func (u *recordingInferenceUsecase) RecordFeedback(context.Context, *model.InferenceFeedback, uuid.UUID) (*model.InferenceFeedback, error) {
 	return nil, nil
 }
@@ -96,7 +122,7 @@ func (u *recordingInferenceUsecase) ReadAgentTrajectory(context.Context, uuid.UU
 	return nil, nil
 }
 
-func (u *recordingInferenceUsecase) ReapExpiredAgentRuns(context.Context, int) (int64, error) {
+func (u *recordingInferenceUsecase) ReapExpiredAgentRuns(context.Context, time.Duration) (int64, error) {
 	return 0, nil
 }
 

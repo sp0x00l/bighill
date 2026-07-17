@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
 	inferencetools "inference_service/pkg/infra/tools"
 	env "lib/shared_lib/env"
@@ -71,6 +72,11 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(os.Unsetenv("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_DIAL_TIMEOUT_MS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_CALL_TIMEOUT_MS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_RETRY_COUNT")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_TEMPORAL_ADDRESS", "localhost:7233")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_TEMPORAL_NAMESPACE", "default")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_TEMPORAL_TASK_QUEUE", "inference-service")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS", "60")).To(Succeed())
+		Expect(os.Setenv("INFERENCE_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS", "1")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_KAFKA_BASE_GROUP_ID")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS")).To(Succeed())
@@ -108,6 +114,11 @@ var _ = Describe("readInferenceConfig", func() {
 		Expect(cfg.TenantTopic).To(Equal("tenant"))
 		Expect(cfg.FeatureMaterializer.Address).To(Equal("localhost:7072"))
 		Expect(cfg.ToolService.Address).To(BeEmpty())
+		Expect(cfg.Temporal.Address).To(Equal("localhost:7233"))
+		Expect(cfg.Temporal.Namespace).To(Equal("default"))
+		Expect(cfg.Temporal.TaskQueue).To(Equal("inference-service"))
+		Expect(cfg.Temporal.ConnectTimeout).To(Equal(60 * time.Second))
+		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(time.Second))
 		Expect(cfg.Reranker.Provider).To(Equal("tei"))
 		Expect(cfg.Reranker.URL).To(Equal("http://tei.local"))
 		Expect(cfg.Reranker.Model).To(Equal("bge-reranker"))
@@ -237,12 +248,13 @@ var _ = Describe("runtime ML provider validation", func() {
 				IdleTimeout:  time.Second,
 			},
 			Agent: agentConfig{
-				MaxStepsCap:           3,
-				TokenBudgetCap:        512,
-				WallMsCap:             60000,
-				RunReaperInterval:     time.Second,
-				RunReaperSafetyFactor: 2,
+				MaxStepsCap:       3,
+				TokenBudgetCap:    512,
+				WallMsCap:         60000,
+				RunReaperInterval: time.Second,
+				RunReaperGrace:    time.Second,
 			},
+			Temporal: validTemporalConfig(),
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -261,12 +273,13 @@ var _ = Describe("runtime ML provider validation", func() {
 				IdleTimeout:  time.Second,
 			},
 			Agent: agentConfig{
-				MaxStepsCap:           3,
-				TokenBudgetCap:        512,
-				WallMsCap:             60000,
-				RunReaperInterval:     time.Second,
-				RunReaperSafetyFactor: 2,
+				MaxStepsCap:       3,
+				TokenBudgetCap:    512,
+				WallMsCap:         60000,
+				RunReaperInterval: time.Second,
+				RunReaperGrace:    time.Second,
 			},
+			Temporal: validTemporalConfig(),
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_RAG_MERGE_STRATEGY=reranker requires INFERENCE_SERVICE_RERANKER_PROVIDER")))
@@ -274,13 +287,22 @@ var _ = Describe("runtime ML provider validation", func() {
 
 	It("rejects non-positive agent wall clock caps", func() {
 		err := validateAgentConfig(agentConfig{
-			MaxStepsCap:           3,
-			TokenBudgetCap:        512,
-			RunReaperInterval:     time.Second,
-			RunReaperSafetyFactor: 2,
+			MaxStepsCap:       3,
+			TokenBudgetCap:    512,
+			RunReaperInterval: time.Second,
+			RunReaperGrace:    time.Second,
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_AGENT_WALL_MS_CAP must be greater than zero")))
+	})
+
+	It("rejects missing Temporal task queue", func() {
+		cfg := validTemporalConfig()
+		cfg.TaskQueue = ""
+
+		err := validateTemporalConfig(cfg)
+
+		Expect(err).To(MatchError(ContainSubstring("INFERENCE_SERVICE_TEMPORAL_TASK_QUEUE is required")))
 	})
 
 	It("rejects unknown query transformation providers", func() {
@@ -315,6 +337,16 @@ var _ = Describe("runtime ML provider validation", func() {
 func configureLocalEnv() {
 	Expect(os.Setenv("ENVIRONMENT", "LOCAL-DEV")).To(Succeed())
 	env.ResetEnvironmentCache()
+}
+
+func validTemporalConfig() temporalConfig {
+	return temporalConfig{
+		Address:              "localhost:7233",
+		Namespace:            "default",
+		TaskQueue:            app.DefaultAgentRunWorkflowTaskQueue,
+		ConnectTimeout:       time.Second,
+		ConnectRetryInterval: time.Millisecond,
+	}
 }
 
 var _ = Describe("promptStrategyFromConfig", func() {

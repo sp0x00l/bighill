@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"inference_service/pkg/domain/model"
 	"lib/shared_lib/authz"
@@ -20,12 +21,51 @@ import (
 
 const (
 	agentTrajectorySchemaVersion = "agent_trajectory_v1"
+
+	agentTrajectorySourceService = "inference_service"
+	agentTrajectoryReadSpanName  = "agent.trajectory.read"
+
+	agentToolInvocationIDNamespace = "agent_tool_invocation:"
+
+	agentRunAPIHrefPrefix = "/v1/inference/agent-runs/"
+	agentRunUIHrefPrefix  = "/agent-runs/"
+
+	agentRunStartedTitle   = "Agent run started"
+	agentRunStartedMessage = "The agent run has started."
+	agentRunCompletedTitle = "Agent run completed"
+	agentRunCompletedMsg   = "The agent run completed."
+	agentRunFailedTitle    = "Agent run failed"
+	agentRunFailedMessage  = "The agent run failed."
+
+	agentStepCompletedTitle   = "Agent step completed"
+	agentStepCompletedMessage = "The agent completed a reasoning step."
+
+	agentToolResultTitle   = "Agent tool result recorded"
+	agentToolResultMessage = "The agent recorded a tool result."
+
+	agentEventActionViewRun = "View run"
+
+	agentEventPartStep = "step"
+	agentEventPartTool = "tool"
+
+	agentToolResultStateCompleted = "COMPLETED"
+	agentToolResultStateFailed    = "FAILED"
+
+	agentEventMetadataEndpointID   = "endpoint_id"
+	agentEventMetadataStepID       = "step_id"
+	agentEventMetadataStepIndex    = "step_index"
+	agentEventMetadataInvocationID = "invocation_id"
+	agentEventMetadataToolName     = "tool_name"
+	agentEventMetadataErrorType    = "error_type"
+
+	agentTrajectoryAttrOrgID = "org_id"
+	agentTrajectoryAttrRunID = "run_id"
 )
 
 func (u *inferenceUsecase) recordAgentRun(ctx context.Context, session *model.AgentSession, status model.AgentRunStatus, stopReason model.AgentStopReason) (*model.AgentRun, error) {
 	log.Trace("InferenceUsecase recordAgentRun")
 
-	decodingParams, err := json.Marshal(session.DecodingOptions)
+	decodingParams, err := agentDecodingOptionsJSON(session.DecodingOptions)
 	if err != nil {
 		return nil, fmt.Errorf("marshal decoding params: %w", err)
 	}
@@ -62,7 +102,7 @@ func (u *inferenceUsecase) recordAgentStep(ctx context.Context, session *model.A
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("marshal presented tool schemas: %w", err)
 	}
-	generationResultJSON, err := json.Marshal(generationResult)
+	generationResultJSON, err := agentGenerationResultJSON(generationResult)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("marshal generation result: %w", err)
 	}
@@ -84,16 +124,20 @@ func (u *inferenceUsecase) recordAgentStep(ctx context.Context, session *model.A
 	return recorded.StepID, nil
 }
 
-func (u *inferenceUsecase) recordAgentToolInvocation(ctx context.Context, session *model.AgentSession, stepID uuid.UUID, call model.ToolCall, result model.ToolResult) error {
+func (u *inferenceUsecase) recordAgentToolInvocation(ctx context.Context, session *model.AgentSession, stepID uuid.UUID, callKey string, call model.ToolCall, result model.ToolResult) error {
 	log.Trace("InferenceUsecase recordAgentToolInvocation")
 
-	resultJSON, err := json.Marshal(result)
+	resultJSON, err := agentToolResultJSON(result)
 	if err != nil {
 		return fmt.Errorf("marshal tool result: %w", err)
 	}
 	errorType := result.ErrorType
+	invocationID := result.InvocationID
+	if invocationID == uuid.Nil {
+		invocationID = deterministicAgentToolInvocationID(session.RunID, stepID, callKey)
+	}
 	invocation := &model.AgentToolInvocation{
-		InvocationID:    result.InvocationID,
+		InvocationID:    invocationID,
 		StepID:          stepID,
 		RunID:           session.RunID,
 		OrgID:           session.OrgID,
@@ -112,23 +156,29 @@ func (u *inferenceUsecase) recordAgentToolInvocation(ctx context.Context, sessio
 	return nil
 }
 
+func deterministicAgentToolInvocationID(runID uuid.UUID, stepID uuid.UUID, toolCallKey string) uuid.UUID {
+	log.Trace("deterministicAgentToolInvocationID")
+
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(agentToolInvocationIDNamespace+runID.String()+":"+stepID.String()+":"+strings.TrimSpace(toolCallKey)))
+}
+
 func (u *inferenceUsecase) ReadAgentTrajectory(ctx context.Context, orgID uuid.UUID, runID uuid.UUID) (trajectory *model.AgentTrajectory, err error) {
 	log.Trace("InferenceUsecase ReadAgentTrajectory")
 
 	ctx = ctxutil.WithOrgID(ctx, orgID)
-	ctx, span := startInferenceSpan(ctx, "agent.trajectory.read",
-		attribute.String("org_id", orgID.String()),
-		attribute.String("run_id", runID.String()),
+	ctx, span := startInferenceSpan(ctx, agentTrajectoryReadSpanName,
+		attribute.String(agentTrajectoryAttrOrgID, orgID.String()),
+		attribute.String(agentTrajectoryAttrRunID, runID.String()),
 	)
 	defer endInferenceSpanOnReturn(ctx, span, &err)
 
 	return u.trajectoryRepository.ReadAgentTrajectory(ctx, orgID, runID)
 }
 
-func (u *inferenceUsecase) ReapExpiredAgentRuns(ctx context.Context, safetyMultiplier int) (int64, error) {
+func (u *inferenceUsecase) ReapExpiredAgentRuns(ctx context.Context, grace time.Duration) (int64, error) {
 	log.Trace("InferenceUsecase ReapExpiredAgentRuns")
 
-	return u.trajectoryRepository.FailExpiredAgentRuns(ctx, safetyMultiplier)
+	return u.trajectoryRepository.FailExpiredAgentRuns(ctx, grace)
 }
 
 func (u *inferenceUsecase) publishAgentRunUserEvent(ctx context.Context, run *model.AgentRun) {
@@ -139,19 +189,19 @@ func (u *inferenceUsecase) publishAgentRunUserEvent(ctx context.Context, run *mo
 	}
 	eventType := userevents.EventTypeAgentRunStarted
 	severity := userevents.SeverityInfo
-	title := "Agent run started"
-	message := "The agent run has started."
+	title := agentRunStartedTitle
+	message := agentRunStartedMessage
 	switch run.Status {
 	case model.AgentRunStatusCompleted:
 		eventType = userevents.EventTypeAgentRunCompleted
 		severity = userevents.SeveritySuccess
-		title = "Agent run completed"
-		message = "The agent run completed."
+		title = agentRunCompletedTitle
+		message = agentRunCompletedMsg
 	case model.AgentRunStatusFailed:
 		eventType = userevents.EventTypeAgentRunFailed
 		severity = userevents.SeverityError
-		title = "Agent run failed"
-		message = "The agent run failed."
+		title = agentRunFailedTitle
+		message = agentRunFailedMessage
 	}
 	event := userevents.Event{
 		EventID: userevents.DeterministicEventID(
@@ -160,22 +210,22 @@ func (u *inferenceUsecase) publishAgentRunUserEvent(ctx context.Context, run *mo
 			run.Status.String(),
 			run.StopReason.String(),
 		),
-		SourceService:      "inference_service",
+		SourceService:      agentTrajectorySourceService,
 		EventType:          eventType,
 		Severity:           severity,
 		RequiredPermission: authz.PermissionInferenceAgentRunsRead,
 		UserID:             optionalAgentEventUUID(run.UserID),
-		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, run.RunID, "", "/v1/inference/agent-runs/"+run.RunID.String()),
+		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, run.RunID, "", agentRunAPIHref(run.RunID)),
 		Status: userevents.Status{
 			State: run.Status.String(),
 			Phase: userevents.StatusPhaseAgent,
 		},
 		Title:       title,
 		Message:     message,
-		ActionLabel: "View run",
-		ActionHref:  "/agent-runs/" + run.RunID.String(),
+		ActionLabel: agentEventActionViewRun,
+		ActionHref:  agentRunUIHref(run.RunID),
 		Metadata: map[string]string{
-			"endpoint_id": run.EndpointID.String(),
+			agentEventMetadataEndpointID: run.EndpointID.String(),
 		},
 	}
 	if err := u.userEventPublisher.Publish(ctx, event); err != nil {
@@ -193,23 +243,23 @@ func (u *inferenceUsecase) publishAgentStepUserEvent(ctx context.Context, sessio
 		EventID: userevents.DeterministicEventID(
 			userevents.ResourceTypeAgentRun,
 			step.RunID.String(),
-			"step",
+			agentEventPartStep,
 			fmt.Sprintf("%d", step.StepIndex),
 		),
-		SourceService:      "inference_service",
+		SourceService:      agentTrajectorySourceService,
 		EventType:          userevents.EventTypeAgentStepCompleted,
 		Severity:           userevents.SeverityInfo,
 		RequiredPermission: authz.PermissionInferenceAgentRunsRead,
 		UserID:             optionalAgentEventUUID(session.UserID),
-		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, step.RunID, "", "/v1/inference/agent-runs/"+step.RunID.String()),
+		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, step.RunID, "", agentRunAPIHref(step.RunID)),
 		Status:             userevents.Status{State: string(step.FinishReason), Phase: userevents.StatusPhaseAgent},
-		Title:              "Agent step completed",
-		Message:            "The agent completed a reasoning step.",
-		ActionLabel:        "View run",
-		ActionHref:         "/agent-runs/" + step.RunID.String(),
+		Title:              agentStepCompletedTitle,
+		Message:            agentStepCompletedMessage,
+		ActionLabel:        agentEventActionViewRun,
+		ActionHref:         agentRunUIHref(step.RunID),
 		Metadata: map[string]string{
-			"step_id":    step.StepID.String(),
-			"step_index": fmt.Sprintf("%d", step.StepIndex),
+			agentEventMetadataStepID:    step.StepID.String(),
+			agentEventMetadataStepIndex: fmt.Sprintf("%d", step.StepIndex),
 		},
 	}
 	if err := u.userEventPublisher.Publish(ctx, event); err != nil {
@@ -224,39 +274,51 @@ func (u *inferenceUsecase) publishAgentToolResultUserEvent(ctx context.Context, 
 		return
 	}
 	severity := userevents.SeverityInfo
-	state := "COMPLETED"
+	state := agentToolResultStateCompleted
 	if invocation.ErrorType != model.ToolErrorTypeUnknown {
 		severity = userevents.SeverityWarning
-		state = "FAILED"
+		state = agentToolResultStateFailed
 	}
 	event := userevents.Event{
 		EventID: userevents.DeterministicEventID(
 			userevents.ResourceTypeAgentRun,
 			invocation.RunID.String(),
-			"tool",
+			agentEventPartTool,
 			invocation.InvocationID.String(),
 		),
-		SourceService:      "inference_service",
+		SourceService:      agentTrajectorySourceService,
 		EventType:          userevents.EventTypeAgentToolResult,
 		Severity:           severity,
 		RequiredPermission: authz.PermissionInferenceAgentRunsRead,
 		UserID:             optionalAgentEventUUID(session.UserID),
-		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, invocation.RunID, "", "/v1/inference/agent-runs/"+invocation.RunID.String()),
+		Resource:           userevents.NewResource(userevents.ResourceTypeAgentRun, invocation.RunID, "", agentRunAPIHref(invocation.RunID)),
 		Status:             userevents.Status{State: state, Phase: userevents.StatusPhaseAgent},
-		Title:              "Agent tool result recorded",
-		Message:            "The agent recorded a tool result.",
-		ActionLabel:        "View run",
-		ActionHref:         "/agent-runs/" + invocation.RunID.String(),
+		Title:              agentToolResultTitle,
+		Message:            agentToolResultMessage,
+		ActionLabel:        agentEventActionViewRun,
+		ActionHref:         agentRunUIHref(invocation.RunID),
 		Metadata: map[string]string{
-			"step_id":       invocation.StepID.String(),
-			"invocation_id": invocation.InvocationID.String(),
-			"tool_name":     invocation.ToolName,
-			"error_type":    invocation.ErrorType.String(),
+			agentEventMetadataStepID:       invocation.StepID.String(),
+			agentEventMetadataInvocationID: invocation.InvocationID.String(),
+			agentEventMetadataToolName:     invocation.ToolName,
+			agentEventMetadataErrorType:    invocation.ErrorType.String(),
 		},
 	}
 	if err := u.userEventPublisher.Publish(ctx, event); err != nil {
 		userevents.LogPublishFailure(ctx, err, event)
 	}
+}
+
+func agentRunAPIHref(runID uuid.UUID) string {
+	log.Trace("agentRunAPIHref")
+
+	return agentRunAPIHrefPrefix + runID.String()
+}
+
+func agentRunUIHref(runID uuid.UUID) string {
+	log.Trace("agentRunUIHref")
+
+	return agentRunUIHrefPrefix + runID.String()
 }
 
 func optionalAgentEventUUID(value uuid.UUID) string {
@@ -310,6 +372,123 @@ func agentToolsetHash(toolSpecs []model.ToolSpec) (string, error) {
 	return userevents.SHA256String(string(canonical)), nil
 }
 
+func agentDecodingOptionsJSON(options model.GenerationOptions) ([]byte, error) {
+	log.Trace("agentDecodingOptionsJSON")
+
+	return json.Marshal(agentGenerationOptionsDTO{
+		Temperature:     options.Temperature,
+		TopP:            options.TopP,
+		Seed:            options.Seed,
+		MaxOutputTokens: options.MaxOutputTokens,
+	})
+}
+
+func agentGenerationResultJSON(result model.GenerationResult) ([]byte, error) {
+	log.Trace("agentGenerationResultJSON")
+
+	toolCalls := make([]agentToolCallDTO, 0, len(result.ToolCalls))
+	for _, call := range result.ToolCalls {
+		toolCalls = append(toolCalls, agentToolCallDTO{
+			ID:        call.ID,
+			Name:      call.Name,
+			Arguments: call.Arguments,
+		})
+	}
+	return json.Marshal(agentGenerationResultDTO{
+		Content:      result.Content,
+		ToolCalls:    toolCalls,
+		FinishReason: result.FinishReason,
+		Usage: agentTokenUsageDTO{
+			PromptTokens:     result.Usage.PromptTokens,
+			CompletionTokens: result.Usage.CompletionTokens,
+			TotalTokens:      result.Usage.TotalTokens,
+		},
+		Options: agentGenerationOptionsDTO{
+			Temperature:     result.Options.Temperature,
+			TopP:            result.Options.TopP,
+			Seed:            result.Options.Seed,
+			MaxOutputTokens: result.Options.MaxOutputTokens,
+		},
+	})
+}
+
+func agentGenerationResultFromJSON(value []byte) (model.GenerationResult, error) {
+	log.Trace("agentGenerationResultFromJSON")
+
+	dto := agentGenerationResultDTO{}
+	if err := json.Unmarshal(value, &dto); err != nil {
+		return model.GenerationResult{}, err
+	}
+	toolCalls := make([]model.ToolCall, 0, len(dto.ToolCalls))
+	for _, call := range dto.ToolCalls {
+		toolCalls = append(toolCalls, model.ToolCall{
+			ID:        call.ID,
+			Name:      call.Name,
+			Arguments: call.Arguments,
+		})
+	}
+	return model.GenerationResult{
+		Content:      dto.Content,
+		ToolCalls:    toolCalls,
+		FinishReason: dto.FinishReason,
+		Usage: model.TokenUsage{
+			PromptTokens:     dto.Usage.PromptTokens,
+			CompletionTokens: dto.Usage.CompletionTokens,
+			TotalTokens:      dto.Usage.TotalTokens,
+		},
+		Options: model.GenerationOptions{
+			Temperature:     dto.Options.Temperature,
+			TopP:            dto.Options.TopP,
+			Seed:            dto.Options.Seed,
+			MaxOutputTokens: dto.Options.MaxOutputTokens,
+		},
+	}, nil
+}
+
+func agentToolResultJSON(result model.ToolResult) ([]byte, error) {
+	log.Trace("agentToolResultJSON")
+
+	return json.Marshal(agentToolResultDTO{
+		InvocationID:    result.InvocationID,
+		CallID:          result.CallID,
+		Name:            result.Name,
+		Content:         result.Content,
+		Contexts:        result.Contexts,
+		IsError:         result.IsError,
+		ErrorType:       result.ErrorType.String(),
+		ToolImplVersion: result.ToolImplVersion,
+		TokenEstimate:   result.TokenEstimate,
+	})
+}
+
+func agentToolResultFromJSON(value []byte) (model.ToolResult, error) {
+	log.Trace("agentToolResultFromJSON")
+
+	dto := agentToolResultDTO{}
+	if err := json.Unmarshal(value, &dto); err != nil {
+		return model.ToolResult{}, err
+	}
+	errorType := model.ToolErrorTypeUnknown
+	if strings.TrimSpace(dto.ErrorType) != "" && strings.TrimSpace(dto.ErrorType) != model.ToolErrorTypeUnknown.String() {
+		parsed, err := model.ToToolErrorType(dto.ErrorType)
+		if err != nil {
+			return model.ToolResult{}, err
+		}
+		errorType = parsed
+	}
+	return model.ToolResult{
+		InvocationID:    dto.InvocationID,
+		CallID:          dto.CallID,
+		Name:            dto.Name,
+		Content:         dto.Content,
+		Contexts:        dto.Contexts,
+		IsError:         dto.IsError,
+		ErrorType:       errorType,
+		ToolImplVersion: dto.ToolImplVersion,
+		TokenEstimate:   dto.TokenEstimate,
+	}, nil
+}
+
 func agentPresentedToolSchemas(toolSpecs []model.ToolSpec) ([]byte, error) {
 	log.Trace("agentPresentedToolSchemas")
 
@@ -331,4 +510,43 @@ func agentPresentedToolSchemas(toolSpecs []model.ToolSpec) ([]byte, error) {
 		})
 	}
 	return json.Marshal(presented)
+}
+
+type agentGenerationResultDTO struct {
+	Content      string                       `json:"content"`
+	ToolCalls    []agentToolCallDTO           `json:"tool_calls,omitempty"`
+	FinishReason model.GenerationFinishReason `json:"finish_reason"`
+	Usage        agentTokenUsageDTO           `json:"usage"`
+	Options      agentGenerationOptionsDTO    `json:"options"`
+}
+
+type agentToolCallDTO struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type agentTokenUsageDTO struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type agentGenerationOptionsDTO struct {
+	Temperature     float64 `json:"temperature"`
+	TopP            float64 `json:"top_p"`
+	Seed            int64   `json:"seed,omitempty"`
+	MaxOutputTokens int     `json:"max_output_tokens"`
+}
+
+type agentToolResultDTO struct {
+	InvocationID    uuid.UUID                `json:"invocation_id,omitempty"`
+	CallID          string                   `json:"call_id"`
+	Name            string                   `json:"name"`
+	Content         string                   `json:"content"`
+	Contexts        []model.RetrievedContext `json:"contexts,omitempty"`
+	IsError         bool                     `json:"is_error"`
+	ErrorType       string                   `json:"error_type,omitempty"`
+	ToolImplVersion string                   `json:"tool_impl_version,omitempty"`
+	TokenEstimate   int                      `json:"token_estimate,omitempty"`
 }

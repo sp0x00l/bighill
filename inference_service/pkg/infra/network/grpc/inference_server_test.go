@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"testing"
+	"time"
 
 	usecase "inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
@@ -74,6 +75,30 @@ func (s *inferenceUsecaseStub) Generate(_ context.Context, request model.Generat
 	return s.result, s.err
 }
 
+func (s *inferenceUsecaseStub) PrepareAgentRunActivity(context.Context, usecase.PrepareAgentRunActivityInput) (usecase.AgentRunWorkflowState, error) {
+	return usecase.AgentRunWorkflowState{}, nil
+}
+
+func (s *inferenceUsecaseStub) GenerateAgentStepActivity(context.Context, usecase.GenerateAgentStepActivityInput) (usecase.GenerateAgentStepActivityOutput, error) {
+	return usecase.GenerateAgentStepActivityOutput{}, nil
+}
+
+func (s *inferenceUsecaseStub) RecordAgentStepActivity(context.Context, usecase.RecordAgentStepActivityInput) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+
+func (s *inferenceUsecaseStub) InvokeAgentToolActivity(context.Context, usecase.InvokeAgentToolActivityInput) (usecase.InvokeAgentToolActivityOutput, error) {
+	return usecase.InvokeAgentToolActivityOutput{}, nil
+}
+
+func (s *inferenceUsecaseStub) CompleteAgentRunActivity(context.Context, usecase.CompleteAgentRunActivityInput) error {
+	return nil
+}
+
+func (s *inferenceUsecaseStub) FailAgentRunActivity(context.Context, usecase.FailAgentRunActivityInput) error {
+	return nil
+}
+
 func (s *inferenceUsecaseStub) RecordFeedback(_ context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
 	s.feedback = feedback
 	s.feedbackKey = idempotencyKey
@@ -103,7 +128,7 @@ func (s *inferenceUsecaseStub) ReadAgentTrajectory(context.Context, uuid.UUID, u
 	return nil, nil
 }
 
-func (s *inferenceUsecaseStub) ReapExpiredAgentRuns(context.Context, int) (int64, error) {
+func (s *inferenceUsecaseStub) ReapExpiredAgentRuns(context.Context, time.Duration) (int64, error) {
 	return 0, nil
 }
 

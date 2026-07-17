@@ -90,8 +90,8 @@ func agentSpecColumns() string {
 func agentSpecArgs(spec *model.AgentSpec) pgx.NamedArgs {
 	log.Trace("agentSpecArgs")
 
-	toolBindings, _ := jsonBytes(spec.ToolBindings)
-	budgets, _ := jsonBytes(spec.Budgets)
+	toolBindings, _ := jsonBytes(agentToolBindingRecords(spec.ToolBindings))
+	budgets, _ := jsonBytes(newAgentBudgetRecord(spec.Budgets))
 	return pgx.NamedArgs{
 		"org_id":            nullableUUID(spec.OrgID),
 		"agent_lineage":     spec.AgentLineage,
@@ -153,9 +153,9 @@ func scanAgentSpec(row pgx.Row) (*model.AgentSpec, error) {
 	record.OrgID = parsedOrgID
 	record.CanonicalJSON = []byte(canonicalJSON)
 	record.ModelID = parsedModelID
-	_ = unmarshalJSON([]byte(toolBindings), &record.ToolBindings)
+	record.ToolBindings = agentToolBindingsFromRecord([]byte(toolBindings))
 	record.RetrievalConfig = []byte(retrievalConfig)
-	_ = unmarshalJSON([]byte(budgets), &record.Budgets)
+	record.Budgets = agentBudgetFromRecord([]byte(budgets))
 	record.StopConditions = []byte(stopConditions)
 	record.Guardrails = []byte(guardrails)
 	parsedStatus, err := model.ToAgentSpecStatus(status)
@@ -164,6 +164,77 @@ func scanAgentSpec(row pgx.Row) (*model.AgentSpec, error) {
 	}
 	record.Status = parsedStatus
 	return record, nil
+}
+
+type agentToolBindingRecord struct {
+	Name       string          `json:"name"`
+	Required   bool            `json:"required"`
+	ToolChoice string          `json:"tool_choice,omitempty"`
+	Config     json.RawMessage `json:"config,omitempty"`
+}
+
+type agentBudgetRecord struct {
+	MaxSteps int `json:"max_steps"`
+	Token    int `json:"token"`
+	WallMs   int `json:"wall_ms"`
+}
+
+func agentToolBindingRecords(bindings []model.ToolBinding) []agentToolBindingRecord {
+	log.Trace("agentToolBindingRecords")
+
+	records := make([]agentToolBindingRecord, 0, len(bindings))
+	for _, binding := range bindings {
+		records = append(records, agentToolBindingRecord{
+			Name:       binding.Name,
+			Required:   binding.Required,
+			ToolChoice: binding.ToolChoice,
+			Config:     binding.Config,
+		})
+	}
+	return records
+}
+
+func agentToolBindingsFromRecord(raw []byte) []model.ToolBinding {
+	log.Trace("agentToolBindingsFromRecord")
+
+	var records []agentToolBindingRecord
+	if err := unmarshalJSON(raw, &records); err != nil {
+		return nil
+	}
+	bindings := make([]model.ToolBinding, 0, len(records))
+	for _, record := range records {
+		bindings = append(bindings, model.ToolBinding{
+			Name:       record.Name,
+			Required:   record.Required,
+			ToolChoice: record.ToolChoice,
+			Config:     record.Config,
+		})
+	}
+	return bindings
+}
+
+func newAgentBudgetRecord(budget model.AgentBudgets) agentBudgetRecord {
+	log.Trace("newAgentBudgetRecord")
+
+	return agentBudgetRecord{
+		MaxSteps: budget.MaxSteps,
+		Token:    budget.Token,
+		WallMs:   budget.WallMs,
+	}
+}
+
+func agentBudgetFromRecord(raw []byte) model.AgentBudgets {
+	log.Trace("agentBudgetFromRecord")
+
+	var record agentBudgetRecord
+	if err := unmarshalJSON(raw, &record); err != nil {
+		return model.AgentBudgets{}
+	}
+	return model.AgentBudgets{
+		MaxSteps: record.MaxSteps,
+		Token:    record.Token,
+		WallMs:   record.WallMs,
+	}
 }
 
 type CapabilityReportRepository struct {

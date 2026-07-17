@@ -153,6 +153,16 @@ spec:
               value: {{ .Values.env.toolServiceGrpcCallTimeoutMs | quote }}
             - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_RETRY_COUNT
               value: {{ .Values.env.toolServiceGrpcRetryCount | quote }}
+            - name: INFERENCE_SERVICE_TEMPORAL_ADDRESS
+              value: {{ .Values.env.temporalAddress | quote }}
+            - name: INFERENCE_SERVICE_TEMPORAL_NAMESPACE
+              value: {{ .Values.env.temporalNamespace | quote }}
+            - name: INFERENCE_SERVICE_TEMPORAL_TASK_QUEUE
+              value: {{ .Values.env.temporalTaskQueue | quote }}
+            - name: INFERENCE_SERVICE_TEMPORAL_CONNECT_TIMEOUT_SECONDS
+              value: {{ .Values.env.temporalConnectTimeoutSeconds | quote }}
+            - name: INFERENCE_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS
+              value: {{ .Values.env.temporalConnectRetryIntervalSeconds | quote }}
             - name: INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.generationRequestTimeoutSeconds | quote }}
             - name: INFERENCE_SERVICE_GENERATION_MAX_OUTPUT_TOKENS

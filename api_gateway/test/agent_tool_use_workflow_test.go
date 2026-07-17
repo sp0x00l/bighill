@@ -58,14 +58,14 @@ var _ = Describe("Agent tool-use workflow", Label("agent"), func() {
 			"query_text": "Use the knowledge search tool first. What phrase identifies the embedded knowledge base?",
 			"top_k":      3,
 		}, user.Token, uuid.New(), ragE2EGenerateCallTimeout)
-		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		Expect(status).To(Equal(http.StatusAccepted), "body: %s", string(body))
 		generation := decodeObject(body)
 		runID := stringField(generation, "agent_run_id")
 		Expect(strings.TrimSpace(runID)).NotTo(BeEmpty())
-		Expect(strings.TrimSpace(stringField(generation, "answer"))).NotTo(BeEmpty())
-		Expect(generation["generation_protocol"]).To(Equal("OPENAI_CHAT_COMPLETIONS"))
+		Expect(generation["status"]).To(Equal("RUNNING"))
+		Expect(generation["agent_run_href"]).To(Equal("/v1/inference/agent-runs/" + runID))
 
-		trajectory := readAgentRun(user, runID)
+		trajectory := waitForAgentRunTerminal(user, runID)
 		run := trajectoryObject(trajectory, "run")
 		Expect(run["agent_spec_hash"]).To(Equal(agentSpecHash))
 		Expect(run["status"]).To(Equal("COMPLETED"))
@@ -112,13 +112,14 @@ var _ = Describe("Agent tool-use workflow", Label("agent"), func() {
 			"query_text": "Call graph_search first with query_text Aurora Relay, top_k 3, and max_hops 2. Then answer from the returned context.",
 			"top_k":      3,
 		}, user.Token, uuid.New(), ragE2EGenerateCallTimeout)
-		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+		Expect(status).To(Equal(http.StatusAccepted), "body: %s", string(body))
 		generation := decodeObject(body)
 		runID := stringField(generation, "agent_run_id")
 		Expect(strings.TrimSpace(runID)).NotTo(BeEmpty())
-		Expect(strings.TrimSpace(stringField(generation, "answer"))).NotTo(BeEmpty())
+		Expect(generation["status"]).To(Equal("RUNNING"))
+		Expect(generation["agent_run_href"]).To(Equal("/v1/inference/agent-runs/" + runID))
 
-		trajectory := readAgentRun(user, runID)
+		trajectory := waitForAgentRunTerminal(user, runID)
 		run := trajectoryObject(trajectory, "run")
 		Expect(run["agent_spec_hash"]).To(Equal(agentSpecHash))
 		Expect(run["status"]).To(Equal("COMPLETED"))
@@ -252,6 +253,16 @@ func readAgentRun(user profileTestUser, runID string) map[string]any {
 	status, body := doJSON(http.MethodGet, "/v1/private/inference/agent-runs/"+runID, nil, user.Token, uuid.Nil)
 	Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
 	return decodeSingleObject(body)
+}
+
+func waitForAgentRunTerminal(user profileTestUser, runID string) map[string]any {
+	var trajectory map[string]any
+	Eventually(func() string {
+		trajectory = readAgentRun(user, runID)
+		run := trajectoryObject(trajectory, "run")
+		return fmt.Sprint(run["status"])
+	}, 2*time.Minute, 2*time.Second).Should(SatisfyAny(Equal("COMPLETED"), Equal("FAILED")))
+	return trajectory
 }
 
 func replayAgentRunSocketEvents(user profileTestUser, runID string) []string {

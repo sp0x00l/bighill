@@ -3,31 +3,11 @@ package adapter
 import (
 	"context"
 
-	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
-	serializers "lib/shared_lib/serializer"
 
-	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
-
-const defaultTopK = 5
-
-type GenerationDTOAdapter interface {
-	FromDTO(ctx context.Context, body []byte) (model.GenerateRequest, error)
-	ToDTO(ctx context.Context, response *model.GenerateResponse) ([]byte, error)
-}
-
-type generationDTOAdapter struct {
-	validator *validator.Validate
-	encoder   *serializers.Encoder
-}
-
-type GenerateRequestDTO struct {
-	QueryText       string            `json:"query_text"       validate:"required,max=4000"`
-	TopK            *int              `json:"top_k"            validate:"omitempty,min=1,max=100"`
-	MetadataFilters map[string]string `json:"metadata_filters" validate:"omitempty,dive,keys,max=128,endkeys,max=512"`
-}
 
 type RetrievedContextDTO struct {
 	DatasetID   string  `json:"dataset_id"`
@@ -40,6 +20,8 @@ type RetrievedContextDTO struct {
 type GenerateResponseDTO struct {
 	RequestID          string                `json:"request_id"`
 	AgentRunID         string                `json:"agent_run_id,omitempty"`
+	Status             string                `json:"status,omitempty"`
+	AgentRunHref       string                `json:"agent_run_href,omitempty"`
 	DatasetID          string                `json:"dataset_id"`
 	DatasetIDs         []string              `json:"dataset_ids"`
 	QueryText          string                `json:"query_text"`
@@ -48,37 +30,6 @@ type GenerateResponseDTO struct {
 	GenerationModel    string                `json:"generation_model"`
 	RAGMergeStrategy   string                `json:"rag_merge_strategy"`
 	Contexts           []RetrievedContextDTO `json:"contexts"`
-}
-
-func NewGenerationDTOAdapter(encoder *serializers.Encoder) *generationDTOAdapter {
-	log.Trace("NewGenerationDTOAdapter")
-
-	return &generationDTOAdapter{
-		validator: validator.New(),
-		encoder:   encoder,
-	}
-}
-
-func (a *generationDTOAdapter) FromDTO(ctx context.Context, body []byte) (model.GenerateRequest, error) {
-	log.Trace("GenerationDTOAdapter FromDTO")
-
-	var dto GenerateRequestDTO
-	if err := a.encoder.DecodeStringToData(string(body), &dto); err != nil {
-		return model.GenerateRequest{}, domain.ErrValidationFailed.Extend(err.Error())
-	}
-	if err := a.validator.Struct(dto); err != nil {
-		log.WithContext(ctx).WithError(err).Error("GenerateRequestDTO validation failed")
-		return model.GenerateRequest{}, domain.ErrValidationFailed.Extend(err.Error())
-	}
-	topK := dto.TopK
-	if topK == nil {
-		topK = ptr(defaultTopK)
-	}
-	return model.GenerateRequest{
-		QueryText:       dto.QueryText,
-		TopK:            *topK,
-		MetadataFilters: dto.MetadataFilters,
-	}, nil
 }
 
 func (a *generationDTOAdapter) ToDTO(ctx context.Context, response *model.GenerateResponse) ([]byte, error) {
@@ -97,6 +48,8 @@ func (a *generationDTOAdapter) ToDTO(ctx context.Context, response *model.Genera
 	encoded, err := a.encoder.EncodeDataToString(GenerateResponseDTO{
 		RequestID:          response.RequestID.String(),
 		AgentRunID:         optionalUUIDString(response.AgentRunID),
+		Status:             generateResponseStatus(response),
+		AgentRunHref:       agentRunHref(response.AgentRunID),
 		DatasetID:          response.DatasetID.String(),
 		DatasetIDs:         uuidStrings(response.DatasetIDs),
 		QueryText:          response.QueryText,
@@ -111,4 +64,22 @@ func (a *generationDTOAdapter) ToDTO(ctx context.Context, response *model.Genera
 		return nil, err
 	}
 	return []byte(encoded), nil
+}
+
+func generateResponseStatus(response *model.GenerateResponse) string {
+	log.Trace("generateResponseStatus")
+
+	if response != nil && response.Accepted {
+		return "RUNNING"
+	}
+	return ""
+}
+
+func agentRunHref(runID uuid.UUID) string {
+	log.Trace("agentRunHref")
+
+	if runID == uuid.Nil {
+		return ""
+	}
+	return "/v1/inference/agent-runs/" + runID.String()
 }

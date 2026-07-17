@@ -32,7 +32,7 @@ var _ = Describe("Multi-LoRA serving control plane", Ordered, func() {
 		baseModel = assertModelSelectable(user, baseModelID, "UPLOAD", "rag-e2e-uploaded-base")
 	})
 
-	It("P1 serves a tenant-owned base model before adapter loading", func() {
+	It("serves a tenant-owned base model before adapter loading", func() {
 		endpointID := waitForPublishedEndpoint(user.Token, "rag-e2e-uploaded-base")
 
 		var response map[string]any
@@ -67,7 +67,7 @@ var _ = Describe("Multi-LoRA serving control plane", Ordered, func() {
 		Expect(response["generation_protocol"]).To(Equal(stringField(baseModel, "serving_protocol")))
 	})
 
-	It("P2 uploads a LoRA adapter and refuses silent base fallback", func() {
+	It("uploads a LoRA adapter and refuses silent base fallback", func() {
 		firstAdapterID = uploadPEFTAdapterThroughIngestion(user, datasetID, ragE2EBaseModel(), "rag-e2e-lora-one", "2")
 		adapter := waitForUploadedAdapterModel(user, firstAdapterID, "rag-e2e-lora-one")
 
@@ -78,7 +78,7 @@ var _ = Describe("Multi-LoRA serving control plane", Ordered, func() {
 		Expect(adapter["serving_model"]).NotTo(Equal(ragE2EBaseModel()))
 	})
 
-	It("P3 registers a second tenant adapter on the same base without collision", func() {
+	It("registers a second tenant adapter on the same base without collision", func() {
 		secondAdapterID = uploadPEFTAdapterThroughIngestion(user, datasetID, ragE2EBaseModel(), "rag-e2e-lora-two", "3")
 		first := waitForUploadedAdapterModel(user, firstAdapterID, "rag-e2e-lora-one")
 		second := waitForUploadedAdapterModel(user, secondAdapterID, "rag-e2e-lora-two")
@@ -91,12 +91,12 @@ var _ = Describe("Multi-LoRA serving control plane", Ordered, func() {
 		Expect(second["adapter_rank"]).To(BeNumerically("==", 16))
 	})
 
-	It("P4 does not publish ready inference endpoints for unserved adapters", func() {
+	It("does not publish ready inference endpoints for unserved adapters", func() {
 		assertNoReadyEndpointForModelName(user, "rag-e2e-lora-one")
 		assertNoReadyEndpointForModelName(user, "rag-e2e-lora-two")
 	})
 
-	It("P5 fails generation against an unserved adapter instead of answering with the base model", func() {
+	It("fails generation against an unserved adapter instead of answering with the base model", func() {
 		status, body := doJSON(http.MethodPost, "/v1/private/inference/endpoints", map[string]any{
 			"model_id":     firstAdapterID.String(),
 			"dataset_ids":  []string{datasetID},
@@ -114,7 +114,7 @@ var _ = Describe("Multi-LoRA serving control plane", Ordered, func() {
 		Expect(status).NotTo(Equal(http.StatusOK), "body: %s", string(body))
 	})
 
-	It("P6 keeps tenant adapter models private to their owner org", func() {
+	It("keeps tenant adapter models private to their owner org", func() {
 		otherUser := createVerifiedProfileAndLogin()
 
 		status, body := doJSON(http.MethodGet, "/v1/private/models/"+firstAdapterID.String(), nil, otherUser.Token, uuid.Nil)

@@ -15,7 +15,7 @@ CREATE TYPE processing_profile_enum AS ENUM (
 CREATE TYPE agent_spec_status_enum AS ENUM ('DRAFT', 'VALIDATED', 'PROMOTED', 'FAILED');
 CREATE TYPE agent_endpoint_mode_enum AS ENUM ('rag', 'agent');
 CREATE TYPE agent_run_status_enum AS ENUM ('RUNNING', 'COMPLETED', 'FAILED');
-CREATE TYPE agent_stop_reason_enum AS ENUM ('FINAL_ANSWER', 'MAX_STEPS', 'BUDGET_EXCEEDED', 'TOOL_ERROR', 'RUNTIME_ERROR', 'LOOP_DETECTED', 'DEADLINE_EXCEEDED');
+CREATE TYPE agent_stop_reason_enum AS ENUM ('FINAL_ANSWER', 'MAX_STEPS', 'BUDGET_EXCEEDED', 'TOOL_ERROR', 'RUNTIME_ERROR', 'LOOP_DETECTED', 'DEADLINE_EXCEEDED', 'ABANDONED');
 CREATE TYPE tool_error_type_enum AS ENUM ('TRANSIENT', 'PERMANENT', 'POLICY_DENIED');
 
 CREATE EXTENSION IF NOT EXISTS citext;
@@ -444,6 +444,7 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_runs (
     status agent_run_status_enum NOT NULL DEFAULT 'RUNNING',
     stop_reason agent_stop_reason_enum,
     started_at timestamptz NOT NULL DEFAULT now(),
+    deadline_at timestamptz NOT NULL,
     finished_at timestamptz,
     total_tokens integer NOT NULL DEFAULT 0,
     wall_ms integer NOT NULL,
@@ -454,11 +455,15 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_runs (
         AND jsonb_typeof(decoding_params) = 'object'
         AND decoding_params <> '{}'::jsonb
         AND wall_ms >= 1000
+        AND deadline_at > started_at
     )
 );
 
 CREATE INDEX IF NOT EXISTS index_agent_runs_org_endpoint
 ON bighill_inference_db.agent_runs(org_id, endpoint_id, started_at);
+
+CREATE INDEX IF NOT EXISTS index_agent_runs_status_deadline
+ON bighill_inference_db.agent_runs(status, deadline_at);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_steps (
     step_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),

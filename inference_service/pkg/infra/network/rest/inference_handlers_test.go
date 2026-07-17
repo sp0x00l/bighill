@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"inference_service/pkg/app"
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
 	"inference_service/pkg/infra/network/adapter"
@@ -32,6 +34,7 @@ type inferenceUsecaseStub struct {
 	preferenceDataset *model.PreferenceDataset
 	agentTrajectory   *model.AgentTrajectory
 	generateRequest   model.GenerateRequest
+	generateResponse  *model.GenerateResponse
 	endpointID        uuid.UUID
 	feedback          *model.InferenceFeedback
 	idempotencyKey    uuid.UUID
@@ -91,6 +94,9 @@ func (s *inferenceUsecaseStub) GenerateForEndpoint(ctx context.Context, endpoint
 	if err := s.err; err != nil {
 		return nil, err
 	}
+	if s.generateResponse != nil {
+		return s.generateResponse, nil
+	}
 	return &model.GenerateResponse{
 		RequestID: request.RequestID,
 		OrgID:     request.OrgID,
@@ -106,6 +112,30 @@ func (s *inferenceUsecaseStub) GenerateForEndpoint(ctx context.Context, endpoint
 
 func (s *inferenceUsecaseStub) Generate(context.Context, model.GenerateRequest) (*model.GenerateResponse, error) {
 	return nil, nil
+}
+
+func (s *inferenceUsecaseStub) PrepareAgentRunActivity(context.Context, app.PrepareAgentRunActivityInput) (app.AgentRunWorkflowState, error) {
+	return app.AgentRunWorkflowState{}, nil
+}
+
+func (s *inferenceUsecaseStub) GenerateAgentStepActivity(context.Context, app.GenerateAgentStepActivityInput) (app.GenerateAgentStepActivityOutput, error) {
+	return app.GenerateAgentStepActivityOutput{}, nil
+}
+
+func (s *inferenceUsecaseStub) RecordAgentStepActivity(context.Context, app.RecordAgentStepActivityInput) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+
+func (s *inferenceUsecaseStub) InvokeAgentToolActivity(context.Context, app.InvokeAgentToolActivityInput) (app.InvokeAgentToolActivityOutput, error) {
+	return app.InvokeAgentToolActivityOutput{}, nil
+}
+
+func (s *inferenceUsecaseStub) CompleteAgentRunActivity(context.Context, app.CompleteAgentRunActivityInput) error {
+	return nil
+}
+
+func (s *inferenceUsecaseStub) FailAgentRunActivity(context.Context, app.FailAgentRunActivityInput) error {
+	return nil
 }
 
 func (s *inferenceUsecaseStub) RecordFeedback(ctx context.Context, feedback *model.InferenceFeedback, idempotencyKey uuid.UUID) (*model.InferenceFeedback, error) {
@@ -166,7 +196,7 @@ func (s *inferenceUsecaseStub) ReadAgentTrajectory(context.Context, uuid.UUID, u
 	return s.agentTrajectory, s.err
 }
 
-func (s *inferenceUsecaseStub) ReapExpiredAgentRuns(context.Context, int) (int64, error) {
+func (s *inferenceUsecaseStub) ReapExpiredAgentRuns(context.Context, time.Duration) (int64, error) {
 	return 0, nil
 }
 
@@ -240,6 +270,29 @@ var _ = Describe("InferenceHandlers", func() {
 		var dto adapter.GenerateResponseDTO
 		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
 		Expect(dto.Answer).To(Equal("answer"))
+	})
+
+	It("returns accepted for asynchronous agent generations", func() {
+		runID := uuid.New()
+		usecase.generateResponse = &model.GenerateResponse{
+			RequestID:  requestID,
+			AgentRunID: runID,
+			Accepted:   true,
+			OrgID:      orgID,
+			QueryText:  "what now?",
+		}
+		req := requestWithAuth(http.MethodPost, "/v1/inference/endpoints/"+endpointID.String()+"/generations", `{"query_text":"what now?"}`, userID, orgID, requestID)
+		req = mux.SetURLVars(req, map[string]string{"endpointId": endpointID.String()})
+
+		res, err := handlers.Generate(context.Background(), req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusAccepted))
+		var dto adapter.GenerateResponseDTO
+		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
+		Expect(dto.AgentRunID).To(Equal(runID.String()))
+		Expect(dto.Status).To(Equal("RUNNING"))
+		Expect(dto.AgentRunHref).To(Equal("/v1/inference/agent-runs/" + runID.String()))
 	})
 
 	It("rejects generation requests without idempotency", func() {

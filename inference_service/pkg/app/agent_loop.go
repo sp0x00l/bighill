@@ -94,6 +94,63 @@ func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.Gene
 	return response, nil
 }
 
+func (u *inferenceUsecase) startAgentRunWorkflow(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint) (*model.GenerateResponse, error) {
+	log.Trace("InferenceUsecase startAgentRunWorkflow")
+
+	request.AgentRunID = request.RequestID
+	spec, err := u.agentSpecRepository.ReadAgentSpecByHash(ctx, request.OrgID, endpoint.AgentSpecHash)
+	if err != nil {
+		return nil, err
+	}
+	datasets, err := u.readGenerateDatasets(ctx, request.OrgID, endpoint.DatasetIDs)
+	if err != nil {
+		return nil, err
+	}
+	readyDatasets := filterReadyRAGDatasets(ctx, datasets)
+	if len(readyDatasets) == 0 {
+		return nil, domain.ErrDatasetNotReady.Extend("no endpoint datasets have materialized embeddings")
+	}
+	session := &model.AgentSession{
+		RunID:           request.AgentRunID,
+		OrgID:           request.OrgID,
+		UserID:          request.UserID,
+		Endpoint:        endpoint,
+		Spec:            spec,
+		Datasets:        readyDatasets,
+		Messages:        agentInitialMessages(spec, request.QueryText),
+		DecodingOptions: agentDecodingOptions(spec, request),
+	}
+	toolSpecs, err := u.toolInvoker.Available(ctx, appToolResolutionContext(session), spec.ToolBindings)
+	if err != nil {
+		return nil, err
+	}
+	session.ResolvedToolSpecs = toolSpecs
+	if _, err := u.recordAgentRun(ctx, session, model.AgentRunStatusRunning, model.AgentStopReasonUnknown); err != nil {
+		return nil, err
+	}
+	input := AgentRunWorkflowInput{
+		EndpointID: endpoint.EndpointID,
+		Request:    request,
+		WallMs:     spec.Budgets.WallMs,
+	}
+	if err := u.agentRunWorkflowStarter.StartAgentRunWorkflow(ctx, input); err != nil {
+		_, _ = u.recordAgentRun(ctx, session, model.AgentRunStatusFailed, model.AgentStopReasonRuntimeError)
+		return nil, err
+	}
+	return &model.GenerateResponse{
+		RequestID:             request.RequestID,
+		AgentRunID:            request.AgentRunID,
+		Accepted:              true,
+		OrgID:                 request.OrgID,
+		DatasetID:             readyDatasets[0].DatasetID,
+		DatasetIDs:            datasetIDsFromModels(readyDatasets),
+		ModelID:               endpoint.ModelID,
+		QueryText:             request.QueryText,
+		PromptStrategyVersion: spec.ContentHash,
+		RAGMergeStrategy:      endpoint.MergeStrategy,
+	}, nil
+}
+
 func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint, spec *model.AgentSpec, inferenceModel *model.InferenceModel, datasets []*model.InferenceDataset, generator GenerationAdapter) (model.AgentResult, error) {
 	log.Trace("InferenceUsecase runAgentLoop")
 
@@ -101,6 +158,7 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 	defer cancel()
 
 	session := &model.AgentSession{
+		RunID:           request.AgentRunID,
 		OrgID:           request.OrgID,
 		UserID:          request.UserID,
 		Endpoint:        endpoint,
@@ -115,11 +173,13 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 		return model.AgentResult{}, err
 	}
 	session.ResolvedToolSpecs = toolSpecs
-	run, err := u.recordAgentRun(ctx, session, model.AgentRunStatusRunning, model.AgentStopReasonUnknown)
-	if err != nil {
-		return model.AgentResult{}, err
+	if session.RunID == uuid.Nil {
+		run, err := u.recordAgentRun(ctx, session, model.AgentRunStatusRunning, model.AgentStopReasonUnknown)
+		if err != nil {
+			return model.AgentResult{}, err
+		}
+		session.RunID = run.RunID
 	}
-	session.RunID = run.RunID
 	maxSteps := spec.Budgets.MaxSteps
 	var contexts []model.RetrievedContext
 	lastToolCallSignature := ""
@@ -172,7 +232,8 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 			Content:   gen.Content,
 			ToolCalls: gen.ToolCalls,
 		})
-		for _, call := range gen.ToolCalls {
+		for toolIndex, call := range gen.ToolCalls {
+			callKey := agentToolCallKey(call, toolIndex)
 			signature := agentToolCallSignature(call)
 			if signature == lastToolCallSignature {
 				repeatedToolCallCount++
@@ -206,10 +267,11 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 			}
 			contexts = append(contexts, toolResult.Contexts...)
 			session.TotalTokens += toolResult.TokenEstimate
-			if err := u.recordAgentToolInvocation(ctx, session, stepID, call, toolResult); err != nil {
+			if err := u.recordAgentToolInvocation(ctx, session, stepID, callKey, call, toolResult); err != nil {
 				return model.AgentResult{RunID: session.RunID, Contexts: contexts, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonRuntimeError, err)
 			}
-			if agentToolResultIsTransient(toolResult) {
+			switch agentToolResultErrorType(toolResult) {
+			case model.ToolErrorTypeTransient:
 				transientToolFailures[signature]++
 				if transientToolFailures[signature] > agentTransientToolFailureRetries {
 					if err == nil {
@@ -218,12 +280,17 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 					reason := agentToolStopReason(err)
 					return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: reason, Steps: step + 1}, u.failAgentRun(ctx, session, reason, err)
 				}
-			} else if err != nil || toolResult.IsError || toolResult.ErrorType != model.ToolErrorTypeUnknown {
+			case model.ToolErrorTypePermanent, model.ToolErrorTypePolicyDenied:
 				if err == nil {
 					err = domain.ErrGenerationFailed.Extend("agent tool call failed")
 				}
 				reason := agentToolStopReason(err)
 				return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: reason, Steps: step + 1}, u.failAgentRun(ctx, session, reason, err)
+			default:
+				if err != nil {
+					reason := agentToolStopReason(err)
+					return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: reason, Steps: step + 1}, u.failAgentRun(ctx, session, reason, err)
+				}
 			}
 			if agentTokenBudgetExceeded(session) {
 				err := domain.ErrGenerationFailed.Extend("agent reached its token budget before producing a final answer")
@@ -239,12 +306,6 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 	}
 	err = domain.ErrGenerationFailed.Extend("agent reached its step limit before producing a final answer")
 	return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonMaxSteps, Steps: maxSteps}, u.failAgentRun(ctx, session, model.AgentStopReasonMaxSteps, err)
-}
-
-func agentToolResultIsTransient(result model.ToolResult) bool {
-	log.Trace("agentToolResultIsTransient")
-
-	return result.IsError && result.ErrorType == model.ToolErrorTypeTransient
 }
 
 func appToolResolutionContext(session *model.AgentSession) ToolResolutionContext {
@@ -287,6 +348,28 @@ func agentToolStopReason(err error) model.AgentStopReason {
 	return model.AgentStopReasonToolError
 }
 
+func agentToolResultErrorType(result model.ToolResult) model.ToolErrorType {
+	log.Trace("agentToolResultErrorType")
+
+	return agentToolFailureClass(result.IsError, result.ErrorType)
+}
+
+func agentToolFailureClass(isError bool, errorType model.ToolErrorType) model.ToolErrorType {
+	log.Trace("agentToolFailureClass")
+
+	switch errorType {
+	case model.ToolErrorTypeTransient, model.ToolErrorTypePermanent, model.ToolErrorTypePolicyDenied:
+		return errorType
+	case model.ToolErrorTypeUnknown:
+		if isError {
+			return model.ToolErrorTypePermanent
+		}
+		return model.ToolErrorTypeUnknown
+	default:
+		return model.ToolErrorTypePermanent
+	}
+}
+
 func (u *inferenceUsecase) failAgentRun(ctx context.Context, session *model.AgentSession, reason model.AgentStopReason, err error) error {
 	log.Trace("InferenceUsecase failAgentRun")
 
@@ -298,6 +381,15 @@ func agentToolCallSignature(call model.ToolCall) string {
 	log.Trace("agentToolCallSignature")
 
 	return strings.Join([]string{strings.TrimSpace(call.Name), strings.TrimSpace(string(call.Arguments))}, "\x00")
+}
+
+func agentToolCallKey(call model.ToolCall, index int) string {
+	log.Trace("agentToolCallKey")
+
+	if value := strings.TrimSpace(call.ID); value != "" {
+		return value
+	}
+	return fmt.Sprintf("%d", index)
 }
 
 func agentDecodingOptions(spec *model.AgentSpec, request model.GenerateRequest) model.GenerationOptions {

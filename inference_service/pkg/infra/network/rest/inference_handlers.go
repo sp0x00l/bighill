@@ -303,6 +303,9 @@ func (h *InferenceHandlers) Generate(ctx context.Context, req *http.Request) (AP
 	if err != nil {
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode generation response")
 	}
+	if result.Accepted {
+		return NewResponseWithPayload(http.StatusAccepted, payload), nil
+	}
 	return NewResponseWithPayload(http.StatusOK, payload), nil
 }
 
