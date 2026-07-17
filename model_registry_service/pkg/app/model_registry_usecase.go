@@ -27,6 +27,7 @@ type ModelRegistryUsecase interface {
 	RegisterModel(ctx context.Context, registeredModel *model.Model, idempotencyKey uuid.UUID) (*model.Model, error)
 	ReadModelSystem(ctx context.Context, modelID uuid.UUID) (*model.Model, error)
 	ReadModelForUser(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.Model, error)
+	ReadEffectiveBaseForModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (*model.EffectiveBaseVersion, error)
 	ListModels(ctx context.Context, userID uuid.UUID, pagination transport.Pagination, filter model.ListFilter) ([]*model.Model, int, error)
 	MarkModelReady(ctx context.Context, modelID uuid.UUID, artifactLocation string) (*model.Model, error)
 	MarkModelFailed(ctx context.Context, modelID uuid.UUID, failureReason string) (*model.Model, error)
@@ -41,6 +42,7 @@ type ModelRegistryUsecase interface {
 type modelRegistryUsecase struct {
 	repo               ModelRepository
 	endpointRepository PublishedEndpointRepository
+	effectiveBases     EffectiveBaseRepository
 	unitOfWork         ModelUnitOfWorkAdapter
 	eventBuilder       ModelEventBuilder
 	servingDeployer    ModelServingDeployer
@@ -71,6 +73,14 @@ func WithPublishedEndpointRepository(repository PublishedEndpointRepository) Mod
 
 	return func(u *modelRegistryUsecase) {
 		u.endpointRepository = repository
+	}
+}
+
+func WithEffectiveBaseRepository(repository EffectiveBaseRepository) ModelRegistryOption {
+	log.Trace("WithEffectiveBaseRepository")
+
+	return func(u *modelRegistryUsecase) {
+		u.effectiveBases = repository
 	}
 }
 
@@ -141,6 +151,22 @@ func (u *modelRegistryUsecase) ReadModelForUser(ctx context.Context, userID uuid
 	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
 
 	return u.repo.ReadByID(ctx, modelID)
+}
+
+func (u *modelRegistryUsecase) ReadEffectiveBaseForModel(ctx context.Context, userID uuid.UUID, modelID uuid.UUID) (out *model.EffectiveBaseVersion, err error) {
+	log.Trace("ModelRegistryUsecase ReadEffectiveBaseForModel")
+
+	ctx = ensureActorContext(ctx, userID)
+	ctx, span := usecasetrace.StartSpan(ctx, "model_registry_service/app", "effective_base.read_for_model",
+		attribute.String("user_id", userID.String()),
+		attribute.String("model_id", modelID.String()),
+	)
+	defer usecasetrace.EndSpanOnReturn(ctx, span, &err)
+
+	if u.effectiveBases == nil {
+		return nil, fmt.Errorf("%w: effective base repository is not configured", domain.ErrValidationFailed)
+	}
+	return u.effectiveBases.ReadLatestByModelID(ctx, modelID)
 }
 
 func (u *modelRegistryUsecase) ListModels(ctx context.Context, userID uuid.UUID, pagination transport.Pagination, filter model.ListFilter) (out []*model.Model, total int, err error) {
@@ -553,6 +579,9 @@ func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedMo
 		if err := u.upsertPublishedEndpoint(ctx, tx, updated); err != nil {
 			return err
 		}
+		if err := u.recordEffectiveBaseVersion(ctx, tx, updated); err != nil {
+			return err
+		}
 		if changed {
 			if err := enqueue(u.eventBuilder.ModelUpdatedMessage(updated)); err != nil {
 				return fmt.Errorf("enqueue model updated: %w", err)
@@ -563,6 +592,40 @@ func (u *modelRegistryUsecase) updateServingStatus(ctx context.Context, servedMo
 		return nil
 	})
 	return modelRecord, statusChanged, err
+}
+
+func (u *modelRegistryUsecase) recordEffectiveBaseVersion(ctx context.Context, tx pgx.Tx, modelRecord *model.Model) error {
+	log.Trace("ModelRegistryUsecase recordEffectiveBaseVersion")
+
+	if u.effectiveBases == nil || modelRecord == nil {
+		return nil
+	}
+	if modelRecord.ServingLoadStatus != model.ModelLoadStatusLoaded {
+		return nil
+	}
+	if modelRecord.ModelKind != model.ModelKindBase || strings.TrimSpace(modelRecord.AdapterURI) != "" {
+		return nil
+	}
+	if strings.TrimSpace(modelRecord.ArtifactLocation) == "" ||
+		strings.TrimSpace(modelRecord.ArtifactFormat) == "" ||
+		strings.TrimSpace(modelRecord.ArtifactChecksum) == "" ||
+		strings.TrimSpace(modelRecord.ServingTarget) == "" ||
+		strings.TrimSpace(modelRecord.ServingModel) == "" ||
+		strings.TrimSpace(modelRecord.ServingProtocol.String()) == "" {
+		return nil
+	}
+	_, err := u.effectiveBases.RecordEffectiveBase(ctx, tx, &model.EffectiveBaseVersion{
+		ModelID:                modelRecord.ModelID,
+		OrgID:                  modelRecord.OrgID,
+		BaseModel:              strings.TrimSpace(modelRecord.BaseModel),
+		SourceArtifactLocation: strings.TrimSpace(modelRecord.ArtifactLocation),
+		SourceArtifactFormat:   strings.TrimSpace(modelRecord.ArtifactFormat),
+		SourceArtifactChecksum: strings.TrimSpace(modelRecord.ArtifactChecksum),
+		ServingTarget:          strings.TrimSpace(modelRecord.ServingTarget),
+		ServingModel:           strings.TrimSpace(modelRecord.ServingModel),
+		ServingProtocol:        modelRecord.ServingProtocol,
+	})
+	return err
 }
 
 func (u *modelRegistryUsecase) publishModelServingUserEvent(ctx context.Context, modelRecord *model.Model, previousServingStatus model.ModelLoadStatus) {

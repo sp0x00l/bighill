@@ -102,6 +102,43 @@ BEFORE UPDATE ON bighill_model_registry_db.models
 FOR EACH ROW
 EXECUTE FUNCTION updated_at_column();
 
+CREATE TABLE IF NOT EXISTS bighill_model_registry_db.effective_base_versions (
+    effective_base_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    model_id uuid NOT NULL REFERENCES bighill_model_registry_db.models(model_id),
+    org_id uuid NOT NULL,
+    base_model text NOT NULL,
+    source_artifact_location text NOT NULL,
+    source_artifact_format text NOT NULL,
+    source_artifact_checksum text NOT NULL,
+    serving_target text NOT NULL,
+    serving_model text NOT NULL,
+    serving_protocol serving_protocol_enum NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT effective_base_versions_non_empty_identity_ck CHECK (
+        btrim(base_model) <> ''
+        AND btrim(source_artifact_location) <> ''
+        AND btrim(source_artifact_format) <> ''
+        AND btrim(source_artifact_checksum) <> ''
+        AND btrim(serving_target) <> ''
+        AND btrim(serving_model) <> ''
+    )
+);
+
+CREATE INDEX IF NOT EXISTS index_effective_base_versions_org_id
+ON bighill_model_registry_db.effective_base_versions(org_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS index_effective_base_versions_model_id
+ON bighill_model_registry_db.effective_base_versions(model_id, updated_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS index_effective_base_versions_identity
+ON bighill_model_registry_db.effective_base_versions(model_id, source_artifact_checksum, serving_target, serving_model, serving_protocol);
+
+CREATE TRIGGER effective_base_versions_updated_at
+BEFORE UPDATE ON bighill_model_registry_db.effective_base_versions
+FOR EACH ROW
+EXECUTE FUNCTION updated_at_column();
+
 CREATE TABLE IF NOT EXISTS bighill_model_registry_db.published_inference_endpoints (
     endpoint_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     org_id uuid NOT NULL,
@@ -144,6 +181,18 @@ WITH CHECK (
 ALTER TABLE bighill_model_registry_db.models ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bighill_model_registry_db.models FORCE ROW LEVEL SECURITY;
 CREATE POLICY models_tenant_isolation ON bighill_model_registry_db.models
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_model_registry_db.effective_base_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_model_registry_db.effective_base_versions FORCE ROW LEVEL SECURITY;
+CREATE POLICY effective_base_versions_tenant_isolation ON bighill_model_registry_db.effective_base_versions
 USING (
     current_setting('app.system_context', true) = 'true'
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id

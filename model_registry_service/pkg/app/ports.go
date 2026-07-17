@@ -29,6 +29,11 @@ type PublishedEndpointRepository interface {
 	UpsertEndpoint(ctx context.Context, tx pgx.Tx, endpoint *model.PublishedEndpoint) error
 }
 
+type EffectiveBaseRepository interface {
+	RecordEffectiveBase(ctx context.Context, tx pgx.Tx, effectiveBase *model.EffectiveBaseVersion) (*model.EffectiveBaseVersion, error)
+	ReadLatestByModelID(ctx context.Context, modelID uuid.UUID) (*model.EffectiveBaseVersion, error)
+}
+
 type ModelUnitOfWorkAdapter interface {
 	Do(ctx context.Context, fn shareduow.TxFunc) error
 }

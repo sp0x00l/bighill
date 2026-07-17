@@ -86,7 +86,7 @@ func (s *modelRepositoryStub) UpdateStatus(_ context.Context, _ pgx.Tx, _ uuid.U
 	return s.readModel, s.updateErr
 }
 
-func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, _ string, _ string, _ model.ServingProtocol, failureReason string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
+func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _ uuid.UUID, status model.ModelStatus, loadStatus model.ModelLoadStatus, servingTarget string, servingModel string, servingProtocol model.ServingProtocol, failureReason string, idempotencyKey uuid.UUID) (*model.Model, bool, error) {
 	s.status = status
 	s.loadStatus = loadStatus
 	s.servingKey = idempotencyKey
@@ -94,6 +94,9 @@ func (s *modelRepositoryStub) UpdateServingStatus(_ context.Context, _ pgx.Tx, _
 	if s.readModel != nil {
 		s.readModel.Status = status
 		s.readModel.ServingLoadStatus = loadStatus
+		s.readModel.ServingTarget = servingTarget
+		s.readModel.ServingModel = servingModel
+		s.readModel.ServingProtocol = servingProtocol
 		s.readModel.FailureReason = failureReason
 	}
 	changed := true
@@ -137,6 +140,33 @@ func (s *modelUnitOfWorkStub) Do(ctx context.Context, fn shareduow.TxFunc) error
 type modelServingDeployerStub struct {
 	servedModel *model.Model
 	err         error
+}
+
+type effectiveBaseRepositoryStub struct {
+	recorded *model.EffectiveBaseVersion
+	read     *model.EffectiveBaseVersion
+	readID   uuid.UUID
+	err      error
+}
+
+func (s *effectiveBaseRepositoryStub) RecordEffectiveBase(_ context.Context, _ pgx.Tx, effectiveBase *model.EffectiveBaseVersion) (*model.EffectiveBaseVersion, error) {
+	s.recorded = effectiveBase
+	if s.err != nil {
+		return nil, s.err
+	}
+	record := *effectiveBase
+	if record.EffectiveBaseID == uuid.Nil {
+		record.EffectiveBaseID = uuid.New()
+	}
+	return &record, nil
+}
+
+func (s *effectiveBaseRepositoryStub) ReadLatestByModelID(_ context.Context, modelID uuid.UUID) (*model.EffectiveBaseVersion, error) {
+	s.readID = modelID
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.read, nil
 }
 
 type publishedEndpointRepositoryStub struct {
@@ -434,6 +464,76 @@ var _ = Describe("ModelRegistryUsecase", func() {
 		Expect(repo.loadStatus).To(Equal(model.ModelLoadStatusLoaded))
 		Expect(repo.servingKey).To(Equal(idempotencyKey))
 		Expect(result.Status).To(Equal(model.ModelStatusReady))
+	})
+
+	It("records an effective base when a base model serving runtime loads", func() {
+		modelRecord := validModel()
+		modelRecord.ModelKind = model.ModelKindBase
+		modelRecord.AdapterURI = ""
+		modelRecord.AdapterRank = 0
+		modelRecord.ArtifactFormat = "GGUF"
+		modelRecord.ArtifactChecksum = "sha256:base-artifact"
+		modelRecord.ServingLoadStatus = model.ModelLoadStatusNotLoaded
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		effectiveBases := &effectiveBaseRepositoryStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithEffectiveBaseRepository(effectiveBases))
+
+		_, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingTarget:     "http://vllm-runtime",
+			ServingModel:      "base-mistral",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(effectiveBases.recorded).NotTo(BeNil())
+		Expect(effectiveBases.recorded.ModelID).To(Equal(modelRecord.ModelID))
+		Expect(effectiveBases.recorded.OrgID).To(Equal(modelRecord.OrgID))
+		Expect(effectiveBases.recorded.BaseModel).To(Equal(modelRecord.BaseModel))
+		Expect(effectiveBases.recorded.SourceArtifactLocation).To(Equal(modelRecord.ArtifactLocation))
+		Expect(effectiveBases.recorded.SourceArtifactFormat).To(Equal("GGUF"))
+		Expect(effectiveBases.recorded.SourceArtifactChecksum).To(Equal("sha256:base-artifact"))
+		Expect(effectiveBases.recorded.ServingTarget).To(Equal("http://vllm-runtime"))
+		Expect(effectiveBases.recorded.ServingModel).To(Equal("base-mistral"))
+		Expect(effectiveBases.recorded.ServingProtocol).To(Equal(model.ServingProtocolOpenAIChatCompletions))
+	})
+
+	It("does not record an effective base for a fine tuned adapter", func() {
+		modelRecord := validModel()
+		modelRecord.ModelKind = model.ModelKindFineTuned
+		modelRecord.AdapterURI = "s3://local-dev-bucket/models/adapter"
+		repo := &modelRepositoryStub{readModel: modelRecord}
+		effectiveBases := &effectiveBaseRepositoryStub{}
+		uc := app.NewModelRegistryUsecase(repo, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithEffectiveBaseRepository(effectiveBases))
+
+		_, err := uc.RecordModelServingStatus(context.Background(), &model.ServedModelStatus{
+			ModelID:           modelRecord.ModelID,
+			ServingTarget:     "http://vllm-runtime",
+			ServingModel:      "adapter-ranker",
+			ServingProtocol:   model.ServingProtocolOpenAIChatCompletions,
+			ServingLoadStatus: model.ModelLoadStatusLoaded,
+		}, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(effectiveBases.recorded).To(BeNil())
+	})
+
+	It("reads the latest effective base for a model", func() {
+		modelID := uuid.New()
+		readRecord := &model.EffectiveBaseVersion{
+			EffectiveBaseID: uuid.New(),
+			ModelID:         modelID,
+			ServingModel:    "base-mistral",
+		}
+		effectiveBases := &effectiveBaseRepositoryStub{read: readRecord}
+		uc := app.NewModelRegistryUsecase(&modelRepositoryStub{}, &modelUnitOfWorkStub{}, modelEventBuilder(), app.WithEffectiveBaseRepository(effectiveBases))
+
+		result, err := uc.ReadEffectiveBaseForModel(context.Background(), uuid.New(), modelID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(readRecord))
+		Expect(effectiveBases.readID).To(Equal(modelID))
 	})
 
 	It("publishes a user event when serving status loads", func() {

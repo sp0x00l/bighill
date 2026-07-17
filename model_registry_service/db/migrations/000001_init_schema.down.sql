@@ -3,6 +3,11 @@ DROP INDEX IF EXISTS bighill_model_registry_db.index_published_inference_endpoin
 DROP INDEX IF EXISTS bighill_model_registry_db.index_published_inference_endpoints_model_id;
 DROP INDEX IF EXISTS bighill_model_registry_db.index_published_inference_endpoints_org_id;
 DROP TABLE IF EXISTS bighill_model_registry_db.published_inference_endpoints;
+DROP TRIGGER IF EXISTS effective_base_versions_updated_at ON bighill_model_registry_db.effective_base_versions;
+DROP INDEX IF EXISTS bighill_model_registry_db.index_effective_base_versions_identity;
+DROP INDEX IF EXISTS bighill_model_registry_db.index_effective_base_versions_model_id;
+DROP INDEX IF EXISTS bighill_model_registry_db.index_effective_base_versions_org_id;
+DROP TABLE IF EXISTS bighill_model_registry_db.effective_base_versions;
 DROP TRIGGER IF EXISTS models_updated_at ON bighill_model_registry_db.models;
 DROP TRIGGER IF EXISTS tenants_updated_at ON bighill_model_registry_db.tenants;
 DROP TABLE IF EXISTS bighill_model_registry_db.models;

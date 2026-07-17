@@ -187,6 +187,9 @@ stays in batch jobs behind clean boundaries.
 - **Evaluates models and gates promotion** through the model registry (absolute floors +
   no-regression-vs-champion + evidence).
 - **Reconciles serving** through a Kubernetes serving layer to vLLM.
+- Records **effective-base identity** for loaded base models in the model registry, using the
+  registered source artifact and observed serving target/model/protocol as the current compatibility
+  anchor.
 - Uses **Kafka events** and a **Postgres outbox** to keep services consistent without coupling them.
 - Ships with **local dev, Docker Compose, Helm, VS Code wiring, and end-to-end tests**.
 

@@ -46,6 +46,10 @@ func (r *recordingModelRegistryUsecase) ReadModelForUser(context.Context, uuid.U
 	return nil, nil
 }
 
+func (r *recordingModelRegistryUsecase) ReadEffectiveBaseForModel(context.Context, uuid.UUID, uuid.UUID) (*model.EffectiveBaseVersion, error) {
+	return nil, nil
+}
+
 func (r *recordingModelRegistryUsecase) ListModels(context.Context, uuid.UUID, transport.Pagination, model.ListFilter) ([]*model.Model, int, error) {
 	return nil, 0, nil
 }

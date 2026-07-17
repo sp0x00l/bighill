@@ -60,7 +60,6 @@ The core interactive agent slice does not include:
 - self-improving agent training
 - agent adapter promotion
 - golden-task management
-- effective-base creation
 - long-running Temporal agent workflows
 - long-term memory governance
 - human approval workflows
@@ -79,7 +78,7 @@ enough for extensions to build on.
 | `data_registry_service` | Dataset/source metadata and dataset lifecycle |
 | `ingestion_service` | Upload sessions and artifact intake |
 | `feature_materializer_service` | Raw/feature/embedding snapshots and pgvector materialization |
-| `model_registry_service` | Model records, model promotion, serving intent, serving status projection |
+| `model_registry_service` | Model records, model promotion, serving intent, serving status projection, effective-base identity |
 | `model_serving_service` | Runtime reconciliation to local serving or vLLM/Kubernetes |
 | `inference_service` | RAG, interactive agent loop, generation dispatch, trajectory audit, feedback |
 | `tool_service` | Isolated execution boundary for world-acting tools |
@@ -100,6 +99,7 @@ The core agent runtime should contain only values that V1 can honestly produce a
 | `ToolInvocation` | `inference_service` and `tool_service` audit | One tool call/result/error |
 | `CapabilityReport` | `inference_service` | Measured capability probe for the bound model/runtime |
 | `ToolDefinition` | local registry / `tool_service` in V1 | Tool name, argument schema, result contract, locality, implementation version |
+| `EffectiveBaseVersion` | `model_registry_service` | Core serving identity for a loaded base model |
 
 `AgentSpec` remains core-owned permanently. The agent registry extension may reference
 `agent_spec_hash`, maintain version history, and decide which hash is champion for a lineage, but it
@@ -127,6 +127,7 @@ step_id
 tool_invocation_id
 tool_name
 tool_impl_version
+effective_base_id
 ```
 
 Extensions attach to these IDs. They should not require the core to predeclare every future lifecycle.
@@ -204,6 +205,26 @@ sequenceDiagram
 
 Extension services are introduced only when the feature has runtime behavior.
 
+## Core Serving Effective-Base Flow
+
+Effective-base identity is produced by the serving stack. It is not written by the agent runtime and
+does not require `agent_registry_service`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant MR as model_registry_service
+    participant MS as model_serving_service
+    participant DB as model_registry DB
+
+    MR->>MS: Ensure served model for base model
+    MS->>MS: Reconcile local/vLLM runtime
+    MS-->>MR: ServedModelStatus(LOADED, target, model, protocol)
+    MR->>DB: Update model serving status
+    MR->>DB: Upsert effective_base_versions row
+    Note over DB: source artifact + observed serving identity only
+```
+
 | Extension service | Adds | Attaches to |
 |-------------------|------|-------------|
 | `agent_registry_service` | Version history and champion/candidate selection over core-authored spec hashes; no spec bytes | `agent_spec_hash`, `model_id`, future `adapter_id` |
@@ -268,10 +289,16 @@ V1 includes:
 - `agent_steps`
 - `agent_tool_invocations`
 
-V1 does not carry dormant lifecycle state. Effective-base identity, champion selection, candidate
-adapters, golden tasks, trajectory labels, durable runtime modes, training eligibility, rubric
-versions, and JSON-schema-output capability probes are future slices. They are not represented in
-the V1 schema until their writer, reader, policy, and tests ship with them.
+V1 does not carry dormant lifecycle state. Champion selection, candidate adapters, golden tasks,
+trajectory labels, durable runtime modes, training eligibility, rubric versions, and
+JSON-schema-output capability probes are future slices. They are not represented in the V1 schema
+until their writer, reader, policy, and tests ship with them.
+
+Effective-base identity is the exception because it is core serving state, not agent lifecycle state.
+The first serving slice records only values the platform can observe today: the loaded base model,
+the source artifact identity, and the observed serving target/model/protocol. Tokenizer,
+chat-template, quantization, and served-artifact checksum fields are added only when
+`model_serving_service` can measure and publish them.
 
 The V1 agent spec binds to a real model by `model_id`. Capability reports key on `(org_id,
 model_id)` and store only measured capabilities used by current policy.
@@ -297,7 +324,7 @@ stack, and agent extensions consume it after it is real.
 
 | Slice | Adds | Why it is now honest |
 |-------|------|----------------------|
-| Effective-base identity | Core serving primitive from `model_serving_service` / `model_registry_service`: `effective_base_versions` writer, checksums, tokenizer/template/quant identity, capability probe tied to served artifact | The base anchor has a producer and compatibility meaning |
+| Effective-base identity | Core serving primitive from `model_serving_service` / `model_registry_service`: `effective_base_versions` writer and reader for loaded base model source artifact plus observed serving target/model/protocol | The base anchor has a producer and compatibility meaning beyond agents |
 | Agent registry | Champion/candidate state and spec versioning, projected into core endpoint binding state | Endpoint binding has a writer; inference still reads only its own rows on the run path |
 | Golden tasks | CRUD/import, split-aware authoring, fingerprints, anti-leak | Eval inputs have a source and reader |
 | Eval runner | Temporal/Ray evaluation against dev/holdout tasks, rubric versions, eval reports | Rubric/version fields have a producer |

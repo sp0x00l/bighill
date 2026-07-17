@@ -52,6 +52,10 @@ func (s *modelUsecaseStub) ReadModelForUser(_ context.Context, userID uuid.UUID,
 	return s.model, s.readErr
 }
 
+func (s *modelUsecaseStub) ReadEffectiveBaseForModel(context.Context, uuid.UUID, uuid.UUID) (*model.EffectiveBaseVersion, error) {
+	return nil, nil
+}
+
 func (s *modelUsecaseStub) ListModels(_ context.Context, userID uuid.UUID, _ transport.Pagination, filter model.ListFilter) ([]*model.Model, int, error) {
 	s.listUserID = userID
 	s.filter = filter
