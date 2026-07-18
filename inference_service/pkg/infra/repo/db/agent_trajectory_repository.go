@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"inference_service/pkg/domain"
@@ -38,11 +40,13 @@ func (r *AgentTrajectoryRepository) RecordAgentRun(ctx context.Context, run *mod
 	}
 	query := `INSERT INTO ` + r.Name + `.agent_runs (
 		run_id, org_id, user_id, endpoint_id, agent_spec_hash,
-		toolset_hash, trajectory_schema_version, decoding_params,
+		toolset_hash, effective_base_id, data_snapshot_set, data_snapshot_hash,
+		trajectory_schema_version, decoding_params,
 		status, stop_reason, total_tokens, wall_ms, started_at, deadline_at
 	) VALUES (
 		COALESCE(@run_id::uuid, uuid_generate_v4()), @org_id, @user_id, @endpoint_id, @agent_spec_hash,
-		@toolset_hash, @trajectory_schema_version, @decoding_params::jsonb,
+		@toolset_hash, @effective_base_id, @data_snapshot_set::jsonb, @data_snapshot_hash,
+		@trajectory_schema_version, @decoding_params::jsonb,
 		@status::agent_run_status_enum, @stop_reason::agent_stop_reason_enum,
 		@total_tokens, @wall_ms, now(), now() + (@wall_ms * interval '1 millisecond')
 	)
@@ -70,7 +74,11 @@ func (r *AgentTrajectoryRepository) updateAgentRun(ctx context.Context, run *mod
 		status = @status::agent_run_status_enum,
 		stop_reason = @stop_reason::agent_stop_reason_enum,
 		finished_at = CASE WHEN @status::text = 'RUNNING' THEN NULL ELSE now() END,
-		total_tokens = @total_tokens
+		total_tokens = @total_tokens,
+		toolset_hash = @toolset_hash,
+		effective_base_id = @effective_base_id,
+		data_snapshot_set = @data_snapshot_set::jsonb,
+		data_snapshot_hash = @data_snapshot_hash
 	WHERE run_id = @run_id AND org_id = @org_id
 	RETURNING run_id::text, started_at, deadline_at`
 	args, err := agentRunArgs(run)
@@ -197,7 +205,8 @@ func (r *AgentTrajectoryRepository) readAgentRun(ctx context.Context, orgID uuid
 	query := `SELECT
 		run_id::text, org_id::text, user_id::text, COALESCE(endpoint_id::text, ''),
 		agent_spec_hash,
-		toolset_hash, trajectory_schema_version,
+		toolset_hash, effective_base_id, data_snapshot_set::text, data_snapshot_hash,
+		trajectory_schema_version,
 		decoding_params::text, status::text, COALESCE(stop_reason::text, ''),
 		started_at, deadline_at,
 		COALESCE(finished_at, 'epoch'::timestamptz), total_tokens, wall_ms
@@ -290,6 +299,18 @@ func agentRunArgs(run *model.AgentRun) (pgx.NamedArgs, error) {
 	if err != nil {
 		return nil, err
 	}
+	effectiveBaseID, err := requiredAgentString(run.EffectiveBaseID, "effective_base_id")
+	if err != nil {
+		return nil, err
+	}
+	dataSnapshotSet, err := agentDataSnapshotSetJSON(run.DataSnapshotSet)
+	if err != nil {
+		return nil, err
+	}
+	dataSnapshotHash, err := requiredAgentString(run.DataSnapshotHash, "data_snapshot_hash")
+	if err != nil {
+		return nil, err
+	}
 	return pgx.NamedArgs{
 		"run_id":                    nullableUUID(run.RunID),
 		"org_id":                    nullableUUID(run.OrgID),
@@ -297,6 +318,9 @@ func agentRunArgs(run *model.AgentRun) (pgx.NamedArgs, error) {
 		"endpoint_id":               nullableUUID(run.EndpointID),
 		"agent_spec_hash":           run.AgentSpecHash,
 		"toolset_hash":              run.ToolsetHash,
+		"effective_base_id":         effectiveBaseID,
+		"data_snapshot_set":         dataSnapshotSet,
+		"data_snapshot_hash":        dataSnapshotHash,
 		"trajectory_schema_version": run.TrajectorySchemaVersion,
 		"decoding_params":           decodingParams,
 		"status":                    run.Status.String(),
@@ -367,6 +391,94 @@ func requiredJSONRawMessage(value []byte, field string) (string, error) {
 	return string(trimmed), nil
 }
 
+type agentDataSnapshotRefRecord struct {
+	DatasetID           string  `json:"dataset_id"`
+	EmbeddingSnapshotID string  `json:"embedding_snapshot_id"`
+	GraphSnapshotID     *string `json:"graph_snapshot_id"`
+}
+
+func requiredAgentString(value string, field string) (string, error) {
+	log.Trace("requiredAgentString")
+
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", domain.ErrValidationFailed.Extend(field + " is required")
+	}
+	return trimmed, nil
+}
+
+func agentDataSnapshotSetJSON(set []model.DatasetSnapshotRef) (string, error) {
+	log.Trace("agentDataSnapshotSetJSON")
+
+	if len(set) == 0 {
+		return "", domain.ErrValidationFailed.Extend("data_snapshot_set is required")
+	}
+	records := make([]agentDataSnapshotRefRecord, 0, len(set))
+	for _, snapshot := range set {
+		if snapshot.DatasetID == uuid.Nil {
+			return "", domain.ErrValidationFailed.Extend("data_snapshot_set dataset_id is required")
+		}
+		if snapshot.EmbeddingSnapshotID == uuid.Nil {
+			return "", domain.ErrValidationFailed.Extend("data_snapshot_set embedding_snapshot_id is required")
+		}
+		graphSnapshotID := (*string)(nil)
+		if snapshot.GraphSnapshotID != uuid.Nil {
+			value := snapshot.GraphSnapshotID.String()
+			graphSnapshotID = &value
+		}
+		records = append(records, agentDataSnapshotRefRecord{
+			DatasetID:           snapshot.DatasetID.String(),
+			EmbeddingSnapshotID: snapshot.EmbeddingSnapshotID.String(),
+			GraphSnapshotID:     graphSnapshotID,
+		})
+	}
+	sortAgentDataSnapshotRecords(records)
+	payload, err := json.Marshal(records)
+	if err != nil {
+		return "", fmt.Errorf("marshal data_snapshot_set: %w", err)
+	}
+	return string(payload), nil
+}
+
+func parseAgentDataSnapshotSet(value string) ([]model.DatasetSnapshotRef, error) {
+	log.Trace("parseAgentDataSnapshotSet")
+
+	records := []agentDataSnapshotRefRecord{}
+	if err := json.Unmarshal([]byte(value), &records); err != nil {
+		return nil, fmt.Errorf("parse data_snapshot_set: %w", err)
+	}
+	set := make([]model.DatasetSnapshotRef, 0, len(records))
+	for _, record := range records {
+		datasetID, err := parseAgentUUID(record.DatasetID, "data_snapshot_set.dataset_id")
+		if err != nil {
+			return nil, err
+		}
+		embeddingSnapshotID, err := parseAgentUUID(record.EmbeddingSnapshotID, "data_snapshot_set.embedding_snapshot_id")
+		if err != nil {
+			return nil, err
+		}
+		graphSnapshotID := uuid.Nil
+		if record.GraphSnapshotID != nil && strings.TrimSpace(*record.GraphSnapshotID) != "" {
+			graphSnapshotID, err = parseAgentUUID(*record.GraphSnapshotID, "data_snapshot_set.graph_snapshot_id")
+			if err != nil {
+				return nil, err
+			}
+		}
+		set = append(set, model.DatasetSnapshotRef{
+			DatasetID:           datasetID,
+			EmbeddingSnapshotID: embeddingSnapshotID,
+			GraphSnapshotID:     graphSnapshotID,
+		})
+	}
+	return set, nil
+}
+
+func sortAgentDataSnapshotRecords(records []agentDataSnapshotRefRecord) {
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].DatasetID < records[j].DatasetID
+	})
+}
+
 func nullableAgentStopReason(value model.AgentStopReason) pgtype.Text {
 	log.Trace("nullableAgentStopReason")
 
@@ -434,14 +546,15 @@ func scanAgentRun(row pgx.Row) (*model.AgentRun, error) {
 	log.Trace("scanAgentRun")
 
 	var (
-		runIDRaw          string
-		orgIDRaw          string
-		userIDRaw         string
-		endpointIDRaw     string
-		decodingParamsRaw string
-		statusRaw         string
-		stopReasonRaw     string
-		run               model.AgentRun
+		runIDRaw           string
+		orgIDRaw           string
+		userIDRaw          string
+		endpointIDRaw      string
+		dataSnapshotSetRaw string
+		decodingParamsRaw  string
+		statusRaw          string
+		stopReasonRaw      string
+		run                model.AgentRun
 	)
 	if err := row.Scan(
 		&runIDRaw,
@@ -450,6 +563,9 @@ func scanAgentRun(row pgx.Row) (*model.AgentRun, error) {
 		&endpointIDRaw,
 		&run.AgentSpecHash,
 		&run.ToolsetHash,
+		&run.EffectiveBaseID,
+		&dataSnapshotSetRaw,
+		&run.DataSnapshotHash,
 		&run.TrajectorySchemaVersion,
 		&decodingParamsRaw,
 		&statusRaw,
@@ -488,6 +604,10 @@ func scanAgentRun(row pgx.Row) (*model.AgentRun, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	run.DataSnapshotSet, err = parseAgentDataSnapshotSet(dataSnapshotSetRaw)
+	if err != nil {
+		return nil, err
 	}
 	run.DecodingParams = []byte(decodingParamsRaw)
 	return &run, nil

@@ -37,6 +37,10 @@ type AgentRunWorkflowState struct {
 	ModelID                   uuid.UUID
 	AgentSpecHash             string
 	DatasetIDs                []uuid.UUID
+	ToolsetHash               string
+	EffectiveBaseID           string
+	DataSnapshotSet           []model.DatasetSnapshotRef
+	DataSnapshotHash          string
 	MergeStrategy             model.RAGMergeStrategy
 	Budgets                   model.AgentBudgets
 	ToolBindings              []model.ToolBinding

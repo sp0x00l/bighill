@@ -119,6 +119,9 @@ type AgentRun struct {
 	EndpointID              uuid.UUID
 	AgentSpecHash           string
 	ToolsetHash             string
+	EffectiveBaseID         string
+	DataSnapshotSet         []DatasetSnapshotRef
+	DataSnapshotHash        string
 	TrajectorySchemaVersion string
 	DecodingParams          json.RawMessage
 	Status                  AgentRunStatus
@@ -128,6 +131,12 @@ type AgentRun struct {
 	FinishedAt              time.Time
 	TotalTokens             int
 	WallMs                  int
+}
+
+type DatasetSnapshotRef struct {
+	DatasetID           uuid.UUID
+	EmbeddingSnapshotID uuid.UUID
+	GraphSnapshotID     uuid.UUID
 }
 
 type AgentStep struct {

@@ -39,6 +39,9 @@ func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.Gene
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(inferenceModel.EffectiveBaseID) == "" {
+		return nil, domain.ErrModelNotReady.Extend("model effective base is not available")
+	}
 	datasets, err := u.readGenerateDatasets(ctx, request.OrgID, endpoint.DatasetIDs)
 	if err != nil {
 		return nil, err
@@ -102,6 +105,13 @@ func (u *inferenceUsecase) startAgentRunWorkflow(ctx context.Context, request mo
 	if err != nil {
 		return nil, err
 	}
+	inferenceModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, endpoint.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(inferenceModel.EffectiveBaseID) == "" {
+		return nil, domain.ErrModelNotReady.Extend("model effective base is not available")
+	}
 	datasets, err := u.readGenerateDatasets(ctx, request.OrgID, endpoint.DatasetIDs)
 	if err != nil {
 		return nil, err
@@ -116,7 +126,9 @@ func (u *inferenceUsecase) startAgentRunWorkflow(ctx context.Context, request mo
 		UserID:          request.UserID,
 		Endpoint:        endpoint,
 		Spec:            spec,
+		Model:           inferenceModel,
 		Datasets:        readyDatasets,
+		DataSnapshotSet: agentDataSnapshotSet(readyDatasets),
 		Messages:        agentInitialMessages(spec, request.QueryText),
 		DecodingOptions: agentDecodingOptions(spec, request),
 	}
@@ -125,6 +137,10 @@ func (u *inferenceUsecase) startAgentRunWorkflow(ctx context.Context, request mo
 		return nil, err
 	}
 	session.ResolvedToolSpecs = toolSpecs
+	session.ToolsetHash, err = agentToolsetHash(toolSpecs)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := u.recordAgentRun(ctx, session, model.AgentRunStatusRunning, model.AgentStopReasonUnknown); err != nil {
 		return nil, err
 	}
@@ -165,6 +181,7 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 		Spec:            spec,
 		Model:           inferenceModel,
 		Datasets:        datasets,
+		DataSnapshotSet: agentDataSnapshotSet(datasets),
 		Messages:        agentInitialMessages(spec, request.QueryText),
 		DecodingOptions: agentDecodingOptions(spec, request),
 	}
@@ -173,6 +190,10 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 		return model.AgentResult{}, err
 	}
 	session.ResolvedToolSpecs = toolSpecs
+	session.ToolsetHash, err = agentToolsetHash(toolSpecs)
+	if err != nil {
+		return model.AgentResult{}, err
+	}
 	if session.RunID == uuid.Nil {
 		run, err := u.recordAgentRun(ctx, session, model.AgentRunStatusRunning, model.AgentStopReasonUnknown)
 		if err != nil {

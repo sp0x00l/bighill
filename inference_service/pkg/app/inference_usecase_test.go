@@ -913,6 +913,13 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(trajectoryRepository.runs).To(HaveLen(1))
 		Expect(trajectoryRepository.runs[0].RunID).To(Equal(requestID))
 		Expect(trajectoryRepository.runs[0].Status).To(Equal(model.AgentRunStatusRunning))
+		Expect(trajectoryRepository.runs[0].EffectiveBaseID).To(Equal(inferenceModel.EffectiveBaseID))
+		Expect(trajectoryRepository.runs[0].DataSnapshotSet).To(Equal([]model.DatasetSnapshotRef{{
+			DatasetID:           dataset.DatasetID,
+			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
+			GraphSnapshotID:     uuid.Nil,
+		}}))
+		Expect(trajectoryRepository.runs[0].DataSnapshotHash).NotTo(BeEmpty())
 		Expect(trajectoryRepository.steps).To(BeEmpty())
 	})
 
@@ -995,6 +1002,30 @@ var _ = Describe("InferenceUsecase", func() {
 		}}, bindings)
 
 		Expect(first).NotTo(Equal(second))
+	})
+
+	It("records data_snapshot_hash from the resolved ready dataset snapshots", func() {
+		dataset := validInferenceDataset()
+		withoutGraph := runAgentAndReturnFirstRunForDataset(dataset, nil, nil)
+		datasetWithGraph := *dataset
+		datasetWithGraph.ProcessingState = model.DatasetProcessingGraphMaterialized
+		datasetWithGraph.GraphSnapshotID = uuid.New()
+		datasetWithGraph.GraphProvenanceHash = "sha256-graph-provenance"
+		withGraph := runAgentAndReturnFirstRunForDataset(&datasetWithGraph, nil, nil)
+
+		Expect(withoutGraph.EffectiveBaseID).To(Equal("sha256-effective-base"))
+		Expect(withoutGraph.DataSnapshotSet).To(Equal([]model.DatasetSnapshotRef{{
+			DatasetID:           dataset.DatasetID,
+			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
+			GraphSnapshotID:     uuid.Nil,
+		}}))
+		Expect(withGraph.DataSnapshotSet).To(Equal([]model.DatasetSnapshotRef{{
+			DatasetID:           dataset.DatasetID,
+			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
+			GraphSnapshotID:     datasetWithGraph.GraphSnapshotID,
+		}}))
+		Expect(withoutGraph.DataSnapshotHash).NotTo(BeEmpty())
+		Expect(withGraph.DataSnapshotHash).NotTo(Equal(withoutGraph.DataSnapshotHash))
 	})
 
 	It("does not record an agent run when tool resolution fails before the run starts", func() {
@@ -2803,7 +2834,10 @@ func validToolUsingAgentSpec(inferenceModel *model.InferenceModel) *model.AgentS
 }
 
 func runAgentAndReturnFirstToolsetHash(toolSpecs []model.ToolSpec, bindings []model.ToolBinding) string {
-	dataset := validInferenceDataset()
+	return runAgentAndReturnFirstRunForDataset(validInferenceDataset(), toolSpecs, bindings).ToolsetHash
+}
+
+func runAgentAndReturnFirstRunForDataset(dataset *model.InferenceDataset, toolSpecs []model.ToolSpec, bindings []model.ToolBinding) *model.AgentRun {
 	inferenceModel := validInferenceModel()
 	inferenceModel.UserID = dataset.UserID
 	inferenceModel.OrgID = dataset.OrgID
@@ -2847,7 +2881,7 @@ func runAgentAndReturnFirstToolsetHash(toolSpecs []model.ToolSpec, bindings []mo
 	Expect(err).NotTo(HaveOccurred())
 	Expect(response).NotTo(BeNil())
 	Expect(trajectoryRepository.runs).NotTo(BeEmpty())
-	return trajectoryRepository.runs[0].ToolsetHash
+	return trajectoryRepository.runs[0]
 }
 
 func validInferenceDataset() *model.InferenceDataset {

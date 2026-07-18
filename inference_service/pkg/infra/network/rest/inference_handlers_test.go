@@ -324,14 +324,22 @@ var _ = Describe("InferenceHandlers", func() {
 	It("reads an agent run trajectory for the trusted org", func() {
 		runID := uuid.New()
 		stepID := uuid.New()
+		datasetID := uuid.New()
+		embeddingSnapshotID := uuid.New()
 		usecase.agentTrajectory = &model.AgentTrajectory{
 			Run: &model.AgentRun{
-				RunID:                   runID,
-				UserID:                  userID,
-				OrgID:                   orgID,
-				EndpointID:              endpointID,
-				AgentSpecHash:           "spec-hash",
-				ToolsetHash:             "toolset-hash",
+				RunID:           runID,
+				UserID:          userID,
+				OrgID:           orgID,
+				EndpointID:      endpointID,
+				AgentSpecHash:   "spec-hash",
+				ToolsetHash:     "toolset-hash",
+				EffectiveBaseID: "sha256-effective-base",
+				DataSnapshotSet: []model.DatasetSnapshotRef{{
+					DatasetID:           datasetID,
+					EmbeddingSnapshotID: embeddingSnapshotID,
+				}},
+				DataSnapshotHash:        "sha256-data-snapshot",
 				TrajectorySchemaVersion: "trajectory-v1",
 				DecodingParams:          []byte(`{"temperature":0}`),
 				Status:                  model.AgentRunStatusCompleted,
@@ -358,6 +366,8 @@ var _ = Describe("InferenceHandlers", func() {
 		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
 		Expect(dto.Run.RunID).To(Equal(runID.String()))
 		Expect(dto.Run.AgentSpecHash).To(Equal("spec-hash"))
+		Expect(dto.Run.EffectiveBaseID).To(Equal("sha256-effective-base"))
+		Expect(dto.Run.DataSnapshotHash).To(Equal("sha256-data-snapshot"))
 		Expect(dto.Steps).To(HaveLen(1))
 		Expect(dto.Steps[0].StepID).To(Equal(stepID.String()))
 	})

@@ -65,6 +65,15 @@ func (u *inferenceUsecase) PrepareAgentRunActivity(ctx context.Context, input Pr
 	if u.generationAdapters[generationProtocol] == nil {
 		return AgentRunWorkflowState{}, domain.ErrModelNotReady.Extend(fmt.Sprintf("serving protocol %q is not supported", generationProtocol))
 	}
+	effectiveBaseID := strings.TrimSpace(inferenceModel.EffectiveBaseID)
+	if effectiveBaseID == "" {
+		return AgentRunWorkflowState{}, domain.ErrModelNotReady.Extend("model effective base is not available")
+	}
+	dataSnapshotSet := agentDataSnapshotSet(readyDatasets)
+	dataSnapshotHash, err := agentDataSnapshotHash(dataSnapshotSet)
+	if err != nil {
+		return AgentRunWorkflowState{}, err
+	}
 	session := &model.AgentSession{
 		RunID:           request.AgentRunID,
 		OrgID:           request.OrgID,
@@ -73,8 +82,17 @@ func (u *inferenceUsecase) PrepareAgentRunActivity(ctx context.Context, input Pr
 		Spec:            spec,
 		Model:           inferenceModel,
 		Datasets:        readyDatasets,
+		DataSnapshotSet: dataSnapshotSet,
 		Messages:        agentInitialMessages(spec, request.QueryText),
 		DecodingOptions: agentDecodingOptions(spec, request),
+	}
+	toolSpecs, err := u.toolInvoker.Available(ctx, appToolResolutionContext(session), spec.ToolBindings)
+	if err != nil {
+		return AgentRunWorkflowState{}, err
+	}
+	toolsetHash, err := agentToolsetHash(toolSpecs)
+	if err != nil {
+		return AgentRunWorkflowState{}, err
 	}
 	return AgentRunWorkflowState{
 		Request:                   request,
@@ -82,6 +100,10 @@ func (u *inferenceUsecase) PrepareAgentRunActivity(ctx context.Context, input Pr
 		ModelID:                   endpoint.ModelID,
 		AgentSpecHash:             spec.ContentHash,
 		DatasetIDs:                datasetIDsFromModels(readyDatasets),
+		ToolsetHash:               toolsetHash,
+		EffectiveBaseID:           effectiveBaseID,
+		DataSnapshotSet:           dataSnapshotSet,
+		DataSnapshotHash:          dataSnapshotHash,
 		MergeStrategy:             endpoint.MergeStrategy,
 		Budgets:                   spec.Budgets,
 		ToolBindings:              spec.ToolBindings,
@@ -265,8 +287,10 @@ func (u *inferenceUsecase) agentWorkflowSession(ctx context.Context, state Agent
 		Spec:              agentWorkflowSpec(state),
 		Model:             agentWorkflowModel(state),
 		Datasets:          datasets,
+		DataSnapshotSet:   state.DataSnapshotSet,
 		Messages:          nil,
 		ResolvedToolSpecs: nil,
+		ToolsetHash:       state.ToolsetHash,
 		DecodingOptions:   state.DecodingOptions,
 		TotalTokens:       state.TotalTokens,
 	}, nil
@@ -398,5 +422,6 @@ func agentWorkflowModel(state AgentRunWorkflowState) *model.InferenceModel {
 		ServingProtocol: servingProtocol,
 		ServingModel:    state.ServingModel,
 		ServingTarget:   state.ServingTarget,
+		EffectiveBaseID: state.EffectiveBaseID,
 	}
 }

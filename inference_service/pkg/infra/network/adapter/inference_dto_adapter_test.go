@@ -419,18 +419,28 @@ budgets:
 		orgID := uuid.New()
 		userID := uuid.New()
 		endpointID := uuid.New()
+		datasetID := uuid.New()
+		embeddingSnapshotID := uuid.New()
+		graphSnapshotID := uuid.New()
 		stepID := uuid.New()
 		invocationID := uuid.New()
 		startedAt := time.Date(2026, 7, 15, 10, 11, 12, 0, time.UTC)
 		deadlineAt := startedAt.Add(60 * time.Second)
 		payload, err := trajectoryAdapter.ToDTO(context.Background(), &model.AgentTrajectory{
 			Run: &model.AgentRun{
-				RunID:                   runID,
-				OrgID:                   orgID,
-				UserID:                  userID,
-				EndpointID:              endpointID,
-				AgentSpecHash:           "sha256:agent-spec",
-				ToolsetHash:             "sha256:toolset",
+				RunID:           runID,
+				OrgID:           orgID,
+				UserID:          userID,
+				EndpointID:      endpointID,
+				AgentSpecHash:   "sha256:agent-spec",
+				ToolsetHash:     "sha256:toolset",
+				EffectiveBaseID: "sha256-effective-base",
+				DataSnapshotSet: []model.DatasetSnapshotRef{{
+					DatasetID:           datasetID,
+					EmbeddingSnapshotID: embeddingSnapshotID,
+					GraphSnapshotID:     graphSnapshotID,
+				}},
+				DataSnapshotHash:        "sha256-data-snapshot",
 				TrajectorySchemaVersion: "agent_trajectory_v1",
 				DecodingParams:          []byte(`{"temperature":0,"seed":123}`),
 				Status:                  model.AgentRunStatusCompleted,
@@ -472,6 +482,13 @@ budgets:
 		run := dto["run"].(map[string]any)
 		Expect(run).To(HaveKeyWithValue("run_id", runID.String()))
 		Expect(run).To(HaveKeyWithValue("agent_spec_hash", "sha256:agent-spec"))
+		Expect(run).To(HaveKeyWithValue("effective_base_id", "sha256-effective-base"))
+		Expect(run).To(HaveKeyWithValue("data_snapshot_hash", "sha256-data-snapshot"))
+		snapshots := run["data_snapshot_set"].([]any)
+		Expect(snapshots).To(HaveLen(1))
+		Expect(snapshots[0].(map[string]any)).To(HaveKeyWithValue("dataset_id", datasetID.String()))
+		Expect(snapshots[0].(map[string]any)).To(HaveKeyWithValue("embedding_snapshot_id", embeddingSnapshotID.String()))
+		Expect(snapshots[0].(map[string]any)).To(HaveKeyWithValue("graph_snapshot_id", graphSnapshotID.String()))
 		Expect(run).To(HaveKeyWithValue("wall_ms", BeNumerically("==", 60000)))
 		Expect(run).To(HaveKeyWithValue("deadline_at", deadlineAt.Format(time.RFC3339Nano)))
 		Expect(run["decoding_params"]).To(HaveKeyWithValue("seed", BeNumerically("==", 123)))

@@ -69,7 +69,19 @@ func (u *inferenceUsecase) recordAgentRun(ctx context.Context, session *model.Ag
 	if err != nil {
 		return nil, fmt.Errorf("marshal decoding params: %w", err)
 	}
-	toolsetHash, err := agentToolsetHash(session.ResolvedToolSpecs)
+	toolsetHash := strings.TrimSpace(session.ToolsetHash)
+	if toolsetHash == "" {
+		var err error
+		toolsetHash, err = agentToolsetHash(session.ResolvedToolSpecs)
+		if err != nil {
+			return nil, err
+		}
+	}
+	dataSnapshotSet := session.DataSnapshotSet
+	if len(dataSnapshotSet) == 0 {
+		dataSnapshotSet = agentDataSnapshotSet(session.Datasets)
+	}
+	dataSnapshotHash, err := agentDataSnapshotHash(dataSnapshotSet)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +92,9 @@ func (u *inferenceUsecase) recordAgentRun(ctx context.Context, session *model.Ag
 		EndpointID:              session.Endpoint.EndpointID,
 		AgentSpecHash:           session.Spec.ContentHash,
 		ToolsetHash:             toolsetHash,
+		EffectiveBaseID:         strings.TrimSpace(session.Model.EffectiveBaseID),
+		DataSnapshotSet:         dataSnapshotSet,
+		DataSnapshotHash:        dataSnapshotHash,
 		TrajectorySchemaVersion: agentTrajectorySchemaVersion,
 		DecodingParams:          decodingParams,
 		Status:                  status,
@@ -368,6 +383,57 @@ func agentToolsetHash(toolSpecs []model.ToolSpec) (string, error) {
 	canonical, err := serializers.NewJSONSerializer().Serialize(resolved)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize resolved toolset: %w", err)
+	}
+	return userevents.SHA256String(string(canonical)), nil
+}
+
+func agentDataSnapshotSet(datasets []*model.InferenceDataset) []model.DatasetSnapshotRef {
+	log.Trace("agentDataSnapshotSet")
+
+	set := make([]model.DatasetSnapshotRef, 0, len(datasets))
+	for _, dataset := range datasets {
+		if dataset == nil {
+			continue
+		}
+		set = append(set, model.DatasetSnapshotRef{
+			DatasetID:           dataset.DatasetID,
+			EmbeddingSnapshotID: dataset.EmbeddingSnapshotID,
+			GraphSnapshotID:     dataset.GraphSnapshotID,
+		})
+	}
+	sort.Slice(set, func(i, j int) bool {
+		return set[i].DatasetID.String() < set[j].DatasetID.String()
+	})
+	return set
+}
+
+func agentDataSnapshotHash(set []model.DatasetSnapshotRef) (string, error) {
+	log.Trace("agentDataSnapshotHash")
+
+	type hashedSnapshotRef struct {
+		DatasetID           string  `json:"dataset_id"`
+		EmbeddingSnapshotID string  `json:"embedding_snapshot_id"`
+		GraphSnapshotID     *string `json:"graph_snapshot_id"`
+	}
+	resolved := make([]hashedSnapshotRef, 0, len(set))
+	for _, snapshot := range set {
+		graphSnapshotID := (*string)(nil)
+		if snapshot.GraphSnapshotID != uuid.Nil {
+			value := snapshot.GraphSnapshotID.String()
+			graphSnapshotID = &value
+		}
+		resolved = append(resolved, hashedSnapshotRef{
+			DatasetID:           snapshot.DatasetID.String(),
+			EmbeddingSnapshotID: snapshot.EmbeddingSnapshotID.String(),
+			GraphSnapshotID:     graphSnapshotID,
+		})
+	}
+	sort.Slice(resolved, func(i, j int) bool {
+		return resolved[i].DatasetID < resolved[j].DatasetID
+	})
+	canonical, err := serializers.NewJSONSerializer().Serialize(resolved)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize data snapshot set: %w", err)
 	}
 	return userevents.SHA256String(string(canonical)), nil
 }

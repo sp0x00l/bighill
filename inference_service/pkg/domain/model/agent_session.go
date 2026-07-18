@@ -10,8 +10,10 @@ type AgentSession struct {
 	Spec              *AgentSpec
 	Model             *InferenceModel
 	Datasets          []*InferenceDataset
+	DataSnapshotSet   []DatasetSnapshotRef
 	Messages          []ChatMessage
 	ResolvedToolSpecs []ToolSpec
+	ToolsetHash       string
 	DecodingOptions   GenerationOptions
 	TotalTokens       int
 }

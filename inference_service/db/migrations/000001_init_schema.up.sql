@@ -439,6 +439,9 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_runs (
     endpoint_id uuid REFERENCES bighill_inference_db.published_inference_endpoints(endpoint_id),
     agent_spec_hash text NOT NULL,
     toolset_hash text NOT NULL,
+    effective_base_id text NOT NULL DEFAULT '',
+    data_snapshot_set jsonb NOT NULL DEFAULT '[]'::jsonb,
+    data_snapshot_hash text NOT NULL DEFAULT '',
     trajectory_schema_version text NOT NULL,
     decoding_params jsonb NOT NULL,
     status agent_run_status_enum NOT NULL DEFAULT 'RUNNING',
@@ -451,6 +454,10 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_runs (
     CONSTRAINT agent_runs_tuple_ck CHECK (
         btrim(agent_spec_hash) <> ''
         AND btrim(toolset_hash) <> ''
+        AND btrim(effective_base_id) <> ''
+        AND jsonb_typeof(data_snapshot_set) = 'array'
+        AND data_snapshot_set <> '[]'::jsonb
+        AND btrim(data_snapshot_hash) <> ''
         AND btrim(trajectory_schema_version) <> ''
         AND jsonb_typeof(decoding_params) = 'object'
         AND decoding_params <> '{}'::jsonb
@@ -464,6 +471,12 @@ ON bighill_inference_db.agent_runs(org_id, endpoint_id, started_at);
 
 CREATE INDEX IF NOT EXISTS index_agent_runs_status_deadline
 ON bighill_inference_db.agent_runs(status, deadline_at);
+
+CREATE INDEX IF NOT EXISTS index_agent_runs_effective_base_id
+ON bighill_inference_db.agent_runs(effective_base_id);
+
+CREATE INDEX IF NOT EXISTS index_agent_runs_data_snapshot_hash
+ON bighill_inference_db.agent_runs(data_snapshot_hash);
 
 CREATE TABLE IF NOT EXISTS bighill_inference_db.agent_steps (
     step_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),

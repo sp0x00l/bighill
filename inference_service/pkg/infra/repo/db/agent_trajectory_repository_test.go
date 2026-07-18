@@ -52,9 +52,12 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 			HaveKeyWithValue("org_id", pgtype.UUID{Bytes: run.OrgID, Valid: true}),
 			HaveKeyWithValue("user_id", pgtype.UUID{Bytes: run.UserID, Valid: true}),
 			HaveKeyWithValue("agent_spec_hash", run.AgentSpecHash),
+			HaveKeyWithValue("effective_base_id", run.EffectiveBaseID),
+			HaveKeyWithValue("data_snapshot_hash", run.DataSnapshotHash),
 			HaveKeyWithValue("status", model.AgentRunStatusRunning.String()),
 			HaveKeyWithValue("wall_ms", run.WallMs),
 		))
+		Expect(args["data_snapshot_set"]).To(MatchJSON(`[{"dataset_id":"` + run.DataSnapshotSet[0].DatasetID.String() + `","embedding_snapshot_id":"` + run.DataSnapshotSet[0].EmbeddingSnapshotID.String() + `","graph_snapshot_id":null}]`))
 	})
 
 	It("records agent runs with a provided idempotency-derived run id", func() {
@@ -96,6 +99,26 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 	It("rejects agent runs without decoding params before querying", func() {
 		run := validAgentRun()
 		run.DecodingParams = nil
+
+		_, err := repository.RecordAgentRun(ctx, run)
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(pool.queryRowCalled).To(BeFalse())
+	})
+
+	It("rejects agent runs without an effective base before querying", func() {
+		run := validAgentRun()
+		run.EffectiveBaseID = ""
+
+		_, err := repository.RecordAgentRun(ctx, run)
+
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(pool.queryRowCalled).To(BeFalse())
+	})
+
+	It("rejects agent runs without a data snapshot set before querying", func() {
+		run := validAgentRun()
+		run.DataSnapshotSet = nil
 
 		_, err := repository.RecordAgentRun(ctx, run)
 
@@ -201,6 +224,9 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 			endpointID.String(),
 			"spec-hash",
 			"toolset-hash",
+			"sha256-effective-base",
+			`[{"dataset_id":"` + orgID.String() + `","embedding_snapshot_id":"` + userID.String() + `","graph_snapshot_id":null}]`,
+			"sha256-data-snapshot",
 			"trajectory-v1",
 			`{"temperature":0}`,
 			model.AgentRunStatusCompleted.String(),
@@ -246,6 +272,13 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 		Expect(trajectory.Run.OrgID).To(Equal(orgID))
 		Expect(trajectory.Run.Status).To(Equal(model.AgentRunStatusCompleted))
 		Expect(trajectory.Run.StopReason).To(Equal(model.AgentStopReasonFinalAnswer))
+		Expect(trajectory.Run.EffectiveBaseID).To(Equal("sha256-effective-base"))
+		Expect(trajectory.Run.DataSnapshotHash).To(Equal("sha256-data-snapshot"))
+		Expect(trajectory.Run.DataSnapshotSet).To(Equal([]model.DatasetSnapshotRef{{
+			DatasetID:           orgID,
+			EmbeddingSnapshotID: userID,
+			GraphSnapshotID:     uuid.Nil,
+		}}))
 		Expect(trajectory.Run.DecodingParams).To(MatchJSON(`{"temperature":0}`))
 		Expect(trajectory.Run.DeadlineAt).To(Equal(deadlineAt))
 		Expect(trajectory.Run.WallMs).To(Equal(60000))
@@ -286,12 +319,20 @@ var _ = Describe("AgentTrajectoryRepository", func() {
 })
 
 func validAgentRun() *model.AgentRun {
+	datasetID := uuid.New()
+	embeddingSnapshotID := uuid.New()
 	return &model.AgentRun{
-		OrgID:                   uuid.New(),
-		UserID:                  uuid.New(),
-		EndpointID:              uuid.New(),
-		AgentSpecHash:           "sha256:spec",
-		ToolsetHash:             "sha256:toolset",
+		OrgID:           uuid.New(),
+		UserID:          uuid.New(),
+		EndpointID:      uuid.New(),
+		AgentSpecHash:   "sha256:spec",
+		ToolsetHash:     "sha256:toolset",
+		EffectiveBaseID: "sha256-effective-base",
+		DataSnapshotSet: []model.DatasetSnapshotRef{{
+			DatasetID:           datasetID,
+			EmbeddingSnapshotID: embeddingSnapshotID,
+		}},
+		DataSnapshotHash:        "sha256-data-snapshot",
 		TrajectorySchemaVersion: "agent_trajectory_v1",
 		DecodingParams:          []byte(`{"temperature":0}`),
 		Status:                  model.AgentRunStatusRunning,

@@ -8,6 +8,7 @@ import (
 	"inference_service/pkg/domain/model"
 	serializers "lib/shared_lib/serializer"
 
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,21 +27,30 @@ type AgentTrajectoryDTO struct {
 }
 
 type AgentRunDTO struct {
-	RunID                   string          `json:"run_id"`
-	UserID                  string          `json:"user_id"`
-	OrgID                   string          `json:"org_id"`
-	EndpointID              string          `json:"endpoint_id,omitempty"`
-	AgentSpecHash           string          `json:"agent_spec_hash"`
-	ToolsetHash             string          `json:"toolset_hash"`
-	TrajectorySchemaVersion string          `json:"trajectory_schema_version"`
-	DecodingParams          json.RawMessage `json:"decoding_params"`
-	Status                  string          `json:"status"`
-	StopReason              string          `json:"stop_reason,omitempty"`
-	StartedAt               string          `json:"started_at"`
-	DeadlineAt              string          `json:"deadline_at"`
-	FinishedAt              string          `json:"finished_at,omitempty"`
-	TotalTokens             int             `json:"total_tokens"`
-	WallMs                  int             `json:"wall_ms"`
+	RunID                   string                  `json:"run_id"`
+	UserID                  string                  `json:"user_id"`
+	OrgID                   string                  `json:"org_id"`
+	EndpointID              string                  `json:"endpoint_id,omitempty"`
+	AgentSpecHash           string                  `json:"agent_spec_hash"`
+	ToolsetHash             string                  `json:"toolset_hash"`
+	EffectiveBaseID         string                  `json:"effective_base_id"`
+	DataSnapshotSet         []DatasetSnapshotRefDTO `json:"data_snapshot_set"`
+	DataSnapshotHash        string                  `json:"data_snapshot_hash"`
+	TrajectorySchemaVersion string                  `json:"trajectory_schema_version"`
+	DecodingParams          json.RawMessage         `json:"decoding_params"`
+	Status                  string                  `json:"status"`
+	StopReason              string                  `json:"stop_reason,omitempty"`
+	StartedAt               string                  `json:"started_at"`
+	DeadlineAt              string                  `json:"deadline_at"`
+	FinishedAt              string                  `json:"finished_at,omitempty"`
+	TotalTokens             int                     `json:"total_tokens"`
+	WallMs                  int                     `json:"wall_ms"`
+}
+
+type DatasetSnapshotRefDTO struct {
+	DatasetID           string  `json:"dataset_id"`
+	EmbeddingSnapshotID string  `json:"embedding_snapshot_id"`
+	GraphSnapshotID     *string `json:"graph_snapshot_id"`
 }
 
 type AgentStepDTO struct {
@@ -114,6 +124,9 @@ func agentRunDTO(run *model.AgentRun) AgentRunDTO {
 		EndpointID:              optionalUUIDString(run.EndpointID),
 		AgentSpecHash:           run.AgentSpecHash,
 		ToolsetHash:             run.ToolsetHash,
+		EffectiveBaseID:         run.EffectiveBaseID,
+		DataSnapshotSet:         datasetSnapshotSetDTO(run.DataSnapshotSet),
+		DataSnapshotHash:        run.DataSnapshotHash,
 		TrajectorySchemaVersion: run.TrajectorySchemaVersion,
 		DecodingParams:          jsonRawOrEmptyObject(run.DecodingParams),
 		Status:                  run.Status.String(),
@@ -124,6 +137,25 @@ func agentRunDTO(run *model.AgentRun) AgentRunDTO {
 		TotalTokens:             run.TotalTokens,
 		WallMs:                  run.WallMs,
 	}
+}
+
+func datasetSnapshotSetDTO(set []model.DatasetSnapshotRef) []DatasetSnapshotRefDTO {
+	log.Trace("datasetSnapshotSetDTO")
+
+	dtos := make([]DatasetSnapshotRefDTO, 0, len(set))
+	for _, snapshot := range set {
+		graphSnapshotID := (*string)(nil)
+		if snapshot.GraphSnapshotID != uuid.Nil {
+			value := snapshot.GraphSnapshotID.String()
+			graphSnapshotID = &value
+		}
+		dtos = append(dtos, DatasetSnapshotRefDTO{
+			DatasetID:           snapshot.DatasetID.String(),
+			EmbeddingSnapshotID: snapshot.EmbeddingSnapshotID.String(),
+			GraphSnapshotID:     graphSnapshotID,
+		})
+	}
+	return dtos
 }
 
 func agentStepDTO(step *model.AgentStep) AgentStepDTO {
