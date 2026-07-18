@@ -1,4 +1,4 @@
-CREATE TYPE tool_executor_kind_enum AS ENUM ('UNKNOWN', 'HTTP_GET', 'CALCULATOR');
+CREATE TYPE tool_executor_kind_enum AS ENUM ('UNKNOWN', 'HTTP_GET', 'CALCULATOR', 'MCP');
 CREATE TYPE tool_error_type_enum AS ENUM ('TRANSIENT', 'PERMANENT', 'POLICY_DENIED');
 CREATE TYPE tool_invocation_audit_status_enum AS ENUM ('COMPLETED', 'DENIED', 'FAILED');
 

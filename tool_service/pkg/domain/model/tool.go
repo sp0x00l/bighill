@@ -14,6 +14,7 @@ const (
 	ToolExecutorKindUnknown ToolExecutorKind = iota
 	ToolExecutorKindHTTPGet
 	ToolExecutorKindCalculator
+	ToolExecutorKindMCP
 )
 
 func (k ToolExecutorKind) String() string {
@@ -22,6 +23,8 @@ func (k ToolExecutorKind) String() string {
 		return "HTTP_GET"
 	case ToolExecutorKindCalculator:
 		return "CALCULATOR"
+	case ToolExecutorKindMCP:
+		return "MCP"
 	default:
 		return "UNKNOWN"
 	}
@@ -37,6 +40,8 @@ func ToToolExecutorKind(value string) (ToolExecutorKind, error) {
 		return ToolExecutorKindHTTPGet, nil
 	case "CALCULATOR":
 		return ToolExecutorKindCalculator, nil
+	case "MCP":
+		return ToolExecutorKindMCP, nil
 	default:
 		return ToolExecutorKindUnknown, fmt.Errorf("invalid tool executor kind %q", value)
 	}
@@ -178,7 +183,10 @@ type ResponseCapPolicy struct {
 }
 
 type CredentialPolicy struct {
-	Mode string
+	Mode       string
+	SecretRef  string
+	HeaderName string
+	Prefix     string
 }
 
 type SchemaPolicy struct {

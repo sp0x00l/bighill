@@ -22,10 +22,11 @@ var _ = Describe("ToolRegistry", func() {
 		orgID := uuid.New()
 		userID := uuid.New()
 		deniedOrgID := uuid.New()
-		registry := NewToolRegistry([]*model.ToolDefinition{
+		registry, err := NewToolRegistry([]*model.ToolDefinition{
 			{Name: "http_get", Enabled: true, AllowedOrgIDs: []uuid.UUID{orgID}},
 			{Name: "calculator", Enabled: true, AllowedOrgIDs: []uuid.UUID{deniedOrgID}},
 		})
+		Expect(err).NotTo(HaveOccurred())
 
 		tool, err := registry.ResolveTool(context.Background(), orgID, userID, "http_get")
 		Expect(err).NotTo(HaveOccurred())
@@ -41,9 +42,19 @@ var _ = Describe("ToolRegistry", func() {
 	})
 
 	It("denies tools with an empty tenant allowlist", func() {
-		registry := NewToolRegistry([]*model.ToolDefinition{{Name: "http_get", Enabled: true}})
+		registry, err := NewToolRegistry([]*model.ToolDefinition{{Name: "http_get", Enabled: true}})
+		Expect(err).NotTo(HaveOccurred())
 
-		_, err := registry.ResolveTool(context.Background(), uuid.New(), uuid.New(), "http_get")
+		_, err = registry.ResolveTool(context.Background(), uuid.New(), uuid.New(), "http_get")
 		Expect(err).To(MatchError(MatchRegexp(domain.ErrToolDenied.Error() + ".*")))
+	})
+
+	It("rejects duplicate tool names at registry construction", func() {
+		_, err := NewToolRegistry([]*model.ToolDefinition{
+			{Name: "http_get", Enabled: true},
+			{Name: "HTTP_GET", Enabled: true},
+		})
+
+		Expect(err).To(MatchError(ContainSubstring(`duplicate tool name "HTTP_GET"`)))
 	})
 })

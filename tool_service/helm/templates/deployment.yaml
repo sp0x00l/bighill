@@ -105,6 +105,23 @@ spec:
               value: {{ .Values.env.httpToolTimeoutMs | quote }}
             - name: TOOL_SERVICE_HTTP_TOOL_MAX_RESPONSE_BYTES
               value: {{ .Values.env.httpToolMaxResponseBytes | quote }}
+            - name: TOOL_SERVICE_PINNED_MCP_SERVER_ENDPOINT
+              value: {{ .Values.env.pinnedMcpServerEndpoint | quote }}
+            - name: TOOL_SERVICE_PINNED_MCP_SERVER_TRANSPORT
+              value: {{ .Values.env.pinnedMcpServerTransport | quote }}
+            - name: TOOL_SERVICE_PINNED_MCP_TOOL_NAMES
+              value: {{ .Values.env.pinnedMcpToolNames | quote }}
+            - name: TOOL_SERVICE_PINNED_MCP_CREDENTIAL_REF
+              value: {{ .Values.env.pinnedMcpCredentialRef | quote }}
+            - name: TOOL_SERVICE_PINNED_MCP_ALLOWED_ORG_IDS
+              value: {{ .Values.env.pinnedMcpAllowedOrgIds | quote }}
+{{- if and .Values.env.pinnedMcpCredentialRef .Values.env.pinnedMcpCredentialSecret.name .Values.env.pinnedMcpCredentialSecret.key }}
+            - name: {{ .Values.env.pinnedMcpCredentialRef | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.pinnedMcpCredentialSecret.name }}
+                  key: {{ .Values.env.pinnedMcpCredentialSecret.key }}
+{{- end }}
             - name: TOOL_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: TOOL_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT

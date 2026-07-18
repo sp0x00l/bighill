@@ -57,6 +57,33 @@ Each invocation is audited with `invocation_id`, org/user, tool name, implementa
 executor kind, status, error classification, latency, egress host, trace id, argument hash, and a
 redacted argument preview. Raw arguments are not stored in the boundary audit table.
 
+### Pinned MCP Tools
+
+`tool_service` can also expose one operator-pinned HTTP MCP server. This is deliberately not an MCP
+catalog or governance plane. There is no self-service publish flow, tenant grant lifecycle, dynamic
+credential binding, resources, prompts, sampling, stdio transport, or hosted runtime here. Those
+belong to the future `tool_catalog_service` extension.
+
+The pinned MCP slice works like this:
+
+- startup reads `TOOL_SERVICE_PINNED_MCP_*` config
+- the service calls the MCP server's real `tools/list`
+- only declared tools returned by the server are registered
+- each registered tool uses the server-provided input schema
+- `implementation_version` is `mcp:{server_host}:{schema_hash}`
+- the configured org allowlist decides who can see or invoke the tool
+- invocation calls the MCP server's real `tools/call`
+
+If `tools/list` fails, a declared tool is absent, or a tool has no input schema, no placeholder tool
+is registered. The tool is unavailable rather than fabricated.
+
+Pinned MCP tools inherit the same boundary controls as `http_get`: JSON Schema validation, egress
+allowlist, dial-time SSRF blocking, timeout, response cap, classified failure results, and durable
+boundary audit. The credential config is an opaque reference only. The actual secret value must be
+provided by the runtime secret environment under that referenced name; it is not stored in normal
+tool-service config. The Helm chart can mount a Kubernetes secret into an environment variable named
+by `TOOL_SERVICE_PINNED_MCP_CREDENTIAL_REF`.
+
 ## Contracts
 
 The service has two contract layers.
@@ -120,6 +147,11 @@ Important variables:
 - `TOOL_SERVICE_ALLOWED_ORG_IDS`: comma-separated org allowlist
 - `TOOL_SERVICE_HTTP_TOOL_TIMEOUT_MS`: per-request timeout
 - `TOOL_SERVICE_HTTP_TOOL_MAX_RESPONSE_BYTES`: response size cap
+- `TOOL_SERVICE_PINNED_MCP_SERVER_ENDPOINT`: optional HTTP MCP JSON-RPC endpoint
+- `TOOL_SERVICE_PINNED_MCP_SERVER_TRANSPORT`: must be `http` for this slice
+- `TOOL_SERVICE_PINNED_MCP_TOOL_NAMES`: comma-separated declared MCP tools to expose
+- `TOOL_SERVICE_PINNED_MCP_CREDENTIAL_REF`: opaque runtime secret reference for MCP auth
+- `TOOL_SERVICE_PINNED_MCP_ALLOWED_ORG_IDS`: comma-separated org allowlist for pinned MCP tools
 
 Local dev allows only `localhost,127.0.0.1` and the fixed test org id. Staging/prod default to empty
 allowlists, which means deny by default until an operator configures them.
@@ -141,6 +173,7 @@ Audit write failures are logged but do not change the tool invocation result.
 The service fails closed:
 
 - unknown tool names are rejected
+- duplicate tool names are rejected at registry construction
 - disabled tools are not listed or invokable
 - empty allowlists deny access
 - org/user IDs must be valid
@@ -170,9 +203,10 @@ pkg/domain/model      tool definitions, command/result/audit models, enums
 pkg/app               usecase, ports, audit behavior
 pkg/infra/repo/static static allowlist-backed registry
 pkg/infra/repo/db     durable boundary audit repository
-pkg/infra/executor    tool executors and argument DTO adapters
+pkg/infra/executor    tool executors and argument DTO adapters, including pinned MCP
 pkg/infra/network/grpc gRPC DTO adapter and server
 pkg/infra/policy      boundary policy resolver
+pkg/infra/credential  runtime credential resolution
 ```
 
 The app layer depends on ports. DTO validation happens at infra boundaries.

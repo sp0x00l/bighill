@@ -96,6 +96,21 @@ var _ = Describe("InvocationAuditRepository", func() {
 		Expect(err).To(MatchError(ContainSubstring("record tool invocation audit")))
 		Expect(err).To(MatchError(ContainSubstring("database unavailable")))
 	})
+
+	It("records MCP executor audit kind", func() {
+		err := repository.RecordInvocation(ctx, model.ToolInvocationAudit{
+			InvocationID: uuid.New(),
+			OrgID:        uuid.New(),
+			UserID:       uuid.New(),
+			ToolName:     "search_partner",
+			ExecutorKind: model.ToolExecutorKindMCP,
+			Status:       model.ToolInvocationAuditStatusCompleted,
+			ArgsHash:     "sha256:mcp",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(namedAuditArgs(pool.lastArgs)).To(HaveKeyWithValue("executor_kind", model.ToolExecutorKindMCP.String()))
+	})
 })
 
 type testConnectionPool struct {

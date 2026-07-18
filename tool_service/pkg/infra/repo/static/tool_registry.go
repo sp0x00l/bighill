@@ -2,6 +2,7 @@ package static
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"tool_service/pkg/domain"
@@ -15,7 +16,7 @@ type ToolRegistry struct {
 	tools map[string]*model.ToolDefinition
 }
 
-func NewToolRegistry(tools []*model.ToolDefinition) *ToolRegistry {
+func NewToolRegistry(tools []*model.ToolDefinition) (*ToolRegistry, error) {
 	log.Trace("NewToolRegistry")
 
 	indexed := make(map[string]*model.ToolDefinition, len(tools))
@@ -23,9 +24,13 @@ func NewToolRegistry(tools []*model.ToolDefinition) *ToolRegistry {
 		if tool == nil {
 			continue
 		}
-		indexed[toolKey(tool.Name)] = tool
+		key := toolKey(tool.Name)
+		if _, exists := indexed[key]; exists {
+			return nil, fmt.Errorf("duplicate tool name %q", tool.Name)
+		}
+		indexed[key] = tool
 	}
-	return &ToolRegistry{tools: indexed}
+	return &ToolRegistry{tools: indexed}, nil
 }
 
 func (r *ToolRegistry) ListAvailableTools(_ context.Context, orgID uuid.UUID, userID uuid.UUID) ([]*model.ToolDefinition, error) {

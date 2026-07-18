@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"strings"
 	"time"
 
 	"tool_service/pkg/domain/model"
@@ -9,10 +10,14 @@ import (
 )
 
 const credentialModeNone = "NONE"
+const credentialModeBearer = "BEARER"
+const credentialHeaderAuthorization = "Authorization"
+const credentialPrefixBearer = "Bearer "
 
 type BoundaryPolicyConfig struct {
-	HTTPTimeout          time.Duration
-	HTTPMaxResponseBytes int64
+	HTTPTimeout            time.Duration
+	HTTPMaxResponseBytes   int64
+	PinnedMCPCredentialRef string
 }
 
 type BoundaryPolicyResolver struct {
@@ -28,6 +33,17 @@ func NewBoundaryPolicyResolver(config BoundaryPolicyConfig) *BoundaryPolicyResol
 func (r *BoundaryPolicyResolver) ResolvePolicy(tool *model.ToolDefinition) (model.PolicySet, error) {
 	log.Trace("BoundaryPolicyResolver ResolvePolicy")
 
+	credential := model.CredentialPolicy{
+		Mode: credentialModeNone,
+	}
+	if tool.ExecutorKind == model.ToolExecutorKindMCP {
+		credential = model.CredentialPolicy{
+			Mode:       credentialModeBearer,
+			SecretRef:  strings.TrimSpace(r.config.PinnedMCPCredentialRef),
+			HeaderName: credentialHeaderAuthorization,
+			Prefix:     credentialPrefixBearer,
+		}
+	}
 	return model.PolicySet{
 		Egress: model.EgressPolicy{
 			AllowedSchemes: []string{"http", "https"},
@@ -39,9 +55,7 @@ func (r *BoundaryPolicyResolver) ResolvePolicy(tool *model.ToolDefinition) (mode
 		ResponseCap: model.ResponseCapPolicy{
 			MaxBytes: r.config.HTTPMaxResponseBytes,
 		},
-		Credential: model.CredentialPolicy{
-			Mode: credentialModeNone,
-		},
+		Credential: credential,
 		Schema: model.SchemaPolicy{
 			InputSchemaJSON: append([]byte(nil), tool.ParametersJSON...),
 		},

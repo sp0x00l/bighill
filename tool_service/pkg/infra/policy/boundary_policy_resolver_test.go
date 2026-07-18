@@ -18,8 +18,9 @@ func TestBoundaryPolicyResolver(t *testing.T) {
 var _ = Describe("BoundaryPolicyResolver", func() {
 	It("resolves boundary policy from a tool definition and platform config", func() {
 		resolver := NewBoundaryPolicyResolver(BoundaryPolicyConfig{
-			HTTPTimeout:          3 * time.Second,
-			HTTPMaxResponseBytes: 4096,
+			HTTPTimeout:            3 * time.Second,
+			HTTPMaxResponseBytes:   4096,
+			PinnedMCPCredentialRef: "MCP_TOKEN",
 		})
 		tool := &model.ToolDefinition{
 			Name:           "http_get",
@@ -36,6 +37,28 @@ var _ = Describe("BoundaryPolicyResolver", func() {
 		Expect(policy.ResponseCap.MaxBytes).To(Equal(int64(4096)))
 		Expect(policy.Credential.Mode).To(Equal(credentialModeNone))
 		Expect(policy.Schema.InputSchemaJSON).To(MatchJSON(`{"type":"object"}`))
+	})
+
+	It("attaches the configured credential policy for MCP tools", func() {
+		resolver := NewBoundaryPolicyResolver(BoundaryPolicyConfig{
+			HTTPTimeout:            3 * time.Second,
+			HTTPMaxResponseBytes:   4096,
+			PinnedMCPCredentialRef: "MCP_TOKEN",
+		})
+		tool := &model.ToolDefinition{
+			Name:           "partner_tool",
+			ExecutorKind:   model.ToolExecutorKindMCP,
+			EgressHosts:    []string{"mcp.example"},
+			ParametersJSON: []byte(`{"type":"object"}`),
+		}
+
+		policy, err := resolver.ResolvePolicy(tool)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(policy.Credential.Mode).To(Equal(credentialModeBearer))
+		Expect(policy.Credential.SecretRef).To(Equal("MCP_TOKEN"))
+		Expect(policy.Credential.HeaderName).To(Equal(credentialHeaderAuthorization))
+		Expect(policy.Credential.Prefix).To(Equal(credentialPrefixBearer))
 	})
 
 	It("copies mutable tool slices into the resolved policy", func() {
