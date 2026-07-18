@@ -14,7 +14,6 @@ import (
 	rpcLib "lib/shared_lib/rpc"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -118,11 +117,10 @@ func (i *RemoteToolInvoker) Available(ctx context.Context, resolution app.ToolRe
 func (i *RemoteToolInvoker) Invoke(ctx context.Context, invocation app.ToolInvocationContext, call model.ToolCall) (model.ToolResult, error) {
 	log.Trace("RemoteToolInvoker Invoke")
 
-	invocationID := uuid.New()
-	req, err := i.adapter.ToInvokeToolRequest(invocation, call, invocationID)
+	req, err := i.adapter.ToInvokeToolRequest(invocation, call)
 	if err != nil {
 		return model.ToolResult{
-			InvocationID: invocationID,
+			InvocationID: invocation.InvocationID,
 			CallID:       call.ID,
 			Name:         call.Name,
 			Content:      err.Error(),
@@ -135,7 +133,7 @@ func (i *RemoteToolInvoker) Invoke(ctx context.Context, invocation app.ToolInvoc
 		log.WithContext(ctx).WithError(err).Error("tool service invoke failed")
 		mappedErr := remoteToolError(err)
 		return model.ToolResult{
-			InvocationID: invocationID,
+			InvocationID: invocation.InvocationID,
 			CallID:       call.ID,
 			Name:         call.Name,
 			Content:      mappedErr.Error(),
@@ -146,7 +144,7 @@ func (i *RemoteToolInvoker) Invoke(ctx context.Context, invocation app.ToolInvoc
 	result, err := i.adapter.FromInvokeToolResponse(resp, call)
 	if err != nil {
 		return model.ToolResult{
-			InvocationID: invocationID,
+			InvocationID: invocation.InvocationID,
 			CallID:       call.ID,
 			Name:         call.Name,
 			Content:      err.Error(),
@@ -154,7 +152,7 @@ func (i *RemoteToolInvoker) Invoke(ctx context.Context, invocation app.ToolInvoc
 			ErrorType:    model.ToolErrorTypePermanent,
 		}, err
 	}
-	result.InvocationID = invocationID
+	result.InvocationID = invocation.InvocationID
 	return result, nil
 }
 

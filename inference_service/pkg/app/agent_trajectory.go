@@ -288,10 +288,9 @@ func (u *inferenceUsecase) publishAgentToolResultUserEvent(ctx context.Context, 
 	if invocation == nil || session == nil {
 		return
 	}
-	severity := userevents.SeverityInfo
+	severity := agentToolResultSeverity(invocation.ErrorType)
 	state := agentToolResultStateCompleted
 	if invocation.ErrorType != model.ToolErrorTypeUnknown {
-		severity = userevents.SeverityWarning
 		state = agentToolResultStateFailed
 	}
 	event := userevents.Event{
@@ -321,6 +320,21 @@ func (u *inferenceUsecase) publishAgentToolResultUserEvent(ctx context.Context, 
 	}
 	if err := u.userEventPublisher.Publish(ctx, event); err != nil {
 		userevents.LogPublishFailure(ctx, err, event)
+	}
+}
+
+func agentToolResultSeverity(errorType model.ToolErrorType) string {
+	log.Trace("agentToolResultSeverity")
+
+	switch errorType {
+	case model.ToolErrorTypeUnknown:
+		return userevents.SeverityInfo
+	case model.ToolErrorTypeTransient:
+		return userevents.SeverityWarning
+	case model.ToolErrorTypePermanent, model.ToolErrorTypePolicyDenied:
+		return userevents.SeverityError
+	default:
+		return userevents.SeverityWarning
 	}
 }
 

@@ -37,6 +37,62 @@ spec:
               value: {{ .Values.env.serviceName | quote }}
             - name: TOOL_SERVICE_BUILD_VERSION
               value: {{ .Values.image.tag | quote }}
+            - name: TOOL_SERVICE_DB_NAME
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.nameKey }}
+{{- else }}
+              value: {{ .Values.env.dbName | quote }}
+{{- end }}
+            - name: TOOL_SERVICE_DB_USER
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.userKey }}
+{{- else }}
+              value: {{ .Values.env.dbUser | quote }}
+{{- end }}
+            - name: TOOL_SERVICE_DB_PASSWORD
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.passwordKey }}
+{{- else }}
+              value: {{ .Values.env.dbPassword | quote }}
+{{- end }}
+            - name: TOOL_SERVICE_DB_MAX_CONNECTIONS
+              value: {{ .Values.env.dbMaxConnections | quote }}
+            - name: PGHOST
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.hostKey }}
+{{- else }}
+              value: {{ .Values.env.pgHost | quote }}
+{{- end }}
+            - name: PGPORT
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.portKey }}
+{{- else }}
+              value: {{ .Values.env.pgPort | quote }}
+{{- end }}
+            - name: PGSSLMODE
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.sslmodeKey }}
+{{- else }}
+              value: {{ .Values.env.pgSslMode | quote }}
+{{- end }}
             - name: TOOL_SERVICE_GRPC_PORT
               value: {{ .Values.service.grpcPort | quote }}
             - name: TOOL_SERVICE_HEALTHCHECK_PORT
@@ -53,6 +109,8 @@ spec:
               value: {{ .Values.env.healthcheckCpuThreshold | quote }}
             - name: TOOL_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
               value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
+            - name: TOOL_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
             - name: TOOL_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
               value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
           resources:

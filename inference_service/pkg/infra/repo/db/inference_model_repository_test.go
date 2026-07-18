@@ -239,6 +239,8 @@ func assignScanValue(dest any, value any) {
 		}
 	case *bool:
 		*typed = value.(bool)
+	case *[]string:
+		*typed = value.([]string)
 	case *time.Time:
 		*typed = value.(time.Time)
 	default:

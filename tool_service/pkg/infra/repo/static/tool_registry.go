@@ -28,10 +28,9 @@ func NewToolRegistry(tools []*model.ToolDefinition) *ToolRegistry {
 	return &ToolRegistry{tools: indexed}
 }
 
-func (r *ToolRegistry) ListAvailableTools(ctx context.Context, orgID uuid.UUID, userID uuid.UUID) ([]*model.ToolDefinition, error) {
+func (r *ToolRegistry) ListAvailableTools(_ context.Context, orgID uuid.UUID, userID uuid.UUID) ([]*model.ToolDefinition, error) {
 	log.Trace("ToolRegistry ListAvailableTools")
 
-	_ = ctx
 	tools := make([]*model.ToolDefinition, 0, len(r.tools))
 	for _, tool := range r.tools {
 		if tool.Enabled && toolAllowedForActor(tool, orgID, userID) {
@@ -41,10 +40,9 @@ func (r *ToolRegistry) ListAvailableTools(ctx context.Context, orgID uuid.UUID, 
 	return tools, nil
 }
 
-func (r *ToolRegistry) ResolveTool(ctx context.Context, orgID uuid.UUID, userID uuid.UUID, toolName string) (*model.ToolDefinition, error) {
+func (r *ToolRegistry) ResolveTool(_ context.Context, orgID uuid.UUID, userID uuid.UUID, toolName string) (*model.ToolDefinition, error) {
 	log.Trace("ToolRegistry ResolveTool")
 
-	_ = ctx
 	tool, ok := r.tools[toolKey(toolName)]
 	if !ok || !tool.Enabled {
 		return nil, domain.ErrToolNotFound.Extend(toolName)

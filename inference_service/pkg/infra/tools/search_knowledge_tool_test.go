@@ -210,7 +210,8 @@ var _ = Describe("RoutedToolInvoker", func() {
 		routed, err := NewRoutedToolInvoker(searchInvoker, remoteInvoker, []string{SearchKnowledgeToolName})
 		Expect(err).NotTo(HaveOccurred())
 		resolution := app.ToolResolutionContext{OrgID: uuid.New(), UserID: uuid.New()}
-		invocation := app.ToolInvocationContext{OrgID: resolution.OrgID, UserID: resolution.UserID, RunID: uuid.New()}
+		invocationID := uuid.New()
+		invocation := app.ToolInvocationContext{OrgID: resolution.OrgID, UserID: resolution.UserID, RunID: uuid.New(), InvocationID: invocationID}
 
 		specs, err := routed.Available(context.Background(), resolution, []model.ToolBinding{{Name: "search_knowledge"}, {Name: "http_get"}})
 
@@ -228,10 +229,10 @@ var _ = Describe("RoutedToolInvoker", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.IsError).To(BeFalse())
 		Expect(result.ToolImplVersion).To(Equal("http_get:test"))
-		Expect(result.InvocationID).NotTo(Equal(uuid.Nil))
+		Expect(result.InvocationID).To(Equal(invocationID))
 		Expect(result.Content).To(ContainSubstring(`"body":"ok"`))
 		Expect(remoteClient.invokeRequest.GetToolName()).To(Equal("http_get"))
-		Expect(remoteClient.invokeRequest.GetInvocationId()).To(Equal(result.InvocationID.String()))
+		Expect(remoteClient.invokeRequest.GetInvocationId()).To(Equal(invocationID.String()))
 	})
 
 	It("fails closed for remote tools when no remote tool service is configured", func() {

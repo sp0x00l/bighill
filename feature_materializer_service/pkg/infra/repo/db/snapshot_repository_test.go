@@ -342,6 +342,85 @@ func (r embeddingSnapshotRow) Scan(dest ...any) error {
 	return nil
 }
 
+type graphSnapshotRow struct {
+	GraphSnapshotID         uuid.UUID
+	FeatureSnapshotID       uuid.UUID
+	EmbeddingSnapshotID     uuid.UUID
+	DatasetID               uuid.UUID
+	UserID                  uuid.UUID
+	OrgID                   uuid.UUID
+	MaterializationEventSeq int64
+	IdempotencyKey          uuid.UUID
+	ProvenanceHash          string
+	ExtractionModel         string
+	ExtractionPromptVersion string
+	ExtractionSchemaVersion string
+	ChunkCount              int64
+	ChunksProcessed         int64
+	EntityCount             int64
+	EdgeCount               int64
+	ActiveForRetrieval      bool
+	Status                  string
+	FailureReason           string
+}
+
+func (r graphSnapshotRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.GraphSnapshotID.String()
+	*(dest[1].(*string)) = r.FeatureSnapshotID.String()
+	*(dest[2].(*string)) = r.EmbeddingSnapshotID.String()
+	*(dest[3].(*string)) = r.DatasetID.String()
+	*(dest[4].(*string)) = r.UserID.String()
+	*(dest[5].(*string)) = r.OrgID.String()
+	*(dest[6].(*int64)) = r.MaterializationEventSeq
+	*(dest[7].(*string)) = r.IdempotencyKey.String()
+	*(dest[8].(*string)) = r.ProvenanceHash
+	*(dest[9].(*string)) = r.ExtractionModel
+	*(dest[10].(*string)) = r.ExtractionPromptVersion
+	*(dest[11].(*string)) = r.ExtractionSchemaVersion
+	*(dest[12].(*int64)) = r.ChunkCount
+	*(dest[13].(*int64)) = r.ChunksProcessed
+	*(dest[14].(*int64)) = r.EntityCount
+	*(dest[15].(*int64)) = r.EdgeCount
+	*(dest[16].(*bool)) = r.ActiveForRetrieval
+	*(dest[17].(*string)) = r.Status
+	*(dest[18].(*string)) = r.FailureReason
+	return nil
+}
+
+type graphChunkRow struct {
+	EmbeddingRecordID   uuid.UUID
+	EmbeddingSnapshotID uuid.UUID
+	DatasetID           uuid.UUID
+	UserID              uuid.UUID
+	OrgID               uuid.UUID
+	ChunkIndex          int
+	SourceText          string
+}
+
+func (r graphChunkRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.EmbeddingRecordID.String()
+	*(dest[1].(*string)) = r.EmbeddingSnapshotID.String()
+	*(dest[2].(*string)) = r.DatasetID.String()
+	*(dest[3].(*string)) = r.UserID.String()
+	*(dest[4].(*string)) = r.OrgID.String()
+	*(dest[5].(*int)) = r.ChunkIndex
+	*(dest[6].(*string)) = r.SourceText
+	return nil
+}
+
+type uuidTextRow struct {
+	value uuid.UUID
+	err   error
+}
+
+func (r uuidTextRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	*(dest[0].(*string)) = r.value.String()
+	return nil
+}
+
 type int64Row struct {
 	value int64
 	err   error
@@ -947,6 +1026,272 @@ var _ = Describe("SnapshotRepository", func() {
 		})
 	})
 
+	Describe("SavePendingGraphSnapshot", func() {
+		It("reads the embedding snapshot and inserts a pending graph snapshot", func() {
+			graphSnapshotID := uuid.New()
+			strategy := model.GraphExtractionStrategy{
+				ExtractionModel:         "llm-graph-extractor",
+				ExtractionPromptVersion: "graph-prompt-v2",
+				ExtractionSchemaVersion: "graph-schema-v2",
+			}
+			poolMock.NextRows = []pgx.Row{
+				newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID),
+				newGraphSnapshotRow(graphSnapshotID, featureID, embeddingID, datasetID, userID, orgID, idempotencyKey),
+			}
+
+			graphSnapshot, err := repository.SavePendingGraphSnapshot(ctx, tx, embeddingID, idempotencyKey, strategy)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(graphSnapshot.GraphSnapshotID).To(Equal(graphSnapshotID))
+			Expect(graphSnapshot.Status).To(Equal(model.SnapshotStatusPending))
+			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.embedding_snapshots WHERE embedding_snapshot_id = @embedding_snapshot_id"))
+			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("INSERT INTO test_db.graph_snapshots"))
+			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("ON CONFLICT (idempotency_key) DO NOTHING"))
+			args := namedArgs(poolMock.QueryArgs[1])
+			Expect(args).To(SatisfyAll(
+				HaveKeyWithValue("feature_snapshot_id", pgtype.UUID{Bytes: featureID, Valid: true}),
+				HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}),
+				HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}),
+				HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}),
+				HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}),
+				HaveKeyWithValue("idempotency_key", pgtype.UUID{Bytes: idempotencyKey, Valid: true}),
+				HaveKeyWithValue("extraction_model", "llm-graph-extractor"),
+				HaveKeyWithValue("extraction_prompt_version", "graph-prompt-v2"),
+				HaveKeyWithValue("extraction_schema_version", "graph-schema-v2"),
+				HaveKeyWithValue("status", model.SnapshotStatusPending.String()),
+			))
+		})
+
+		It("returns a domain idempotency error when graph snapshot insert is replayed", func() {
+			readyRow := newGraphSnapshotRow(uuid.New(), featureID, embeddingID, datasetID, userID, orgID, idempotencyKey)
+			readyRow.Status = model.SnapshotStatusReady.String()
+			poolMock.NextRows = []pgx.Row{
+				newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID),
+				errorRow{err: pgx.ErrNoRows},
+				readyRow,
+			}
+
+			graphSnapshot, err := repository.SavePendingGraphSnapshot(ctx, tx, embeddingID, idempotencyKey, model.GraphExtractionStrategy{})
+
+			Expect(graphSnapshot).To(BeNil())
+			existing, ok := domain.IsGraphAlreadyMaterialized(err)
+			Expect(ok).To(BeTrue())
+			Expect(existing.GraphSnapshotID).To(Equal(readyRow.GraphSnapshotID))
+			Expect(poolMock.QueryRowCalledCount).To(Equal(3))
+			Expect(poolMock.QueryCalls[2]).To(ContainSubstring("FROM test_db.graph_snapshots WHERE idempotency_key = @idempotency_key"))
+		})
+
+		It("maps missing embedding snapshots before inserting graph snapshots", func() {
+			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
+
+			graphSnapshot, err := repository.SavePendingGraphSnapshot(ctx, tx, embeddingID, idempotencyKey, model.GraphExtractionStrategy{})
+
+			Expect(graphSnapshot).To(BeNil())
+			Expect(errors.Is(err, domain.ErrEmbeddingSnapshotNotFound)).To(BeTrue())
+			Expect(poolMock.QueryRowCalledCount).To(Equal(1))
+		})
+	})
+
+	Describe("ReadEmbeddingChunks", func() {
+		It("reads chunks for graph extraction from embedding records", func() {
+			recordID := uuid.New()
+			poolMock.NextQueryRows = &testRows{rows: []pgx.Row{graphChunkRow{
+				EmbeddingRecordID:   recordID,
+				EmbeddingSnapshotID: embeddingID,
+				DatasetID:           datasetID,
+				UserID:              userID,
+				OrgID:               orgID,
+				ChunkIndex:          4,
+				SourceText:          "Alice introduced Beta Corp.",
+			}}}
+
+			chunks, err := repository.ReadEmbeddingChunks(ctx, embeddingID)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(chunks).To(HaveLen(1))
+			Expect(chunks[0].EmbeddingRecordID).To(Equal(recordID))
+			Expect(chunks[0].ChunkIndex).To(Equal(4))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.embedding_records"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY chunk_index"))
+			Expect(namedArgs(poolMock.QueryArgs[0])).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
+		})
+
+		It("surfaces embedding chunk iterator errors", func() {
+			rows := &testRows{err: errors.New("cursor failed")}
+			poolMock.NextQueryRows = rows
+
+			chunks, err := repository.ReadEmbeddingChunks(ctx, embeddingID)
+
+			Expect(chunks).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring("read embedding chunks rows")))
+		})
+	})
+
+	Describe("SaveGraphMaterialization", func() {
+		It("persists graph nodes, node chunks, and edges with tenant-scoped args", func() {
+			graphSnapshotID := uuid.New()
+			nodeA := uuid.New()
+			nodeB := uuid.New()
+			recordID := uuid.New()
+			poolMock.NextRows = []pgx.Row{uuidTextRow{value: nodeA}, uuidTextRow{value: nodeB}}
+			materialization := &model.GraphMaterialization{
+				Snapshot: &model.GraphSnapshot{
+					GraphSnapshotID: graphSnapshotID,
+				},
+				Nodes: []model.GraphNode{
+					{DatasetID: datasetID, UserID: userID, OrgID: orgID, EntityKey: "person:alice", Name: "Alice", Type: "person", Description: "Alice entity", MentionCount: 2},
+					{DatasetID: datasetID, UserID: userID, OrgID: orgID, EntityKey: "company:beta", Name: "Beta Corp", Type: "company", Description: "Beta entity", MentionCount: 1},
+				},
+				NodeChunks: []model.GraphNodeChunk{{
+					EntityKey:           "person:alice",
+					EmbeddingRecordID:   recordID,
+					EmbeddingSnapshotID: embeddingID,
+					DatasetID:           datasetID,
+					UserID:              userID,
+					OrgID:               orgID,
+					ChunkIndex:          0,
+					SourceText:          "Alice founded Beta Corp.",
+				}},
+				Edges: []model.GraphEdge{{
+					DatasetID:       datasetID,
+					UserID:          userID,
+					OrgID:           orgID,
+					SourceEntityKey: "person:alice",
+					TargetEntityKey: "company:beta",
+					RelationType:    "",
+					Description:     "founded",
+					Weight:          0.8,
+				}},
+			}
+
+			err := repository.SaveGraphMaterialization(ctx, tx, materialization)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
+			Expect(poolMock.ExecCalls).To(HaveLen(2))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("INSERT INTO test_db.graph_nodes"))
+			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("INSERT INTO test_db.graph_node_chunks"))
+			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("INSERT INTO test_db.graph_edges"))
+			chunkArgs := namedArgs(poolMock.ExecArgs[0])
+			Expect(chunkArgs).To(SatisfyAll(
+				HaveKeyWithValue("graph_snapshot_id", pgtype.UUID{Bytes: graphSnapshotID, Valid: true}),
+				HaveKeyWithValue("graph_node_id", pgtype.UUID{Bytes: nodeA, Valid: true}),
+				HaveKeyWithValue("embedding_record_id", pgtype.UUID{Bytes: recordID, Valid: true}),
+				HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}),
+			))
+			edgeArgs := namedArgs(poolMock.ExecArgs[1])
+			Expect(edgeArgs).To(SatisfyAll(
+				HaveKeyWithValue("source_node_id", pgtype.UUID{Bytes: nodeA, Valid: true}),
+				HaveKeyWithValue("target_node_id", pgtype.UUID{Bytes: nodeB, Valid: true}),
+				HaveKeyWithValue("relation_type", "RELATED_TO"),
+			))
+		})
+
+		It("rejects nil graph materializations before querying", func() {
+			err := repository.SaveGraphMaterialization(ctx, tx, nil)
+
+			Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+			Expect(poolMock.QueryRowCalled).To(BeFalse())
+			Expect(poolMock.ExecCalled).To(BeFalse())
+		})
+	})
+
+	Describe("MarkGraphReady", func() {
+		It("marks the graph snapshot ready and activates it for retrieval", func() {
+			graphSnapshotID := uuid.New()
+			poolMock.NextRows = []pgx.Row{int64Row{value: 4}}
+			graphSnapshot := &model.GraphSnapshot{
+				GraphSnapshotID:         graphSnapshotID,
+				DatasetID:               datasetID,
+				OrgID:                   orgID,
+				ProvenanceHash:          "sha256:graph",
+				ExtractionModel:         "llm-graph-extractor",
+				ExtractionPromptVersion: "graph-prompt-v2",
+				ExtractionSchemaVersion: "graph-schema-v2",
+				ChunkCount:              3,
+				ChunksProcessed:         3,
+				EntityCount:             2,
+				EdgeCount:               1,
+			}
+
+			err := repository.MarkGraphReady(ctx, tx, graphSnapshot)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(graphSnapshot.MaterializationEventSeq).To(Equal(int64(4)))
+			Expect(graphSnapshot.ActiveForRetrieval).To(BeTrue())
+			Expect(poolMock.ExecCalls).To(HaveLen(2))
+			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("active_for_retrieval = false"))
+			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("UPDATE test_db.graph_snapshots"))
+			args := namedArgs(poolMock.ExecArgs[1])
+			Expect(args).To(SatisfyAll(
+				HaveKeyWithValue("graph_snapshot_id", pgtype.UUID{Bytes: graphSnapshotID, Valid: true}),
+				HaveKeyWithValue("materialization_event_seq", int64(4)),
+				HaveKeyWithValue("provenance_hash", "sha256:graph"),
+				HaveKeyWithValue("status", model.SnapshotStatusReady.String()),
+			))
+		})
+
+		It("returns graph snapshot not found when no row is updated", func() {
+			poolMock.NextRows = []pgx.Row{int64Row{value: 4}}
+			poolMock.NextRowsAffected = 0
+
+			err := repository.MarkGraphReady(ctx, tx, &model.GraphSnapshot{GraphSnapshotID: uuid.New(), DatasetID: datasetID, OrgID: orgID})
+
+			Expect(errors.Is(err, domain.ErrGraphSnapshotNotFound)).To(BeTrue())
+		})
+	})
+
+	Describe("MarkGraphFailed", func() {
+		It("marks the graph snapshot failed with a reason", func() {
+			graphSnapshotID := uuid.New()
+
+			err := repository.MarkGraphFailed(ctx, tx, graphSnapshotID, "graph extraction failed")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("UPDATE test_db.graph_snapshots"))
+			args := namedArgs(poolMock.ExecArgs[0])
+			Expect(args).To(SatisfyAll(
+				HaveKeyWithValue("graph_snapshot_id", pgtype.UUID{Bytes: graphSnapshotID, Valid: true}),
+				HaveKeyWithValue("failure_reason", "graph extraction failed"),
+				HaveKeyWithValue("status", model.SnapshotStatusFailed.String()),
+			))
+		})
+	})
+
+	Describe("ReadActiveGraphSnapshot", func() {
+		It("reads the ready active graph snapshot for a dataset", func() {
+			graphSnapshotID := uuid.New()
+			row := newGraphSnapshotRow(graphSnapshotID, featureID, embeddingID, datasetID, userID, orgID, idempotencyKey)
+			row.Status = model.SnapshotStatusReady.String()
+			row.ActiveForRetrieval = true
+			poolMock.NextRows = []pgx.Row{row}
+
+			graphSnapshot, err := repository.ReadActiveGraphSnapshot(ctx, userID, datasetID)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(graphSnapshot.GraphSnapshotID).To(Equal(graphSnapshotID))
+			Expect(graphSnapshot.ActiveForRetrieval).To(BeTrue())
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("active_for_retrieval = true"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(SatisfyAll(
+				HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}),
+				HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}),
+				HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}),
+				HaveKeyWithValue("status", model.SnapshotStatusReady.String()),
+			))
+		})
+
+		It("returns graph snapshot not found when no active graph snapshot exists", func() {
+			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
+
+			graphSnapshot, err := repository.ReadActiveGraphSnapshot(ctx, userID, datasetID)
+
+			Expect(graphSnapshot).To(BeNil())
+			Expect(errors.Is(err, domain.ErrGraphSnapshotNotFound)).To(BeTrue())
+		})
+	})
+
 	Describe("SearchGraph", func() {
 		It("returns contexts, matched entities, and recursive graph paths", func() {
 			graphSnapshotID := uuid.New()
@@ -1085,6 +1430,30 @@ func newEmbeddingSnapshotRow(embeddingSnapshotID, featureSnapshotID, datasetID, 
 		EmbeddingProvider:   strategy.EmbeddingProvider,
 		EmbeddingModel:      strategy.EmbeddingModel,
 		Status:              model.SnapshotStatusPending.String(),
+	}
+}
+
+func newGraphSnapshotRow(graphSnapshotID, featureSnapshotID, embeddingSnapshotID, datasetID, userID, orgID, idempotencyKey uuid.UUID) graphSnapshotRow {
+	return graphSnapshotRow{
+		GraphSnapshotID:         graphSnapshotID,
+		FeatureSnapshotID:       featureSnapshotID,
+		EmbeddingSnapshotID:     embeddingSnapshotID,
+		DatasetID:               datasetID,
+		UserID:                  userID,
+		OrgID:                   orgID,
+		MaterializationEventSeq: 0,
+		IdempotencyKey:          idempotencyKey,
+		ProvenanceHash:          "",
+		ExtractionModel:         "llm-graph-extractor",
+		ExtractionPromptVersion: "graph-prompt-v2",
+		ExtractionSchemaVersion: "graph-schema-v2",
+		ChunkCount:              0,
+		ChunksProcessed:         0,
+		EntityCount:             0,
+		EdgeCount:               0,
+		ActiveForRetrieval:      false,
+		Status:                  model.SnapshotStatusPending.String(),
+		FailureReason:           "",
 	}
 }
 

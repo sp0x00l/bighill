@@ -14,7 +14,11 @@ type ToolRegistry interface {
 }
 
 type ToolExecutor interface {
-	Execute(ctx context.Context, tool *model.ToolDefinition, command model.InvokeToolCommand) (*model.ToolInvocationResult, error)
+	Execute(ctx context.Context, tool *model.ToolDefinition, command model.InvokeToolCommand, policy model.PolicySet) (*model.ToolInvocationResult, error)
+}
+
+type BoundaryPolicyResolver interface {
+	ResolvePolicy(tool *model.ToolDefinition) (model.PolicySet, error)
 }
 
 type InvocationAuditRepository interface {

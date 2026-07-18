@@ -12,11 +12,13 @@ import (
 
 	"tool_service/pkg/app"
 	"tool_service/pkg/domain/model"
-	"tool_service/pkg/infra/audit"
 	"tool_service/pkg/infra/executor"
 	toolgrpc "tool_service/pkg/infra/network/grpc"
+	toolpolicy "tool_service/pkg/infra/policy"
+	tooldb "tool_service/pkg/infra/repo/db"
 	staticrepo "tool_service/pkg/infra/repo/static"
 
+	coreDB "lib/shared_lib/db"
 	env "lib/shared_lib/env"
 	"lib/shared_lib/healthcheck"
 	logs "lib/shared_lib/logs"
@@ -33,6 +35,8 @@ var (
 
 type runtimeConfig struct {
 	serviceName       string
+	dbName            string
+	dbConnection      string
 	grpcPort          int
 	healthCheckConfig healthcheck.HealthCheckConfig
 	httpToolConfig    httpToolConfig
@@ -61,17 +65,27 @@ func main() {
 	obsShutdown := observability.Init(runCtx, cfg.serviceName, Version)
 	defer obsShutdown()
 
-	healthCheck := healthcheck.NewMonitor(cfg.healthCheckConfig).WithCpuCheck().WithMemoryCheck()
+	database, err := coreDB.InitDatabase(runCtx, cfg.dbName, cfg.dbConnection, log.StandardLogger())
+	if err != nil {
+		log.WithContext(runCtx).WithError(err).Fatal("unable to connect to tool service database")
+	}
+	defer database.Close()
+
+	healthCheck := healthcheck.NewMonitor(cfg.healthCheckConfig).WithCpuCheck().WithDatabaseCheck().WithMemoryCheck()
 	defer healthCheck.Close()
 
 	validate := validator.New()
 	httpArgsAdapter := executor.NewHTTPGetArgumentsDTOAdapter(validate)
-	httpExecutor := executor.NewHTTPGetExecutor(nil, httpArgsAdapter, cfg.httpToolConfig.timeout, cfg.httpToolConfig.maxResponseBytes)
+	httpExecutor := executor.NewHTTPGetExecutor(nil, httpArgsAdapter)
 	registry := staticrepo.NewToolRegistry(localTools(cfg.httpToolConfig.allowedHosts, cfg.httpToolConfig.allowedOrgIDs))
-	auditRepository := audit.NewLogInvocationAuditRepository()
+	policyResolver := toolpolicy.NewBoundaryPolicyResolver(toolpolicy.BoundaryPolicyConfig{
+		HTTPTimeout:          cfg.httpToolConfig.timeout,
+		HTTPMaxResponseBytes: cfg.httpToolConfig.maxResponseBytes,
+	})
+	auditRepository := tooldb.NewInvocationAuditRepository(database)
 	usecase := app.NewToolUsecase(registry, map[model.ToolExecutorKind]app.ToolExecutor{
 		model.ToolExecutorKindHTTPGet: httpExecutor,
-	}, app.WithInvocationAuditRepository(auditRepository))
+	}, app.WithBoundaryPolicyResolver(policyResolver), app.WithInvocationAuditRepository(auditRepository))
 	dtoAdapter := toolgrpc.NewToolDTOAdapter(validate)
 	server := toolgrpc.NewToolServer(usecase, dtoAdapter)
 
@@ -106,13 +120,28 @@ func loadConfig() runtimeConfig {
 	log.Trace("loadConfig")
 
 	serviceLatencyThreshold := time.Duration(env.MustInt("TOOL_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS")) * time.Second
+	dbLatencyThreshold := time.Duration(env.MustInt("TOOL_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS")) * time.Second
+	dbConfig := coreDB.DatabaseConfig{}
+	dbConfig.RequireDbName("TOOL_SERVICE_DB_NAME")
+	dbConfig.RequireDbUser("TOOL_SERVICE_DB_USER")
+	dbConfig.RequireDbPassword("TOOL_SERVICE_DB_PASSWORD")
+	dbConfig.RequireDbMaxConnections("TOOL_SERVICE_DB_MAX_CONNECTIONS")
+	dbConfig.RequireDbHost("PGHOST")
+	dbConfig.RequireDbPort("PGPORT")
+	dbConfig.RequireDbSSLMode("PGSSLMODE")
+	dbName := dbConfig.GetName()
+	dbConnectionString := dbConfig.GetConnectionString()
 	cfg := runtimeConfig{
-		serviceName: env.MustString("TOOL_SERVICE_NAME"),
-		grpcPort:    env.MustInt("TOOL_SERVICE_GRPC_PORT"),
+		serviceName:  env.MustString("TOOL_SERVICE_NAME"),
+		dbName:       dbName,
+		dbConnection: dbConnectionString,
+		grpcPort:     env.MustInt("TOOL_SERVICE_GRPC_PORT"),
 		healthCheckConfig: healthcheck.HealthCheckConfig{
 			CpuThresholdPercentage:     env.MustInt("TOOL_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT"),
 			MemFreeThresholdPercentage: env.MustInt("TOOL_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT"),
 			HealthCheckPort:            env.MustInt("TOOL_SERVICE_HEALTHCHECK_PORT"),
+			DBConnectionString:         dbConnectionString,
+			DbLatencyThresholdSec:      dbLatencyThreshold,
 			ServiceLatencyThresholdSec: serviceLatencyThreshold,
 		},
 		httpToolConfig: httpToolConfig{

@@ -23,14 +23,15 @@ var _ = Describe("ToolUsecase", func() {
 		orgID := uuid.New()
 		userID := uuid.New()
 		expectedTools := []*model.ToolDefinition{{
-			Name:         "http_get",
-			ExecutorKind: model.ToolExecutorKindHTTPGet,
-			Enabled:      true,
+			Name:           "http_get",
+			ParametersJSON: []byte(`{"type":"object"}`),
+			ExecutorKind:   model.ToolExecutorKindHTTPGet,
+			Enabled:        true,
 		}}
 		registry := &registryStub{tools: expectedTools}
 		usecase := app.NewToolUsecase(registry, map[model.ToolExecutorKind]app.ToolExecutor{
 			model.ToolExecutorKindHTTPGet: &executorStub{},
-		})
+		}, app.WithBoundaryPolicyResolver(&policyResolverStub{}), app.WithInvocationAuditRepository(&auditRepositoryStub{}))
 
 		tools, err := usecase.ListAvailableTools(context.Background(), model.ListAvailableToolsCommand{
 			OrgID:  orgID,
@@ -49,6 +50,7 @@ var _ = Describe("ToolUsecase", func() {
 		registry := &registryStub{
 			tool: &model.ToolDefinition{
 				Name:                  "http_get",
+				ParametersJSON:        []byte(`{"type":"object"}`),
 				ExecutorKind:          model.ToolExecutorKindHTTPGet,
 				ImplementationVersion: "v1",
 				Enabled:               true,
@@ -63,7 +65,7 @@ var _ = Describe("ToolUsecase", func() {
 		auditor := &auditRepositoryStub{}
 		usecase := app.NewToolUsecase(registry, map[model.ToolExecutorKind]app.ToolExecutor{
 			model.ToolExecutorKindHTTPGet: executor,
-		}, app.WithInvocationAuditRepository(auditor))
+		}, app.WithBoundaryPolicyResolver(&policyResolverStub{}), app.WithInvocationAuditRepository(auditor))
 
 		result, err := usecase.Invoke(context.Background(), model.InvokeToolCommand{
 			InvocationID:  uuid.New(),
@@ -85,10 +87,10 @@ var _ = Describe("ToolUsecase", func() {
 	It("fails closed when the resolved executor is not configured", func() {
 		auditor := &auditRepositoryStub{}
 		usecase := app.NewToolUsecase(&registryStub{
-			tool: &model.ToolDefinition{Name: "calculator", ExecutorKind: model.ToolExecutorKindCalculator, Enabled: true},
+			tool: &model.ToolDefinition{Name: "calculator", ParametersJSON: []byte(`{"type":"object"}`), ExecutorKind: model.ToolExecutorKindCalculator, Enabled: true},
 		}, map[model.ToolExecutorKind]app.ToolExecutor{
 			model.ToolExecutorKindHTTPGet: &executorStub{},
-		}, app.WithInvocationAuditRepository(auditor))
+		}, app.WithBoundaryPolicyResolver(&policyResolverStub{}), app.WithInvocationAuditRepository(auditor))
 
 		_, err := usecase.Invoke(context.Background(), model.InvokeToolCommand{
 			ToolName: "calculator",
@@ -106,7 +108,7 @@ var _ = Describe("ToolUsecase", func() {
 		auditor := &auditRepositoryStub{}
 		usecase := app.NewToolUsecase(&registryStub{resolveErr: domain.ErrToolDenied.Extend("tool is not allowlisted for tenant")}, map[model.ToolExecutorKind]app.ToolExecutor{
 			model.ToolExecutorKindHTTPGet: &executorStub{},
-		}, app.WithInvocationAuditRepository(auditor))
+		}, app.WithBoundaryPolicyResolver(&policyResolverStub{}), app.WithInvocationAuditRepository(auditor))
 
 		_, err := usecase.Invoke(context.Background(), model.InvokeToolCommand{
 			InvocationID: uuid.New(),
@@ -126,6 +128,7 @@ var _ = Describe("ToolUsecase", func() {
 		usecase := app.NewToolUsecase(&registryStub{
 			tool: &model.ToolDefinition{
 				Name:                  "http_get",
+				ParametersJSON:        []byte(`{"type":"object"}`),
 				ExecutorKind:          model.ToolExecutorKindHTTPGet,
 				ImplementationVersion: "v1",
 				Enabled:               true,
@@ -140,13 +143,14 @@ var _ = Describe("ToolUsecase", func() {
 					LatencyMs:             17,
 				},
 			},
-		}, app.WithInvocationAuditRepository(auditor))
+		}, app.WithBoundaryPolicyResolver(&policyResolverStub{}), app.WithInvocationAuditRepository(auditor))
 
 		result, err := usecase.Invoke(context.Background(), model.InvokeToolCommand{
-			InvocationID: uuid.New(),
-			ToolName:     "http_get",
-			OrgID:        uuid.New(),
-			UserID:       uuid.New(),
+			InvocationID:  uuid.New(),
+			ToolName:      "http_get",
+			ArgumentsJSON: []byte(`{"url":"http://example.com"}`),
+			OrgID:         uuid.New(),
+			UserID:        uuid.New(),
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -162,19 +166,21 @@ var _ = Describe("ToolUsecase", func() {
 	It("does not fail the tool invocation when audit persistence fails", func() {
 		usecase := app.NewToolUsecase(&registryStub{
 			tool: &model.ToolDefinition{
-				Name:         "http_get",
-				ExecutorKind: model.ToolExecutorKindHTTPGet,
-				Enabled:      true,
+				Name:           "http_get",
+				ParametersJSON: []byte(`{"type":"object"}`),
+				ExecutorKind:   model.ToolExecutorKindHTTPGet,
+				Enabled:        true,
 			},
 		}, map[model.ToolExecutorKind]app.ToolExecutor{
 			model.ToolExecutorKindHTTPGet: &executorStub{result: &model.ToolInvocationResult{ResultJSON: []byte(`{"ok":true}`)}},
-		}, app.WithInvocationAuditRepository(&auditRepositoryStub{err: domain.ErrToolExecution.Extend("audit unavailable")}))
+		}, app.WithBoundaryPolicyResolver(&policyResolverStub{}), app.WithInvocationAuditRepository(&auditRepositoryStub{err: domain.ErrToolExecution.Extend("audit unavailable")}))
 
 		result, err := usecase.Invoke(context.Background(), model.InvokeToolCommand{
-			InvocationID: uuid.New(),
-			ToolName:     "http_get",
-			OrgID:        uuid.New(),
-			UserID:       uuid.New(),
+			InvocationID:  uuid.New(),
+			ToolName:      "http_get",
+			ArgumentsJSON: []byte(`{"url":"http://example.com"}`),
+			OrgID:         uuid.New(),
+			UserID:        uuid.New(),
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -223,12 +229,14 @@ type executorStub struct {
 	result  *model.ToolInvocationResult
 	err     error
 	command model.InvokeToolCommand
+	policy  model.PolicySet
 }
 
-func (s *executorStub) Execute(ctx context.Context, tool *model.ToolDefinition, command model.InvokeToolCommand) (*model.ToolInvocationResult, error) {
+func (s *executorStub) Execute(ctx context.Context, tool *model.ToolDefinition, command model.InvokeToolCommand, policy model.PolicySet) (*model.ToolInvocationResult, error) {
 	_ = ctx
 	_ = tool
 	s.command = command
+	s.policy = policy
 	return s.result, s.err
 }
 
@@ -241,4 +249,17 @@ func (s *auditRepositoryStub) RecordInvocation(ctx context.Context, audit model.
 	_ = ctx
 	s.records = append(s.records, audit)
 	return s.err
+}
+
+type policyResolverStub struct {
+	policy model.PolicySet
+	err    error
+}
+
+func (s *policyResolverStub) ResolvePolicy(tool *model.ToolDefinition) (model.PolicySet, error) {
+	_ = tool
+	if s.err != nil {
+		return model.PolicySet{}, s.err
+	}
+	return s.policy, nil
 }

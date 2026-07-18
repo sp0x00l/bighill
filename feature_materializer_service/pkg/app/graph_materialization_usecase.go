@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -11,8 +9,10 @@ import (
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	"lib/shared_lib/authz"
 	serializers "lib/shared_lib/serializer"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,28 +20,63 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
+const (
+	graphUserEventSourceService = "feature_materializer_service"
+	graphMaterializeOperation   = "graph.materialize"
+	graphSnapshotReadyTitle     = "Graph snapshot ready"
+	graphSnapshotReadyMessage   = "The graph snapshot is ready for retrieval."
+	graphSnapshotFailedTitle    = "Graph snapshot failed"
+	graphEventActionViewDataset = "View dataset"
+
+	graphEventMetadataDatasetID           = "dataset_id"
+	graphEventMetadataFeatureSnapshotID   = "feature_snapshot_id"
+	graphEventMetadataEmbeddingSnapshotID = "embedding_snapshot_id"
+	graphEventMetadataProvenanceHash      = "provenance_hash"
+	graphEventMetadataExtractionModel     = "extraction_model"
+	graphEventMetadataEntityCount         = "entity_count"
+	graphEventMetadataEdgeCount           = "edge_count"
+)
+
 type GraphMaterializationUsecase interface {
 	MaterializeGraph(ctx context.Context, embeddingSnapshotID uuid.UUID, idempotencyKey uuid.UUID, strategy model.GraphExtractionStrategy) (*model.GraphSnapshot, error)
 }
 
+type GraphMaterializationOption func(*graphMaterializationUsecase)
+
 type graphMaterializationUsecase struct {
-	repo         GraphSnapshotRepository
-	unitOfWork   SnapshotUnitOfWorkAdapter
-	eventBuilder SnapshotEventBuilder
-	extractor    GraphExtractor
-	encoder      *serializers.Encoder
+	repo               GraphSnapshotRepository
+	unitOfWork         SnapshotUnitOfWorkAdapter
+	eventBuilder       SnapshotEventBuilder
+	extractor          GraphExtractor
+	userEventPublisher UserEventPublisher
+	encoder            *serializers.Encoder
 }
 
-func NewGraphMaterializationUsecase(repo GraphSnapshotRepository, unitOfWork SnapshotUnitOfWorkAdapter, eventBuilder SnapshotEventBuilder, extractor GraphExtractor) GraphMaterializationUsecase {
+func WithGraphUserEventPublisher(publisher UserEventPublisher) GraphMaterializationOption {
+	log.Trace("WithGraphUserEventPublisher")
+
+	return func(u *graphMaterializationUsecase) {
+		u.userEventPublisher = publisher
+	}
+}
+
+func NewGraphMaterializationUsecase(repo GraphSnapshotRepository, unitOfWork SnapshotUnitOfWorkAdapter, eventBuilder SnapshotEventBuilder, extractor GraphExtractor, opts ...GraphMaterializationOption) GraphMaterializationUsecase {
 	log.Trace("NewGraphMaterializationUsecase")
 
-	return &graphMaterializationUsecase{
-		repo:         repo,
-		unitOfWork:   unitOfWork,
-		eventBuilder: eventBuilder,
-		extractor:    extractor,
-		encoder:      serializers.NewJSONSerializer(),
+	usecase := &graphMaterializationUsecase{
+		repo:               repo,
+		unitOfWork:         unitOfWork,
+		eventBuilder:       eventBuilder,
+		extractor:          extractor,
+		userEventPublisher: userevents.NewNoopPublisher(),
+		encoder:            serializers.NewJSONSerializer(),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(usecase)
+		}
+	}
+	return usecase
 }
 
 func (u *graphMaterializationUsecase) MaterializeGraph(ctx context.Context, embeddingSnapshotID uuid.UUID, idempotencyKey uuid.UUID, strategy model.GraphExtractionStrategy) (out *model.GraphSnapshot, err error) {
@@ -75,7 +110,7 @@ func (u *graphMaterializationUsecase) MaterializeGraph(ctx context.Context, embe
 	extraction, err := u.extractor.ExtractGraph(ctx, chunks, strategy)
 	if err != nil {
 		outErr := fmt.Errorf("%w: %w", domain.ErrGraphMaterialize, err)
-		if markErr := u.markGraphFailed(ctx, graphSnapshot.GraphSnapshotID, err.Error()); markErr != nil {
+		if markErr := u.markGraphFailed(ctx, graphSnapshot, err.Error()); markErr != nil {
 			return nil, errors.Join(outErr, fmt.Errorf("mark graph snapshot failed: %w", markErr))
 		}
 		return nil, outErr
@@ -105,7 +140,7 @@ func (u *graphMaterializationUsecase) savePendingGraphSnapshot(ctx context.Conte
 func (u *graphMaterializationUsecase) markGraphReady(ctx context.Context, materialization *model.GraphMaterialization) error {
 	log.Trace("GraphMaterializationUsecase markGraphReady")
 
-	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
+	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, enqueue shareduow.EnqueueFunc) error {
 		if err := u.repo.SaveGraphMaterialization(ctx, tx, materialization); err != nil {
 			return err
 		}
@@ -121,14 +156,27 @@ func (u *graphMaterializationUsecase) markGraphReady(ctx context.Context, materi
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	materialization.Snapshot.Status = model.SnapshotStatusReady
+	u.publishGraphSnapshotReadyUserEvent(ctx, materialization.Snapshot)
+	return nil
 }
 
-func (u *graphMaterializationUsecase) markGraphFailed(ctx context.Context, graphSnapshotID uuid.UUID, reason string) error {
+func (u *graphMaterializationUsecase) markGraphFailed(ctx context.Context, graphSnapshot *model.GraphSnapshot, reason string) error {
 	log.Trace("GraphMaterializationUsecase markGraphFailed")
 
-	return u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
-		return u.repo.MarkGraphFailed(ctx, tx, graphSnapshotID, reason)
+	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+		return u.repo.MarkGraphFailed(ctx, tx, graphSnapshot.GraphSnapshotID, reason)
 	})
+	if err != nil {
+		return err
+	}
+	graphSnapshot.Status = model.SnapshotStatusFailed
+	graphSnapshot.FailureReason = strings.TrimSpace(reason)
+	u.publishGraphSnapshotFailedUserEvent(ctx, graphSnapshot)
+	return nil
 }
 
 func (u *graphMaterializationUsecase) graphProvenanceHash(snapshot *model.GraphSnapshot, strategy model.GraphExtractionStrategy) (string, error) {
@@ -151,8 +199,86 @@ func (u *graphMaterializationUsecase) graphProvenanceHash(snapshot *model.GraphS
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:]), nil
+	return userevents.SHA256String(string(canonical)), nil
+}
+
+func (u *graphMaterializationUsecase) publishGraphSnapshotReadyUserEvent(ctx context.Context, graphSnapshot *model.GraphSnapshot) {
+	log.Trace("GraphMaterializationUsecase publishGraphSnapshotReadyUserEvent")
+
+	u.publishGraphSnapshotUserEvent(ctx, graphSnapshot, userevents.EventTypeSnapshotGraphReady, userevents.SeveritySuccess, graphSnapshotReadyTitle, graphSnapshotReadyMessage, nil)
+}
+
+func (u *graphMaterializationUsecase) publishGraphSnapshotFailedUserEvent(ctx context.Context, graphSnapshot *model.GraphSnapshot) {
+	log.Trace("GraphMaterializationUsecase publishGraphSnapshotFailedUserEvent")
+
+	classified := userevents.ClassifyError(userevents.ClassificationInput{
+		Service:          graphUserEventSourceService,
+		Operation:        graphMaterializeOperation,
+		ResourceType:     userevents.ResourceTypeSnapshot,
+		RawFailureReason: graphSnapshot.FailureReason,
+	})
+	u.publishGraphSnapshotUserEvent(ctx, graphSnapshot, userevents.EventTypeSnapshotGraphFailed, userevents.SeverityError, graphSnapshotFailedTitle, classified.Message, &classified)
+}
+
+func (u *graphMaterializationUsecase) publishGraphSnapshotUserEvent(ctx context.Context, graphSnapshot *model.GraphSnapshot, eventType string, severity string, title string, message string, detail *userevents.ErrorDetail) {
+	log.Trace("GraphMaterializationUsecase publishGraphSnapshotUserEvent")
+
+	event := userevents.Event{
+		SourceService:      graphUserEventSourceService,
+		EventType:          eventType,
+		Severity:           severity,
+		RequiredPermission: authz.PermissionDataRead,
+		UserID:             optionalGraphEventUUID(graphSnapshot.UserID),
+		OrgID:              optionalGraphEventUUID(graphSnapshot.OrgID),
+		Resource:           userevents.NewResource(userevents.ResourceTypeSnapshot, graphSnapshot.GraphSnapshotID, "graph snapshot", "/datasets/"+graphSnapshot.DatasetID.String()),
+		Status: userevents.Status{
+			State:    graphSnapshot.Status.String(),
+			Phase:    userevents.StatusPhaseMaterialization,
+			Progress: graphSnapshotProgress(graphSnapshot),
+		},
+		Title:       title,
+		Message:     message,
+		ActionLabel: graphEventActionViewDataset,
+		ActionHref:  "/datasets/" + graphSnapshot.DatasetID.String(),
+		Error:       detail,
+		Metadata: map[string]string{
+			graphEventMetadataDatasetID:           graphSnapshot.DatasetID.String(),
+			graphEventMetadataFeatureSnapshotID:   graphSnapshot.FeatureSnapshotID.String(),
+			graphEventMetadataEmbeddingSnapshotID: graphSnapshot.EmbeddingSnapshotID.String(),
+			graphEventMetadataProvenanceHash:      graphSnapshot.ProvenanceHash,
+			graphEventMetadataExtractionModel:     graphSnapshot.ExtractionModel,
+			graphEventMetadataEntityCount:         fmt.Sprint(graphSnapshot.EntityCount),
+			graphEventMetadataEdgeCount:           fmt.Sprint(graphSnapshot.EdgeCount),
+		},
+	}
+	if err := u.userEventPublisher.Publish(ctx, event); err != nil {
+		userevents.LogPublishFailure(ctx, err, event)
+	}
+}
+
+func graphSnapshotProgress(graphSnapshot *model.GraphSnapshot) int {
+	log.Trace("graphSnapshotProgress")
+
+	if graphSnapshot == nil || graphSnapshot.ChunkCount <= 0 {
+		return 0
+	}
+	progress := int((graphSnapshot.ChunksProcessed * 100) / graphSnapshot.ChunkCount)
+	if progress < 0 {
+		return 0
+	}
+	if progress > 100 {
+		return 100
+	}
+	return progress
+}
+
+func optionalGraphEventUUID(id uuid.UUID) string {
+	log.Trace("optionalGraphEventUUID")
+
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 func graphMaterializationFromExtraction(snapshot *model.GraphSnapshot, chunks []model.GraphChunk, extraction *model.GraphExtraction) *model.GraphMaterialization {

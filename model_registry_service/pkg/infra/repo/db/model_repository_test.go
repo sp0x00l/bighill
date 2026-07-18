@@ -439,6 +439,28 @@ var _ = Describe("ModelRepository", func() {
 		})
 	})
 
+	Describe("ReadByTrainingRunID", func() {
+		It("reads a model by training run id", func() {
+			poolMock.NextRows = []pgx.Row{newModelRow(registered)}
+
+			modelRecord, err := repository.ReadByTrainingRunID(ctx, trainingRunID)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(modelRecord.ModelID).To(Equal(modelID))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.models WHERE training_run_id = @training_run_id"))
+			Expect(namedArgs(poolMock.QueryArgs[0])).To(HaveKeyWithValue("training_run_id", pgtype.UUID{Bytes: trainingRunID, Valid: true}))
+		})
+
+		It("returns a domain not-found error when no training run model exists", func() {
+			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
+
+			modelRecord, err := repository.ReadByTrainingRunID(ctx, trainingRunID)
+
+			Expect(modelRecord).To(BeNil())
+			Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
+		})
+	})
+
 	Describe("ReadChampion", func() {
 		It("reads the newest loaded ready model with the highest version for a lineage", func() {
 			poolMock.NextRows = []pgx.Row{newModelRow(registered)}
@@ -528,6 +550,15 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("status", model.ModelStatusReady.String()))
 			Expect(args).To(HaveKeyWithValue("artifact_location", ready.ArtifactLocation))
 		})
+
+		It("returns model not found when no status row is updated", func() {
+			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
+
+			modelRecord, err := repository.UpdateStatus(ctx, tx, modelID, model.ModelStatusFailed, "", "training failed")
+
+			Expect(modelRecord).To(BeNil())
+			Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
+		})
 	})
 
 	Describe("UpdateServingStatus", func() {
@@ -604,6 +635,15 @@ var _ = Describe("ModelRepository", func() {
 			Expect(args).To(HaveKeyWithValue("promotion_deltas", ready.PromotionDeltas))
 			Expect(args).To(HaveKeyWithValue("promotion_decision", ready.PromotionDecision))
 			Expect(args).To(HaveKeyWithValue("promotion_reason", ready.PromotionReason))
+		})
+
+		It("returns model not found when no promotion row is updated", func() {
+			poolMock.NextRows = []pgx.Row{errorRow{err: pgx.ErrNoRows}}
+
+			modelRecord, err := repository.UpdatePromotionDecision(ctx, tx, modelID, model.ModelStatusFailed, "", "{}", "", "promotion failed")
+
+			Expect(modelRecord).To(BeNil())
+			Expect(errors.Is(err, domain.ErrModelNotFound)).To(BeTrue())
 		})
 	})
 })

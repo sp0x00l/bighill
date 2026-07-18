@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -135,6 +136,7 @@ type ToolInvocationResult struct {
 	ErrorType             ToolErrorType
 	ImplementationVersion string
 	LatencyMs             int64
+	EgressHost            string
 }
 
 type ToolInvocationAudit struct {
@@ -143,8 +145,42 @@ type ToolInvocationAudit struct {
 	UserID                uuid.UUID
 	ToolName              string
 	ImplementationVersion string
+	ExecutorKind          ToolExecutorKind
 	Status                ToolInvocationAuditStatus
 	ErrorCode             string
 	ErrorType             ToolErrorType
 	LatencyMs             int64
+	EgressHost            string
+	TraceID               string
+	ArgsHash              string
+	ArgsPreview           string
+}
+
+type PolicySet struct {
+	Egress      EgressPolicy
+	Timeout     TimeoutPolicy
+	ResponseCap ResponseCapPolicy
+	Credential  CredentialPolicy
+	Schema      SchemaPolicy
+}
+
+type EgressPolicy struct {
+	AllowedSchemes []string
+	AllowedHosts   []string
+}
+
+type TimeoutPolicy struct {
+	CallTimeout time.Duration
+}
+
+type ResponseCapPolicy struct {
+	MaxBytes int64
+}
+
+type CredentialPolicy struct {
+	Mode string
+}
+
+type SchemaPolicy struct {
+	InputSchemaJSON []byte
 }

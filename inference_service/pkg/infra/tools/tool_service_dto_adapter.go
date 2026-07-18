@@ -91,11 +91,11 @@ func (a *toolServiceDTOAdapter) FromListAvailableToolsResponse(resp *toolspb.Lis
 	return specs, nil
 }
 
-func (a *toolServiceDTOAdapter) ToInvokeToolRequest(invocation app.ToolInvocationContext, call model.ToolCall, invocationID uuid.UUID) (*toolspb.InvokeToolRequest, error) {
+func (a *toolServiceDTOAdapter) ToInvokeToolRequest(invocation app.ToolInvocationContext, call model.ToolCall) (*toolspb.InvokeToolRequest, error) {
 	log.Trace("toolServiceDTOAdapter ToInvokeToolRequest")
 
-	if invocation.OrgID == uuid.Nil || invocation.UserID == uuid.Nil || invocation.RunID == uuid.Nil {
-		return nil, domain.ErrValidationFailed.Extend("tool invocation context requires org_id, user_id, and run_id")
+	if invocation.OrgID == uuid.Nil || invocation.UserID == uuid.Nil || invocation.RunID == uuid.Nil || invocation.InvocationID == uuid.Nil {
+		return nil, domain.ErrValidationFailed.Extend("tool invocation context requires org_id, user_id, run_id, and invocation_id")
 	}
 	if strings.TrimSpace(call.Name) == "" {
 		return nil, domain.ErrValidationFailed.Extend("tool call name is required")
@@ -109,7 +109,7 @@ func (a *toolServiceDTOAdapter) ToInvokeToolRequest(invocation app.ToolInvocatio
 		OrgId:         invocation.OrgID.String(),
 		UserId:        invocation.UserID.String(),
 		TraceId:       invocation.RunID.String(),
-		InvocationId:  invocationID.String(),
+		InvocationId:  invocation.InvocationID.String(),
 	}, nil
 }
 

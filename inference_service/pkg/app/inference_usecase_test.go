@@ -435,6 +435,25 @@ func (s *agentRunWorkflowStarterStub) StartAgentRunWorkflow(_ context.Context, i
 	return s.err
 }
 
+type userEventPublisherStub struct {
+	events []userevents.Event
+	err    error
+}
+
+func (s *userEventPublisherStub) Publish(_ context.Context, event userevents.Event) error {
+	s.events = append(s.events, event)
+	return s.err
+}
+
+func (s *userEventPublisherStub) lastEventOfType(eventType string) *userevents.Event {
+	for index := len(s.events) - 1; index >= 0; index-- {
+		if s.events[index].EventType == eventType {
+			return &s.events[index]
+		}
+	}
+	return nil
+}
+
 type toolInvokerStub struct {
 	tools  []model.ToolSpec
 	result model.ToolResult
@@ -1160,6 +1179,7 @@ var _ = Describe("InferenceUsecase", func() {
 		}
 		trajectoryRepository := &agentTrajectoryRepositoryStub{}
 		requestRepository := &inferenceRequestRepositoryStub{}
+		userEvents := &userEventPublisherStub{}
 		generator := &generationAdapterStub{toolCalls: []model.ToolCall{{
 			ID:        "call-http",
 			Name:      "http_get",
@@ -1172,6 +1192,7 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithUserEventPublisher(userEvents),
 			app.WithToolInvoker(&toolInvokerStub{
 				tools: []model.ToolSpec{{
 					Name:       "http_get",
@@ -1206,6 +1227,10 @@ var _ = Describe("InferenceUsecase", func() {
 		terminal := trajectoryRepository.runs[len(trajectoryRepository.runs)-1]
 		Expect(terminal.Status).To(Equal(model.AgentRunStatusFailed))
 		Expect(terminal.StopReason).To(Equal(model.AgentStopReasonToolError))
+		toolEvent := userEvents.lastEventOfType(userevents.EventTypeAgentToolResult)
+		Expect(toolEvent).NotTo(BeNil())
+		Expect(toolEvent.Severity).To(Equal(userevents.SeverityError))
+		Expect(toolEvent.Status.State).To(Equal("FAILED"))
 	})
 
 	It("feeds transient tool errors back so the agent can recover", func() {
@@ -1235,6 +1260,7 @@ var _ = Describe("InferenceUsecase", func() {
 		}
 		trajectoryRepository := &agentTrajectoryRepositoryStub{}
 		requestRepository := &inferenceRequestRepositoryStub{}
+		userEvents := &userEventPublisherStub{}
 		generator := &generationAdapterStub{results: []model.GenerationResult{
 			{
 				ToolCalls: []model.ToolCall{{
@@ -1256,6 +1282,7 @@ var _ = Describe("InferenceUsecase", func() {
 			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
 			app.WithInferenceRequestRepository(requestRepository),
 			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithUserEventPublisher(userEvents),
 			app.WithToolInvoker(&toolInvokerStub{
 				tools: []model.ToolSpec{{
 					Name:       "http_get",
@@ -1295,6 +1322,10 @@ var _ = Describe("InferenceUsecase", func() {
 			HaveField("Role", model.ChatMessageRoleTool),
 			HaveField("Content", `{"status":503}`),
 		)))
+		toolEvent := userEvents.lastEventOfType(userevents.EventTypeAgentToolResult)
+		Expect(toolEvent).NotTo(BeNil())
+		Expect(toolEvent.Severity).To(Equal(userevents.SeverityWarning))
+		Expect(toolEvent.Status.State).To(Equal("FAILED"))
 	})
 
 	It("uses the per-step call key for deterministic invocation IDs when tool call IDs are empty", func() {

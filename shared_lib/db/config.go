@@ -66,3 +66,27 @@ func (db *DatabaseConfig) WithDbMaxConnections(maxConnections, defaultValue stri
 func (db *DatabaseConfig) RequireDbMaxConnections(maxConnections string) {
 	db.maxConnections = env.MustInt(maxConnections)
 }
+
+func (db *DatabaseConfig) WithDbHost(host, defaultValue string) {
+	db.host = env.WithDefaultString(host, defaultValue)
+}
+
+func (db *DatabaseConfig) RequireDbHost(host string) {
+	db.host = env.MustString(host)
+}
+
+func (db *DatabaseConfig) WithDbPort(port, defaultValue string) {
+	db.port = env.WithDefaultString(port, defaultValue)
+}
+
+func (db *DatabaseConfig) RequireDbPort(port string) {
+	db.port = env.MustString(port)
+}
+
+func (db *DatabaseConfig) WithDbSSLMode(sslMode, defaultValue string) {
+	db.ssl = env.WithDefaultString(sslMode, defaultValue)
+}
+
+func (db *DatabaseConfig) RequireDbSSLMode(sslMode string) {
+	db.ssl = env.MustString(sslMode)
+}

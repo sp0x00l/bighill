@@ -266,7 +266,7 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 				err := domain.ErrGenerationFailed.Extend("agent repeated the same tool call")
 				return model.AgentResult{RequestID: request.RequestID, RunID: session.RunID, Contexts: contexts, StopReason: model.AgentStopReasonLoopDetected, Steps: step + 1}, u.failAgentRun(ctx, session, model.AgentStopReasonLoopDetected, err)
 			}
-			toolResult, err := u.toolInvoker.Invoke(runCtx, appToolInvocationContext(session), call)
+			toolResult, err := u.toolInvoker.Invoke(runCtx, appToolInvocationContext(session, stepID, callKey), call)
 			if err != nil && toolResult.CallID == "" {
 				toolResult = model.ToolResult{
 					CallID:    call.ID,
@@ -340,14 +340,15 @@ func appToolResolutionContext(session *model.AgentSession) ToolResolutionContext
 	}
 }
 
-func appToolInvocationContext(session *model.AgentSession) ToolInvocationContext {
+func appToolInvocationContext(session *model.AgentSession, stepID uuid.UUID, callKey string) ToolInvocationContext {
 	log.Trace("appToolInvocationContext")
 
 	return ToolInvocationContext{
-		OrgID:    session.OrgID,
-		UserID:   session.UserID,
-		RunID:    session.RunID,
-		Datasets: session.Datasets,
+		OrgID:        session.OrgID,
+		UserID:       session.UserID,
+		RunID:        session.RunID,
+		InvocationID: deterministicAgentToolInvocationID(session.RunID, stepID, callKey),
+		Datasets:     session.Datasets,
 	}
 }
 

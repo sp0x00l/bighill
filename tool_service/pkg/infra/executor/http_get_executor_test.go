@@ -40,7 +40,7 @@ var _ = Describe("HTTPGetExecutor", func() {
 		}
 		targetURL := "https://allowed.example/resource"
 		host := mustHost(targetURL)
-		executor := NewHTTPGetExecutor(client, adapter, time.Second, 1024)
+		executor := NewHTTPGetExecutor(client, adapter)
 
 		result, err := executor.Execute(context.Background(), toolWithHosts(host), model.InvokeToolCommand{
 			InvocationID:  uuid.New(),
@@ -48,7 +48,7 @@ var _ = Describe("HTTPGetExecutor", func() {
 			ArgumentsJSON: []byte(`{"url":"` + targetURL + `"}`),
 			OrgID:         uuid.New(),
 			UserID:        uuid.New(),
-		})
+		}, policyWithHosts(host))
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(client.request.Method).To(Equal(http.MethodGet))
@@ -59,21 +59,21 @@ var _ = Describe("HTTPGetExecutor", func() {
 	})
 
 	It("rejects malformed arguments at the executor boundary", func() {
-		executor := NewHTTPGetExecutor(http.DefaultClient, adapter, time.Second, 1024)
+		executor := NewHTTPGetExecutor(http.DefaultClient, adapter)
 
 		_, err := executor.Execute(context.Background(), toolWithHosts("example.com"), model.InvokeToolCommand{
 			ArgumentsJSON: []byte(`{"url":""}`),
-		})
+		}, policyWithHosts("example.com"))
 
 		Expect(err).To(MatchError(ContainSubstring("validation failed")))
 	})
 
 	It("blocks metadata service SSRF targets even when the host is allowlisted", func() {
-		executor := NewHTTPGetExecutor(http.DefaultClient, adapter, time.Second, 1024)
+		executor := NewHTTPGetExecutor(http.DefaultClient, adapter)
 
 		_, err := executor.Execute(context.Background(), toolWithHosts("169.254.169.254"), model.InvokeToolCommand{
 			ArgumentsJSON: []byte(`{"url":"http://169.254.169.254/latest/meta-data"}`),
-		})
+		}, policyWithHosts("169.254.169.254"))
 
 		Expect(err).To(MatchError(ContainSubstring("http tool url host is blocked")))
 		Expect(err).To(MatchError(MatchRegexp(domain.ErrToolPolicy.Error() + ".*")))
@@ -100,22 +100,41 @@ var _ = Describe("HTTPGetExecutor", func() {
 	})
 
 	It("propagates hardened client policy blocks as executor errors", func() {
-		executor := NewHTTPGetExecutor(&httpClientStub{err: domain.ErrToolPolicy.Extend("http tool resolved host is blocked")}, adapter, time.Second, 1024)
+		executor := NewHTTPGetExecutor(&httpClientStub{err: domain.ErrToolPolicy.Extend("http tool resolved host is blocked")}, adapter)
 
 		_, err := executor.Execute(context.Background(), toolWithHosts("allowed.example"), model.InvokeToolCommand{
 			ArgumentsJSON: []byte(`{"url":"https://allowed.example/path"}`),
-		})
+		}, policyWithHosts("allowed.example"))
 
 		Expect(err).To(MatchError(ContainSubstring("http tool resolved host is blocked")))
 		Expect(err).To(MatchError(MatchRegexp(domain.ErrToolPolicy.Error() + ".*")))
 	})
 
+	It("fails closed when the response exceeds the configured cap", func() {
+		client := &httpClientStub{
+			response: &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("too-large")),
+			},
+		}
+		policy := policyWithHosts("allowed.example")
+		policy.ResponseCap.MaxBytes = 3
+		executor := NewHTTPGetExecutor(client, adapter)
+
+		_, err := executor.Execute(context.Background(), toolWithHosts("allowed.example"), model.InvokeToolCommand{
+			ArgumentsJSON: []byte(`{"url":"https://allowed.example/path"}`),
+		}, policy)
+
+		Expect(err).To(MatchError(ContainSubstring("http tool response exceeds max response bytes")))
+		Expect(err).To(MatchError(MatchRegexp(domain.ErrToolPolicy.Error() + ".*")))
+	})
+
 	It("denies hosts outside the tool allowlist", func() {
-		executor := NewHTTPGetExecutor(http.DefaultClient, adapter, time.Second, 1024)
+		executor := NewHTTPGetExecutor(http.DefaultClient, adapter)
 
 		_, err := executor.Execute(context.Background(), toolWithHosts("allowed.example"), model.InvokeToolCommand{
 			ArgumentsJSON: []byte(`{"url":"https://denied.example/path"}`),
-		})
+		}, policyWithHosts("allowed.example"))
 
 		Expect(err).To(MatchError(ContainSubstring("host denied.example is not allowlisted")))
 		Expect(err).To(MatchError(MatchRegexp(domain.ErrToolDenied.Error() + ".*")))
@@ -129,6 +148,24 @@ func toolWithHosts(hosts ...string) *model.ToolDefinition {
 		ExecutorKind:          model.ToolExecutorKindHTTPGet,
 		EgressHosts:           hosts,
 		Enabled:               true,
+	}
+}
+
+func policyWithHosts(hosts ...string) model.PolicySet {
+	return model.PolicySet{
+		Egress: model.EgressPolicy{
+			AllowedSchemes: []string{"http", "https"},
+			AllowedHosts:   hosts,
+		},
+		Timeout: model.TimeoutPolicy{
+			CallTimeout: time.Second,
+		},
+		ResponseCap: model.ResponseCapPolicy{
+			MaxBytes: 1024,
+		},
+		Schema: model.SchemaPolicy{
+			InputSchemaJSON: []byte(`{"type":"object","additionalProperties":false,"required":["url"],"properties":{"url":{"type":"string","format":"uri"}}}`),
+		},
 	}
 }
 

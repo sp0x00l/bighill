@@ -180,7 +180,7 @@ func (u *inferenceUsecase) InvokeAgentToolActivity(ctx context.Context, input In
 	if err != nil {
 		return InvokeAgentToolActivityOutput{}, err
 	}
-	toolResult, err := u.toolInvoker.Invoke(ctx, appToolInvocationContext(session), input.Call)
+	toolResult, err := u.toolInvoker.Invoke(ctx, appToolInvocationContext(session, input.StepID, input.CallKey), input.Call)
 	if err != nil && toolResult.CallID == "" {
 		toolResult = model.ToolResult{
 			CallID:    input.Call.ID,

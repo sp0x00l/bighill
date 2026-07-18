@@ -4,6 +4,7 @@ import (
 	"context"
 	"feature_materializer_service/pkg/domain/model"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -83,4 +84,8 @@ type GraphExtractor interface {
 
 type FeatureSnapshotReader interface {
 	ReadFeatureSnapshot(ctx context.Context, featureSnapshotID uuid.UUID) (*model.FeatureSnapshot, error)
+}
+
+type UserEventPublisher interface {
+	Publish(ctx context.Context, event userevents.Event) error
 }

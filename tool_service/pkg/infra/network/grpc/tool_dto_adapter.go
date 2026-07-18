@@ -20,7 +20,7 @@ type listAvailableToolsRequestDTO struct {
 }
 
 type invokeToolRequestDTO struct {
-	InvocationID  string `validate:"omitempty,uuid"`
+	InvocationID  string `validate:"required,uuid"`
 	ToolName      string `validate:"required"`
 	ArgumentsJSON []byte `validate:"required"`
 	OrgID         string `validate:"required,uuid"`
@@ -91,15 +91,13 @@ func (a *ToolDTOAdapter) FromInvokeToolRequest(req *toolspb.InvokeToolRequest) (
 		TraceID:       dto.TraceID,
 	}
 	var err error
-	command.OrgID, command.UserID, err = parseActor(dto.OrgID, dto.UserID)
+	command.InvocationID, err = parseRequiredUUID("invocation_id", dto.InvocationID)
 	if err != nil {
 		return model.InvokeToolCommand{}, err
 	}
-	if dto.InvocationID != "" {
-		command.InvocationID, err = uuid.Parse(dto.InvocationID)
-		if err != nil {
-			return model.InvokeToolCommand{}, domain.ErrValidationFailed.Extend("invocation_id is invalid")
-		}
+	command.OrgID, command.UserID, err = parseActor(dto.OrgID, dto.UserID)
+	if err != nil {
+		return model.InvokeToolCommand{}, err
 	}
 	return command, nil
 }
@@ -125,15 +123,25 @@ func (a *ToolDTOAdapter) ToListAvailableToolsResponse(tools []*model.ToolDefinit
 func parseActor(orgIDRaw string, userIDRaw string) (uuid.UUID, uuid.UUID, error) {
 	log.Trace("parseActor")
 
-	orgID, err := uuid.Parse(orgIDRaw)
-	if err != nil || orgID == uuid.Nil {
-		return uuid.Nil, uuid.Nil, domain.ErrValidationFailed.Extend("org_id is invalid")
+	orgID, err := parseRequiredUUID("org_id", orgIDRaw)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
 	}
-	userID, err := uuid.Parse(userIDRaw)
-	if err != nil || userID == uuid.Nil {
-		return uuid.Nil, uuid.Nil, domain.ErrValidationFailed.Extend("user_id is invalid")
+	userID, err := parseRequiredUUID("user_id", userIDRaw)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
 	}
 	return orgID, userID, nil
+}
+
+func parseRequiredUUID(name string, raw string) (uuid.UUID, error) {
+	log.Trace("parseRequiredUUID")
+
+	value, err := uuid.Parse(raw)
+	if err != nil || value == uuid.Nil {
+		return uuid.Nil, domain.ErrValidationFailed.Extend(name + " is invalid")
+	}
+	return value, nil
 }
 
 func (a *ToolDTOAdapter) ToInvokeToolResponse(result *model.ToolInvocationResult) *toolspb.InvokeToolResponse {

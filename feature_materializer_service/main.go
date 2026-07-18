@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,6 +27,7 @@ import (
 	sharedTenant "lib/shared_lib/tenant"
 	trace "lib/shared_lib/trace"
 	shareduow "lib/shared_lib/uow"
+	"lib/shared_lib/userevents"
 
 	log "github.com/sirupsen/logrus"
 	"go.temporal.io/sdk/client"
@@ -58,6 +58,7 @@ type materializerConfig struct {
 	DataRegistryTopic    string
 	TenantTopic          string
 	PublishTopics        featuremessaging.MaterializationTopics
+	UserEvents           userevents.Config
 	Health               healthConfig
 	Lifecycle            lifecycle.Config
 }
@@ -250,6 +251,13 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create graph extractor")
 	}
+	userEventPublisher := userevents.Publisher(userevents.NewNoopPublisher())
+	if cfg.UserEvents.Enabled {
+		userEventPublisher, err = userevents.NewRedisPublisher(cfg.UserEvents)
+		if err != nil {
+			log.WithContext(cancelCtx).WithError(err).Fatal("failed to initialize user event publisher")
+		}
+	}
 	rawDispatcher := materialization.NewRawSnapshotWriterDispatcher(dataStreamRawWriter, rawWriter)
 	featureDispatcher := materialization.NewFeatureSnapshotBuilderDispatcher(featureBuilder)
 	embeddingDispatcher := materialization.NewEmbeddingWriterDispatcher(embeddingWriter)
@@ -258,7 +266,7 @@ func main() {
 	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, rawDispatcher)
 	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, snapshotRepo, featureDispatcher)
 	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, snapshotRepo, embeddingDispatcher)
-	graphUsecase := usecase.NewGraphMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, graphExtractor)
+	graphUsecase := usecase.NewGraphMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, graphExtractor, usecase.WithGraphUserEventPublisher(userEventPublisher))
 	embeddingSearchUsecase := usecase.NewEmbeddingSearchUsecase(snapshotRepo, newQueryEmbeddingProviderFactory(cfg.Embedding))
 	graphSearchUsecase := usecase.NewGraphSearchUsecase(snapshotRepo)
 	activities := featuretemporal.NewMaterializationActivities(rawSnapshotUsecase, featureSnapshotUsecase, embeddingUsecase, graphUsecase)
@@ -286,6 +294,10 @@ func main() {
 		}),
 		lifecycle.CloserComponent("feature-materializer-publisher", func() error {
 			outboxPublisher.Close()
+			return nil
+		}),
+		lifecycle.CloserComponent("feature-materializer-user-event-publisher", func() error {
+			userEventPublisher.Close()
 			return nil
 		}),
 		lifecycle.HealthCheckComponent("feature-materializer-healthcheck", healthCheck),
@@ -410,16 +422,16 @@ func readMaterializerConfig() materializerConfig {
 	env.RequireServiceEnvironment()
 
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
-	dbName := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_NAME", "bighill_feature_materializer_db")
-	dbConnectionString := postgresConnectionString(
-		env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_USER", "bighill_feature_materializer_db_user"),
-		env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_PASSWORD", ""),
-		env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_HOST", env.WithDefaultString("PGHOST", "127.0.0.1")),
-		env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_PORT", env.WithDefaultString("PGPORT", "5432")),
-		dbName,
-		env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_SSLMODE", env.WithDefaultString("PGSSLMODE", "disable")),
-		env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_DB_MAX_CONNECTIONS", "20"),
-	)
+	dbConfig := coreDB.DatabaseConfig{}
+	dbConfig.WithDbName("FEATURE_MATERIALIZER_SERVICE_DB_NAME", "bighill_feature_materializer_db")
+	dbConfig.WithDbUser("FEATURE_MATERIALIZER_SERVICE_DB_USER", "bighill_feature_materializer_db_user")
+	dbConfig.WithDbPassword("FEATURE_MATERIALIZER_SERVICE_DB_PASSWORD", "")
+	dbConfig.WithDbMaxConnections("FEATURE_MATERIALIZER_SERVICE_DB_MAX_CONNECTIONS", "20")
+	dbConfig.WithDbHost("FEATURE_MATERIALIZER_SERVICE_DB_HOST", env.WithDefaultString("PGHOST", "127.0.0.1"))
+	dbConfig.WithDbPort("FEATURE_MATERIALIZER_SERVICE_DB_PORT", env.WithDefaultString("PGPORT", "5432"))
+	dbConfig.WithDbSSLMode("FEATURE_MATERIALIZER_SERVICE_DB_SSLMODE", env.WithDefaultString("PGSSLMODE", "disable"))
+	dbName := dbConfig.GetName()
+	dbConnectionString := dbConfig.GetConnectionString()
 	uploadPartSizeMB := env.WithDefaultInt64("FEATURE_MATERIALIZER_SERVICE_ARTIFACT_UPLOAD_PART_SIZE_MB", "10")
 	defaultArtifactBucketName := ""
 	defaultArtifactBucketRegion := "eu-west-1"
@@ -511,6 +523,16 @@ func readMaterializerConfig() materializerConfig {
 		TenantTopic:          env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TENANT_SUBSCRIBER_TOPIC", "tenant"),
 		PublishTopics: featuremessaging.MaterializationTopics{
 			FeatureMaterializer: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer"),
+		},
+		UserEvents: userevents.Config{
+			Enabled:        env.WithDefaultBool("USER_EVENTS_ENABLED", false),
+			RedisAddress:   env.WithDefaultString("USER_EVENTS_REDIS_ADDRESS", ""),
+			RedisUsername:  env.WithDefaultString("USER_EVENTS_REDIS_USERNAME", ""),
+			RedisPassword:  env.WithDefaultString("USER_EVENTS_REDIS_PASSWORD", ""),
+			RedisTLS:       env.WithDefaultBool("USER_EVENTS_REDIS_TLS", false),
+			ChannelPrefix:  env.WithDefaultString("USER_EVENTS_CHANNEL_PREFIX", userevents.DefaultChannelPrefix),
+			PublishTimeout: time.Duration(env.WithDefaultInt("USER_EVENTS_PUBLISH_TIMEOUT_MS", "500")) * time.Millisecond,
+			StreamMaxLen:   int64(env.WithDefaultInt("USER_EVENTS_STREAM_MAX_LEN", "1000")),
 		},
 		Health: healthConfig{
 			CpuThresholdPercentage:                    env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT", "80"),
@@ -782,15 +804,4 @@ func newPostgresOutbox(database *coreDB.Database, backend string) (messagingConn
 		return nil, fmt.Errorf("unsupported outbox backend %q", backend)
 	}
 	return messagingConn.NewPostgresOutbox(database.Pool, database.Name, "")
-}
-
-func postgresConnectionString(user, password, host, port, dbName, sslMode string, maxConnections int) string {
-	log.Trace("postgresConnnectionString")
-
-	encodedUser := url.QueryEscape(user)
-	encodedPassword := url.QueryEscape(password)
-	q := url.Values{}
-	q.Set("sslmode", sslMode)
-	q.Set("pool_max_conns", strconv.Itoa(maxConnections))
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?%s", encodedUser, encodedPassword, host, port, dbName, q.Encode())
 }

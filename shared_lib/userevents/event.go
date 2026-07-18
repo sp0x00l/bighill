@@ -49,6 +49,8 @@ const (
 	EventTypeSnapshotFeatureFailed            = "snapshot.feature.failed"
 	EventTypeSnapshotEmbeddingReady           = "snapshot.embedding.ready"
 	EventTypeSnapshotEmbeddingFailed          = "snapshot.embedding.failed"
+	EventTypeSnapshotGraphReady               = "snapshot.graph.ready"
+	EventTypeSnapshotGraphFailed              = "snapshot.graph.failed"
 	EventTypeUploadAccepted                   = "upload.accepted"
 	EventTypeUploadCompleted                  = "upload.completed"
 	EventTypeUploadFailed                     = "upload.failed"

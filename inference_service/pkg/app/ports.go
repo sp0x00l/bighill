@@ -67,10 +67,11 @@ type ToolResolutionContext struct {
 }
 
 type ToolInvocationContext struct {
-	OrgID    uuid.UUID
-	UserID   uuid.UUID
-	RunID    uuid.UUID
-	Datasets []*model.InferenceDataset
+	OrgID        uuid.UUID
+	UserID       uuid.UUID
+	RunID        uuid.UUID
+	InvocationID uuid.UUID
+	Datasets     []*model.InferenceDataset
 }
 
 type ToolInvoker interface {

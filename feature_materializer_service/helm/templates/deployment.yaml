@@ -68,6 +68,22 @@ spec:
               value: {{ .Values.env.outboxRelayBatchSize | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
               value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: USER_EVENTS_ENABLED
+              value: {{ .Values.env.userEventsEnabled | quote }}
+            - name: USER_EVENTS_REDIS_ADDRESS
+              value: {{ .Values.env.userEventsRedisAddress | quote }}
+            - name: USER_EVENTS_REDIS_USERNAME
+              value: {{ .Values.env.userEventsRedisUsername | quote }}
+            - name: USER_EVENTS_REDIS_PASSWORD
+              value: {{ .Values.env.userEventsRedisPassword | quote }}
+            - name: USER_EVENTS_REDIS_TLS
+              value: {{ .Values.env.userEventsRedisTLS | quote }}
+            - name: USER_EVENTS_CHANNEL_PREFIX
+              value: {{ .Values.env.userEventsChannelPrefix | quote }}
+            - name: USER_EVENTS_PUBLISH_TIMEOUT_MS
+              value: {{ .Values.env.userEventsPublishTimeoutMs | quote }}
+            - name: USER_EVENTS_STREAM_MAX_LEN
+              value: {{ .Values.env.userEventsStreamMaxLen | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_TEMPORAL_ADDRESS
               value: {{ .Values.env.temporalAddress | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_TEMPORAL_NAMESPACE

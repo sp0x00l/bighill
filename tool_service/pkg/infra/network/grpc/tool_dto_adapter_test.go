@@ -88,11 +88,19 @@ var _ = Describe("ToolDTOAdapter", func() {
 
 		_, err = adapter.FromInvokeToolRequest(&toolspb.InvokeToolRequest{
 			ToolName:      "http_get",
+			ArgumentsJson: []byte(`{"url":"https://example.com"}`),
+			OrgId:         uuid.NewString(),
+			UserId:        uuid.NewString(),
+		})
+		Expect(err).To(MatchError(ContainSubstring("InvocationID")))
+
+		_, err = adapter.FromInvokeToolRequest(&toolspb.InvokeToolRequest{
+			InvocationId:  uuid.NewString(),
+			ToolName:      "http_get",
 			ArgumentsJson: []byte(`not-json`),
 			OrgId:         uuid.NewString(),
 			UserId:        uuid.NewString(),
 		})
-
 		Expect(err).To(MatchError(ContainSubstring("arguments_json must contain valid JSON")))
 	})
 
@@ -107,6 +115,7 @@ var _ = Describe("ToolDTOAdapter", func() {
 		Expect(err).To(HaveOccurred())
 
 		_, err = adapter.FromInvokeToolRequest(&toolspb.InvokeToolRequest{
+			InvocationId:  uuid.NewString(),
 			ToolName:      "http_get",
 			ArgumentsJson: []byte(`{"url":"https://example.com"}`),
 			OrgId:         uuid.Nil.String(),

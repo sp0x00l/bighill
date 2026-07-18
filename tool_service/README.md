@@ -17,6 +17,9 @@ Other tools act on the outside world. `http_get` can reach a URL. Future SQL or 
 act outside inference. Those tools need a separate process with its own allowlist, argument checks,
 timeouts, response caps, and audit. That is this service.
 
+`tool_service` owns its own audit database. Inference still records the agent trajectory, but the
+tool boundary keeps an independent record of every invocation, denial, and execution failure.
+
 The rule is:
 
 ```text
@@ -44,10 +47,15 @@ Controls:
 
 - the caller org must be in `TOOL_SERVICE_ALLOWED_ORG_IDS`
 - the URL host must be in `TOOL_SERVICE_HTTP_TOOL_ALLOWED_HOSTS`
+- arguments must match the tool's JSON Schema
 - loopback, private, link-local, CGNAT, NAT64, multicast, unspecified, and metadata hosts are blocked
 - redirects are not followed
 - environment proxies are disabled
 - request timeout and max response bytes are enforced
+
+Each invocation is audited with `invocation_id`, org/user, tool name, implementation version,
+executor kind, status, error classification, latency, egress host, trace id, argument hash, and a
+redacted argument preview. Raw arguments are not stored in the boundary audit table.
 
 ## Contracts
 
@@ -101,7 +109,13 @@ Configured by [scripts/config.sh](scripts/config.sh).
 Important variables:
 
 - `TOOL_SERVICE_GRPC_PORT`: gRPC port, local default `7084`
+- `TOOL_SERVICE_DB_NAME`: audit database name
+- `TOOL_SERVICE_DB_USER`: audit database user
+- `TOOL_SERVICE_DB_PASSWORD`: audit database password
+- `TOOL_SERVICE_DB_MAX_CONNECTIONS`: audit database connection pool limit
+- `PGHOST`, `PGPORT`, `PGSSLMODE`: shared Postgres connection settings
 - `TOOL_SERVICE_HEALTHCHECK_PORT`: health port, local default `5065`
+- `TOOL_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS`: health check DB latency threshold
 - `TOOL_SERVICE_HTTP_TOOL_ALLOWED_HOSTS`: comma-separated host allowlist for `http_get`
 - `TOOL_SERVICE_ALLOWED_ORG_IDS`: comma-separated org allowlist
 - `TOOL_SERVICE_HTTP_TOOL_TIMEOUT_MS`: per-request timeout
@@ -155,9 +169,10 @@ The root compose/test scripts start the service when the agent tool flow is enab
 pkg/domain/model      tool definitions, command/result/audit models, enums
 pkg/app               usecase, ports, audit behavior
 pkg/infra/repo/static static allowlist-backed registry
+pkg/infra/repo/db     durable boundary audit repository
 pkg/infra/executor    tool executors and argument DTO adapters
 pkg/infra/network/grpc gRPC DTO adapter and server
-pkg/infra/audit       boundary audit implementation
+pkg/infra/policy      boundary policy resolver
 ```
 
 The app layer depends on ports. DTO validation happens at infra boundaries.

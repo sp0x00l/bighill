@@ -251,6 +251,36 @@ var _ = Describe("database intialization", func() {
 		})
 	})
 
+	Describe("DatabaseConfig", func() {
+		It("builds a connection string from required database env vars", func() {
+			env := map[string]string{
+				"TEST_DB_NAME":            "app_db",
+				"TEST_DB_USER":            "app_user",
+				"TEST_DB_PASSWORD":        "secret",
+				"TEST_DB_MAX_CONNECTIONS": "12",
+				"TEST_PGHOST":             "db.internal",
+				"TEST_PGPORT":             "5433",
+				"TEST_PGSSLMODE":          "require",
+			}
+			for key, value := range env {
+				Expect(os.Setenv(key, value)).To(Succeed())
+				defer os.Unsetenv(key)
+			}
+
+			config := db.DatabaseConfig{}
+			config.RequireDbName("TEST_DB_NAME")
+			config.RequireDbUser("TEST_DB_USER")
+			config.RequireDbPassword("TEST_DB_PASSWORD")
+			config.RequireDbMaxConnections("TEST_DB_MAX_CONNECTIONS")
+			config.RequireDbHost("TEST_PGHOST")
+			config.RequireDbPort("TEST_PGPORT")
+			config.RequireDbSSLMode("TEST_PGSSLMODE")
+
+			Expect(config.GetName()).To(Equal("app_db"))
+			Expect(config.GetConnectionString()).To(Equal("postgres://app_user:secret@db.internal:5433/app_db?sslmode=require&pool_max_conns=12"))
+		})
+	})
+
 	When("Closing the database", func() {
 		It("should close the connection pool", func() {
 			mockPool := &testConnectionPool{}
