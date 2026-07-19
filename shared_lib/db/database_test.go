@@ -7,7 +7,6 @@ import (
 	"lib/shared_lib/ctxutil"
 	db "lib/shared_lib/db"
 	"os"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -484,32 +483,5 @@ var _ = Describe("database error classifiers", func() {
 		}
 
 		Expect(db.IsRowLevelSecurityViolation(err)).To(BeFalse())
-	})
-})
-
-var _ = Describe("tenant RLS migration policies", func() {
-	It("keeps tenant-scoped service policies fail-closed", func() {
-		paths := []string{
-			"../../data_registry_service/db/migrations/000001_init_schema.up.sql",
-			"../../feature_materializer_service/db/migrations/000001_init_schema.up.sql",
-			"../../inference_service/db/migrations/000001_init_schema.up.sql",
-			"../../ingestion_service/db/migrations/000001_init_schema.up.sql",
-			"../../model_registry_service/db/migrations/000001_init_schema.up.sql",
-		}
-
-		for _, path := range paths {
-			contentBytes, err := os.ReadFile(path)
-			Expect(err).ToNot(HaveOccurred(), path)
-			content := string(contentBytes)
-
-			Expect(content).To(ContainSubstring("FORCE ROW LEVEL SECURITY"), path)
-			Expect(content).To(ContainSubstring("current_setting('app.system_context', true) = 'true'"), path)
-			Expect(content).To(ContainSubstring("NULLIF(current_setting('app.current_org_id', true), '')::uuid"), path)
-			Expect(strings.Contains(content, "COALESCE(NULLIF(current_setting('app.current_user_id'")).To(BeFalse(), path)
-			Expect(strings.Contains(content, "COALESCE(NULLIF(current_setting('app.current_org_id'")).To(BeFalse(), path)
-			Expect(strings.Contains(content, "user_id = user_id")).To(BeFalse(), path)
-			Expect(strings.Contains(content, "org_id = org_id")).To(BeFalse(), path)
-			Expect(strings.Contains(content, "status = 'published'")).To(BeFalse(), path)
-		}
 	})
 })

@@ -580,8 +580,13 @@ func (sc *subscriber) prepareMessage(ctx context.Context, msg *kafka.Message) (s
 	var message Message
 	if err := message.Deserialize(msgCtx, msg.Value); err != nil {
 		log.WithContext(msgCtx).WithError(err).Error("Invalid Kafka message. Sending to DLQ and committing.")
-		sc.registerInFlight(msg)
-		sc.sendToDlq(msgCtx, msg)
+		if dlqErr := sc.sendToDlq(msgCtx, msg); dlqErr != nil {
+			sc.recordSubscriberError(dlqErr)
+			log.WithContext(msgCtx).WithError(dlqErr).
+				WithField("topic_partition", msg.TopicPartition).
+				Error("DLQ write failed for invalid Kafka message; offset will not be committed")
+			return shardedMessage{}, false, fmt.Errorf("send invalid Kafka message to DLQ: %w", dlqErr)
+		}
 		sc.requestCommit(msgCtx, commitRequest{msg: msg, assignment: assignment, messageType: "deserialize_error"})
 		return shardedMessage{}, false, nil
 	}
@@ -703,7 +708,16 @@ func (sc *subscriber) processMessage(sm shardedMessage) {
 		case sc.isNonRetryableError(err):
 			log.WithContext(ctx).WithError(err).WithFields(messageLogFields(sm)).Error("Non-retryable handler failure. Sending to DLQ and committing.")
 			sc.recordNonRetryableFailure()
-			sc.sendToDlq(ctx, msg)
+			if dlqErr := sc.sendToDlq(ctx, msg); dlqErr != nil {
+				sc.recordSubscriberError(dlqErr)
+				log.WithContext(ctx).WithError(dlqErr).WithFields(messageLogFields(sm)).
+					Error("DLQ write failed for non-retryable handler failure; offset will not be committed")
+				if retryErr := sc.replayMessageToShard(sm, dlqErr); retryErr != nil && !errors.Is(retryErr, context.Canceled) {
+					log.WithContext(ctx).WithError(retryErr).Error("retry handling failed after DLQ write failure")
+					sc.recordSubscriberError(retryErr)
+				}
+				return
+			}
 			sc.requestCommit(ctx, sc.commitRequestFor(sm))
 			sc.removeReplayKey(msg.TopicPartition)
 			return
@@ -826,7 +840,12 @@ func (sc *subscriber) replayMessageToShard(sm shardedMessage, cause error) error
 	if attempts >= MaxReplayAttempts {
 		sc.logRetryableHandlerFailure(ctx, sm, cause, attempts, true)
 		sc.recordMaxReplayDLQ()
-		sc.sendToDlq(ctx, msg)
+		if err := sc.sendToDlq(ctx, msg); err != nil {
+			sc.recordSubscriberError(err)
+			log.WithContext(ctx).WithError(err).WithFields(messageLogFields(sm)).
+				Error("DLQ write failed after max replay attempts; offset will not be committed")
+			return fmt.Errorf("send max-replay Kafka message to DLQ: %w", err)
+		}
 		sc.requestCommit(ctx, sc.commitRequestFor(sm))
 		sc.mutex.Lock()
 		delete(sc.ReplayMap, key)

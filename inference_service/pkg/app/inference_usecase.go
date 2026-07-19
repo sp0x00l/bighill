@@ -34,11 +34,15 @@ type InferenceUsecase interface {
 	RecordDatasetUpdated(ctx context.Context, dataset *model.InferenceDataset, idempotencyKey uuid.UUID) (*model.InferenceDataset, error)
 	ReadModel(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) (*model.InferenceModel, error)
 	PublishAgentSpec(ctx context.Context, request model.AgentSpecPublication) (*model.AgentSpec, error)
+	ReadAgentSpec(ctx context.Context, orgID uuid.UUID, agentSpecHash string) (*model.AgentSpec, error)
 	ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error)
+	ReadEndpoint(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID) (*model.PublishedEndpoint, error)
 	PublishEndpoint(ctx context.Context, request model.EndpointPublication) (*model.PublishedEndpoint, error)
+	ApplyAgentChampionUpdate(ctx context.Context, update model.AgentChampionUpdate) (*model.PublishedEndpoint, error)
 	SetEndpointDatasets(ctx context.Context, request model.EndpointDatasetBinding) (*model.PublishedEndpoint, error)
 	SetEndpointMergeStrategy(ctx context.Context, request model.EndpointMergeConfiguration) (*model.PublishedEndpoint, error)
 	GenerateForEndpoint(ctx context.Context, endpointID uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error)
+	StartAgentEvalRun(ctx context.Context, endpointID uuid.UUID, agentSpecHash string, request model.GenerateRequest) (*model.GenerateResponse, error)
 	Generate(ctx context.Context, request model.GenerateRequest) (*model.GenerateResponse, error)
 	PrepareAgentRunActivity(ctx context.Context, input PrepareAgentRunActivityInput) (AgentRunWorkflowState, error)
 	GenerateAgentStepActivity(ctx context.Context, input GenerateAgentStepActivityInput) (GenerateAgentStepActivityOutput, error)
@@ -367,6 +371,19 @@ func (u *inferenceUsecase) ListEndpoints(ctx context.Context, orgID uuid.UUID) (
 	return out, nil
 }
 
+func (u *inferenceUsecase) ReadEndpoint(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID) (endpoint *model.PublishedEndpoint, err error) {
+	log.Trace("InferenceUsecase ReadEndpoint")
+
+	ctx = ctxutil.WithOrgID(ctx, orgID)
+	ctx, span := startInferenceSpan(ctx, "endpoint.read",
+		attribute.String("org_id", orgID.String()),
+		attribute.String("endpoint_id", endpointID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
+	return u.endpointRepository.ReadEndpoint(ctx, orgID, endpointID)
+}
+
 func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.EndpointPublication) (endpoint *model.PublishedEndpoint, err error) {
 	log.Trace("InferenceUsecase PublishEndpoint")
 
@@ -426,6 +443,21 @@ func (u *inferenceUsecase) PublishEndpoint(ctx context.Context, request model.En
 		DisplayName:     displayName,
 		CreatedByUserID: request.UserID,
 	})
+}
+
+func (u *inferenceUsecase) ApplyAgentChampionUpdate(ctx context.Context, update model.AgentChampionUpdate) (endpoint *model.PublishedEndpoint, err error) {
+	log.Trace("InferenceUsecase ApplyAgentChampionUpdate")
+
+	ctx = ctxutil.WithOrgID(ctx, update.OrgID)
+	ctx, span := startInferenceSpan(ctx, "endpoint.apply_agent_champion_update",
+		attribute.String("org_id", update.OrgID.String()),
+		attribute.String("endpoint_id", update.EndpointID.String()),
+		attribute.String("agent_spec_hash", update.AgentSpecHash),
+		attribute.String("decision_id", update.DecisionID.String()),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
+	return u.endpointRepository.ApplyAgentChampionUpdate(ctx, update)
 }
 
 func (u *inferenceUsecase) SetEndpointDatasets(ctx context.Context, request model.EndpointDatasetBinding) (endpoint *model.PublishedEndpoint, err error) {

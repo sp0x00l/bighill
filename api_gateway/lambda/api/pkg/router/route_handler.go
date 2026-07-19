@@ -56,6 +56,8 @@ type Config struct {
 	TrainingServiceRoute      string
 	InferenceServiceRoute     string
 	SocketServiceRoute        string
+	AgentRegistryServiceRoute string
+	ToolCatalogServiceRoute   string
 }
 
 type routeResolver struct {
@@ -66,6 +68,8 @@ type routeResolver struct {
 	trainingServiceRoute      string
 	inferenceServiceRoute     string
 	socketServiceRoute        string
+	agentRegistryServiceRoute string
+	toolCatalogServiceRoute   string
 }
 
 type routeContext struct {
@@ -109,6 +113,12 @@ func (cfg Config) resolver() (routeResolver, error) {
 	if cfg.SocketServiceRoute == "" {
 		return routeResolver{}, fmt.Errorf("missing socket service route")
 	}
+	if cfg.AgentRegistryServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing agent registry service route")
+	}
+	if cfg.ToolCatalogServiceRoute == "" {
+		return routeResolver{}, fmt.Errorf("missing tool catalog service route")
+	}
 	return routeResolver{
 		dataRegistryServiceRoute:  cfg.DataRegistryServiceRoute,
 		ingestionServiceRoute:     cfg.IngestionServiceRoute,
@@ -117,6 +127,8 @@ func (cfg Config) resolver() (routeResolver, error) {
 		trainingServiceRoute:      cfg.TrainingServiceRoute,
 		inferenceServiceRoute:     cfg.InferenceServiceRoute,
 		socketServiceRoute:        cfg.SocketServiceRoute,
+		agentRegistryServiceRoute: cfg.AgentRegistryServiceRoute,
+		toolCatalogServiceRoute:   cfg.ToolCatalogServiceRoute,
 	}, nil
 }
 
@@ -164,8 +176,28 @@ func requiredRoutePermission(request events.APIGatewayProxyRequest) string {
 			return authz.PermissionTrainingStart
 		}
 		return authz.PermissionTrainingRead
+	case "agent-registry":
+		if routeCtx.method == http.MethodGet {
+			return authz.PermissionModelRead
+		}
+		if routeCtx.method == http.MethodPost {
+			return authz.PermissionModelWrite
+		}
+	case "tool-catalog":
+		if routeCtx.method == http.MethodGet {
+			return authz.PermissionModelRead
+		}
+		if routeCtx.method == http.MethodPost {
+			if len(afterResource) >= 1 && afterResource[0] == "capabilities" {
+				return authz.PermissionToolCatalogPublish
+			}
+			return authz.PermissionModelWrite
+		}
 	case "inference":
 		if len(afterResource) == 1 && afterResource[0] == "endpoints" && routeCtx.method == http.MethodGet {
+			return authz.PermissionInferenceEndpointsRead
+		}
+		if len(afterResource) == 2 && afterResource[0] == "endpoints" && routeCtx.method == http.MethodGet {
 			return authz.PermissionInferenceEndpointsRead
 		}
 		if len(afterResource) == 1 && afterResource[0] == "endpoints" && routeCtx.method == http.MethodPost {
@@ -392,6 +424,10 @@ func serviceRoute(request events.APIGatewayProxyRequest, resolver routeResolver)
 		return fmt.Sprintf("%s%s", resolver.inferenceServiceRoute, path), nil
 	case "socket-token":
 		return fmt.Sprintf("%s%s", resolver.socketServiceRoute, path), nil
+	case "agent-registry":
+		return fmt.Sprintf("%s%s", resolver.agentRegistryServiceRoute, path), nil
+	case "tool-catalog":
+		return fmt.Sprintf("%s%s", resolver.toolCatalogServiceRoute, path), nil
 	default:
 		return "", fmt.Errorf("invalid resource: %s", routeCtx.resource)
 	}

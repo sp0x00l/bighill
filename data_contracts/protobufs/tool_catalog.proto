@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package tool_catalog;
+
+option go_package = "lib/data_contracts_lib/tool_catalog";
+
+message ToolCapabilityUpdatedEvent {
+  string event_id = 1;
+  string idempotency_key = 2;
+  string capability_version_id = 3;
+  string capability_id = 4;
+  string version = 5;
+  string tool_name = 6;
+  string kind = 7;
+  string description = 8;
+  bytes parameters_json = 9;
+  string implementation_version = 10;
+  repeated string egress_hosts = 11;
+  int64 timeout_ms = 12;
+  int64 max_response_bytes = 13;
+  string credential_name = 14;
+  bool credential_required = 15;
+  string lifecycle_status = 16;
+  string content_hash = 17;
+  string mcp_server_endpoint = 18;
+}
+
+message ToolGrantUpdatedEvent {
+  string event_id = 1;
+  string idempotency_key = 2;
+  string grant_id = 3;
+  string org_id = 4;
+  string capability_version_id = 5;
+  string status = 6;
+}
+
+message ToolCredentialBindingUpdatedEvent {
+  string event_id = 1;
+  string idempotency_key = 2;
+  string binding_id = 3;
+  string org_id = 4;
+  string capability_id = 5;
+  string credential_ref = 6;
+}

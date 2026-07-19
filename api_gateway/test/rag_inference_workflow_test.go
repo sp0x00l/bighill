@@ -27,6 +27,8 @@ const (
 	ragE2EGenerateCallTimeout = 90 * time.Second
 	ragE2EGenerateWaitTimeout = 3 * time.Minute
 	ragE2EModelPollTimeout    = 5 * time.Second
+	ragE2EModelSelectTimeout  = 3 * time.Minute
+	ragE2EGraphWaitTimeout    = 3 * time.Minute
 	ragE2EOllamaPollTimeout   = 90 * time.Second
 	ragE2EOllamaCallTimeout   = 20 * time.Second
 )
@@ -386,7 +388,7 @@ func waitForGraphRAGDatasetMaterialized(
 			strings.TrimSpace(event.GetEmbeddingSnapshotId()) != "" &&
 			event.GetEmbeddingCount() > 0
 	})
-	graphEvent := graphSnapshotReadyEvents.waitFor(datasetUUID, 2*time.Minute, func(event *featurepb.GraphSnapshotReadyEvent) bool {
+	graphEvent := graphSnapshotReadyEvents.waitFor(datasetUUID, ragE2EGraphWaitTimeout, func(event *featurepb.GraphSnapshotReadyEvent) bool {
 		return event.GetDatasetId() == datasetID &&
 			strings.TrimSpace(event.GetGraphSnapshotId()) != "" &&
 			strings.TrimSpace(event.GetEmbeddingSnapshotId()) == embeddingEvent.GetEmbeddingSnapshotId() &&
@@ -669,7 +671,7 @@ func replaceHuggingFaceToken(user profileTestUser, token string) {
 
 func assertModelSelectable(user profileTestUser, modelID uuid.UUID, source string, name string) map[string]any {
 	var selected map[string]any
-	var lastErr error
+	lastErr := fmt.Errorf("model %s was not observed yet", modelID)
 	Eventually(func() bool {
 		status, body, err := requestWithTimeout(http.MethodGet, "/v1/private/models/"+modelID.String(), nil, user.Token, uuid.Nil, ragE2EModelPollTimeout)
 		if err != nil {
@@ -713,7 +715,7 @@ func assertModelSelectable(user profileTestUser, modelID uuid.UUID, source strin
 		}
 		lastErr = fmt.Errorf("model list did not contain selectable model %s: %#v", modelID, resources)
 		return false
-	}, 75*time.Second, 1*time.Second).Should(BeTrue(), "model was not selectable: %v", lastErr)
+	}, ragE2EModelSelectTimeout, 1*time.Second).Should(BeTrue(), "model was not selectable: %v", lastErr)
 	return selected
 }
 

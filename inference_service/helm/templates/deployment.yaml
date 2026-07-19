@@ -111,6 +111,8 @@ spec:
               value: {{ .Values.env.kafkaAutoOffsetReset | quote }}
             - name: INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.modelRegistrySubscriberTopic | quote }}
+            - name: INFERENCE_SERVICE_AGENT_REGISTRY_SUBSCRIBER_TOPIC
+              value: {{ .Values.env.agentRegistrySubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC
               value: {{ .Values.env.dataRegistrySubscriberTopic | quote }}
             - name: INFERENCE_SERVICE_TENANT_SUBSCRIBER_TOPIC
@@ -145,14 +147,14 @@ spec:
               value: {{ .Values.env.featureMaterializerGrpcCallTimeoutMs | quote }}
             - name: INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT
               value: {{ .Values.env.featureMaterializerGrpcRetryCount | quote }}
-            - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_ADDRESS
-              value: {{ .Values.env.toolServiceGrpcAddress | quote }}
-            - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_DIAL_TIMEOUT_MS
-              value: {{ .Values.env.toolServiceGrpcDialTimeoutMs | quote }}
-            - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_CALL_TIMEOUT_MS
-              value: {{ .Values.env.toolServiceGrpcCallTimeoutMs | quote }}
-            - name: INFERENCE_SERVICE_TOOL_SERVICE_GRPC_RETRY_COUNT
-              value: {{ .Values.env.toolServiceGrpcRetryCount | quote }}
+            - name: INFERENCE_SERVICE_TOOL_EXECUTION_GRPC_ADDRESS
+              value: {{ .Values.env.toolExecutionGrpcAddress | quote }}
+            - name: INFERENCE_SERVICE_TOOL_EXECUTION_GRPC_DIAL_TIMEOUT_MS
+              value: {{ .Values.env.toolExecutionGrpcDialTimeoutMs | quote }}
+            - name: INFERENCE_SERVICE_TOOL_EXECUTION_GRPC_CALL_TIMEOUT_MS
+              value: {{ .Values.env.toolExecutionGrpcCallTimeoutMs | quote }}
+            - name: INFERENCE_SERVICE_TOOL_EXECUTION_GRPC_RETRY_COUNT
+              value: {{ .Values.env.toolExecutionGrpcRetryCount | quote }}
             - name: INFERENCE_SERVICE_TEMPORAL_ADDRESS
               value: {{ .Values.env.temporalAddress | quote }}
             - name: INFERENCE_SERVICE_TEMPORAL_NAMESPACE

@@ -1,0 +1,15 @@
+DROP TABLE IF EXISTS bighill_agent_registry_db.outbox_messages;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_eval_task_results;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_eval_reports;
+DROP TRIGGER IF EXISTS agent_adapters_updated_at ON bighill_agent_registry_db.agent_adapters;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_adapters;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_trajectory_datasets;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_run_labels;
+DROP TABLE IF EXISTS bighill_agent_registry_db.golden_tasks;
+DROP TYPE IF EXISTS bighill_agent_registry_db.golden_task_split_enum;
+DROP TRIGGER IF EXISTS agent_champion_states_updated_at ON bighill_agent_registry_db.agent_champion_states;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_champion_states;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_endpoint_bindings;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_spec_versions;
+DROP TRIGGER IF EXISTS agent_lineages_updated_at ON bighill_agent_registry_db.agent_lineages;
+DROP TABLE IF EXISTS bighill_agent_registry_db.agent_lineages;

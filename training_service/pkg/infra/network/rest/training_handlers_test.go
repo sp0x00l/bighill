@@ -27,14 +27,15 @@ func TestRest(t *testing.T) {
 }
 
 type trainingCommandUsecaseStub struct {
-	command    model.StartTrainingRunCommand
-	dpoCommand model.StartDPOTrainingRunCommand
-	tenant     uuid.UUID
-	org        uuid.UUID
-	result     *model.TrainingRunStartResult
-	status     *model.TrainingRunStatusResult
-	err        error
-	readErr    error
+	command             model.StartTrainingRunCommand
+	dpoCommand          model.StartDPOTrainingRunCommand
+	agentAdapterCommand model.StartAgentAdapterTrainingRunCommand
+	tenant              uuid.UUID
+	org                 uuid.UUID
+	result              *model.TrainingRunStartResult
+	status              *model.TrainingRunStatusResult
+	err                 error
+	readErr             error
 }
 
 func (s *trainingCommandUsecaseStub) StartTrainingRun(ctx context.Context, command model.StartTrainingRunCommand) (*model.TrainingRunStartResult, error) {
@@ -50,6 +51,17 @@ func (s *trainingCommandUsecaseStub) StartTrainingRun(ctx context.Context, comma
 
 func (s *trainingCommandUsecaseStub) StartDPOTrainingRun(ctx context.Context, command model.StartDPOTrainingRunCommand) (*model.TrainingRunStartResult, error) {
 	s.dpoCommand = command
+	if tenantID, ok := ctxutil.TenantID(ctx); ok {
+		s.tenant = tenantID
+	}
+	if orgID, ok := ctxutil.OrgID(ctx); ok {
+		s.org = orgID
+	}
+	return s.result, s.err
+}
+
+func (s *trainingCommandUsecaseStub) StartAgentAdapterTrainingRun(ctx context.Context, command model.StartAgentAdapterTrainingRunCommand) (*model.TrainingRunStartResult, error) {
+	s.agentAdapterCommand = command
 	if tenantID, ok := ctxutil.TenantID(ctx); ok {
 		s.tenant = tenantID
 	}
@@ -128,6 +140,30 @@ var _ = Describe("TrainingHandlers", func() {
 		Expect(usecase.dpoCommand.PreferenceDatasetID).To(Equal(preferenceDatasetID))
 		Expect(usecase.dpoCommand.TrainingProfile).To(Equal("dpo-default@v1"))
 		Expect(usecase.dpoCommand.EvaluationProfile).To(Equal("dpo-eval@v1"))
+		var dto StartTrainingRunResponseDTO
+		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
+		Expect(dto.TrainingRunID).To(Equal(usecase.result.TrainingRunID))
+	})
+
+	It("starts agent adapter training runs with trajectory dataset provenance", func() {
+		datasetID := uuid.New()
+		sourceModelID := uuid.New()
+		req := newTrainingRequest(`{"dataset_id":"`+datasetID.String()+`","dataset_uri":"s3://local-dev-bucket/agent-datasets/run.jsonl","dataset_content_hash":"sha256:agent-dataset","source_model_id":"`+sourceModelID.String()+`","agent_lineage":"support-agent","training_profile":"agent-sft@v1","evaluation_profile":"agent-eval@v1"}`, userID, orgID, requestID)
+
+		res, err := handlers.StartAgentAdapterTrainingRun(context.Background(), req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusAccepted))
+		Expect(usecase.tenant).To(Equal(userID))
+		Expect(usecase.org).To(Equal(orgID))
+		Expect(usecase.agentAdapterCommand.IdempotencyKey).To(Equal(requestID))
+		Expect(usecase.agentAdapterCommand.DatasetID).To(Equal(datasetID))
+		Expect(usecase.agentAdapterCommand.DatasetURI).To(Equal("s3://local-dev-bucket/agent-datasets/run.jsonl"))
+		Expect(usecase.agentAdapterCommand.DatasetContentHash).To(Equal("sha256:agent-dataset"))
+		Expect(usecase.agentAdapterCommand.SourceModelID).To(Equal(sourceModelID))
+		Expect(usecase.agentAdapterCommand.AgentLineage).To(Equal("support-agent"))
+		Expect(usecase.agentAdapterCommand.TrainingProfile).To(Equal("agent-sft@v1"))
+		Expect(usecase.agentAdapterCommand.EvaluationProfile).To(Equal("agent-eval@v1"))
 		var dto StartTrainingRunResponseDTO
 		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
 		Expect(dto.TrainingRunID).To(Equal(usecase.result.TrainingRunID))

@@ -2,22 +2,14 @@ package materialization
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
-	contractschemas "lib/data_contracts_lib/schemas"
 
 	log "github.com/sirupsen/logrus"
 )
-
-var entityTokenPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3}\b`)
-
-type LocalGraphExtractor struct {
-}
 
 type DisabledGraphExtractor struct {
 }
@@ -42,15 +34,6 @@ type graphExtractionRelationDTO struct {
 	Weight      float64 `json:"weight"`
 }
 
-func NewLocalGraphExtractor() (*LocalGraphExtractor, error) {
-	log.Trace("NewLocalGraphExtractor")
-
-	if !json.Valid(contractschemas.GraphExtractionV1Schema()) {
-		return nil, fmt.Errorf("graph extraction schema is invalid JSON")
-	}
-	return &LocalGraphExtractor{}, nil
-}
-
 func NewDisabledGraphExtractor() *DisabledGraphExtractor {
 	log.Trace("NewDisabledGraphExtractor")
 
@@ -63,142 +46,173 @@ func (e *DisabledGraphExtractor) ExtractGraph(context.Context, []model.GraphChun
 	return nil, domain.ErrGraphMaterialize.Extend("graph extraction is disabled")
 }
 
-func (e *LocalGraphExtractor) ExtractGraph(ctx context.Context, chunks []model.GraphChunk, strategy model.GraphExtractionStrategy) (*model.GraphExtraction, error) {
-	log.Trace("LocalGraphExtractor ExtractGraph")
-
-	_ = ctx
-	_ = strategy
-	extraction := &model.GraphExtraction{}
-	for _, chunk := range chunks {
-		names := orderedUniqueEntityNames(chunk.SourceText)
-		for _, name := range names {
-			extraction.Entities = append(extraction.Entities, model.GraphExtractionEntity{
-				ID:          graphExtractionEntityID(name),
-				Name:        name,
-				Type:        graphEntityType(name),
-				Description: "Mentioned in source chunk.",
-				ChunkIndex:  chunk.ChunkIndex,
-			})
-		}
-		for i := 0; i+1 < len(names); i++ {
-			extraction.Relations = append(extraction.Relations, model.GraphExtractionRelation{
-				Source:      graphExtractionEntityID(names[i]),
-				Target:      graphExtractionEntityID(names[i+1]),
-				Type:        "RELATED_TO",
-				Description: "Co-mentioned in source chunk.",
-				Weight:      1,
-			})
-		}
-	}
-	if err := e.validate(extraction); err != nil {
-		return nil, err
-	}
-	return extraction, nil
-}
-
-func (e *LocalGraphExtractor) validate(extraction *model.GraphExtraction) error {
-	log.Trace("LocalGraphExtractor validate")
-
-	document := graphExtractionDocument{
-		Entities:  make([]graphExtractionEntityDTO, 0, len(extraction.Entities)),
-		Relations: make([]graphExtractionRelationDTO, 0, len(extraction.Relations)),
-	}
-	for _, entity := range extraction.Entities {
-		document.Entities = append(document.Entities, graphExtractionEntityDTO{
-			ID:          strings.TrimSpace(entity.ID),
-			Name:        strings.TrimSpace(entity.Name),
-			Type:        strings.TrimSpace(entity.Type),
-			Description: strings.TrimSpace(entity.Description),
-		})
-	}
-	for _, relation := range extraction.Relations {
-		document.Relations = append(document.Relations, graphExtractionRelationDTO{
-			Source:      strings.TrimSpace(relation.Source),
-			Target:      strings.TrimSpace(relation.Target),
-			Type:        strings.TrimSpace(relation.Type),
-			Description: strings.TrimSpace(relation.Description),
-			Weight:      relation.Weight,
-		})
-	}
-	if err := validateGraphExtractionDocument(document); err != nil {
-		return domain.ErrGraphMaterialize.Extend(err.Error())
-	}
-	return nil
-}
-
-func orderedUniqueEntityNames(text string) []string {
-	log.Trace("orderedUniqueEntityNames")
-
-	matches := entityTokenPattern.FindAllString(text, -1)
-	out := make([]string, 0, len(matches))
-	seen := map[string]struct{}{}
-	for _, match := range matches {
-		name := strings.TrimSpace(match)
-		if len(name) <= 1 {
-			continue
-		}
-		lower := strings.ToLower(name)
-		switch lower {
-		case "the", "this", "that", "it", "a", "an":
-			continue
-		}
-		if _, ok := seen[lower]; ok {
-			continue
-		}
-		seen[lower] = struct{}{}
-		out = append(out, name)
-	}
-	return out
-}
-
-func graphExtractionEntityID(name string) string {
-	log.Trace("graphExtractionEntityID")
-
-	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), "_"))
-}
-
-func graphEntityType(name string) string {
-	log.Trace("graphEntityType")
-
-	if strings.Contains(strings.ToLower(name), "inc") || strings.Contains(strings.ToLower(name), "corp") {
-		return "organization"
-	}
-	return "entity"
-}
-
 func validateGraphExtractionDocument(document graphExtractionDocument) error {
 	log.Trace("validateGraphExtractionDocument")
 
+	entityIDs := make(map[string]struct{}, len(document.Entities))
+	entityIDList := make([]string, 0, len(document.Entities))
 	for idx, entity := range document.Entities {
-		if strings.TrimSpace(entity.ID) == "" {
-			return fmt.Errorf("entities[%d].id is required", idx)
+		entityID := strings.TrimSpace(entity.ID)
+		if entityID == "" {
+			return graphExtractionDocumentError("entities[%d].id is required", idx)
 		}
+		entityIDs[entityID] = struct{}{}
+		entityIDList = append(entityIDList, entityID)
 		if strings.TrimSpace(entity.Name) == "" {
-			return fmt.Errorf("entities[%d].name is required", idx)
+			return graphExtractionDocumentError("entities[%d].name is required", idx)
 		}
 		if strings.TrimSpace(entity.Type) == "" {
-			return fmt.Errorf("entities[%d].type is required", idx)
+			return graphExtractionDocumentError("entities[%d].type is required", idx)
 		}
 		if strings.TrimSpace(entity.Description) == "" {
-			return fmt.Errorf("entities[%d].description is required", idx)
+			return graphExtractionDocumentError("entities[%d].description is required", idx)
 		}
 	}
 	for idx, relation := range document.Relations {
 		if strings.TrimSpace(relation.Source) == "" {
-			return fmt.Errorf("relations[%d].source is required", idx)
+			return graphExtractionDocumentError("relations[%d].source is required", idx)
+		}
+		if _, ok := entityIDs[strings.TrimSpace(relation.Source)]; !ok {
+			return graphExtractionDocumentError("relations[%d].source must reference an entity id: %q available=%q", idx, strings.TrimSpace(relation.Source), strings.Join(entityIDList, ","))
 		}
 		if strings.TrimSpace(relation.Target) == "" {
-			return fmt.Errorf("relations[%d].target is required", idx)
+			return graphExtractionDocumentError("relations[%d].target is required", idx)
+		}
+		if _, ok := entityIDs[strings.TrimSpace(relation.Target)]; !ok {
+			return graphExtractionDocumentError("relations[%d].target must reference an entity id: %q available=%q", idx, strings.TrimSpace(relation.Target), strings.Join(entityIDList, ","))
 		}
 		if strings.TrimSpace(relation.Type) == "" {
-			return fmt.Errorf("relations[%d].type is required", idx)
+			return graphExtractionDocumentError("relations[%d].type is required", idx)
 		}
 		if strings.TrimSpace(relation.Description) == "" {
-			return fmt.Errorf("relations[%d].description is required", idx)
+			return graphExtractionDocumentError("relations[%d].description is required", idx)
 		}
 		if relation.Weight < 0 {
-			return fmt.Errorf("relations[%d].weight must be non-negative", idx)
+			return graphExtractionDocumentError("relations[%d].weight must be non-negative", idx)
 		}
 	}
 	return nil
+}
+
+func graphExtractionDocumentError(format string, args ...any) error {
+	log.Trace("graphExtractionDocumentError")
+
+	return domain.ErrGraphExtractionInvalid.Extend(fmt.Sprintf(format, args...))
+}
+
+func canonicalizeGraphExtractionDocument(document graphExtractionDocument, sourceText string) graphExtractionDocument {
+	log.Trace("canonicalizeGraphExtractionDocument")
+
+	lookup, ambiguous := graphExtractionEntityLookup(document.Entities)
+	for idx := range document.Relations {
+		document.Relations[idx].Source = canonicalGraphEndpoint(document.Relations[idx].Source, &document, lookup, ambiguous, sourceText)
+		document.Relations[idx].Target = canonicalGraphEndpoint(document.Relations[idx].Target, &document, lookup, ambiguous, sourceText)
+	}
+	return document
+}
+
+func graphExtractionEntityLookup(entities []graphExtractionEntityDTO) (map[string]string, map[string]struct{}) {
+	log.Trace("graphExtractionEntityLookup")
+
+	lookup := make(map[string]string, len(entities)*2)
+	ambiguous := make(map[string]struct{})
+	for _, entity := range entities {
+		entityID := strings.TrimSpace(entity.ID)
+		if entityID == "" {
+			continue
+		}
+		addGraphEndpointAlias(lookup, ambiguous, entityID, entityID)
+		addGraphEndpointAlias(lookup, ambiguous, entity.Name, entityID)
+	}
+	return lookup, ambiguous
+}
+
+func addGraphEndpointAlias(lookup map[string]string, ambiguous map[string]struct{}, alias string, entityID string) {
+	log.Trace("addGraphEndpointAlias")
+
+	key := normalizeGraphEndpoint(alias)
+	if key == "" {
+		return
+	}
+	if existing, ok := lookup[key]; ok && existing != entityID {
+		delete(lookup, key)
+		ambiguous[key] = struct{}{}
+		return
+	}
+	if _, ok := ambiguous[key]; ok {
+		return
+	}
+	lookup[key] = entityID
+}
+
+func canonicalGraphEndpoint(value string, document *graphExtractionDocument, lookup map[string]string, ambiguous map[string]struct{}, sourceText string) string {
+	log.Trace("canonicalGraphEndpoint")
+
+	trimmed := strings.TrimSpace(value)
+	key := normalizeGraphEndpoint(trimmed)
+	if _, ok := ambiguous[key]; ok {
+		return trimmed
+	}
+	if entityID, ok := lookup[key]; ok {
+		return entityID
+	}
+	if endpointMentionedInSource(trimmed, sourceText) {
+		entityID := graphEndpointEntityID(trimmed)
+		document.Entities = append(document.Entities, graphExtractionEntityDTO{
+			ID:          entityID,
+			Name:        trimmed,
+			Type:        "other",
+			Description: "Mentioned in source chunk.",
+		})
+		addGraphEndpointAlias(lookup, ambiguous, entityID, entityID)
+		addGraphEndpointAlias(lookup, ambiguous, trimmed, entityID)
+		return entityID
+	}
+	return trimmed
+}
+
+func endpointMentionedInSource(endpoint string, sourceText string) bool {
+	log.Trace("endpointMentionedInSource")
+
+	endpointKey := normalizeGraphEndpoint(endpoint)
+	if endpointKey == "" {
+		return false
+	}
+	return strings.Contains(normalizeGraphEndpoint(sourceText), endpointKey)
+}
+
+func graphEndpointEntityID(value string) string {
+	log.Trace("graphEndpointEntityID")
+
+	parts := make([]string, 0)
+	var current strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			current.WriteRune(r)
+			continue
+		}
+		if current.Len() > 0 {
+			parts = append(parts, current.String())
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	if len(parts) == 0 {
+		return "entity"
+	}
+	return strings.Join(parts, "_")
+}
+
+func normalizeGraphEndpoint(value string) string {
+	log.Trace("normalizeGraphEndpoint")
+
+	var out strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }

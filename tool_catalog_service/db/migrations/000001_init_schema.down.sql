@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS bighill_tool_catalog_db.outbox_messages;
+DROP POLICY IF EXISTS tool_credential_bindings_tenant_isolation ON bighill_tool_catalog_db.tool_credential_bindings;
+DROP TABLE IF EXISTS bighill_tool_catalog_db.tool_credential_bindings;
+DROP POLICY IF EXISTS tenant_capability_grants_tenant_isolation ON bighill_tool_catalog_db.tenant_capability_grants;
+DROP TABLE IF EXISTS bighill_tool_catalog_db.tenant_capability_grants;
+DROP POLICY IF EXISTS tool_capability_versions_system_delete ON bighill_tool_catalog_db.tool_capability_versions;
+DROP POLICY IF EXISTS tool_capability_versions_system_update ON bighill_tool_catalog_db.tool_capability_versions;
+DROP POLICY IF EXISTS tool_capability_versions_system_insert ON bighill_tool_catalog_db.tool_capability_versions;
+DROP POLICY IF EXISTS tool_capability_versions_read ON bighill_tool_catalog_db.tool_capability_versions;
+DROP TABLE IF EXISTS bighill_tool_catalog_db.tool_capability_versions;
+DROP TYPE IF EXISTS bighill_tool_catalog_db.tenant_capability_grant_status_enum;
+DROP TYPE IF EXISTS bighill_tool_catalog_db.tool_capability_lifecycle_status_enum;
+DROP TYPE IF EXISTS bighill_tool_catalog_db.tool_capability_kind_enum;

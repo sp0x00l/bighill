@@ -5,7 +5,7 @@ BIGHILL_ROOT=$(git rev-parse --show-toplevel)
 
 if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
     export TRAINING_SERVICE_TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-localhost:7233}
-    export TRAINING_SERVICE_PROMOTION_REPORT_SUBSCRIBER_ENABLED=false
+    export TRAINING_SERVICE_PROMOTION_REPORT_SUBSCRIBER_ENABLED=true
     export INFERENCE_SERVICE_HTTP_HOST=${INFERENCE_SERVICE_HTTP_HOST:-127.0.0.1}
     export INFERENCE_SERVICE_HTTP_PORT=${INFERENCE_SERVICE_HTTP_PORT:-8087}
 elif [ "$1" = "staging" ]; then
@@ -65,6 +65,8 @@ if [ "$1" = "local-dev" ] || [ "$1" = "cicd" ]; then
 else
     export TRAINING_SERVICE_EXECUTOR_PROVIDER=kuberay
 fi
+export TRAINING_SERVICE_RAY_HEAD_PORT=6380
+export TRAINING_SERVICE_RAY_PYENV_VERSION=3.11.9
 export TRAINING_SERVICE_RAY_JOBS_URL=http://localhost:8265
 export TRAINING_SERVICE_RAY_TRAINING_ENTRYPOINT="python -m training_jobs.train"
 export TRAINING_SERVICE_RAY_EVALUATION_ENTRYPOINT="python -m training_jobs.evaluate"

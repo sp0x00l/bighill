@@ -27,7 +27,7 @@ var _ = Describe("RedisPublisher", func() {
 		event := userevents.Event{
 			EventID:            "event-1",
 			OccurredAt:         time.Unix(100, 0).UTC(),
-			SourceService:      "model_registry_service",
+			SourceService:      "test_service",
 			EventType:          userevents.EventTypeModelServingLoaded,
 			Severity:           userevents.SeveritySuccess,
 			RequiredPermission: "model:read",

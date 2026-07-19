@@ -20,27 +20,27 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type ToolServiceClientConfig struct {
+type ToolExecutionServiceClientConfig struct {
 	Address       string
 	DialTimeoutMs int
 	CallTimeoutMs int
 	RetryCount    int
 }
 
-func ValidateToolServiceClientConfig(config ToolServiceClientConfig) error {
-	log.Trace("ValidateToolServiceClientConfig")
+func ValidateToolExecutionServiceClientConfig(config ToolExecutionServiceClientConfig) error {
+	log.Trace("ValidateToolExecutionServiceClientConfig")
 
 	if strings.TrimSpace(config.Address) == "" {
-		return fmt.Errorf("tool service grpc address is required")
+		return fmt.Errorf("tool execution service grpc address is required")
 	}
 	if config.DialTimeoutMs <= 0 {
-		return fmt.Errorf("tool service grpc dial timeout must be greater than zero")
+		return fmt.Errorf("tool execution service grpc dial timeout must be greater than zero")
 	}
 	if config.CallTimeoutMs <= 0 {
-		return fmt.Errorf("tool service grpc call timeout must be greater than zero")
+		return fmt.Errorf("tool execution service grpc call timeout must be greater than zero")
 	}
 	if config.RetryCount <= 0 {
-		return fmt.Errorf("tool service grpc retry count must be greater than zero")
+		return fmt.Errorf("tool execution service grpc retry count must be greater than zero")
 	}
 	return nil
 }
@@ -48,13 +48,13 @@ func ValidateToolServiceClientConfig(config ToolServiceClientConfig) error {
 type RemoteToolInvoker struct {
 	conn    *grpc.ClientConn
 	client  toolspb.ToolServiceClient
-	adapter *toolServiceDTOAdapter
+	adapter *toolExecutionServiceDTOAdapter
 }
 
-func NewRemoteToolInvoker(ctx context.Context, config ToolServiceClientConfig, opts ...grpc.DialOption) (*RemoteToolInvoker, error) {
+func NewRemoteToolInvoker(ctx context.Context, config ToolExecutionServiceClientConfig, opts ...grpc.DialOption) (*RemoteToolInvoker, error) {
 	log.Trace("NewRemoteToolInvoker")
 
-	if err := ValidateToolServiceClientConfig(config); err != nil {
+	if err := ValidateToolExecutionServiceClientConfig(config); err != nil {
 		return nil, err
 	}
 	conn, err := rpcLib.NewClient(ctx, rpcLib.Config{
@@ -65,24 +65,24 @@ func NewRemoteToolInvoker(ctx context.Context, config ToolServiceClientConfig, o
 		MaxRetryAttempts: config.RetryCount,
 	}, opts...)
 	if err != nil {
-		log.WithContext(ctx).WithError(err).Error("tool service grpc connection instantiation failed")
+		log.WithContext(ctx).WithError(err).Error("tool execution service grpc connection instantiation failed")
 		return nil, err
 	}
 	return &RemoteToolInvoker{
 		conn:    conn,
 		client:  toolspb.NewToolServiceClient(conn),
-		adapter: newToolServiceDTOAdapter(validator.New()),
+		adapter: newToolExecutionServiceDTOAdapter(validator.New()),
 	}, nil
 }
 
-func NewRemoteToolInvokerWithClient(client toolspb.ToolServiceClient, adapter *toolServiceDTOAdapter) (*RemoteToolInvoker, error) {
+func NewRemoteToolInvokerWithClient(client toolspb.ToolServiceClient, adapter *toolExecutionServiceDTOAdapter) (*RemoteToolInvoker, error) {
 	log.Trace("NewRemoteToolInvokerWithClient")
 
 	if client == nil {
-		return nil, domain.ErrValidationFailed.Extend("tool service client is required")
+		return nil, domain.ErrValidationFailed.Extend("tool execution service client is required")
 	}
 	if adapter == nil {
-		return nil, domain.ErrValidationFailed.Extend("tool service dto adapter is required")
+		return nil, domain.ErrValidationFailed.Extend("tool execution service dto adapter is required")
 	}
 	return &RemoteToolInvoker{client: client, adapter: adapter}, nil
 }
@@ -108,7 +108,7 @@ func (i *RemoteToolInvoker) Available(ctx context.Context, resolution app.ToolRe
 	}
 	resp, err := i.client.ListAvailableTools(ctx, req)
 	if err != nil {
-		log.WithContext(ctx).WithError(err).Error("tool service list available tools failed")
+		log.WithContext(ctx).WithError(err).Error("tool execution service list available tools failed")
 		return nil, remoteToolError(err)
 	}
 	return i.adapter.FromListAvailableToolsResponse(resp, bindings)
@@ -130,7 +130,7 @@ func (i *RemoteToolInvoker) Invoke(ctx context.Context, invocation app.ToolInvoc
 	}
 	resp, err := i.client.Invoke(ctx, req)
 	if err != nil {
-		log.WithContext(ctx).WithError(err).Error("tool service invoke failed")
+		log.WithContext(ctx).WithError(err).Error("tool execution service invoke failed")
 		mappedErr := remoteToolError(err)
 		return model.ToolResult{
 			InvocationID: invocation.InvocationID,
@@ -171,7 +171,7 @@ func remoteToolError(err error) error {
 	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
 		return domain.ErrModelNotReady.Extend(rpcLib.ExtractGRPCErrMsg(err).Error())
 	default:
-		return fmt.Errorf("tool service request failed: %w", rpcLib.ExtractGRPCErrMsg(err))
+		return fmt.Errorf("tool execution service request failed: %w", rpcLib.ExtractGRPCErrMsg(err))
 	}
 }
 

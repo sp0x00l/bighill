@@ -172,9 +172,14 @@ install_go_protobuf_plugins() {
 
 install_python_tooling() {
     echo "Installing Python tooling..."
+    local REPO_ROOT
+    REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
     # PEP 668: Python 3.12+ on Debian requires --break-system-packages for system-wide pip installs
     python3 -m pip install --upgrade --user --break-system-packages pip
     python3 -m pip install --upgrade --user --break-system-packages aws-sam-cli grpcio-tools
+    python3 -m pip install --upgrade --user --break-system-packages -e "$REPO_ROOT/shared_py"
+    python3 -m pip install --upgrade --user --break-system-packages -e "$REPO_ROOT/training_service/training_jobs[runtime]"
 }
 
 install_aws_cli() {

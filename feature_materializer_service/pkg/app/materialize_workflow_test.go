@@ -84,12 +84,18 @@ var _ = Describe("MaterializeWorkflow", func() {
 			IdempotencyKey:    usecase.EmbeddingSnapshotIdempotencyKey(featureSnapshot.FeatureSnapshotID, strategy),
 			Strategy:          strategy,
 		}).Return(embeddingSnapshot, nil)
-		graphStrategy := model.ApplyGraphExtractionStrategyDefaults(model.GraphExtractionStrategy{})
+		graphStrategy := model.ApplyGraphExtractionStrategyDefaults(model.GraphExtractionStrategy{
+			ExtractionModel:         "graph-model",
+			ExtractionPromptVersion: model.DefaultGraphExtractionPromptVersion,
+			ExtractionSchemaVersion: model.DefaultGraphExtractionSchemaVersion,
+		})
+		graphIdempotencyKey, err := usecase.GraphSnapshotIdempotencyKey(embeddingSnapshot.EmbeddingSnapshotID, graphStrategy)
+		Expect(err).NotTo(HaveOccurred())
 		env.OnActivity(usecase.MaterializeGraphActivityName, usecase.MaterializeGraphActivityInput{
 			EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
 			UserID:              embeddingSnapshot.UserID,
 			OrgID:               embeddingSnapshot.OrgID,
-			IdempotencyKey:      usecase.GraphSnapshotIdempotencyKey(embeddingSnapshot.EmbeddingSnapshotID, graphStrategy),
+			IdempotencyKey:      graphIdempotencyKey,
 			Strategy:            graphStrategy,
 		}).Return(graphSnapshot, nil)
 
@@ -192,6 +198,16 @@ var _ = Describe("MaterializeWorkflow", func() {
 		second := model.ApplyEmbeddingStrategyDefaults(model.EmbeddingStrategy{EmbeddingProvider: "tei", EmbeddingModel: "bge-m3", ChunkSize: 512})
 
 		Expect(usecase.EmbeddingSnapshotIdempotencyKey(featureSnapshotID, first)).NotTo(Equal(usecase.EmbeddingSnapshotIdempotencyKey(featureSnapshotID, second)))
+	})
+
+	It("rejects graph idempotency keys for unsupported prompt versions", func() {
+		_, err := usecase.GraphSnapshotIdempotencyKey(uuid.New(), model.GraphExtractionStrategy{
+			ExtractionModel:         "graph-model",
+			ExtractionPromptVersion: "missing-prompt",
+			ExtractionSchemaVersion: model.DefaultGraphExtractionSchemaVersion,
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("unsupported graph extraction prompt version")))
 	})
 
 	It("skips embedding materialization for generic parquet datasets", func() {

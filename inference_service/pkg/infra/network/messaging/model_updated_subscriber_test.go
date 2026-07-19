@@ -2,6 +2,7 @@ package messaging_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"inference_service/pkg/domain/model"
 	inferencemessaging "inference_service/pkg/infra/network/messaging"
 
+	agentregistrypb "lib/data_contracts_lib/agent_registry"
 	datasetpb "lib/data_contracts_lib/data_registry"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	sharedmessaging "lib/shared_lib/messaging"
@@ -26,6 +28,7 @@ func TestMessaging(t *testing.T) {
 type recordingInferenceUsecase struct {
 	model          *model.InferenceModel
 	dataset        *model.InferenceDataset
+	championUpdate model.AgentChampionUpdate
 	idempotencyKey uuid.UUID
 	err            error
 }
@@ -46,6 +49,10 @@ func (u *recordingInferenceUsecase) ReadModel(context.Context, uuid.UUID, uuid.U
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) ReadAgentSpec(context.Context, uuid.UUID, string) (*model.AgentSpec, error) {
+	return nil, nil
+}
+
 func (u *recordingInferenceUsecase) PublishAgentSpec(context.Context, model.AgentSpecPublication) (*model.AgentSpec, error) {
 	return nil, nil
 }
@@ -54,8 +61,17 @@ func (u *recordingInferenceUsecase) ListEndpoints(context.Context, uuid.UUID) ([
 	return nil, nil
 }
 
+func (u *recordingInferenceUsecase) ReadEndpoint(context.Context, uuid.UUID, uuid.UUID) (*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
 func (u *recordingInferenceUsecase) PublishEndpoint(context.Context, model.EndpointPublication) (*model.PublishedEndpoint, error) {
 	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) ApplyAgentChampionUpdate(_ context.Context, update model.AgentChampionUpdate) (*model.PublishedEndpoint, error) {
+	u.championUpdate = update
+	return nil, u.err
 }
 
 func (u *recordingInferenceUsecase) SetEndpointDatasets(context.Context, model.EndpointDatasetBinding) (*model.PublishedEndpoint, error) {
@@ -67,6 +83,10 @@ func (u *recordingInferenceUsecase) SetEndpointMergeStrategy(context.Context, mo
 }
 
 func (u *recordingInferenceUsecase) GenerateForEndpoint(context.Context, uuid.UUID, model.GenerateRequest) (*model.GenerateResponse, error) {
+	return nil, nil
+}
+
+func (u *recordingInferenceUsecase) StartAgentEvalRun(context.Context, uuid.UUID, string, model.GenerateRequest) (*model.GenerateResponse, error) {
 	return nil, nil
 }
 
@@ -130,8 +150,78 @@ var _ = Describe("InferenceTopics", func() {
 	It("subscribes to registry topics", func() {
 		Expect(inferencemessaging.InferenceTopics{
 			ModelRegistry: "model_registry",
+			AgentRegistry: "agent_registry",
 			DataRegistry:  "data_registry",
-		}.List()).To(Equal([]string{"model_registry", "data_registry"}))
+		}.List()).To(Equal([]string{"model_registry", "agent_registry", "data_registry"}))
+	})
+})
+
+var _ = Describe("AgentChampionUpdatedEventListener", func() {
+	It("exposes the agent champion updated message type", func() {
+		listener := inferencemessaging.NewAgentChampionUpdatedEventListener(&recordingInferenceUsecase{})
+
+		Expect(listener.MsgType()).To(Equal(sharedmessaging.MsgTypeAgentChampionUpdated))
+		Expect(listener.NewMessage()).To(Equal(&agentregistrypb.AgentChampionUpdatedEvent{}))
+	})
+
+	It("maps an agent champion update event into the inference use case", func() {
+		endpointID := uuid.New()
+		orgID := uuid.New()
+		decisionID := uuid.New()
+		servingModelID := uuid.New()
+		decidedAt := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+		uc := &recordingInferenceUsecase{}
+		listener := inferencemessaging.NewAgentChampionUpdatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), endpointID, &agentregistrypb.AgentChampionUpdatedEvent{
+			OrgId:                 orgID.String(),
+			AgentLineage:          "support_agent",
+			EndpointId:            endpointID.String(),
+			AgentSpecHash:         "sha256:new-spec",
+			PreviousAgentSpecHash: "sha256:old-spec",
+			DecisionId:            decisionID.String(),
+			ServingModelId:        servingModelID.String(),
+			DecidedAt:             decidedAt.Format(time.RFC3339Nano),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.championUpdate.OrgID).To(Equal(orgID))
+		Expect(uc.championUpdate.EndpointID).To(Equal(endpointID))
+		Expect(uc.championUpdate.AgentLineage).To(Equal("support_agent"))
+		Expect(uc.championUpdate.AgentSpecHash).To(Equal("sha256:new-spec"))
+		Expect(uc.championUpdate.PreviousAgentSpecHash).To(Equal("sha256:old-spec"))
+		Expect(uc.championUpdate.ServingModelID).To(Equal(servingModelID))
+		Expect(uc.championUpdate.DecisionID).To(Equal(decisionID))
+		Expect(uc.championUpdate.DecidedAt).To(Equal(decidedAt))
+	})
+
+	It("propagates usecase errors as retryable champion update failures", func() {
+		endpointID := uuid.New()
+		storeErr := errors.New("database unavailable")
+		uc := &recordingInferenceUsecase{err: storeErr}
+		listener := inferencemessaging.NewAgentChampionUpdatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), endpointID, validAgentChampionUpdatedEvent(endpointID))
+
+		Expect(err).To(Equal(storeErr))
+		Expect(sharedmessaging.IsNonRetryable(err)).To(BeFalse())
+	})
+
+	It("returns non-retryable errors for stale or malformed champion update payloads", func() {
+		endpointID := uuid.New()
+		listener := inferencemessaging.NewAgentChampionUpdatedEventListener(&recordingInferenceUsecase{})
+
+		err := listener.Handle(context.Background(), endpointID, &agentregistrypb.AgentChampionUpdatedEvent{
+			EndpointId:    uuid.NewString(),
+			OrgId:         uuid.NewString(),
+			AgentLineage:  "support_agent",
+			AgentSpecHash: "sha256:new-spec",
+			DecisionId:    uuid.NewString(),
+			DecidedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(sharedmessaging.IsNonRetryable(err)).To(BeTrue())
 	})
 })
 
@@ -239,6 +329,18 @@ var _ = Describe("ModelUpdatedEventListener", func() {
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 
+	It("propagates usecase errors as retryable model update failures", func() {
+		modelID := uuid.New()
+		storeErr := errors.New("database unavailable")
+		uc := &recordingInferenceUsecase{err: storeErr}
+		listener := inferencemessaging.NewModelUpdatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), modelID, validModelUpdatedEvent(modelID))
+
+		Expect(err).To(Equal(storeErr))
+		Expect(sharedmessaging.IsNonRetryable(err)).To(BeFalse())
+	})
+
 	It("returns non-retryable errors for missing model metadata", func() {
 		modelID := uuid.New()
 		uc := &recordingInferenceUsecase{}
@@ -336,6 +438,18 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		Expect(uc.idempotencyKey).NotTo(Equal(uuid.Nil))
 	})
 
+	It("propagates usecase errors as retryable dataset update failures", func() {
+		datasetID := uuid.New()
+		storeErr := errors.New("database unavailable")
+		uc := &recordingInferenceUsecase{err: storeErr}
+		listener := inferencemessaging.NewDatasetUpdatedEventListener(uc)
+
+		err := listener.Handle(context.Background(), datasetID, validDatasetUpdatedEvent(datasetID))
+
+		Expect(err).To(Equal(storeErr))
+		Expect(sharedmessaging.IsNonRetryable(err)).To(BeFalse())
+	})
+
 	It("returns non-retryable errors for missing dataset metadata", func() {
 		datasetID := uuid.New()
 		uc := &recordingInferenceUsecase{}
@@ -390,3 +504,52 @@ var _ = Describe("DatasetUpdatedEventListener", func() {
 		Expect(sharedmessaging.IsNonRetryable(err)).To(BeTrue())
 	})
 })
+
+func validAgentChampionUpdatedEvent(endpointID uuid.UUID) *agentregistrypb.AgentChampionUpdatedEvent {
+	return &agentregistrypb.AgentChampionUpdatedEvent{
+		OrgId:         uuid.NewString(),
+		AgentLineage:  "support_agent",
+		EndpointId:    endpointID.String(),
+		AgentSpecHash: "sha256:new-spec",
+		DecisionId:    uuid.NewString(),
+		DecidedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func validModelUpdatedEvent(modelID uuid.UUID) *modelregistrypb.ModelUpdatedEvent {
+	return &modelregistrypb.ModelUpdatedEvent{
+		ModelId:           modelID.String(),
+		UserId:            uuid.NewString(),
+		OrgId:             uuid.NewString(),
+		ModelKind:         "BASE",
+		Source:            "UPLOAD",
+		SourceUri:         "s3://local-dev-bucket/models/base-model",
+		SourceMetadata:    `{"upload_id":"u1"}`,
+		Name:              "uploaded-base",
+		ModelVersion:      1,
+		BaseModel:         "s3://local-dev-bucket/models/base-model",
+		ArtifactLocation:  "s3://local-dev-bucket/models/base-model",
+		ArtifactFormat:    "HF_FULL_WEIGHTS",
+		ArtifactChecksum:  "checksum",
+		ArtifactSizeBytes: 42,
+		ServingTarget:     "vllm-local",
+		ServingModel:      "uploaded-base-v1",
+		ServingProtocol:   "OPENAI_CHAT_COMPLETIONS",
+		ServingLoadStatus: "LOADED",
+		EffectiveBaseId:   "sha256-uploaded-base",
+		Status:            "READY",
+	}
+}
+
+func validDatasetUpdatedEvent(datasetID uuid.UUID) *datasetpb.DatasetUpdatedEvent {
+	return &datasetpb.DatasetUpdatedEvent{
+		DatasetId:         datasetID.String(),
+		UserId:            uuid.NewString(),
+		OrgId:             uuid.NewString(),
+		DatasetVersion:    1,
+		ProcessingState:   "PENDING",
+		ProcessingProfile: "TEXT_RAG_PROCESSING_PROFILE",
+		SchemaVersion:     1,
+		SchemaMetadata:    `{"columns":[]}`,
+	}
+}

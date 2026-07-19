@@ -1,6 +1,6 @@
 #! /usr/bin/env sh
 
-export BIGHILL_DB_NAMES="bighill_data_registry_db bighill_ingestion_db"
+export BIGHILL_DB_NAMES="bighill_data_registry_db bighill_ingestion_db bighill_tool_catalog_db bighill_agent_registry_db"
 
 export BIGHILL_DB_MIGRATIONS_USER=bighill_user
 export BIGHILL_DB_PASSWORD=LrDwb53E7DmFc2j4qw77n4pUUfKtULDVh4vrHjWw

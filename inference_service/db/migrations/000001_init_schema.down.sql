@@ -13,6 +13,7 @@ DROP TABLE IF EXISTS bighill_inference_db.capability_reports;
 DROP INDEX IF EXISTS bighill_inference_db.index_published_endpoint_datasets_dataset_id;
 DROP TABLE IF EXISTS bighill_inference_db.published_endpoint_datasets;
 DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_natural_key;
+DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_serving_model_id;
 DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_model_id;
 DROP INDEX IF EXISTS bighill_inference_db.index_published_inference_endpoints_org_id;
 DROP TABLE IF EXISTS bighill_inference_db.published_inference_endpoints;

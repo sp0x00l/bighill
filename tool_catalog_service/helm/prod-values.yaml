@@ -1,0 +1,5 @@
+env:
+  environment: "prod"
+  pgHost: "bighill-postgres"
+  pgSslMode: "require"
+  dlq: ""

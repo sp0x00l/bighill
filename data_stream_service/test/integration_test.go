@@ -95,6 +95,7 @@ var _ = Describe("Data stream datasource integration", Label("external-data-sour
 			"mysql":      uuid.NewString(),
 			"clickhouse": uuid.NewString(),
 			"mongo":      uuid.NewString(),
+			"saas":       uuid.NewString(),
 		}
 
 		var err error

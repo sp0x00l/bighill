@@ -100,6 +100,17 @@ type StartDPOTrainingRunCommand struct {
 	EvaluationProfile   string
 }
 
+type StartAgentAdapterTrainingRunCommand struct {
+	IdempotencyKey     uuid.UUID
+	DatasetID          uuid.UUID
+	DatasetURI         string
+	DatasetContentHash string
+	SourceModelID      uuid.UUID
+	AgentLineage       string
+	TrainingProfile    string
+	EvaluationProfile  string
+}
+
 type TrainingRunStartResult struct {
 	TrainingRunID string
 	StatusURL     string

@@ -7,6 +7,7 @@ import (
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -35,6 +36,19 @@ func (u *inferenceUsecase) PublishAgentSpec(ctx context.Context, request model.A
 		return nil, err
 	}
 	return u.agentSpecRepository.UpsertAgentSpec(ctx, spec)
+}
+
+func (u *inferenceUsecase) ReadAgentSpec(ctx context.Context, orgID uuid.UUID, agentSpecHash string) (spec *model.AgentSpec, err error) {
+	log.Trace("InferenceUsecase ReadAgentSpec")
+
+	ctx = ctxutil.WithOrgID(ctx, orgID)
+	ctx, span := startInferenceSpan(ctx, "agent_spec.read",
+		attribute.String("org_id", orgID.String()),
+		attribute.String("agent_spec_hash", agentSpecHash),
+	)
+	defer endInferenceSpanOnReturn(ctx, span, &err)
+
+	return u.agentSpecRepository.ReadAgentSpecByHash(ctx, orgID, agentSpecHash)
 }
 
 func (u *inferenceUsecase) ensureAgentSpecPublishable(ctx context.Context, userID uuid.UUID, spec *model.AgentSpec, inferenceModel *model.InferenceModel) error {

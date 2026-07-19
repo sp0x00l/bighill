@@ -30,6 +30,16 @@ type StartDPOTrainingRunDTO struct {
 	EvaluationProfile   string `json:"evaluation_profile"`
 }
 
+type StartAgentAdapterTrainingRunDTO struct {
+	DatasetID          string `json:"dataset_id"           validate:"required,uuid,ne=00000000-0000-0000-0000-000000000000"`
+	DatasetURI         string `json:"dataset_uri"          validate:"required"`
+	DatasetContentHash string `json:"dataset_content_hash" validate:"required"`
+	SourceModelID      string `json:"source_model_id"      validate:"required,uuid,ne=00000000-0000-0000-0000-000000000000"`
+	AgentLineage       string `json:"agent_lineage"        validate:"required"`
+	TrainingProfile    string `json:"training_profile"`
+	EvaluationProfile  string `json:"evaluation_profile"`
+}
+
 type StartTrainingRunResponseDTO struct {
 	TrainingRunID string `json:"training_run_id"`
 	StatusURL     string `json:"status_url"`
@@ -43,6 +53,7 @@ type TrainingRunStatusDTO struct {
 type TrainingRunDTOAdapter interface {
 	FromDTO(ctx context.Context, body []byte) (model.StartTrainingRunCommand, error)
 	FromDPOTrainingRunDTO(ctx context.Context, body []byte) (model.StartDPOTrainingRunCommand, error)
+	FromAgentAdapterTrainingRunDTO(ctx context.Context, body []byte) (model.StartAgentAdapterTrainingRunCommand, error)
 	ToStartTrainingRunDTO(ctx context.Context, result *model.TrainingRunStartResult) ([]byte, error)
 	ToTrainingRunStatusDTO(ctx context.Context, result *model.TrainingRunStatusResult) ([]byte, error)
 }
@@ -119,6 +130,47 @@ func (a *trainingRunDTOAdapter) FromDPOTrainingRunDTO(ctx context.Context, body 
 		PreferenceDatasetID: preferenceDatasetID,
 		TrainingProfile:     strings.TrimSpace(dto.TrainingProfile),
 		EvaluationProfile:   strings.TrimSpace(dto.EvaluationProfile),
+	}, nil
+}
+
+func (a *trainingRunDTOAdapter) FromAgentAdapterTrainingRunDTO(ctx context.Context, body []byte) (model.StartAgentAdapterTrainingRunCommand, error) {
+	log.Trace("TrainingRunDTOAdapter FromAgentAdapterTrainingRunDTO")
+
+	var dto StartAgentAdapterTrainingRunDTO
+	if err := a.encoder.DecodeStringToData(string(body), &dto); err != nil {
+		return model.StartAgentAdapterTrainingRunCommand{}, domain.ErrValidationFailed.Extend(err.Error())
+	}
+	dto.DatasetURI = strings.TrimSpace(dto.DatasetURI)
+	dto.DatasetContentHash = strings.TrimSpace(dto.DatasetContentHash)
+	dto.AgentLineage = strings.TrimSpace(dto.AgentLineage)
+	dto.TrainingProfile = strings.TrimSpace(dto.TrainingProfile)
+	dto.EvaluationProfile = strings.TrimSpace(dto.EvaluationProfile)
+	if err := a.validator.Struct(dto); err != nil {
+		log.WithContext(ctx).WithError(err).Error("StartAgentAdapterTrainingRunDTO validation failed")
+		return model.StartAgentAdapterTrainingRunCommand{}, domain.ErrValidationFailed.Extend(err.Error())
+	}
+	datasetID, err := uuid.Parse(dto.DatasetID)
+	if err != nil {
+		return model.StartAgentAdapterTrainingRunCommand{}, domain.ErrValidationFailed.Extend("dataset id is required")
+	}
+	sourceModelID, err := uuid.Parse(dto.SourceModelID)
+	if err != nil {
+		return model.StartAgentAdapterTrainingRunCommand{}, domain.ErrValidationFailed.Extend("source model id is required")
+	}
+	if err := validatePinnedProfileName("training profile", dto.TrainingProfile); err != nil {
+		return model.StartAgentAdapterTrainingRunCommand{}, err
+	}
+	if err := validatePinnedProfileName("evaluation profile", dto.EvaluationProfile); err != nil {
+		return model.StartAgentAdapterTrainingRunCommand{}, err
+	}
+	return model.StartAgentAdapterTrainingRunCommand{
+		DatasetID:          datasetID,
+		DatasetURI:         dto.DatasetURI,
+		DatasetContentHash: dto.DatasetContentHash,
+		SourceModelID:      sourceModelID,
+		AgentLineage:       dto.AgentLineage,
+		TrainingProfile:    dto.TrainingProfile,
+		EvaluationProfile:  dto.EvaluationProfile,
 	}, nil
 }
 

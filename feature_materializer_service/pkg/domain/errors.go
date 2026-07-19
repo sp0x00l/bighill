@@ -30,6 +30,14 @@ func IsServiceError(err error, target *ServiceError) bool {
 	return errors.Is(err, target)
 }
 
+func ServiceErrorCode(err error) string {
+	var serviceError *ServiceError
+	if !errors.As(err, &serviceError) {
+		return ""
+	}
+	return serviceError.Code
+}
+
 var (
 	ErrValidationFailed            = &ServiceError{Code: "validation_failed", Message: "validation failed"}
 	ErrRawSnapshotMaterialize      = &ServiceError{Code: "raw_snapshot_materialize_failed", Message: "raw snapshot materialize failed"}
@@ -37,6 +45,7 @@ var (
 	ErrEmbeddingMaterialize        = &ServiceError{Code: "embedding_materialize_failed", Message: "embedding materialize failed"}
 	ErrEmbeddingSearch             = &ServiceError{Code: "embedding_search_failed", Message: "embedding search failed"}
 	ErrGraphMaterialize            = &ServiceError{Code: "graph_materialize_failed", Message: "graph materialize failed"}
+	ErrGraphExtractionInvalid      = &ServiceError{Code: "graph_extraction_invalid_document", Message: "graph extraction document invalid"}
 	ErrGraphSearch                 = &ServiceError{Code: "graph_search_failed", Message: "graph search failed"}
 	ErrArtifactRead                = &ServiceError{Code: "artifact_read_failed", Message: "artifact read failed"}
 	ErrArtifactWrite               = &ServiceError{Code: "artifact_write_failed", Message: "artifact write failed"}

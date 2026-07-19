@@ -1,6 +1,6 @@
 #! /usr/bin/env sh
 
-export BIGHILL_DB_NAMES="bighill_data_registry_db bighill_ingestion_db bighill_feature_materializer_db bighill_inference_db bighill_model_registry_db bighill_tenant_db bighill_tool_db"
+export BIGHILL_DB_NAMES="bighill_data_registry_db bighill_ingestion_db bighill_feature_materializer_db bighill_inference_db bighill_model_registry_db bighill_tenant_db bighill_tool_execution_db bighill_tool_catalog_db bighill_agent_registry_db"
 
 
 # if [ "$1" = "local-dev" ]; then

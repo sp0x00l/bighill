@@ -49,7 +49,6 @@ var _ = Describe("source query command", func() {
 				payload["database"] = "db"
 				payload["collection"] = "items"
 			}
-
 			query, err := parseSourceQueryCommand(sourceQueryJSON(payload))
 
 			if sourceTypeSupportsRegistryQuery(tc.want) {

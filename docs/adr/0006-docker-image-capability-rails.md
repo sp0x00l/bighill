@@ -5,7 +5,7 @@
 Proposed, deferred.
 
 Do not build this until after the first flywheel proof. It depends on
-[ADR 0005](0005-tool-service-boundary-contract.md) and the tool catalog.
+[ADR 0005](0005-tool-execution-service-boundary-contract.md) and the tool catalog.
 
 ## Context
 
@@ -27,7 +27,7 @@ Allow Docker images as hosted capability runtimes, not as the agent runtime.
 The path is:
 
 ```
-OCI image -> capability manifest -> catalog -> deployment controller -> tool_service invocation
+OCI image -> capability manifest -> catalog -> deployment controller -> tool_execution_service invocation
 ```
 
 It is not:
@@ -46,7 +46,7 @@ A hosted container is registered in the catalog with a manifest:
 - required credentials
 - resource and timeout limits
 
-A deployment controller deploys the pinned digest to Kubernetes. `tool_service` invokes it through
+A deployment controller deploys the pinned digest to Kubernetes. `tool_execution_service` invokes it through
 the shared boundary contract from ADR 0005. The agent spec references it by stable capability id and
 version.
 
@@ -62,7 +62,7 @@ Required controls are enforced by the platform, not by the image:
 - NetworkPolicy egress allowlist
 - platform-injected credentials, never secrets in the spec
 - no direct DB, Kafka, or Redis access unless explicitly granted
-- input/output schema validation at `tool_service`
+- input/output schema validation at `tool_execution_service`
 - timeout and response-size caps
 - durable boundary audit per call
 - OpenTelemetry trace propagation

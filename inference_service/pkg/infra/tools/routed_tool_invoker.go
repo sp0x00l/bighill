@@ -62,7 +62,7 @@ func (i *RoutedToolInvoker) Available(ctx context.Context, resolution app.ToolRe
 	}
 	if len(remoteBindings) > 0 {
 		if i.remote == nil {
-			return nil, domain.ErrValidationFailed.Extend("remote tool service is not configured")
+			return nil, domain.ErrValidationFailed.Extend("remote tool execution service is not configured")
 		}
 		remoteSpecs, err := i.remote.Available(ctx, resolution, remoteBindings)
 		if err != nil {
@@ -88,7 +88,7 @@ func (i *RoutedToolInvoker) Invoke(ctx context.Context, invocation app.ToolInvoc
 		return i.local.Invoke(ctx, invocation, call)
 	}
 	if i.remote == nil {
-		err := domain.ErrValidationFailed.Extend("remote tool service is not configured")
+		err := domain.ErrValidationFailed.Extend("remote tool execution service is not configured")
 		return model.ToolResult{
 			CallID:    call.ID,
 			Name:      call.Name,

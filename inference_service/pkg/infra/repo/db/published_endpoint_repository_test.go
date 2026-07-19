@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"time"
 
 	"inference_service/pkg/domain"
 	"inference_service/pkg/domain/model"
@@ -130,13 +131,101 @@ var _ = Describe("PublishedEndpointRepository", func() {
 
 		It("surfaces invalid persisted endpoint modes", func() {
 			row := publishedEndpointRow(endpoint).(*repositoryRow)
-			row.values[3] = "BROKEN"
+			row.values[4] = "BROKEN"
 			pool.nextRows = []pgx.Row{row}
 
 			record, err := repository.ReadEndpoint(ctx, endpoint.OrgID, endpoint.EndpointID)
 
 			Expect(record).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring("parse published endpoint mode")))
+		})
+	})
+
+	Describe("ApplyAgentChampionUpdate", func() {
+		It("updates the endpoint binding when the champion decision is newer", func() {
+			specID := uuid.New()
+			decisionID := uuid.New()
+			servingModelID := uuid.New()
+			decidedAt := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+			updated := *endpoint
+			updated.ServingModelID = servingModelID
+			updated.AgentSpecID = specID
+			updated.AgentSpecHash = "sha256:new-spec"
+			updated.ChampionDecisionID = decisionID
+			updated.ChampionDecidedAt = decidedAt
+			pool.nextRows = []pgx.Row{
+				publishedEndpointRow(endpoint),
+				&repositoryRow{values: []any{specID.String(), "support_agent"}},
+				publishedEndpointRow(&updated),
+			}
+
+			record, err := repository.ApplyAgentChampionUpdate(ctx, model.AgentChampionUpdate{
+				OrgID:          endpoint.OrgID,
+				EndpointID:     endpoint.EndpointID,
+				AgentLineage:   "support_agent",
+				AgentSpecHash:  "sha256:new-spec",
+				ServingModelID: servingModelID,
+				DecisionID:     decisionID,
+				DecidedAt:      decidedAt,
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(record.ModelID).To(Equal(endpoint.ModelID))
+			Expect(record.ServingModelID).To(Equal(servingModelID))
+			Expect(record.AgentSpecID).To(Equal(specID))
+			Expect(record.AgentSpecHash).To(Equal("sha256:new-spec"))
+			Expect(record.ChampionDecisionID).To(Equal(decisionID))
+			Expect(record.ChampionDecidedAt).To(Equal(decidedAt))
+			Expect(pool.commitCalled).To(BeTrue())
+			Expect(pool.queries[2]).To(ContainSubstring("UPDATE test_db.published_inference_endpoints"))
+			Expect(namedArgs(pool.args[2])).To(SatisfyAll(
+				HaveKeyWithValue("agent_spec_hash", "sha256:new-spec"),
+				HaveKeyWithValue("serving_model_id", pgtype.UUID{Bytes: servingModelID, Valid: true}),
+				HaveKeyWithValue("decision_id", pgtype.UUID{Bytes: decisionID, Valid: true}),
+			))
+		})
+
+		It("ignores stale champion decisions without updating the endpoint", func() {
+			endpoint.ChampionDecisionID = uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff")
+			endpoint.ChampionDecidedAt = time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+			pool.nextRows = []pgx.Row{
+				publishedEndpointRow(endpoint),
+				&repositoryRow{values: []any{uuid.NewString(), "support_agent"}},
+			}
+
+			record, err := repository.ApplyAgentChampionUpdate(ctx, model.AgentChampionUpdate{
+				OrgID:         endpoint.OrgID,
+				EndpointID:    endpoint.EndpointID,
+				AgentLineage:  "support_agent",
+				AgentSpecHash: "sha256:old-spec",
+				DecisionID:    uuid.MustParse("00000000-0000-0000-0000-000000000001"),
+				DecidedAt:     endpoint.ChampionDecidedAt.Add(-time.Minute),
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(record).To(Equal(endpoint))
+			Expect(pool.commitCalled).To(BeTrue())
+			Expect(pool.execCalled).To(BeFalse())
+		})
+
+		It("fails closed when the local spec lineage does not match the event", func() {
+			pool.nextRows = []pgx.Row{
+				publishedEndpointRow(endpoint),
+				&repositoryRow{values: []any{uuid.NewString(), "other_agent"}},
+			}
+
+			record, err := repository.ApplyAgentChampionUpdate(ctx, model.AgentChampionUpdate{
+				OrgID:         endpoint.OrgID,
+				EndpointID:    endpoint.EndpointID,
+				AgentLineage:  "support_agent",
+				AgentSpecHash: "sha256:new-spec",
+				DecisionID:    uuid.New(),
+				DecidedAt:     time.Now(),
+			})
+
+			Expect(record).To(BeNil())
+			Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+			Expect(pool.commitCalled).To(BeFalse())
 		})
 	})
 })
@@ -170,6 +259,7 @@ func publishedEndpointValues(endpoint *model.PublishedEndpoint) []any {
 		endpoint.EndpointID.String(),
 		endpoint.OrgID.String(),
 		endpoint.ModelID.String(),
+		optionalPublishedEndpointUUIDString(endpoint.ServingModelID),
 		endpoint.Mode.String(),
 		optionalPublishedEndpointUUIDString(endpoint.AgentSpecID),
 		endpoint.AgentSpecHash,
@@ -177,6 +267,8 @@ func publishedEndpointValues(endpoint *model.PublishedEndpoint) []any {
 		string(endpoint.MergeStrategy),
 		endpoint.DisplayName,
 		endpoint.CreatedByUserID.String(),
+		optionalPublishedEndpointUUIDString(endpoint.ChampionDecisionID),
+		pgtype.Timestamptz{Time: endpoint.ChampionDecidedAt, Valid: !endpoint.ChampionDecidedAt.IsZero()},
 		datasetIDs,
 	}
 }

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: tool-execution-service
+description: Bighill ML Ops tool execution service
+type: application
+version: 0.1.0
+appVersion: "0.0.1"

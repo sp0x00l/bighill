@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: bighill-model-artifacts
+Version: 0.1.0
+Summary: Shared Python model artifact validation helpers for Bighill services
+Requires-Python: >=3.11
+Requires-Dist: gguf>=0.13

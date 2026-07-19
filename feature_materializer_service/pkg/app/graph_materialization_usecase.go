@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	contractprompts "lib/data_contracts_lib/prompts"
 	"lib/shared_lib/authz"
 	serializers "lib/shared_lib/serializer"
 	shareduow "lib/shared_lib/uow"
@@ -21,6 +23,9 @@ import (
 )
 
 const (
+	graphExtractionPromptV1Version = "graph_extraction_prompt_v1"
+	graphExtractionPromptNone      = "none"
+
 	graphUserEventSourceService = "feature_materializer_service"
 	graphMaterializeOperation   = "graph.materialize"
 	graphSnapshotReadyTitle     = "Graph snapshot ready"
@@ -35,6 +40,8 @@ const (
 	graphEventMetadataExtractionModel     = "extraction_model"
 	graphEventMetadataEntityCount         = "entity_count"
 	graphEventMetadataEdgeCount           = "edge_count"
+
+	graphFailureRecordTimeout = 10 * time.Second
 )
 
 type GraphMaterializationUsecase interface {
@@ -110,7 +117,9 @@ func (u *graphMaterializationUsecase) MaterializeGraph(ctx context.Context, embe
 	extraction, err := u.extractor.ExtractGraph(ctx, chunks, strategy)
 	if err != nil {
 		outErr := fmt.Errorf("%w: %w", domain.ErrGraphMaterialize, err)
-		if markErr := u.markGraphFailed(ctx, graphSnapshot, err.Error()); markErr != nil {
+		failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), graphFailureRecordTimeout)
+		defer cancel()
+		if markErr := u.markGraphFailed(failureCtx, graphSnapshot, err); markErr != nil {
 			return nil, errors.Join(outErr, fmt.Errorf("mark graph snapshot failed: %w", markErr))
 		}
 		return nil, outErr
@@ -164,34 +173,44 @@ func (u *graphMaterializationUsecase) markGraphReady(ctx context.Context, materi
 	return nil
 }
 
-func (u *graphMaterializationUsecase) markGraphFailed(ctx context.Context, graphSnapshot *model.GraphSnapshot, reason string) error {
+func (u *graphMaterializationUsecase) markGraphFailed(ctx context.Context, graphSnapshot *model.GraphSnapshot, cause error) error {
 	log.Trace("GraphMaterializationUsecase markGraphFailed")
 
+	reason := ""
+	if cause != nil {
+		reason = cause.Error()
+	}
 	err := u.unitOfWork.Do(ctx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
-		return u.repo.MarkGraphFailed(ctx, tx, graphSnapshot.GraphSnapshotID, reason)
+		return u.repo.MarkGraphFailed(ctx, tx, graphSnapshot, reason)
 	})
 	if err != nil {
 		return err
 	}
 	graphSnapshot.Status = model.SnapshotStatusFailed
 	graphSnapshot.FailureReason = strings.TrimSpace(reason)
-	u.publishGraphSnapshotFailedUserEvent(ctx, graphSnapshot)
+	u.publishGraphSnapshotFailedUserEvent(ctx, graphSnapshot, cause)
 	return nil
 }
 
 func (u *graphMaterializationUsecase) graphProvenanceHash(snapshot *model.GraphSnapshot, strategy model.GraphExtractionStrategy) (string, error) {
 	log.Trace("GraphMaterializationUsecase graphProvenanceHash")
 
+	promptHash, err := graphPromptContentHash(strategy.ExtractionPromptVersion)
+	if err != nil {
+		return "", err
+	}
 	payload := struct {
 		FeatureSnapshotID       string `json:"feature_snapshot_id"`
 		EmbeddingSnapshotID     string `json:"embedding_snapshot_id"`
 		ExtractionModel         string `json:"extraction_model"`
+		ExtractionPromptHash    string `json:"extraction_prompt_hash"`
 		ExtractionPromptVersion string `json:"extraction_prompt_version"`
 		ExtractionSchemaVersion string `json:"extraction_schema_version"`
 	}{
 		FeatureSnapshotID:       snapshot.FeatureSnapshotID.String(),
 		EmbeddingSnapshotID:     snapshot.EmbeddingSnapshotID.String(),
 		ExtractionModel:         strategy.ExtractionModel,
+		ExtractionPromptHash:    promptHash,
 		ExtractionPromptVersion: strategy.ExtractionPromptVersion,
 		ExtractionSchemaVersion: strategy.ExtractionSchemaVersion,
 	}
@@ -202,19 +221,33 @@ func (u *graphMaterializationUsecase) graphProvenanceHash(snapshot *model.GraphS
 	return userevents.SHA256String(string(canonical)), nil
 }
 
+func graphPromptContentHash(promptVersion string) (string, error) {
+	log.Trace("graphPromptContentHash")
+
+	switch strings.TrimSpace(promptVersion) {
+	case graphExtractionPromptV1Version:
+		return userevents.SHA256String(string(contractprompts.GraphExtractionPromptV1())), nil
+	case graphExtractionPromptNone:
+		return "", nil
+	default:
+		return "", domain.ErrValidationFailed.Extend("unsupported graph extraction prompt version")
+	}
+}
+
 func (u *graphMaterializationUsecase) publishGraphSnapshotReadyUserEvent(ctx context.Context, graphSnapshot *model.GraphSnapshot) {
 	log.Trace("GraphMaterializationUsecase publishGraphSnapshotReadyUserEvent")
 
 	u.publishGraphSnapshotUserEvent(ctx, graphSnapshot, userevents.EventTypeSnapshotGraphReady, userevents.SeveritySuccess, graphSnapshotReadyTitle, graphSnapshotReadyMessage, nil)
 }
 
-func (u *graphMaterializationUsecase) publishGraphSnapshotFailedUserEvent(ctx context.Context, graphSnapshot *model.GraphSnapshot) {
+func (u *graphMaterializationUsecase) publishGraphSnapshotFailedUserEvent(ctx context.Context, graphSnapshot *model.GraphSnapshot, cause error) {
 	log.Trace("GraphMaterializationUsecase publishGraphSnapshotFailedUserEvent")
 
 	classified := userevents.ClassifyError(userevents.ClassificationInput{
 		Service:          graphUserEventSourceService,
 		Operation:        graphMaterializeOperation,
 		ResourceType:     userevents.ResourceTypeSnapshot,
+		DomainErrorCode:  domain.ServiceErrorCode(cause),
 		RawFailureReason: graphSnapshot.FailureReason,
 	})
 	u.publishGraphSnapshotUserEvent(ctx, graphSnapshot, userevents.EventTypeSnapshotGraphFailed, userevents.SeverityError, graphSnapshotFailedTitle, classified.Message, &classified)

@@ -136,6 +136,59 @@ func (r *PublishedEndpointRepository) ReadEndpoint(ctx context.Context, orgID uu
 	return record, nil
 }
 
+func (r *PublishedEndpointRepository) ApplyAgentChampionUpdate(ctx context.Context, update model.AgentChampionUpdate) (*model.PublishedEndpoint, error) {
+	log.Trace("PublishedEndpointRepository ApplyAgentChampionUpdate")
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin agent champion endpoint transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	endpoint, err := readEndpointTx(ctx, tx, r.Name, update.OrgID, update.EndpointID)
+	if err != nil {
+		return nil, err
+	}
+	spec, err := readAgentSpecBindingTx(ctx, tx, r.Name, update.OrgID, update.AgentSpecHash)
+	if err != nil {
+		return nil, err
+	}
+	if spec.agentLineage != update.AgentLineage {
+		return nil, domain.ErrValidationFailed.Extend("agent champion lineage does not match local spec")
+	}
+	if staleAgentChampionDecision(endpoint, update) {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit stale agent champion endpoint transaction: %w", err)
+		}
+		return endpoint, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE `+r.Name+`.published_inference_endpoints
+		SET agent_spec_id = @agent_spec_id,
+			agent_spec_hash = @agent_spec_hash,
+			serving_model_id = @serving_model_id,
+			agent_champion_decision_id = @decision_id,
+			agent_champion_decided_at = @decided_at
+		WHERE endpoint_id = @endpoint_id AND org_id = @org_id`, pgx.NamedArgs{
+		"agent_spec_id":    pgtype.UUID{Bytes: spec.agentSpecID, Valid: true},
+		"agent_spec_hash":  update.AgentSpecHash,
+		"serving_model_id": nullableUUID(update.ServingModelID),
+		"decision_id":      pgtype.UUID{Bytes: update.DecisionID, Valid: true},
+		"decided_at":       update.DecidedAt,
+		"endpoint_id":      pgtype.UUID{Bytes: update.EndpointID, Valid: true},
+		"org_id":           pgtype.UUID{Bytes: update.OrgID, Valid: true},
+	}); err != nil {
+		return nil, fmt.Errorf("apply agent champion endpoint update: %w", err)
+	}
+	record, err := readEndpointTx(ctx, tx, r.Name, update.OrgID, update.EndpointID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit agent champion endpoint transaction: %w", err)
+	}
+	return record, nil
+}
+
 type endpointRowReader interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
@@ -191,6 +244,48 @@ func replaceEndpointDatasets(ctx context.Context, tx pgx.Tx, schemaName string, 
 	return nil
 }
 
+type agentSpecBinding struct {
+	agentSpecID  uuid.UUID
+	agentLineage string
+}
+
+func readAgentSpecBindingTx(ctx context.Context, tx pgx.Tx, schemaName string, orgID uuid.UUID, agentSpecHash string) (agentSpecBinding, error) {
+	log.Trace("readAgentSpecBindingTx")
+
+	var agentSpecID, agentLineage string
+	err := tx.QueryRow(ctx, `SELECT agent_spec_id::text, agent_lineage
+		FROM `+schemaName+`.agent_specs
+		WHERE org_id = @org_id AND content_hash = @agent_spec_hash`, pgx.NamedArgs{
+		"org_id":          pgtype.UUID{Bytes: orgID, Valid: true},
+		"agent_spec_hash": agentSpecHash,
+	}).Scan(&agentSpecID, &agentLineage)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return agentSpecBinding{}, domain.ErrValidationFailed.Extend("agent champion spec hash is not available locally")
+		}
+		return agentSpecBinding{}, fmt.Errorf("read agent champion spec binding: %w", err)
+	}
+	return agentSpecBinding{
+		agentSpecID:  uuid.MustParse(agentSpecID),
+		agentLineage: agentLineage,
+	}, nil
+}
+
+func staleAgentChampionDecision(endpoint *model.PublishedEndpoint, update model.AgentChampionUpdate) bool {
+	log.Trace("staleAgentChampionDecision")
+
+	if endpoint.ChampionDecidedAt.IsZero() {
+		return false
+	}
+	if endpoint.ChampionDecidedAt.After(update.DecidedAt) {
+		return true
+	}
+	if endpoint.ChampionDecidedAt.Equal(update.DecidedAt) && endpoint.ChampionDecisionID.String() >= update.DecisionID.String() {
+		return true
+	}
+	return false
+}
+
 func endpointReadQuery(schemaName string, predicate string) string {
 	log.Trace("endpointReadQuery")
 
@@ -208,6 +303,7 @@ func endpointColumns() string {
 	return `endpoint.endpoint_id::text,
 		endpoint.org_id::text,
 		endpoint.model_id::text,
+		COALESCE(endpoint.serving_model_id::text, ''),
 		endpoint.mode::text,
 		COALESCE(endpoint.agent_spec_id::text, ''),
 		endpoint.agent_spec_hash,
@@ -215,6 +311,8 @@ func endpointColumns() string {
 		endpoint.rag_merge_strategy,
 		endpoint.display_name,
 		endpoint.created_by_user_id::text,
+		COALESCE(endpoint.agent_champion_decision_id::text, ''),
+		endpoint.agent_champion_decided_at,
 		COALESCE(
 			array_agg(endpoint_dataset.dataset_id::text ORDER BY endpoint_dataset.position, endpoint_dataset.dataset_id::text)
 				FILTER (WHERE endpoint_dataset.dataset_id IS NOT NULL),
@@ -247,13 +345,15 @@ func endpointMode(mode model.AgentEndpointMode) string {
 func scanEndpoint(row pgx.Row) (*model.PublishedEndpoint, error) {
 	log.Trace("scanEndpoint")
 
-	var endpointID, orgID, modelID, mode, agentSpecID, status, mergeStrategy, createdByUserID string
+	var endpointID, orgID, modelID, servingModelID, mode, agentSpecID, status, mergeStrategy, createdByUserID, championDecisionID string
+	var championDecidedAt pgtype.Timestamptz
 	var datasetIDs []string
 	record := &model.PublishedEndpoint{}
 	if err := row.Scan(
 		&endpointID,
 		&orgID,
 		&modelID,
+		&servingModelID,
 		&mode,
 		&agentSpecID,
 		&record.AgentSpecHash,
@@ -261,6 +361,8 @@ func scanEndpoint(row pgx.Row) (*model.PublishedEndpoint, error) {
 		&mergeStrategy,
 		&record.DisplayName,
 		&createdByUserID,
+		&championDecisionID,
+		&championDecidedAt,
 		&datasetIDs,
 	); err != nil {
 		return nil, err
@@ -268,6 +370,9 @@ func scanEndpoint(row pgx.Row) (*model.PublishedEndpoint, error) {
 	record.EndpointID = uuid.MustParse(endpointID)
 	record.OrgID = uuid.MustParse(orgID)
 	record.ModelID = uuid.MustParse(modelID)
+	if servingModelID != "" {
+		record.ServingModelID = uuid.MustParse(servingModelID)
+	}
 	parsedMode, err := model.ToAgentEndpointMode(mode)
 	if err != nil {
 		return nil, fmt.Errorf("parse published endpoint mode: %w", err)
@@ -279,6 +384,12 @@ func scanEndpoint(row pgx.Row) (*model.PublishedEndpoint, error) {
 	record.Status = model.PublishedEndpointStatus(status)
 	record.MergeStrategy = model.RAGMergeStrategy(mergeStrategy)
 	record.CreatedByUserID = uuid.MustParse(createdByUserID)
+	if championDecisionID != "" {
+		record.ChampionDecisionID = uuid.MustParse(championDecisionID)
+	}
+	if championDecidedAt.Valid {
+		record.ChampionDecidedAt = championDecidedAt.Time
+	}
 	record.DatasetIDs = make([]uuid.UUID, 0, len(datasetIDs))
 	for _, datasetID := range datasetIDs {
 		if datasetID == "" {

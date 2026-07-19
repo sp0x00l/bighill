@@ -10,6 +10,8 @@ fi
 
 ROOT_DIR="$(pwd)"
 PYTHON_VERSION="3.11.9"
+TEXT_EMBEDDINGS_INFERENCE_GIT_REF="v1.9.3"
+TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR="$ROOT_DIR/tmp/text-embeddings-inference"
 
 is_installed()
 {
@@ -195,15 +197,16 @@ install_protobuf()
 
 install_rust()
 {
-    install rust
-
     if is_installed rustup; then
+        export PATH="$HOME/.cargo/bin:$PATH"
         echo "upgrading rust stable toolchain"
         rustup update stable
         rustup default stable
     else
-        echo "rustup not found; upgrading Homebrew rust"
-        brew upgrade rust || true
+        echo "installing rustup"
+        install_brew_formula rustup-init
+        rustup-init -y --no-modify-path --default-toolchain stable
+        export PATH="$HOME/.cargo/bin:$PATH"
     fi
 }
 
@@ -268,6 +271,55 @@ install_ollama()
     install_brew_formula ollama
 }
 
+install_tei()
+{
+    if is_installed text-embeddings-router; then
+        echo "Text Embeddings Inference already installed"
+        return
+    fi
+
+    if ! is_installed rustup; then
+        echo "Error: rustup is required to build Text Embeddings Inference with its pinned toolchain. Run install_rust first."
+        exit 1
+    fi
+
+    local FEATURE
+    case "$(uname -m)" in
+        arm64|aarch64)
+            FEATURE="metal"
+            ;;
+        x86_64|amd64)
+            FEATURE="ort"
+            ;;
+        *)
+            echo "Error: unsupported architecture for local Text Embeddings Inference: $(uname -m)"
+            exit 1
+            ;;
+    esac
+
+    echo "installing Text Embeddings Inference (${TEXT_EMBEDDINGS_INFERENCE_GIT_REF}, feature ${FEATURE})"
+    mkdir -p "$(dirname "$TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR")"
+    if [ -d "$TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR/.git" ]; then
+        git -C "$TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR" fetch --tags origin
+    else
+        git clone https://github.com/huggingface/text-embeddings-inference.git "$TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR"
+    fi
+
+    git -C "$TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR" checkout "$TEXT_EMBEDDINGS_INFERENCE_GIT_REF"
+    git -C "$TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR" submodule update --init --recursive
+    local TOOLCHAIN
+    TOOLCHAIN="$(awk -F'"' '/channel[[:space:]]*=/ { print $2; exit }' "$TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR/rust-toolchain.toml")"
+    if [ -z "$TOOLCHAIN" ]; then
+        echo "Error: Text Embeddings Inference rust-toolchain.toml does not declare a toolchain channel."
+        exit 1
+    fi
+
+    rustup toolchain install "$TOOLCHAIN"
+    cd "$TEXT_EMBEDDINGS_INFERENCE_SOURCE_DIR"
+    rustup run "$TOOLCHAIN" cargo install --locked --path router -F "$FEATURE"
+    cd "$ROOT_DIR"
+}
+
 build_datafusion_query_engine()
 {
     local QUERY_ENGINE_DIR
@@ -293,6 +345,7 @@ install redis
 install_kafka
 install_temporal
 install_data_infra_dependencies
+install_tei
 install_ollama
 install_open_tofu
 install yq
@@ -300,10 +353,11 @@ install yq
 echo ""
 echo "Final steps:"
 echo "  1. Run make install to generate module replacements and protobuf output."
-echo "  2. Run make start-infra for Postgres with pgvector, Redis, Kafka, Temporal, Polaris, and the local TEI-compatible embedding endpoint."
+echo "  2. Run make start-infra for Postgres with pgvector, Redis, Kafka, Temporal, Polaris, Ray Jobs, Ollama checks, and Text Embeddings Inference."
 echo "     make test starts datasource fixtures by default; run make test-api-data-sources for the datasource-only API suite."
 echo "  3. Run make start-test to start the local services and API gateway."
 echo "  4. Run make build-query-engine to rebuild DATA_STREAM_SERVICE_QUERY_ENGINE_MODE=datafusion after Rust changes."
-echo "  5. Start Ollama before using local inference generation; tests and API requests must provision the model they intend to serve."
+echo "  5. install-dev builds the local Text Embeddings Inference binary and installs Ollama."
+echo "     Ensure Ollama is running and the configured graph extraction model is pulled before make start-infra."
 
 cd "$ROOT_DIR"

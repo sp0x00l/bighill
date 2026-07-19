@@ -190,10 +190,10 @@ var _ = Describe("GraphSearchToolInvoker", func() {
 })
 
 var _ = Describe("RoutedToolInvoker", func() {
-	It("routes search_knowledge locally and http_get through the remote tool service", func() {
+	It("routes search_knowledge locally and http_get through the remote tool execution service", func() {
 		searchInvoker, err := NewSearchKnowledgeToolInvoker(&retrievalClientStub{})
 		Expect(err).NotTo(HaveOccurred())
-		remoteClient := &toolServiceClientStub{
+		remoteClient := &toolExecutionServiceClientStub{
 			listResponse: &toolspb.ListAvailableToolsResponse{Tools: []*toolspb.ToolDefinition{{
 				Name:                  "http_get",
 				Description:           "Fetch HTTP content.",
@@ -205,7 +205,7 @@ var _ = Describe("RoutedToolInvoker", func() {
 				ImplementationVersion: "http_get:test",
 			},
 		}
-		remoteInvoker, err := NewRemoteToolInvokerWithClient(remoteClient, newToolServiceDTOAdapter(validator.New()))
+		remoteInvoker, err := NewRemoteToolInvokerWithClient(remoteClient, newToolExecutionServiceDTOAdapter(validator.New()))
 		Expect(err).NotTo(HaveOccurred())
 		routed, err := NewRoutedToolInvoker(searchInvoker, remoteInvoker, []string{SearchKnowledgeToolName})
 		Expect(err).NotTo(HaveOccurred())
@@ -235,7 +235,7 @@ var _ = Describe("RoutedToolInvoker", func() {
 		Expect(remoteClient.invokeRequest.GetInvocationId()).To(Equal(invocationID.String()))
 	})
 
-	It("fails closed for remote tools when no remote tool service is configured", func() {
+	It("fails closed for remote tools when no remote tool execution service is configured", func() {
 		searchInvoker, err := NewSearchKnowledgeToolInvoker(&retrievalClientStub{})
 		Expect(err).NotTo(HaveOccurred())
 		routed, err := NewRoutedToolInvoker(searchInvoker, nil, []string{SearchKnowledgeToolName})
@@ -244,13 +244,13 @@ var _ = Describe("RoutedToolInvoker", func() {
 		_, err = routed.Available(context.Background(), app.ToolResolutionContext{OrgID: uuid.New(), UserID: uuid.New()}, []model.ToolBinding{{Name: "http_get"}})
 
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("remote tool service is not configured"))
+		Expect(err.Error()).To(ContainSubstring("remote tool execution service is not configured"))
 	})
 
 	It("rejects duplicate requested tool names defensively", func() {
 		searchInvoker, err := NewSearchKnowledgeToolInvoker(&retrievalClientStub{})
 		Expect(err).NotTo(HaveOccurred())
-		remoteClient := &toolServiceClientStub{
+		remoteClient := &toolExecutionServiceClientStub{
 			listResponse: &toolspb.ListAvailableToolsResponse{Tools: []*toolspb.ToolDefinition{{
 				Name:                  "http_get",
 				Description:           "Fetch HTTP content.",
@@ -258,7 +258,7 @@ var _ = Describe("RoutedToolInvoker", func() {
 				ImplementationVersion: "http_get:v1",
 			}}},
 		}
-		remoteInvoker, err := NewRemoteToolInvokerWithClient(remoteClient, newToolServiceDTOAdapter(validator.New()))
+		remoteInvoker, err := NewRemoteToolInvokerWithClient(remoteClient, newToolExecutionServiceDTOAdapter(validator.New()))
 		Expect(err).NotTo(HaveOccurred())
 		routed, err := NewRoutedToolInvoker(searchInvoker, remoteInvoker, []string{SearchKnowledgeToolName})
 		Expect(err).NotTo(HaveOccurred())
@@ -270,9 +270,9 @@ var _ = Describe("RoutedToolInvoker", func() {
 	})
 })
 
-var _ = Describe("toolServiceDTOAdapter", func() {
+var _ = Describe("toolExecutionServiceDTOAdapter", func() {
 	It("uses response error_type instead of treating HTTP failures as unknown successes", func() {
-		adapter := newToolServiceDTOAdapter(validator.New())
+		adapter := newToolExecutionServiceDTOAdapter(validator.New())
 
 		result, err := adapter.FromInvokeToolResponse(&toolspb.InvokeToolResponse{
 			ResultJson:            []byte(`{"status":500}`),
@@ -289,11 +289,11 @@ var _ = Describe("toolServiceDTOAdapter", func() {
 	})
 
 	It("maps legacy HTTP failure codes to an error type", func() {
-		Expect(toolServiceErrorType("", "http_tool_request_failed")).To(Equal(model.ToolErrorTypeTransient))
+		Expect(toolExecutionServiceErrorType("", "http_tool_request_failed")).To(Equal(model.ToolErrorTypeTransient))
 	})
 })
 
-type toolServiceClientStub struct {
+type toolExecutionServiceClientStub struct {
 	listRequest    *toolspb.ListAvailableToolsRequest
 	listResponse   *toolspb.ListAvailableToolsResponse
 	listErr        error
@@ -302,12 +302,12 @@ type toolServiceClientStub struct {
 	invokeErr      error
 }
 
-func (s *toolServiceClientStub) ListAvailableTools(_ context.Context, req *toolspb.ListAvailableToolsRequest, _ ...grpc.CallOption) (*toolspb.ListAvailableToolsResponse, error) {
+func (s *toolExecutionServiceClientStub) ListAvailableTools(_ context.Context, req *toolspb.ListAvailableToolsRequest, _ ...grpc.CallOption) (*toolspb.ListAvailableToolsResponse, error) {
 	s.listRequest = req
 	return s.listResponse, s.listErr
 }
 
-func (s *toolServiceClientStub) Invoke(_ context.Context, req *toolspb.InvokeToolRequest, _ ...grpc.CallOption) (*toolspb.InvokeToolResponse, error) {
+func (s *toolExecutionServiceClientStub) Invoke(_ context.Context, req *toolspb.InvokeToolRequest, _ ...grpc.CallOption) (*toolspb.InvokeToolResponse, error) {
 	s.invokeRequest = req
 	return s.invokeResponse, s.invokeErr
 }

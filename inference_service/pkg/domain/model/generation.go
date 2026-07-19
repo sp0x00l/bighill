@@ -15,6 +15,9 @@ type GenerateRequest struct {
 	OrgID           uuid.UUID
 	DatasetID       uuid.UUID
 	ModelID         uuid.UUID
+	ServingModelID  uuid.UUID
+	LoraName        string
+	AdapterURI      string
 	QueryText       string
 	TopK            int
 	MetadataFilters map[string]string
@@ -76,6 +79,8 @@ type GenerationRequest struct {
 	Tools                 []ToolSpec
 	ToolChoice            string
 	Options               GenerationOptions
+	LoraName              string
+	AdapterURI            string
 }
 
 type ChatMessageRole string

@@ -58,9 +58,14 @@ var _ = Describe("readMaterializerConfig", func() {
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_TEMPORAL_CONNECT_RETRY_INTERVAL_SECONDS")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_ENDPOINT")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_AUTH_TOKEN")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION")).To(Succeed())
 		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_REQUEST_TIMEOUT_SECONDS")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RESPONSE_BYTES")).To(Succeed())
+		Expect(os.Unsetenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES")).To(Succeed())
 	})
 
 	It("uses the tenant service topic for tenant projections by default", func() {
@@ -84,16 +89,30 @@ var _ = Describe("readMaterializerConfig", func() {
 		Expect(cfg.Temporal.ConnectRetryInterval).To(Equal(3 * time.Second))
 	})
 
-	It("allows heuristic graph extraction only as an explicit dev setting", func() {
+	It("configures model-serving graph extraction from explicit endpoint settings", func() {
 		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED", "true")).To(Succeed())
-		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR", graphExtractorHeuristic)).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR", graphExtractorModel)).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_ENDPOINT", "http://graph-model/v1/chat/completions")).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_AUTH_TOKEN", "token-1")).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL", "graph-model")).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION", model.DefaultGraphExtractionPromptVersion)).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION", model.DefaultGraphExtractionSchemaVersion)).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_REQUEST_TIMEOUT_SECONDS", "12")).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RESPONSE_BYTES", "4096")).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS", "256")).To(Succeed())
+		Expect(os.Setenv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES", "1")).To(Succeed())
 
 		cfg := readMaterializerConfig()
 
 		Expect(cfg.Graph.Enabled).To(BeTrue())
-		Expect(cfg.Graph.Extractor).To(Equal(graphExtractorHeuristic))
-		Expect(cfg.Graph.ExtractionModel).To(Equal(model.DefaultGraphExtractionModel))
-		Expect(cfg.Graph.ExtractionPromptVersion).To(Equal(model.DefaultGraphExtractionPromptVersion))
+		Expect(cfg.Graph.Extractor).To(Equal(graphExtractorModel))
+		Expect(cfg.Graph.ExtractionEndpoint).To(Equal("http://graph-model/v1/chat/completions"))
+		Expect(cfg.Graph.ExtractionAuthToken).To(Equal("token-1"))
+		Expect(cfg.Graph.ExtractionModel).To(Equal("graph-model"))
+		Expect(cfg.Graph.ExtractionRequestTimeout).To(Equal(12 * time.Second))
+		Expect(cfg.Graph.ExtractionMaxResponseBytes).To(Equal(int64(4096)))
+		Expect(cfg.Graph.ExtractionMaxOutputTokens).To(Equal(256))
+		Expect(cfg.Graph.ExtractionMaxRetries).To(Equal(1))
 	})
 })
 
@@ -167,15 +186,12 @@ var _ = Describe("runtime embedding validation", func() {
 		Expect(err).To(MatchError(ContainSubstring("must not be local-dev-bucket outside dev environments")))
 	})
 
-	It("rejects heuristic graph extraction outside dev environments", func() {
-		Expect(os.Setenv("ENVIRONMENT", "STAGING")).To(Succeed())
-		env.ResetEnvironmentCache()
-
+	It("rejects heuristic graph extraction as a service runtime mode", func() {
 		err := validateGraphConfig(graphConfig{
 			Enabled:   true,
-			Extractor: graphExtractorHeuristic,
+			Extractor: "heuristic",
 		})
 
-		Expect(err).To(MatchError(ContainSubstring("only allowed in dev environments")))
+		Expect(err).To(MatchError(ContainSubstring("unsupported FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR")))
 	})
 })

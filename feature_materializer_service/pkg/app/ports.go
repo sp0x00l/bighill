@@ -49,7 +49,7 @@ type GraphSnapshotRepository interface {
 	ReadEmbeddingChunks(ctx context.Context, embeddingSnapshotID uuid.UUID) ([]model.GraphChunk, error)
 	SaveGraphMaterialization(ctx context.Context, tx pgx.Tx, materialization *model.GraphMaterialization) error
 	MarkGraphReady(ctx context.Context, tx pgx.Tx, graphSnapshot *model.GraphSnapshot) error
-	MarkGraphFailed(ctx context.Context, tx pgx.Tx, graphSnapshotID uuid.UUID, reason string) error
+	MarkGraphFailed(ctx context.Context, tx pgx.Tx, graphSnapshot *model.GraphSnapshot, reason string) error
 	ReadGraphByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (*model.GraphSnapshot, error)
 }
 

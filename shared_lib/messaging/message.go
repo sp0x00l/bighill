@@ -35,26 +35,34 @@ const (
 	MsgTypePromotionRequested
 	MsgTypePromotionReportReady
 	MsgTypeGraphSnapshotReady
+	MsgTypeAgentChampionUpdated
+	MsgTypeToolCapabilityUpdated
+	MsgTypeToolGrantUpdated
+	MsgTypeToolCredentialBindingUpdated
 )
 
 var msgType = map[MsgType]string{
-	MsgTypeUserCreated:            "user_created",
-	MsgTypeUserUpdated:            "user_updated",
-	MsgTypeUserDeleted:            "user_deleted",
-	MsgTypeDatasetFileUploaded:    "dataset_file_uploaded",
-	MsgTypeRawSnapshotReady:       "raw_snapshot_ready",
-	MsgTypeFeatureSnapshotReady:   "feature_snapshot_ready",
-	MsgTypeEmbeddingSnapshotReady: "embedding_snapshot_ready",
-	MsgTypeDatasetCreated:         "dataset_created",
-	MsgTypeDatasetDeleted:         "dataset_deleted",
-	MsgTypeDatasetUpdated:         "dataset_updated",
-	MsgTypeModelTrainingCompleted: "model_training_completed",
-	MsgTypeModelTrainingFailed:    "model_training_failed",
-	MsgTypeModelUpdated:           "model_updated",
-	MsgTypeModelArtifactIngested:  "model_artifact_ingested",
-	MsgTypePromotionRequested:     "promotion_requested",
-	MsgTypePromotionReportReady:   "promotion_report_ready",
-	MsgTypeGraphSnapshotReady:     "graph_snapshot_ready",
+	MsgTypeUserCreated:                  "user_created",
+	MsgTypeUserUpdated:                  "user_updated",
+	MsgTypeUserDeleted:                  "user_deleted",
+	MsgTypeDatasetFileUploaded:          "dataset_file_uploaded",
+	MsgTypeRawSnapshotReady:             "raw_snapshot_ready",
+	MsgTypeFeatureSnapshotReady:         "feature_snapshot_ready",
+	MsgTypeEmbeddingSnapshotReady:       "embedding_snapshot_ready",
+	MsgTypeDatasetCreated:               "dataset_created",
+	MsgTypeDatasetDeleted:               "dataset_deleted",
+	MsgTypeDatasetUpdated:               "dataset_updated",
+	MsgTypeModelTrainingCompleted:       "model_training_completed",
+	MsgTypeModelTrainingFailed:          "model_training_failed",
+	MsgTypeModelUpdated:                 "model_updated",
+	MsgTypeModelArtifactIngested:        "model_artifact_ingested",
+	MsgTypePromotionRequested:           "promotion_requested",
+	MsgTypePromotionReportReady:         "promotion_report_ready",
+	MsgTypeGraphSnapshotReady:           "graph_snapshot_ready",
+	MsgTypeAgentChampionUpdated:         "agent_champion_updated",
+	MsgTypeToolCapabilityUpdated:        "tool_capability_updated",
+	MsgTypeToolGrantUpdated:             "tool_grant_updated",
+	MsgTypeToolCredentialBindingUpdated: "tool_credential_binding_updated",
 }
 
 func (m MsgType) String() string {

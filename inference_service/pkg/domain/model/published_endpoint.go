@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -22,17 +23,20 @@ const (
 )
 
 type PublishedEndpoint struct {
-	EndpointID      uuid.UUID
-	OrgID           uuid.UUID
-	ModelID         uuid.UUID
-	Mode            AgentEndpointMode
-	AgentSpecID     uuid.UUID
-	AgentSpecHash   string
-	DatasetIDs      []uuid.UUID
-	MergeStrategy   RAGMergeStrategy
-	Status          PublishedEndpointStatus
-	DisplayName     string
-	CreatedByUserID uuid.UUID
+	EndpointID         uuid.UUID
+	OrgID              uuid.UUID
+	ModelID            uuid.UUID
+	ServingModelID     uuid.UUID
+	Mode               AgentEndpointMode
+	AgentSpecID        uuid.UUID
+	AgentSpecHash      string
+	DatasetIDs         []uuid.UUID
+	MergeStrategy      RAGMergeStrategy
+	Status             PublishedEndpointStatus
+	DisplayName        string
+	CreatedByUserID    uuid.UUID
+	ChampionDecisionID uuid.UUID
+	ChampionDecidedAt  time.Time
 }
 
 func (e PublishedEndpoint) IsReady() bool {

@@ -21,9 +21,10 @@ const (
 )
 
 const (
-	RoleConsumer     = "consumer"
-	RoleMLResearcher = "ml_researcher"
-	RoleOrgAdmin     = "org_admin"
+	RoleConsumer      = "consumer"
+	RoleMLResearcher  = "ml_researcher"
+	RoleOrgAdmin      = "org_admin"
+	RolePlatformAdmin = "platform_admin"
 )
 
 const (
@@ -40,6 +41,7 @@ const (
 	PermissionPublishEndpoints       = "inference:endpoints:publish"
 	PermissionOrgMembersRead         = "org:members:read"
 	PermissionOrgMembersWrite        = "org:members:write"
+	PermissionToolCatalogPublish     = "tool-catalog:capabilities:publish"
 )
 
 var rolePermissions = map[string][]string{
@@ -76,6 +78,23 @@ var rolePermissions = map[string][]string{
 		PermissionPublishEndpoints,
 		PermissionOrgMembersRead,
 		PermissionOrgMembersWrite,
+		PermissionToolCatalogPublish,
+	},
+	RolePlatformAdmin: {
+		PermissionInferenceEndpointsRead,
+		PermissionInferenceAgentRunsRead,
+		PermissionInferenceInvoke,
+		PermissionInferenceFeedback,
+		PermissionDataRead,
+		PermissionDataWrite,
+		PermissionModelRead,
+		PermissionModelWrite,
+		PermissionTrainingRead,
+		PermissionTrainingStart,
+		PermissionPublishEndpoints,
+		PermissionOrgMembersRead,
+		PermissionOrgMembersWrite,
+		PermissionToolCatalogPublish,
 	},
 }
 

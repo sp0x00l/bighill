@@ -36,6 +36,7 @@ type inferenceUsecaseStub struct {
 	generateRequest   model.GenerateRequest
 	generateResponse  *model.GenerateResponse
 	endpointID        uuid.UUID
+	agentSpecHash     string
 	feedback          *model.InferenceFeedback
 	idempotencyKey    uuid.UUID
 	actor             uuid.UUID
@@ -59,6 +60,10 @@ func (s *inferenceUsecaseStub) PublishAgentSpec(context.Context, model.AgentSpec
 	return nil, s.err
 }
 
+func (s *inferenceUsecaseStub) ReadAgentSpec(context.Context, uuid.UUID, string) (*model.AgentSpec, error) {
+	return nil, s.err
+}
+
 func (s *inferenceUsecaseStub) ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error) {
 	s.org = orgID
 	if actor, ok := ctxutil.TenantID(ctx); ok {
@@ -68,6 +73,20 @@ func (s *inferenceUsecaseStub) ListEndpoints(ctx context.Context, orgID uuid.UUI
 		return nil, err
 	}
 	return s.endpoints, nil
+}
+
+func (s *inferenceUsecaseStub) ReadEndpoint(context.Context, uuid.UUID, uuid.UUID) (*model.PublishedEndpoint, error) {
+	if len(s.endpoints) == 0 {
+		return nil, s.err
+	}
+	return s.endpoints[0], s.err
+}
+
+func (s *inferenceUsecaseStub) ApplyAgentChampionUpdate(context.Context, model.AgentChampionUpdate) (*model.PublishedEndpoint, error) {
+	if len(s.endpoints) == 0 {
+		return nil, s.err
+	}
+	return s.endpoints[0], s.err
 }
 
 func (s *inferenceUsecaseStub) PublishEndpoint(context.Context, model.EndpointPublication) (*model.PublishedEndpoint, error) {
@@ -107,6 +126,31 @@ func (s *inferenceUsecaseStub) GenerateForEndpoint(ctx context.Context, endpoint
 			SourceText: "source",
 			Similarity: 0.8,
 		}},
+	}, nil
+}
+
+func (s *inferenceUsecaseStub) StartAgentEvalRun(ctx context.Context, endpointID uuid.UUID, agentSpecHash string, request model.GenerateRequest) (*model.GenerateResponse, error) {
+	s.endpointID = endpointID
+	s.agentSpecHash = agentSpecHash
+	s.generateRequest = request
+	if actor, ok := ctxutil.TenantID(ctx); ok {
+		s.actor = actor
+	}
+	if org, ok := ctxutil.OrgID(ctx); ok {
+		s.org = org
+	}
+	if err := s.err; err != nil {
+		return nil, err
+	}
+	if s.generateResponse != nil {
+		return s.generateResponse, nil
+	}
+	return &model.GenerateResponse{
+		RequestID:  request.RequestID,
+		AgentRunID: request.RequestID,
+		Accepted:   true,
+		OrgID:      request.OrgID,
+		QueryText:  request.QueryText,
 	}, nil
 }
 
@@ -293,6 +337,36 @@ var _ = Describe("InferenceHandlers", func() {
 		Expect(dto.AgentRunID).To(Equal(runID.String()))
 		Expect(dto.Status).To(Equal("RUNNING"))
 		Expect(dto.AgentRunHref).To(Equal("/v1/inference/agent-runs/" + runID.String()))
+	})
+
+	It("starts pinned spec eval runs asynchronously", func() {
+		runID := uuid.New()
+		servingModelID := uuid.New()
+		usecase.generateResponse = &model.GenerateResponse{
+			RequestID:  requestID,
+			AgentRunID: runID,
+			Accepted:   true,
+			OrgID:      orgID,
+			QueryText:  "what now?",
+		}
+		req := requestWithAuth(http.MethodPost, "/v1/inference/endpoints/"+endpointID.String()+"/agent-eval-runs/sha256-spec", `{"query_text":"what now?","serving_model_id":"`+servingModelID.String()+`"}`, userID, orgID, requestID)
+		req = mux.SetURLVars(req, map[string]string{"endpointId": endpointID.String(), "agentSpecHash": "sha256-spec"})
+
+		res, err := handlers.StartAgentEvalRun(context.Background(), req)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.StatusCode()).To(Equal(http.StatusAccepted))
+		Expect(usecase.endpointID).To(Equal(endpointID))
+		Expect(usecase.agentSpecHash).To(Equal("sha256-spec"))
+		Expect(usecase.generateRequest.RequestID).To(Equal(requestID))
+		Expect(usecase.generateRequest.UserID).To(Equal(userID))
+		Expect(usecase.generateRequest.OrgID).To(Equal(orgID))
+		Expect(usecase.generateRequest.ServingModelID).To(Equal(servingModelID))
+		Expect(usecase.generateRequest.QueryText).To(Equal("what now?"))
+		var dto adapter.GenerateResponseDTO
+		Expect(json.Unmarshal(res.Payload(), &dto)).To(Succeed())
+		Expect(dto.AgentRunID).To(Equal(runID.String()))
+		Expect(dto.Status).To(Equal("RUNNING"))
 	})
 
 	It("rejects generation requests without idempotency", func() {

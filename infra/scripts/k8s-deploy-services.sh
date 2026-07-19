@@ -449,7 +449,7 @@ wait_for_rollouts() {
 }
 
 # Services that are internal-only and do not expose gateway-routed HTTP ingress.
-INTERNAL_ONLY_SERVICES="data-stream-service feature-materializer-service model-serving-service tool-service"
+INTERNAL_ONLY_SERVICES="data-stream-service feature-materializer-service model-serving-service tool-execution-service tool-catalog-service agent-registry-service"
 
 service_needs_alb() {
   local SERVICE="$1"

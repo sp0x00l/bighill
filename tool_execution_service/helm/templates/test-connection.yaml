@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "tool-execution-service.fullname" . }}-test-connection"
+  labels:
+    app: {{ include "tool-execution-service.fullname" . }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['{{ include "tool-execution-service.fullname" . }}:{{ .Values.service.healthPort }}/health']
+  restartPolicy: Never

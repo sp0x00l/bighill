@@ -347,6 +347,9 @@ CREATE TABLE IF NOT EXISTS bighill_inference_db.published_inference_endpoints (
     rag_merge_strategy text NOT NULL DEFAULT 'reranker',
     display_name text NOT NULL,
     created_by_user_id uuid NOT NULL REFERENCES bighill_inference_db.tenants(id),
+    serving_model_id uuid,
+    agent_champion_decision_id uuid,
+    agent_champion_decided_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT published_inference_endpoint_status_ck CHECK (status IN ('ready', 'disabled')),
@@ -361,6 +364,10 @@ ON bighill_inference_db.published_inference_endpoints(model_id);
 
 CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_agent_spec_id
 ON bighill_inference_db.published_inference_endpoints(agent_spec_id);
+
+CREATE INDEX IF NOT EXISTS index_published_inference_endpoints_serving_model_id
+ON bighill_inference_db.published_inference_endpoints(serving_model_id)
+WHERE serving_model_id IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS index_published_inference_endpoints_natural_key
 ON bighill_inference_db.published_inference_endpoints(org_id, model_id);

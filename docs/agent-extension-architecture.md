@@ -81,7 +81,7 @@ enough for extensions to build on.
 | `model_registry_service` | Model records, model promotion, serving intent, serving status projection, effective-base identity |
 | `model_serving_service` | Runtime reconciliation to local serving or vLLM/Kubernetes |
 | `inference_service` | RAG, interactive agent loop, generation dispatch, trajectory audit, feedback |
-| `tool_service` | Isolated execution boundary for world-acting tools |
+| `tool_execution_service` | Isolated execution boundary for world-acting tools |
 | `training_service` | Generic training workflow engine for supported recipes |
 | `socket_service` | Realtime user-visible event delivery |
 | `data_contracts` | Protobuf and JSON Schema contracts |
@@ -96,9 +96,9 @@ The core agent runtime should contain only values that V1 can honestly produce a
 | `AgentSpec` | `inference_service` | Immutable, content-addressed agent config artifact |
 | `AgentRun` | `inference_service` | One agent execution for a user turn/task |
 | `AgentStep` | `inference_service` | One generation step in the loop |
-| `ToolInvocation` | `inference_service` and `tool_service` audit | One tool call/result/error |
+| `ToolInvocation` | `inference_service` and `tool_execution_service` audit | One tool call/result/error |
 | `CapabilityReport` | `inference_service` | Measured capability probe for the bound model/runtime |
-| `ToolDefinition` | local registry / `tool_service` in V1 | Tool name, argument schema, result contract, locality, implementation version |
+| `ToolDefinition` | local registry / `tool_execution_service` in V1 | Tool name, argument schema, result contract, locality, implementation version |
 | `EffectiveBaseVersion` | `model_registry_service` | Core serving identity for a loaded base model |
 
 `AgentSpec` remains core-owned permanently. The agent registry extension may reference
@@ -166,7 +166,7 @@ sequenceDiagram
     actor Client
     participant GW as api_gateway
     participant IF as inference_service (core)
-    participant TS as tool_service
+    participant TS as tool_execution_service
     participant AR as agent_registry_service (extension)
     participant Bus as Kafka / outbox
 
@@ -236,19 +236,24 @@ sequenceDiagram
 | `agent_training` extension in `training_service` | Trajectory-to-SFT/DPO builders and agent adapter training | `run_id`, `agent_spec_hash`, `model_id`, training artifact IDs |
 | `memory_service` | Long-term memory, recall policy, memory compaction | `org_id`, `user_id`, `agent_spec_hash`, `run_id` |
 | `approval_service` | Human approval for side-effecting tools | `tool_invocation_id`, `run_id`, `user_id`, `org_id` |
-| `tool_catalog_service` | Dynamic tool catalog, tenant tool marketplace, credential binding | `tool_name`, `org_id`, policy IDs |
+| `tool_catalog_service` | Dynamic tool catalog, tenant grants, credential binding | `tool_name`, `org_id`, capability version IDs |
 | `policy_service` | Centralized guardrail/policy evaluation when local policy becomes too large | `agent_spec_hash`, `run_id`, `tool_invocation_id` |
 | durable `agent_workflow_service` or Temporal extension | Long-running/autonomous agent runs | `run_id`, `agent_spec_hash` |
 
 An extension may be a new service or a clearly bounded module inside an existing service. The decision
 depends on ownership, scaling, blast radius, and security boundary. For example, world-acting tools
-deserve `tool_service`; trajectory-to-DPO can start inside `training_service` because training
+deserve `tool_execution_service`; trajectory-to-DPO can start inside `training_service` because training
 already owns Temporal/Ray dispatch.
 
-The eventual `tool_catalog_service` should become the single source of truth for dynamic tool
-definitions. Until then V1 has two deliberately bounded sources: the local `search_knowledge`
-definition in `inference_service` and remote world-acting definitions from `tool_service`. Do not add
-a third hardcoded catalog.
+The concrete control-plane contract for the first flywheel slice is defined in
+[ADR 0008](adr/0008-agent-registry-flywheel-control-plane.md). Its first executable registry slice
+selects spec champions over `agent_spec_hash`; adapter tables return later with adapter training and
+serving compatibility.
+
+`tool_catalog_service` is the source of truth for dynamic tool definitions. `tool_execution_service`
+projects its events into local resolution tables and never calls catalog on the invocation path.
+Static local tools such as `search_knowledge` remain in `inference_service`; dynamic world-acting
+tools come through the catalog-to-execution projection.
 
 ## Extension Slice Rule
 
@@ -385,7 +390,7 @@ capability. Until that runtime exists, the core should simply reject side-effect
 - Extension decisions that affect serving are pushed into core-owned binding state by API call or
   event projection. The core run path does not synchronously ask an optional extension what to run.
 - `inference_service` owns the live interactive loop.
-- `tool_service` owns execution of world-acting tools.
+- `tool_execution_service` owns execution of world-acting tools.
 - Extension services may request, label, evaluate, or train from trajectories, but they do not mutate
   historical trajectory rows.
 

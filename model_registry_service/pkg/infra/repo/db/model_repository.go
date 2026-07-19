@@ -181,12 +181,13 @@ func (r *ModelRepository) List(ctx context.Context, pagination transport.Paginat
 func (r *ModelRepository) UpdateStatus(ctx context.Context, tx pgx.Tx, modelID uuid.UUID, status model.ModelStatus, artifactLocation string, failureReason string) (*model.Model, error) {
 	log.Trace("ModelRepository UpdateStatus")
 
-	query := `UPDATE ` + r.Name + `.models
-		SET status = @status::model_status_enum,
-			artifact_location = COALESCE(NULLIF(@artifact_location, ''), artifact_location),
-			failure_reason = @failure_reason
-		WHERE model_id = @model_id
-		RETURNING ` + modelColumns()
+		query := `UPDATE ` + r.Name + `.models
+			SET status = @status::model_status_enum,
+				artifact_location = COALESCE(NULLIF(@artifact_location, ''), artifact_location),
+				failure_reason = @failure_reason,
+				updated_at = now()
+			WHERE model_id = @model_id
+			RETURNING ` + modelColumns()
 	modelRecord, err := scanModel(tx.QueryRow(ctx, query, pgx.NamedArgs{
 		"model_id":          pgtype.UUID{Bytes: modelID, Valid: true},
 		"status":            status.String(),
@@ -210,11 +211,12 @@ func (r *ModelRepository) UpdateServingStatus(ctx context.Context, tx pgx.Tx, mo
 		SET status = @status::model_status_enum,
 			serving_load_status = @serving_load_status::model_load_status_enum,
 			serving_target = @serving_target,
-			serving_model = @serving_model,
-			serving_protocol = NULLIF(@serving_protocol, '')::serving_protocol_enum,
-			failure_reason = @failure_reason,
-			serving_status_idempotency_key = @serving_status_idempotency_key
-		WHERE model_id = @model_id
+				serving_model = @serving_model,
+				serving_protocol = NULLIF(@serving_protocol, '')::serving_protocol_enum,
+				failure_reason = @failure_reason,
+				serving_status_idempotency_key = @serving_status_idempotency_key,
+				updated_at = now()
+			WHERE model_id = @model_id
 			AND serving_status_idempotency_key IS DISTINCT FROM @serving_status_idempotency_key
 			AND (
 				status IS DISTINCT FROM @status::model_status_enum

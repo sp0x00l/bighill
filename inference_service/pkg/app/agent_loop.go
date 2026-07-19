@@ -21,6 +21,116 @@ const (
 	agentTransientToolFailureRetries = 1
 )
 
+type agentServingSelection struct {
+	BaseModel       *model.InferenceModel
+	AdapterModel    *model.InferenceModel
+	ServingModelID  uuid.UUID
+	Protocol        string
+	BaseModelName   string
+	Target          string
+	LoraName        string
+	AdapterURI      string
+	EffectiveBaseID string
+}
+
+func (s agentServingSelection) generationModelName() string {
+	if value := strings.TrimSpace(s.LoraName); value != "" {
+		return value
+	}
+	return strings.TrimSpace(s.BaseModelName)
+}
+
+func (u *inferenceUsecase) resolveAgentServing(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint, spec *model.AgentSpec) (agentServingSelection, model.GenerateRequest, error) {
+	log.Trace("InferenceUsecase resolveAgentServing")
+
+	if endpoint == nil {
+		return agentServingSelection{}, request, domain.ErrValidationFailed.Extend("agent endpoint is required")
+	}
+	if spec == nil {
+		return agentServingSelection{}, request, domain.ErrValidationFailed.Extend("agent spec is required")
+	}
+	baseModelID := endpoint.ModelID
+	if baseModelID == uuid.Nil {
+		return agentServingSelection{}, request, domain.ErrValidationFailed.Extend("agent endpoint model is required")
+	}
+	if spec.ModelID != uuid.Nil && spec.ModelID != baseModelID {
+		return agentServingSelection{}, request, domain.ErrValidationFailed.Extend("agent spec model does not match endpoint model")
+	}
+	baseModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, baseModelID)
+	if err != nil {
+		return agentServingSelection{}, request, err
+	}
+	if baseModel.Status != model.ModelStatusReady {
+		return agentServingSelection{}, request, domain.ErrModelNotReady.Extend("model is not ready")
+	}
+	if baseModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
+		baseModel, err = u.ensureServingModelLoaded(ctx, request.OrgID, baseModel)
+		if err != nil {
+			return agentServingSelection{}, request, err
+		}
+	}
+	effectiveBaseID := strings.TrimSpace(baseModel.EffectiveBaseID)
+	if effectiveBaseID == "" {
+		return agentServingSelection{}, request, domain.ErrModelNotReady.Extend("model effective base is not available")
+	}
+	selection := agentServingSelection{
+		BaseModel:       baseModel,
+		Protocol:        strings.TrimSpace(baseModel.ServingProtocol.String()),
+		BaseModelName:   strings.TrimSpace(baseModel.ServingModel),
+		Target:          strings.TrimSpace(baseModel.ServingTarget),
+		EffectiveBaseID: effectiveBaseID,
+	}
+	servingModelID := uuid.Nil
+	if endpoint.ServingModelID != uuid.Nil && endpoint.ServingModelID != baseModelID {
+		servingModelID = endpoint.ServingModelID
+	}
+	if request.ServingModelID != uuid.Nil && request.ServingModelID != baseModelID {
+		servingModelID = request.ServingModelID
+	}
+	request.ModelID = baseModelID
+	request.ServingModelID = servingModelID
+	if servingModelID == uuid.Nil {
+		return selection, request, nil
+	}
+	adapterModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, servingModelID)
+	if err != nil {
+		return agentServingSelection{}, request, err
+	}
+	if adapterModel.ModelKind != model.ModelKindFineTuned {
+		return agentServingSelection{}, request, domain.ErrValidationFailed.Extend("agent serving model must be a fine-tuned adapter")
+	}
+	if adapterModel.Status != model.ModelStatusReady {
+		return agentServingSelection{}, request, domain.ErrModelNotReady.Extend("adapter model is not ready")
+	}
+	adapterBaseID := strings.TrimSpace(adapterModel.EffectiveBaseID)
+	if adapterBaseID == "" {
+		return agentServingSelection{}, request, domain.ErrModelNotReady.Extend("adapter effective base is not available")
+	}
+	if adapterBaseID != effectiveBaseID {
+		return agentServingSelection{}, request, domain.ErrValidationFailed.Extend("adapter effective base does not match endpoint model")
+	}
+	if strings.TrimSpace(adapterModel.AdapterURI) == "" {
+		return agentServingSelection{}, request, domain.ErrModelNotReady.Extend("adapter uri is not available")
+	}
+	if adapterModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
+		adapterModel, err = u.ensureServingModelLoaded(ctx, request.OrgID, adapterModel)
+		if err != nil {
+			return agentServingSelection{}, request, err
+		}
+	}
+	loraName := strings.TrimSpace(adapterModel.ServingModel)
+	if loraName == "" {
+		return agentServingSelection{}, request, domain.ErrModelNotReady.Extend("adapter serving name is not available")
+	}
+	selection.AdapterModel = adapterModel
+	selection.ServingModelID = servingModelID
+	selection.LoraName = loraName
+	selection.AdapterURI = strings.TrimSpace(adapterModel.AdapterURI)
+	request.LoraName = selection.LoraName
+	request.AdapterURI = selection.AdapterURI
+	return selection, request, nil
+}
+
 func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint) (response *model.GenerateResponse, err error) {
 	log.Trace("InferenceUsecase generateAgent")
 
@@ -35,13 +145,11 @@ func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.Gene
 	if err != nil {
 		return nil, err
 	}
-	inferenceModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, endpoint.ModelID)
+	serving, request, err := u.resolveAgentServing(ctx, request, endpoint, spec)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(inferenceModel.EffectiveBaseID) == "" {
-		return nil, domain.ErrModelNotReady.Extend("model effective base is not available")
-	}
+	inferenceModel := serving.BaseModel
 	datasets, err := u.readGenerateDatasets(ctx, request.OrgID, endpoint.DatasetIDs)
 	if err != nil {
 		return nil, err
@@ -53,20 +161,8 @@ func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.Gene
 	dataset := readyDatasets[0]
 	request.DatasetID = dataset.DatasetID
 
-	generationProtocol := strings.TrimSpace(inferenceModel.ServingProtocol.String())
-	generationModel := strings.TrimSpace(inferenceModel.ServingModel)
-	if inferenceModel.Status != model.ModelStatusReady {
-		err = domain.ErrModelNotReady.Extend("model is not ready")
-		return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, nil, "", "", startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
-	}
-	if inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
-		inferenceModel, err = u.ensureServingModelLoaded(ctx, request.OrgID, inferenceModel)
-		if err != nil {
-			return nil, errors.Join(err, u.recordInferenceRequest(ctx, request, dataset, inferenceModel, nil, "", "", startedAt, generationProtocol, generationModel, model.InferenceRequestStatusFailed, err.Error()))
-		}
-		generationProtocol = strings.TrimSpace(inferenceModel.ServingProtocol.String())
-		generationModel = strings.TrimSpace(inferenceModel.ServingModel)
-	}
+	generationProtocol := serving.Protocol
+	generationModel := serving.generationModelName()
 	generator := u.generationAdapters[generationProtocol]
 	if generator == nil {
 		err = domain.ErrModelNotReady.Extend(fmt.Sprintf("serving protocol %q is not supported", generationProtocol))
@@ -91,6 +187,9 @@ func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.Gene
 		GenerationModel:       generationModel,
 		RAGMergeStrategy:      endpoint.MergeStrategy,
 	}
+	if serving.ServingModelID != uuid.Nil {
+		response.ModelID = serving.ServingModelID
+	}
 	if err := u.recordInferenceRequest(ctx, request, dataset, inferenceModel, result.Contexts, "", result.Answer, startedAt, generationProtocol, generationModel, model.InferenceRequestStatusCompleted, ""); err != nil {
 		return nil, err
 	}
@@ -100,17 +199,20 @@ func (u *inferenceUsecase) generateAgent(ctx context.Context, request model.Gene
 func (u *inferenceUsecase) startAgentRunWorkflow(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint) (*model.GenerateResponse, error) {
 	log.Trace("InferenceUsecase startAgentRunWorkflow")
 
+	return u.startAgentRunWorkflowWithSpec(ctx, request, endpoint, endpoint.AgentSpecHash)
+}
+
+func (u *inferenceUsecase) startAgentRunWorkflowWithSpec(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint, agentSpecHash string) (*model.GenerateResponse, error) {
+	log.Trace("InferenceUsecase startAgentRunWorkflowWithSpec")
+
 	request.AgentRunID = request.RequestID
-	spec, err := u.agentSpecRepository.ReadAgentSpecByHash(ctx, request.OrgID, endpoint.AgentSpecHash)
+	spec, err := u.agentSpecRepository.ReadAgentSpecByHash(ctx, request.OrgID, agentSpecHash)
 	if err != nil {
 		return nil, err
 	}
-	inferenceModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, endpoint.ModelID)
+	serving, request, err := u.resolveAgentServing(ctx, request, endpoint, spec)
 	if err != nil {
 		return nil, err
-	}
-	if strings.TrimSpace(inferenceModel.EffectiveBaseID) == "" {
-		return nil, domain.ErrModelNotReady.Extend("model effective base is not available")
 	}
 	datasets, err := u.readGenerateDatasets(ctx, request.OrgID, endpoint.DatasetIDs)
 	if err != nil {
@@ -124,11 +226,13 @@ func (u *inferenceUsecase) startAgentRunWorkflow(ctx context.Context, request mo
 		RunID:           request.AgentRunID,
 		OrgID:           request.OrgID,
 		UserID:          request.UserID,
-		Endpoint:        endpoint,
+		Endpoint:        agentEndpointWithAdapter(endpoint, serving.ServingModelID),
 		Spec:            spec,
-		Model:           inferenceModel,
+		Model:           serving.BaseModel,
 		Datasets:        readyDatasets,
 		DataSnapshotSet: agentDataSnapshotSet(readyDatasets),
+		LoraName:        serving.LoraName,
+		AdapterURI:      serving.AdapterURI,
 		Messages:        agentInitialMessages(spec, request.QueryText),
 		DecodingOptions: agentDecodingOptions(spec, request),
 	}
@@ -145,9 +249,10 @@ func (u *inferenceUsecase) startAgentRunWorkflow(ctx context.Context, request mo
 		return nil, err
 	}
 	input := AgentRunWorkflowInput{
-		EndpointID: endpoint.EndpointID,
-		Request:    request,
-		WallMs:     spec.Budgets.WallMs,
+		EndpointID:    endpoint.EndpointID,
+		AgentSpecHash: spec.ContentHash,
+		Request:       request,
+		WallMs:        spec.Budgets.WallMs,
 	}
 	if err := u.agentRunWorkflowStarter.StartAgentRunWorkflow(ctx, input); err != nil {
 		_, _ = u.recordAgentRun(ctx, session, model.AgentRunStatusFailed, model.AgentStopReasonRuntimeError)
@@ -160,11 +265,43 @@ func (u *inferenceUsecase) startAgentRunWorkflow(ctx context.Context, request mo
 		OrgID:                 request.OrgID,
 		DatasetID:             readyDatasets[0].DatasetID,
 		DatasetIDs:            datasetIDsFromModels(readyDatasets),
-		ModelID:               endpoint.ModelID,
+		ModelID:               agentSelectedModelID(serving),
 		QueryText:             request.QueryText,
 		PromptStrategyVersion: spec.ContentHash,
 		RAGMergeStrategy:      endpoint.MergeStrategy,
 	}, nil
+}
+
+func agentEndpointWithAdapter(endpoint *model.PublishedEndpoint, servingModelID uuid.UUID) *model.PublishedEndpoint {
+	if endpoint == nil {
+		return endpoint
+	}
+	record := *endpoint
+	record.ServingModelID = servingModelID
+	return &record
+}
+
+func agentSelectedModelID(serving agentServingSelection) uuid.UUID {
+	if serving.ServingModelID != uuid.Nil {
+		return serving.ServingModelID
+	}
+	if serving.BaseModel != nil {
+		return serving.BaseModel.ModelID
+	}
+	return uuid.Nil
+}
+
+func (u *inferenceUsecase) StartAgentEvalRun(ctx context.Context, endpointID uuid.UUID, agentSpecHash string, request model.GenerateRequest) (*model.GenerateResponse, error) {
+	log.Trace("InferenceUsecase StartAgentEvalRun")
+
+	endpoint, err := u.endpointRepository.ReadEndpoint(ctx, request.OrgID, endpointID)
+	if err != nil {
+		return nil, err
+	}
+	if endpoint.Mode != model.AgentEndpointModeAgent {
+		return nil, domain.ErrValidationFailed.Extend("agent eval requires an agent endpoint")
+	}
+	return u.startAgentRunWorkflowWithSpec(ctx, request, endpoint, agentSpecHash)
 }
 
 func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.GenerateRequest, endpoint *model.PublishedEndpoint, spec *model.AgentSpec, inferenceModel *model.InferenceModel, datasets []*model.InferenceDataset, generator GenerationAdapter) (model.AgentResult, error) {
@@ -182,6 +319,8 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 		Model:           inferenceModel,
 		Datasets:        datasets,
 		DataSnapshotSet: agentDataSnapshotSet(datasets),
+		LoraName:        request.LoraName,
+		AdapterURI:      request.AdapterURI,
 		Messages:        agentInitialMessages(spec, request.QueryText),
 		DecodingOptions: agentDecodingOptions(spec, request),
 	}
@@ -224,6 +363,8 @@ func (u *inferenceUsecase) runAgentLoop(ctx context.Context, request model.Gener
 			Tools:      toolSpecs,
 			ToolChoice: toolChoice,
 			Options:    generationOptions,
+			LoraName:   session.LoraName,
+			AdapterURI: session.AdapterURI,
 		})
 		if err != nil {
 			reason := agentRuntimeStopReason(err)

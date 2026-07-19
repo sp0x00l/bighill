@@ -20,10 +20,13 @@ import (
 
 const (
 	pathInferenceEndpoints             = "/v1/inference/endpoints"
+	pathInferenceEndpoint              = "/v1/inference/endpoints/{endpointId}"
 	pathInferenceAgentSpecs            = "/v1/inference/agent-specs"
+	pathInferenceAgentSpec             = "/v1/inference/agent-specs/{agentSpecHash}"
 	pathInferenceEndpointDatasets      = "/v1/inference/endpoints/{endpointId}/datasets"
 	pathInferenceEndpointMergeStrategy = "/v1/inference/endpoints/{endpointId}/merge-strategy"
 	pathInferenceEndpointGenerations   = "/v1/inference/endpoints/{endpointId}/generations"
+	pathInferenceEndpointAgentEvalRuns = "/v1/inference/endpoints/{endpointId}/agent-eval-runs/{agentSpecHash}"
 	pathInferenceEndpointPreferences   = "/v1/inference/endpoints/{endpointId}/preference-datasets"
 	pathInferencePreferenceDatasets    = "/v1/inference/preference-datasets"
 	pathInferencePreferenceDataset     = "/v1/inference/preference-datasets/{preferenceDatasetId}"
@@ -80,10 +83,22 @@ func (h *InferenceHandlers) GetRoutes() []Route {
 			SpanName: "publish-inference-endpoint",
 		},
 		{
+			Path:     pathInferenceEndpoint,
+			Handler:  h.ReadEndpoint,
+			Method:   http.MethodGet,
+			SpanName: "read-inference-endpoint",
+		},
+		{
 			Path:     pathInferenceAgentSpecs,
 			Handler:  h.PublishAgentSpec,
 			Method:   http.MethodPost,
 			SpanName: "publish-inference-agent-spec",
+		},
+		{
+			Path:     pathInferenceAgentSpec,
+			Handler:  h.ReadAgentSpec,
+			Method:   http.MethodGet,
+			SpanName: "read-inference-agent-spec",
 		},
 		{
 			Path:     pathInferenceEndpointDatasets,
@@ -102,6 +117,12 @@ func (h *InferenceHandlers) GetRoutes() []Route {
 			Handler:  h.Generate,
 			Method:   http.MethodPost,
 			SpanName: "generate-from-inference-endpoint",
+		},
+		{
+			Path:     pathInferenceEndpointAgentEvalRuns,
+			Handler:  h.StartAgentEvalRun,
+			Method:   http.MethodPost,
+			SpanName: "start-agent-eval-run",
 		},
 		{
 			Path:     pathInferenceFeedback,
@@ -184,6 +205,29 @@ func (h *InferenceHandlers) PublishEndpoint(ctx context.Context, req *http.Reque
 	return NewResponseWithPayload(http.StatusCreated, payload), nil
 }
 
+func (h *InferenceHandlers) ReadEndpoint(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers ReadEndpoint")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	endpointID, err := uuid.Parse(mux.Vars(req)["endpointId"])
+	if err != nil || endpointID == uuid.Nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid endpoint ID")
+	}
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	endpoint, err := h.usecase.ReadEndpoint(ctx, orgID, endpointID)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.endpointAdapter.ToDetailDTOs(ctx, []*model.PublishedEndpoint{endpoint})
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode inference endpoint")
+	}
+	return NewResponseWithPayload(http.StatusOK, payload), nil
+}
+
 func (h *InferenceHandlers) PublishAgentSpec(ctx context.Context, req *http.Request) (APIResponse, error) {
 	log.Trace("InferenceHandlers PublishAgentSpec")
 
@@ -214,6 +258,26 @@ func (h *InferenceHandlers) PublishAgentSpec(ctx context.Context, req *http.Requ
 		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode agent spec")
 	}
 	return NewResponseWithPayload(http.StatusCreated, payload), nil
+}
+
+func (h *InferenceHandlers) ReadAgentSpec(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers ReadAgentSpec")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	agentSpecHash := mux.Vars(req)["agentSpecHash"]
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	spec, err := h.usecase.ReadAgentSpec(ctx, orgID, agentSpecHash)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.agentSpecAdapter.ToDTO(ctx, spec)
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode agent spec")
+	}
+	return NewResponseWithPayload(http.StatusOK, payload), nil
 }
 
 func (h *InferenceHandlers) SetEndpointDatasets(ctx context.Context, req *http.Request) (APIResponse, error) {
@@ -307,6 +371,48 @@ func (h *InferenceHandlers) Generate(ctx context.Context, req *http.Request) (AP
 		return NewResponseWithPayload(http.StatusAccepted, payload), nil
 	}
 	return NewResponseWithPayload(http.StatusOK, payload), nil
+}
+
+func (h *InferenceHandlers) StartAgentEvalRun(ctx context.Context, req *http.Request) (APIResponse, error) {
+	log.Trace("InferenceHandlers StartAgentEvalRun")
+
+	actor, orgID, err := readActorOrg(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("User and org headers are required")
+	}
+	requestID, err := transport.ReadIdempotencyIDHeader(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("X-Request-ID is required")
+	}
+	endpointID, err := readEndpointID(req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid endpoint id")
+	}
+	agentSpecHash := mux.Vars(req)["agentSpecHash"]
+	if agentSpecHash == "" {
+		return nil, ErrBadRequest().WithMessage("Invalid agent spec hash")
+	}
+	body, err := transport.ReadReqBody(ctx, req)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid request body")
+	}
+	command, err := h.generationAdapter.FromAgentEvalRunDTO(ctx, body)
+	if err != nil {
+		return nil, ErrBadRequest().Wrap(err).WithMessage("Invalid agent eval run request")
+	}
+	command.RequestID = requestID
+	command.UserID = actor
+	command.OrgID = orgID
+	ctx = ctxutil.WithActorOrg(ctx, actor, orgID)
+	result, err := h.usecase.StartAgentEvalRun(ctx, endpointID, agentSpecHash, command)
+	if err != nil {
+		return nil, mapInferenceError(err)
+	}
+	payload, err := h.generationAdapter.ToDTO(ctx, result)
+	if err != nil {
+		return nil, ErrInternalServer().Wrap(err).WithMessage("Failed to encode agent eval run response")
+	}
+	return NewResponseWithPayload(http.StatusAccepted, payload), nil
 }
 
 func (h *InferenceHandlers) RecordFeedback(ctx context.Context, req *http.Request) (APIResponse, error) {

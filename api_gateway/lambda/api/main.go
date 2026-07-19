@@ -83,6 +83,14 @@ func NewAPIHandler() APIHandler {
 			env.WithDefaultString("SOCKET_SERVICE_HTTP_HOST", "127.0.0.1"),
 			env.WithDefaultString("SOCKET_SERVICE_HTTP_PORT", "8089"),
 		),
+		AgentRegistryServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("AGENT_REGISTRY_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("AGENT_REGISTRY_SERVICE_HTTP_PORT", "8090"),
+		),
+		ToolCatalogServiceRoute: serviceBaseRoute(
+			env.WithDefaultString("TOOL_CATALOG_SERVICE_HTTP_HOST", "127.0.0.1"),
+			env.WithDefaultString("TOOL_CATALOG_SERVICE_HTTP_PORT", "8091"),
+		),
 	}
 
 	return APIHandler{

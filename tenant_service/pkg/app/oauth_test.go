@@ -330,6 +330,7 @@ var _ = Describe("OAuth usecase", func() {
 		Expect(authProvider.lastClaims.UserID).To(Equal(userID.String()))
 		Expect(authProvider.lastClaims.Roles).To(Equal([]string{domain.OrgMemberRoleOrgAdmin}))
 		Expect(authProvider.lastClaims.Permissions).To(ContainElement(authz.PermissionOrgMembersWrite))
+		Expect(authProvider.lastClaims.Permissions).To(ContainElement(authz.PermissionToolCatalogPublish))
 		Expect(builderStub.createdCalled).To(BeTrue())
 		Expect(authStore.createSessionCalled).To(BeTrue())
 		Expect(dbStub.saveOAuthIdentityCalled).To(BeTrue())

@@ -26,9 +26,10 @@ const (
 )
 
 type AgentRunWorkflowInput struct {
-	EndpointID uuid.UUID
-	Request    model.GenerateRequest
-	WallMs     int
+	EndpointID    uuid.UUID
+	AgentSpecHash string
+	Request       model.GenerateRequest
+	WallMs        int
 }
 
 type AgentRunWorkflowState struct {
@@ -47,6 +48,8 @@ type AgentRunWorkflowState struct {
 	ServingProtocol           string
 	ServingModel              string
 	ServingTarget             string
+	LoraName                  string
+	AdapterURI                string
 	DecodingOptions           model.GenerationOptions
 	TotalTokens               int
 	LastToolCallSignature     string
@@ -55,8 +58,9 @@ type AgentRunWorkflowState struct {
 }
 
 type PrepareAgentRunActivityInput struct {
-	EndpointID uuid.UUID
-	Request    model.GenerateRequest
+	EndpointID    uuid.UUID
+	AgentSpecHash string
+	Request       model.GenerateRequest
 }
 
 type GenerateAgentStepActivityInput struct {
@@ -120,7 +124,7 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 	if err := workflow.ExecuteActivity(
 		agentRunRecordActivityContext(ctx, timeout, "prepare:"+input.Request.AgentRunID.String()),
 		PrepareAgentRunActivityName,
-		PrepareAgentRunActivityInput{EndpointID: input.EndpointID, Request: input.Request},
+		PrepareAgentRunActivityInput{EndpointID: input.EndpointID, AgentSpecHash: input.AgentSpecHash, Request: input.Request},
 	).Get(ctx, &state); err != nil {
 		return err
 	}

@@ -1,0 +1,16 @@
+replicaCount: 2
+image:
+  repository: "tool-execution-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+env:
+  environment: "prod"
+  dbCredentialsSecret:
+    name: "aurora-creds-prod"
+    userKey: "bighill_tool_execution_db_user"
+    passwordKey: "bighill_tool_execution_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_tool_execution_db"
+  httpToolAllowedHosts: ""

@@ -29,8 +29,16 @@ var _ = Describe("Role permissions", func() {
 		permissions := authz.PermissionsForRole(authz.RoleOrgAdmin)
 
 		Expect(authz.HasPermission(permissions, authz.PermissionOrgMembersWrite)).To(BeTrue())
+		Expect(authz.HasPermission(permissions, authz.PermissionToolCatalogPublish)).To(BeTrue())
 		Expect(authz.ValidRole(authz.RoleOrgAdmin)).To(BeTrue())
 		Expect(authz.ValidRole("owner")).To(BeFalse())
+	})
+
+	It("derives platform admin tool catalog publish permissions", func() {
+		permissions := authz.PermissionsForRole(authz.RolePlatformAdmin)
+
+		Expect(authz.HasPermission(permissions, authz.PermissionToolCatalogPublish)).To(BeTrue())
+		Expect(authz.ValidRole(authz.RolePlatformAdmin)).To(BeTrue())
 	})
 })
 

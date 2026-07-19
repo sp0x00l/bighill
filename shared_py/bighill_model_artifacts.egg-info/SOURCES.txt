@@ -1,0 +1,8 @@
+pyproject.toml
+bighill_model_artifacts/__init__.py
+bighill_model_artifacts/gguf.py
+bighill_model_artifacts.egg-info/PKG-INFO
+bighill_model_artifacts.egg-info/SOURCES.txt
+bighill_model_artifacts.egg-info/dependency_links.txt
+bighill_model_artifacts.egg-info/requires.txt
+bighill_model_artifacts.egg-info/top_level.txt

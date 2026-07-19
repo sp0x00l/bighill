@@ -22,7 +22,7 @@ env:
     sslmodeKey: "pg_sslmode"
     nameKey: "bighill_inference_db"
   dlq: "https://sqs.eu-west-1.amazonaws.com/385800116362/bighill-staging-inference-dlq"
-  toolServiceGrpcAddress: "tool-service:7084"
+  toolExecutionGrpcAddress: "tool-execution-service:7084"
   rerankerProvider: "tei"
   rerankerUrl: "http://text-embeddings-inference-reranker:80"
   rerankerModel: "bge-reranker-large"

@@ -47,8 +47,9 @@ var _ = Describe("AgentRunWorkflow", func() {
 	It("orchestrates prepare, generate, record step, and completion as separate activities", func() {
 		env := suite.NewTestWorkflowEnvironment()
 		input := app.AgentRunWorkflowInput{
-			EndpointID: uuid.New(),
-			WallMs:     60000,
+			EndpointID:    uuid.New(),
+			AgentSpecHash: "sha256:candidate",
+			WallMs:        60000,
 			Request: model.GenerateRequest{
 				RequestID:  uuid.New(),
 				AgentRunID: uuid.New(),
@@ -56,8 +57,9 @@ var _ = Describe("AgentRunWorkflow", func() {
 			},
 		}
 		order := []string{}
-		env.RegisterActivityWithOptions(func(app.PrepareAgentRunActivityInput) (app.AgentRunWorkflowState, error) {
+		env.RegisterActivityWithOptions(func(activityInput app.PrepareAgentRunActivityInput) (app.AgentRunWorkflowState, error) {
 			order = append(order, "prepare")
+			Expect(activityInput.AgentSpecHash).To(Equal("sha256:candidate"))
 			return app.AgentRunWorkflowState{
 				Request: input.Request,
 				Budgets: model.AgentBudgets{
@@ -354,9 +356,11 @@ func (s *capabilityReportRepositoryStub) ReadCapabilityReportForEffectiveBase(_ 
 }
 
 type agentSpecRepositoryStub struct {
-	upserted *model.AgentSpec
-	spec     *model.AgentSpec
-	err      error
+	upserted  *model.AgentSpec
+	spec      *model.AgentSpec
+	readOrgID uuid.UUID
+	readHash  string
+	err       error
 }
 
 type agentTrajectoryRepositoryStub struct {
@@ -497,7 +501,9 @@ func (s *agentSpecRepositoryStub) UpsertAgentSpec(_ context.Context, spec *model
 	return spec, nil
 }
 
-func (s *agentSpecRepositoryStub) ReadAgentSpecByHash(_ context.Context, _ uuid.UUID, _ string) (*model.AgentSpec, error) {
+func (s *agentSpecRepositoryStub) ReadAgentSpecByHash(_ context.Context, orgID uuid.UUID, hash string) (*model.AgentSpec, error) {
+	s.readOrgID = orgID
+	s.readHash = hash
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -507,6 +513,7 @@ func (s *agentSpecRepositoryStub) ReadAgentSpecByHash(_ context.Context, _ uuid.
 type publishedEndpointRepositoryStub struct {
 	endpoint       *model.PublishedEndpoint
 	upserted       *model.PublishedEndpoint
+	championUpdate model.AgentChampionUpdate
 	datasetIDs     []uuid.UUID
 	readOrgID      uuid.UUID
 	readEndpointID uuid.UUID
@@ -547,6 +554,14 @@ func (s *publishedEndpointRepositoryStub) ListEndpoints(_ context.Context, _ uui
 func (s *publishedEndpointRepositoryStub) ReadEndpoint(_ context.Context, orgID uuid.UUID, endpointID uuid.UUID) (*model.PublishedEndpoint, error) {
 	s.readOrgID = orgID
 	s.readEndpointID = endpointID
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.endpoint, nil
+}
+
+func (s *publishedEndpointRepositoryStub) ApplyAgentChampionUpdate(_ context.Context, update model.AgentChampionUpdate) (*model.PublishedEndpoint, error) {
+	s.championUpdate = update
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -882,6 +897,7 @@ var _ = Describe("InferenceUsecase", func() {
 		inferenceModel.UserID = dataset.UserID
 		inferenceModel.OrgID = dataset.OrgID
 		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.ModelKind = model.ModelKindBase
 		inferenceModel.DatasetID = uuid.Nil
 		spec := validToolUsingAgentSpec(inferenceModel)
 		endpointID := uuid.New()
@@ -928,6 +944,7 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(response.AgentRunID).To(Equal(requestID))
 		Expect(workflowStarter.inputs).To(HaveLen(1))
 		Expect(workflowStarter.inputs[0].Request.AgentRunID).To(Equal(requestID))
+		Expect(workflowStarter.inputs[0].AgentSpecHash).To(Equal(spec.ContentHash))
 		Expect(workflowStarter.inputs[0].WallMs).To(Equal(spec.Budgets.WallMs))
 		Expect(trajectoryRepository.runs).To(HaveLen(1))
 		Expect(trajectoryRepository.runs[0].RunID).To(Equal(requestID))
@@ -940,6 +957,183 @@ var _ = Describe("InferenceUsecase", func() {
 		}}))
 		Expect(trajectoryRepository.runs[0].DataSnapshotHash).NotTo(BeEmpty())
 		Expect(trajectoryRepository.steps).To(BeEmpty())
+	})
+
+	It("starts eval agent runs against the requested spec hash instead of the endpoint champion", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		inferenceModel.DatasetID = uuid.Nil
+		spec := validToolUsingAgentSpec(inferenceModel)
+		spec.ContentHash = "sha256:candidate-spec"
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: "sha256:champion-spec",
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		agentSpecRepository := &agentSpecRepositoryStub{spec: spec}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		workflowStarter := &agentRunWorkflowStarterStub{}
+		requestID := uuid.New()
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(agentSpecRepository),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:                  "search_knowledge",
+				Description:           "Search knowledge",
+				Parameters:            []byte(`{"type":"object"}`),
+				ImplementationVersion: "search_knowledge:v1",
+				Locality:              "local",
+			}}}),
+			app.WithAgentRunWorkflowStarter(workflowStarter),
+		)
+
+		response, err := uc.StartAgentEvalRun(context.Background(), endpointID, spec.ContentHash, model.GenerateRequest{
+			RequestID: requestID,
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "eval this candidate",
+			TopK:      2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Accepted).To(BeTrue())
+		Expect(agentSpecRepository.readHash).To(Equal("sha256:candidate-spec"))
+		Expect(workflowStarter.inputs).To(HaveLen(1))
+		Expect(workflowStarter.inputs[0].AgentSpecHash).To(Equal("sha256:candidate-spec"))
+		Expect(trajectoryRepository.runs).To(HaveLen(1))
+		Expect(trajectoryRepository.runs[0].AgentSpecHash).To(Equal("sha256:candidate-spec"))
+	})
+
+	It("starts eval agent runs with the requested candidate adapter LoRA", func() {
+		dataset := validInferenceDataset()
+		baseModel := validInferenceModel()
+		baseModel.UserID = dataset.UserID
+		baseModel.OrgID = dataset.OrgID
+		baseModel.ModelKind = model.ModelKindBase
+		baseModel.DatasetID = uuid.Nil
+		baseModel.ServingModel = "base-agent-model"
+		adapterModel := validInferenceModel()
+		adapterModel.ModelID = uuid.New()
+		adapterModel.UserID = dataset.UserID
+		adapterModel.OrgID = dataset.OrgID
+		adapterModel.ModelKind = model.ModelKindFineTuned
+		adapterModel.DatasetID = uuid.Nil
+		adapterModel.ServingModel = "candidate-agent-lora"
+		adapterModel.AdapterURI = "s3://models/candidate-agent-lora"
+		adapterModel.EffectiveBaseID = baseModel.EffectiveBaseID
+		spec := validToolUsingAgentSpec(baseModel)
+		spec.ContentHash = "sha256:candidate-spec"
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       baseModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: "sha256:champion-spec",
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		workflowStarter := &agentRunWorkflowStarterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{models: []*model.InferenceModel{baseModel, adapterModel}},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{tools: []model.ToolSpec{{
+				Name:                  "search_knowledge",
+				Description:           "Search knowledge",
+				Parameters:            []byte(`{"type":"object"}`),
+				ImplementationVersion: "search_knowledge:v1",
+				Locality:              "local",
+			}}}),
+			app.WithAgentRunWorkflowStarter(workflowStarter),
+		)
+		requestID := uuid.New()
+
+		response, err := uc.StartAgentEvalRun(context.Background(), endpointID, spec.ContentHash, model.GenerateRequest{
+			RequestID:      requestID,
+			UserID:         dataset.UserID,
+			OrgID:          dataset.OrgID,
+			ServingModelID: adapterModel.ModelID,
+			QueryText:      "eval this candidate",
+			TopK:           2,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Accepted).To(BeTrue())
+		Expect(response.ModelID).To(Equal(adapterModel.ModelID))
+		Expect(workflowStarter.inputs).To(HaveLen(1))
+		workflowRequest := workflowStarter.inputs[0].Request
+		Expect(workflowRequest.ModelID).To(Equal(baseModel.ModelID))
+		Expect(workflowRequest.ServingModelID).To(Equal(adapterModel.ModelID))
+		Expect(workflowRequest.LoraName).To(Equal("candidate-agent-lora"))
+		Expect(workflowRequest.AdapterURI).To(Equal("s3://models/candidate-agent-lora"))
+		Expect(trajectoryRepository.runs).To(HaveLen(1))
+		Expect(trajectoryRepository.runs[0].EffectiveBaseID).To(Equal(baseModel.EffectiveBaseID))
+	})
+
+	It("rejects eval agent runs when the requested spec targets a different model than the endpoint", func() {
+		dataset := validInferenceDataset()
+		inferenceModel := validInferenceModel()
+		inferenceModel.UserID = dataset.UserID
+		inferenceModel.OrgID = dataset.OrgID
+		inferenceModel.ModelKind = model.ModelKindBase
+		spec := validToolUsingAgentSpec(inferenceModel)
+		spec.ContentHash = "sha256:wrong-model-spec"
+		spec.ModelID = uuid.New()
+		endpointID := uuid.New()
+		endpoint := &model.PublishedEndpoint{
+			EndpointID:    endpointID,
+			OrgID:         dataset.OrgID,
+			ModelID:       inferenceModel.ModelID,
+			Mode:          model.AgentEndpointModeAgent,
+			AgentSpecHash: "sha256:champion-spec",
+			DatasetIDs:    []uuid.UUID{dataset.DatasetID},
+			MergeStrategy: model.RAGMergeStrategyScoreNormalized,
+			Status:        model.PublishedEndpointStatusReady,
+		}
+		trajectoryRepository := &agentTrajectoryRepositoryStub{}
+		workflowStarter := &agentRunWorkflowStarterStub{}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{model: inferenceModel},
+			app.WithPublishedEndpointRepository(&publishedEndpointRepositoryStub{endpoint: endpoint}),
+			app.WithAgentSpecRepository(&agentSpecRepositoryStub{spec: spec}),
+			app.WithInferenceDatasetRepository(&inferenceDatasetRepositoryStub{datasets: map[uuid.UUID]*model.InferenceDataset{dataset.DatasetID: dataset}}),
+			app.WithInferenceRequestRepository(&inferenceRequestRepositoryStub{}),
+			app.WithAgentTrajectoryRepository(trajectoryRepository),
+			app.WithToolInvoker(&toolInvokerStub{}),
+			app.WithAgentRunWorkflowStarter(workflowStarter),
+		)
+
+		response, err := uc.StartAgentEvalRun(context.Background(), endpointID, spec.ContentHash, model.GenerateRequest{
+			RequestID: uuid.New(),
+			UserID:    dataset.UserID,
+			OrgID:     dataset.OrgID,
+			QueryText: "eval this candidate",
+			TopK:      2,
+		})
+
+		Expect(response).To(BeNil())
+		Expect(errors.Is(err, domain.ErrValidationFailed)).To(BeTrue())
+		Expect(workflowStarter.inputs).To(BeEmpty())
+		Expect(trajectoryRepository.runs).To(BeEmpty())
 	})
 
 	It("enforces agent token budget even when the backend omits usage", func() {
@@ -1431,6 +1625,60 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(readModel).To(Equal(expected))
 		Expect(repository.readUserID).To(Equal(expected.OrgID))
 		Expect(repository.readID).To(Equal(expected.ModelID))
+	})
+
+	It("reads an agent spec by hash for registry verification", func() {
+		inferenceModel := validInferenceModel()
+		expected := validToolUsingAgentSpec(inferenceModel)
+		repository := &agentSpecRepositoryStub{spec: expected}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithAgentSpecRepository(repository),
+		)
+
+		spec, err := uc.ReadAgentSpec(context.Background(), expected.OrgID, expected.ContentHash)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec).To(Equal(expected))
+	})
+
+	It("reads an endpoint by id for registry verification", func() {
+		expected := validEndpointFixture()
+		repository := &publishedEndpointRepositoryStub{endpoint: expected}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithPublishedEndpointRepository(repository),
+		)
+
+		endpoint, err := uc.ReadEndpoint(context.Background(), expected.OrgID, expected.EndpointID)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(endpoint).To(Equal(expected))
+		Expect(repository.readOrgID).To(Equal(expected.OrgID))
+		Expect(repository.readEndpointID).To(Equal(expected.EndpointID))
+	})
+
+	It("applies an agent champion update through the endpoint repository", func() {
+		expected := validEndpointFixture()
+		update := model.AgentChampionUpdate{
+			OrgID:         expected.OrgID,
+			EndpointID:    expected.EndpointID,
+			AgentLineage:  "support_agent",
+			AgentSpecHash: "sha256:new-spec",
+			DecisionID:    uuid.New(),
+			DecidedAt:     time.Now().UTC(),
+		}
+		repository := &publishedEndpointRepositoryStub{endpoint: expected}
+		uc := app.NewInferenceUsecase(
+			&inferenceModelRepositoryStub{},
+			app.WithPublishedEndpointRepository(repository),
+		)
+
+		endpoint, err := uc.ApplyAgentChampionUpdate(context.Background(), update)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(endpoint).To(Equal(expected))
+		Expect(repository.championUpdate).To(Equal(update))
 	})
 
 	It("records a registry dataset update", func() {
@@ -2861,6 +3109,21 @@ func validToolUsingAgentSpec(inferenceModel *model.InferenceModel) *model.AgentS
 		StopConditions: []byte(`{}`),
 		Guardrails:     []byte(`{}`),
 		Status:         model.AgentSpecStatusValidated,
+	}
+}
+
+func validEndpointFixture() *model.PublishedEndpoint {
+	return &model.PublishedEndpoint{
+		EndpointID:      uuid.New(),
+		OrgID:           uuid.New(),
+		ModelID:         uuid.New(),
+		Mode:            model.AgentEndpointModeAgent,
+		AgentSpecID:     uuid.New(),
+		AgentSpecHash:   "sha256:agent-spec",
+		MergeStrategy:   model.RAGMergeStrategyReranker,
+		Status:          model.PublishedEndpointStatusReady,
+		DisplayName:     "Support agent",
+		CreatedByUserID: uuid.New(),
 	}
 }
 

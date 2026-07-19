@@ -1245,14 +1245,31 @@ var _ = Describe("SnapshotRepository", func() {
 	Describe("MarkGraphFailed", func() {
 		It("marks the graph snapshot failed with a reason", func() {
 			graphSnapshotID := uuid.New()
+			graphSnapshot := &model.GraphSnapshot{
+				GraphSnapshotID:         graphSnapshotID,
+				ProvenanceHash:          "sha256:graph",
+				ExtractionModel:         "graph-model",
+				ExtractionPromptVersion: "graph_extraction_prompt_v1",
+				ExtractionSchemaVersion: "graph_extraction_v1",
+				ChunkCount:              7,
+				ChunksProcessed:         3,
+				EntityCount:             2,
+				EdgeCount:               1,
+			}
 
-			err := repository.MarkGraphFailed(ctx, tx, graphSnapshotID, "graph extraction failed")
+			err := repository.MarkGraphFailed(ctx, tx, graphSnapshot, "graph extraction failed")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("UPDATE test_db.graph_snapshots"))
 			args := namedArgs(poolMock.ExecArgs[0])
 			Expect(args).To(SatisfyAll(
 				HaveKeyWithValue("graph_snapshot_id", pgtype.UUID{Bytes: graphSnapshotID, Valid: true}),
+				HaveKeyWithValue("provenance_hash", "sha256:graph"),
+				HaveKeyWithValue("extraction_model", "graph-model"),
+				HaveKeyWithValue("extraction_prompt_version", "graph_extraction_prompt_v1"),
+				HaveKeyWithValue("extraction_schema_version", "graph_extraction_v1"),
+				HaveKeyWithValue("chunk_count", int64(7)),
+				HaveKeyWithValue("chunks_processed", int64(3)),
 				HaveKeyWithValue("failure_reason", "graph extraction failed"),
 				HaveKeyWithValue("status", model.SnapshotStatusFailed.String()),
 			))

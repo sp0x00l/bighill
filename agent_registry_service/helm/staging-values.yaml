@@ -1,0 +1,8 @@
+env:
+  environment: "staging"
+  pgHost: "bighill-postgres"
+  pgSslMode: "require"
+  dlq: ""
+  inferenceBaseUrl: "http://inference-service:8087"
+  agentTrainingDispatcher: "training-service"
+  trainingBaseUrl: "http://training-service:8085"

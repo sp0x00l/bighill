@@ -325,6 +325,9 @@ func (g *HTTPGenerator) servingTarget(request model.GenerationRequest) (string, 
 		return "", "", fmt.Errorf("served model record is required")
 	}
 	modelName := strings.TrimSpace(request.Model.ServingModel)
+	if loraName := strings.TrimSpace(request.LoraName); loraName != "" {
+		modelName = loraName
+	}
 	endpoint := strings.TrimRight(strings.TrimSpace(request.Model.ServingTarget), "/")
 	if modelName == "" {
 		return "", "", fmt.Errorf("served model name is required")

@@ -27,6 +27,7 @@ type PublishedEndpointRepository interface {
 	SetEndpointDatasets(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID, datasetIDs []uuid.UUID) (*model.PublishedEndpoint, error)
 	ListEndpoints(ctx context.Context, orgID uuid.UUID) ([]*model.PublishedEndpoint, error)
 	ReadEndpoint(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID) (*model.PublishedEndpoint, error)
+	ApplyAgentChampionUpdate(ctx context.Context, update model.AgentChampionUpdate) (*model.PublishedEndpoint, error)
 }
 
 type AgentSpecRepository interface {

@@ -1,0 +1,67 @@
+replicaCount: 1
+image:
+  repository: "agent-registry-service"
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: false
+  name: "agent-registry-service"
+  annotations: {}
+service:
+  type: ClusterIP
+  healthPort: 5063
+  httpPort: 8090
+env:
+  environment: "local-dev"
+  serviceName: "agent-registry-service"
+  otelExporterEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  kafkaBroker: "kafka:9092"
+  dbCredentialsSecret:
+    name: ""
+    userKey: "bighill_agent_registry_db_user"
+    passwordKey: "bighill_agent_registry_db_password"
+    hostKey: "pg_host"
+    portKey: "pg_port"
+    sslmodeKey: "pg_sslmode"
+    nameKey: "bighill_agent_registry_db"
+  dbName: "bighill_agent_registry_db"
+  dbUser: "bighill_agent_registry_db_user"
+  dbPassword: ""
+  dbMaxConnections: "20"
+  pgHost: "localhost"
+  pgPort: "5432"
+  pgSslMode: "require"
+  dlq: ""
+  kafkaBaseGroupId: "agent-registry"
+  kafkaAutoOffsetReset: "earliest"
+  topic: "agent_registry"
+  trainingTopic: "training"
+  outbox: "postgres"
+  outboxRelayPollMs: "250"
+  outboxRelayBatchSize: "100"
+  outboxRelayFailureBackoffMs: "2000"
+  inferenceBaseUrl: "http://inference-service:8087"
+  inferenceRequestTimeoutSeconds: "5"
+  inferenceEvalPollIntervalMs: "500"
+  inferenceEvalPollAttempts: "120"
+  agentTrainingDispatcher: "training-service"
+  trainingBaseUrl: "http://training-service:8085"
+  trainingRequestTimeoutSeconds: "10"
+  healthcheckCpuThreshold: "80"
+  healthcheckFreeMemThreshold: "20"
+  healthcheckDbLatencyThreshold: "5"
+  healthcheckMsgBrokerLatencyThreshold: "5"
+  healthcheckServiceLatencyThreshold: "5"
+  healthcheckMessageBrokerSubscriberMaxPollSilenceSeconds: "30"
+  healthcheckMessageBrokerSubscriberMaxProgressSilenceSeconds: "90"
+  healthcheckMessageBrokerSubscriberMaxLag: "100000"
+  lifecycleReadinessTimeoutSeconds: "30"
+  lifecycleDrainTimeoutSeconds: "30"
+  lifecycleCloseTimeoutSeconds: "10"
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "25m"
+  limits:
+    memory: "128Mi"
+    cpu: "100m"

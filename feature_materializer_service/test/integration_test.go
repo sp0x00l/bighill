@@ -51,7 +51,7 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 	)
 
 	BeforeAll(func() {
-		ctx, cancel = context.WithTimeout(context.Background(), 90*time.Second)
+		ctx, cancel = context.WithTimeout(context.Background(), 180*time.Second)
 
 		dbName := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DB_NAME", "bighill_feature_materializer_db")
 		connectionString := testPostgresConnectionString(dbName)
@@ -296,6 +296,169 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(featureReadyEvent.GetStorageLocation()).To(MatchRegexp(`^s3://local-dev-bucket/lakehouse/features/.+\.parquet$`))
 	})
+
+	It("materializes a graph snapshot through the configured extractor and enqueues a graph-ready event", Label("graph"), func() {
+		brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
+		featureMaterializerTopic := env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_TOPIC", "feature_materializer")
+		Expect(sharedmessaging.CreateTopics(ctx, brokers, []string{featureMaterializerTopic})).To(Succeed())
+
+		datasetFile := validIntegrationDatasetFile()
+		datasetFile.ProcessingProfile = model.ProcessingProfileTextRAG
+		Expect(upsertFeatureMaterializerTenant(ctx, database, datasetFile.UserID)).To(Succeed())
+		tenantCtx := ctxutil.WithActorOrg(ctx, datasetFile.UserID, datasetFile.OrgID)
+
+		rawSnapshot, err := rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
+
+		var featureSnapshot *model.FeatureSnapshot
+		err = snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			out, err := snapshots.SavePendingFeatureSnapshot(ctx, tx, rawSnapshot.RawSnapshotID, uuid.New())
+			if err != nil {
+				return err
+			}
+			featureSnapshot = out
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		featureSnapshot.StorageLocation = "s3://local-dev-bucket/lakehouse/features/graph-fixture.parquet"
+		featureSnapshot.SchemaVersion = 1
+		featureSnapshot.SchemaMetadata = "{}"
+		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			return snapshots.MarkFeatureReady(ctx, tx, featureSnapshot)
+		})).To(Succeed())
+
+		embeddingStrategy := integrationEmbeddingStrategy()
+		var embeddingSnapshot *model.EmbeddingSnapshot
+		err = snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			out, err := snapshots.SavePendingEmbeddingSnapshot(ctx, tx, featureSnapshot.FeatureSnapshotID, uuid.New(), embeddingStrategy)
+			if err != nil {
+				return err
+			}
+			embeddingSnapshot = out
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		embeddingSnapshot.VectorStore = "pgvector"
+		embeddingSnapshot.CollectionName = "graph-fixture"
+		embeddingSnapshot.EmbeddingDimensions = embeddingStrategy.EmbeddingDimensions
+		embeddingSnapshot.EmbeddingCount = 1
+		embeddingSnapshot.StrategyVersion = embeddingStrategy.StrategyVersion
+		embeddingSnapshot.ChunkerName = embeddingStrategy.ChunkerName
+		embeddingSnapshot.ChunkerVersion = embeddingStrategy.ChunkerVersion
+		embeddingSnapshot.ChunkSize = embeddingStrategy.ChunkSize
+		embeddingSnapshot.ChunkOverlap = embeddingStrategy.ChunkOverlap
+		embeddingSnapshot.EmbeddingProvider = embeddingStrategy.EmbeddingProvider
+		embeddingSnapshot.EmbeddingModel = embeddingStrategy.EmbeddingModel
+		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			err := snapshots.SaveEmbeddingRecords(ctx, tx, []model.EmbeddingRecord{{
+				EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+				DatasetID:           embeddingSnapshot.DatasetID,
+				UserID:              embeddingSnapshot.UserID,
+				OrgID:               embeddingSnapshot.OrgID,
+				ChunkIndex:          0,
+				SourceText:          "Aurora Relay connects Beacon Hub.",
+				Vector:              integrationEmbeddingVector(embeddingStrategy.EmbeddingDimensions),
+			}})
+			if err != nil {
+				return err
+			}
+			return snapshots.MarkEmbeddingReady(ctx, tx, embeddingSnapshot)
+		})).To(Succeed())
+
+		runCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		messenger := sharedmessaging.NewMessenger(sharedmessaging.MessengerConfig{
+			Brokers:         brokers,
+			GroupID:         "feature-materializer-graph-ready-" + uuid.NewString(),
+			DlqURL:          "http://localhost:4566/feature-materializer-dev-env-queue/",
+			AutoOffsetReset: "latest",
+		}, stop)
+		defer func() {
+			_ = messenger.Close(ctx)
+		}()
+		publisher, err := messenger.Publisher(runCtx)
+		Expect(err).NotTo(HaveOccurred())
+		relayPublisher, ok := publisher.(sharedmessaging.RelayPublisher)
+		Expect(ok).To(BeTrue())
+		subscriber, err := messenger.Subscriber(runCtx)
+		Expect(err).NotTo(HaveOccurred())
+		graphReadyCollector := newGraphSnapshotReadyCollector(datasetFile.DatasetID)
+		sharedmessaging.AddListener(subscriber, graphReadyCollector)
+		go func() {
+			_ = subscriber.Subscribe(runCtx, []string{featureMaterializerTopic})
+		}()
+		Eventually(func() error {
+			return sharedmessaging.CheckSubscriberHealth(ctx, subscriber, sharedmessaging.SubscriberHealthCheckConfig{
+				RequireAssignment: true,
+			})
+		}, 30*time.Second, 100*time.Millisecond).Should(Succeed())
+
+		outboxSignal := make(chan struct{}, 1)
+		outboxWriter, err := sharedmessaging.NewPostgresOutbox(database.Pool, database.Name, "")
+		Expect(err).NotTo(HaveOccurred())
+		orderedOutbox, ok := outboxWriter.(sharedmessaging.OrderedOutbox)
+		Expect(ok).To(BeTrue())
+		signaledOutbox := sharedmessaging.NewSignaledOutbox(outboxWriter, outboxSignal)
+		relayOutbox, ok := signaledOutbox.(sharedmessaging.RelayOutbox)
+		Expect(ok).To(BeTrue())
+		graphSnapshotUOW := shareduow.New(database.Pool,
+			shareduow.WithTransactionalOutbox(orderedOutbox),
+			shareduow.WithOutboxSignal(func() { sharedmessaging.NotifyOutboxSignal(outboxSignal) }),
+		)
+		outboxRelay := sharedmessaging.NewOutboxRelay(relayOutbox, relayPublisher, sharedmessaging.OutboxRelayConfig{
+			PollInterval:   100 * time.Millisecond,
+			FailureBackoff: 250 * time.Millisecond,
+			BatchSize:      10,
+			Signal:         outboxSignal,
+			InstanceID:     "feature-materializer-graph-ready-" + uuid.NewString(),
+			LeaseDuration:  time.Second,
+		})
+		go func() {
+			_ = outboxRelay.Run(runCtx)
+		}()
+
+		requestTimeout := time.Duration(env.MustInt("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_REQUEST_TIMEOUT_SECONDS")) * time.Second
+		graphExtractor, err := materialization.NewModelServingGraphExtractor(materialization.ModelServingGraphExtractorConfig{
+			Endpoint:         env.MustString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_ENDPOINT"),
+			AuthToken:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_AUTH_TOKEN", ""),
+			Timeout:          requestTimeout,
+			MaxResponseBytes: env.MustInt64("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RESPONSE_BYTES"),
+			MaxOutputTokens:  env.MustInt("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS"),
+			MaxRetries:       env.MustInt("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES"),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		graphUsecase := usecase.NewGraphMaterializationUsecase(
+			snapshots,
+			graphSnapshotUOW,
+			featuremessaging.NewSnapshotEventBuilder(featuremessaging.MaterializationTopics{FeatureMaterializer: featureMaterializerTopic}),
+			graphExtractor,
+		)
+		graphStrategy := model.GraphExtractionStrategy{
+			ExtractionModel:         env.MustString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL"),
+			ExtractionPromptVersion: model.DefaultGraphExtractionPromptVersion,
+			ExtractionSchemaVersion: model.DefaultGraphExtractionSchemaVersion,
+		}
+
+		graphSnapshot, err := graphUsecase.MaterializeGraph(tenantCtx, embeddingSnapshot.EmbeddingSnapshotID, uuid.New(), graphStrategy)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(graphSnapshot.Status).To(Equal(model.SnapshotStatusReady))
+		Expect(graphSnapshot.ChunkCount).To(Equal(int64(1)))
+		Expect(graphSnapshot.ChunksProcessed).To(Equal(int64(1)))
+		Expect(graphSnapshot.EntityCount).To(BeNumerically(">", 0))
+		Expect(graphSnapshot.ProvenanceHash).NotTo(BeEmpty())
+		graphReadyEvent, err := readGraphSnapshotReadyEvent(ctx, database, datasetFile.DatasetID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(graphReadyEvent.GetDatasetId()).To(Equal(datasetFile.DatasetID.String()))
+		Expect(graphReadyEvent.GetGraphSnapshotId()).To(Equal(graphSnapshot.GraphSnapshotID.String()))
+		Expect(graphReadyEvent.GetEmbeddingSnapshotId()).To(Equal(embeddingSnapshot.EmbeddingSnapshotID.String()))
+		Expect(graphReadyEvent.GetChunkCount()).To(Equal(int64(1)))
+		Expect(graphReadyEvent.GetChunksProcessed()).To(Equal(int64(1)))
+		Expect(graphReadyEvent.GetEntityCount()).To(BeNumerically(">", 0))
+		publishedGraphEvent := graphReadyCollector.wait(30 * time.Second)
+		Expect(publishedGraphEvent.GetDatasetId()).To(Equal(datasetFile.DatasetID.String()))
+		Expect(publishedGraphEvent.GetGraphSnapshotId()).To(Equal(graphSnapshot.GraphSnapshotID.String()))
+	})
 })
 
 func validIntegrationDatasetFile() *model.DatasetFile {
@@ -354,13 +517,17 @@ func (p integrationEmbeddingProvider) Dimensions() int {
 func (p integrationEmbeddingProvider) Embed(_ context.Context, texts []string) ([][]float32, error) {
 	vectors := make([][]float32, len(texts))
 	for textIndex := range texts {
-		vector := make([]float32, p.dimensions)
-		for i := range vector {
-			vector[i] = float32((textIndex+i)%7+1) / 10
-		}
-		vectors[textIndex] = vector
+		vectors[textIndex] = integrationEmbeddingVector(p.dimensions)
 	}
 	return vectors, nil
+}
+
+func integrationEmbeddingVector(dimensions int) []float32 {
+	vector := make([]float32, dimensions)
+	for i := range vector {
+		vector[i] = float32(i%7+1) / 10
+	}
+	return vector
 }
 
 func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {
@@ -440,6 +607,77 @@ func readFeatureSnapshotReadyEvent(ctx context.Context, database *dbconn.Databas
 		return nil, err
 	}
 	return event, nil
+}
+
+func readGraphSnapshotReadyEvent(ctx context.Context, database *dbconn.Database, datasetID uuid.UUID) (*featurepb.GraphSnapshotReadyEvent, error) {
+	var payload []byte
+	err := database.Pool.QueryRow(ctx, `
+		SELECT payload
+		FROM `+database.Name+`.outbox_messages
+		WHERE resource_key = $1 AND event_type = 'graph_snapshot_ready'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, datasetID).Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var envelope sharedmessaging.Message
+	if err := envelope.Deserialize(ctx, payload); err != nil {
+		return nil, err
+	}
+	event := &featurepb.GraphSnapshotReadyEvent{}
+	if err := envelope.DeserializePayload(event); err != nil {
+		return nil, err
+	}
+	return event, nil
+}
+
+type graphSnapshotReadyCollector struct {
+	datasetID uuid.UUID
+	events    chan *featurepb.GraphSnapshotReadyEvent
+}
+
+func newGraphSnapshotReadyCollector(datasetID uuid.UUID) *graphSnapshotReadyCollector {
+	log.Trace("newGraphSnapshotReadyCollector")
+
+	return &graphSnapshotReadyCollector{
+		datasetID: datasetID,
+		events:    make(chan *featurepb.GraphSnapshotReadyEvent, 1),
+	}
+}
+
+func (c *graphSnapshotReadyCollector) MsgType() sharedmessaging.MsgType {
+	log.Trace("graphSnapshotReadyCollector MsgType")
+
+	return sharedmessaging.MsgTypeGraphSnapshotReady
+}
+
+func (c *graphSnapshotReadyCollector) NewMessage() *featurepb.GraphSnapshotReadyEvent {
+	log.Trace("graphSnapshotReadyCollector NewMessage")
+
+	return &featurepb.GraphSnapshotReadyEvent{}
+}
+
+func (c *graphSnapshotReadyCollector) Handle(_ context.Context, resourceKey uuid.UUID, payload *featurepb.GraphSnapshotReadyEvent) error {
+	log.Trace("graphSnapshotReadyCollector Handle")
+
+	if resourceKey != c.datasetID || payload == nil {
+		return nil
+	}
+	select {
+	case c.events <- payload:
+	default:
+	}
+	return nil
+}
+
+func (c *graphSnapshotReadyCollector) wait(timeout time.Duration) *featurepb.GraphSnapshotReadyEvent {
+	log.Trace("graphSnapshotReadyCollector wait")
+
+	var event *featurepb.GraphSnapshotReadyEvent
+	Eventually(c.events, timeout, 100*time.Millisecond).Should(Receive(&event))
+	return event
 }
 
 func testPostgresConnectionString(dbName string) string {

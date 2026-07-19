@@ -49,7 +49,15 @@ func (s *inferenceUsecaseStub) PublishAgentSpec(context.Context, model.AgentSpec
 	return nil, nil
 }
 
+func (s *inferenceUsecaseStub) ReadAgentSpec(context.Context, uuid.UUID, string) (*model.AgentSpec, error) {
+	return nil, nil
+}
+
 func (s *inferenceUsecaseStub) ListEndpoints(context.Context, uuid.UUID) ([]*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
+func (s *inferenceUsecaseStub) ReadEndpoint(context.Context, uuid.UUID, uuid.UUID) (*model.PublishedEndpoint, error) {
 	return nil, nil
 }
 
@@ -65,9 +73,17 @@ func (s *inferenceUsecaseStub) SetEndpointMergeStrategy(context.Context, model.E
 	return nil, nil
 }
 
+func (s *inferenceUsecaseStub) ApplyAgentChampionUpdate(context.Context, model.AgentChampionUpdate) (*model.PublishedEndpoint, error) {
+	return nil, nil
+}
+
 func (s *inferenceUsecaseStub) GenerateForEndpoint(_ context.Context, _ uuid.UUID, request model.GenerateRequest) (*model.GenerateResponse, error) {
 	s.request = request
 	return s.result, s.err
+}
+
+func (s *inferenceUsecaseStub) StartAgentEvalRun(context.Context, uuid.UUID, string, model.GenerateRequest) (*model.GenerateResponse, error) {
+	return nil, nil
 }
 
 func (s *inferenceUsecaseStub) Generate(_ context.Context, request model.GenerateRequest) (*model.GenerateResponse, error) {

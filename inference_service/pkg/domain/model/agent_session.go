@@ -11,6 +11,8 @@ type AgentSession struct {
 	Model             *InferenceModel
 	Datasets          []*InferenceDataset
 	DataSnapshotSet   []DatasetSnapshotRef
+	LoraName          string
+	AdapterURI        string
 	Messages          []ChatMessage
 	ResolvedToolSpecs []ToolSpec
 	ToolsetHash       string

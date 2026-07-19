@@ -13,7 +13,8 @@ declare -a search_paths=(
   "model_registry_service"
   "model_serving_service"
   "tenant_service"
-  "tool_service"
+  "tool_execution_service"
+  "tool_catalog_service"
   "training_service"
   "scripts"
   ".vscode/launch.json"
@@ -29,7 +30,7 @@ declare -a patterns=(
   "(?<![A-Z0-9_])MODEL_REGISTRY_(?!SERVICE_)"
   "(?<![A-Z0-9_])MODEL_SERVING_(?!SERVICE_)"
   "(?<![A-Z0-9_])PROFILE_(?!SERVICE_)"
-  "(?<![A-Z0-9_])TOOL_(?!SERVICE_|ERROR)"
+  "(?<![A-Z0-9_])TOOL_(?!EXECUTION_SERVICE_|CATALOG_SERVICE_|ERROR)"
   "(?<![A-Z0-9_])TRAINING_(?!SERVICE_|JOB_|JOBS_|OUTPUT_|AXOLOTL_|ARTIFACT_|ADAPTER_|BASE_|DATASET_|MODEL_|RECIPE_|RUN_|SERVING_|EVALUATION_|REPORT_|RAY_)"
 )
 

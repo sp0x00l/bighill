@@ -36,6 +36,7 @@ type PublishedEndpointDTO struct {
 type PublishedEndpointDetailDTO struct {
 	EndpointID      string   `json:"endpoint_id"`
 	ModelID         string   `json:"model_id"`
+	ServingModelID  string   `json:"serving_model_id,omitempty"`
 	Mode            string   `json:"mode"`
 	AgentSpecID     string   `json:"agent_spec_id,omitempty"`
 	AgentSpecHash   string   `json:"agent_spec_hash,omitempty"`
@@ -184,6 +185,7 @@ func (a *endpointDTOAdapter) ToDetailDTOs(ctx context.Context, endpoints []*mode
 		dtos = append(dtos, PublishedEndpointDetailDTO{
 			EndpointID:      endpoint.EndpointID.String(),
 			ModelID:         endpoint.ModelID.String(),
+			ServingModelID:  optionalUUIDString(endpoint.ServingModelID),
 			Mode:            endpoint.Mode.String(),
 			AgentSpecID:     optionalUUIDString(endpoint.AgentSpecID),
 			AgentSpecHash:   endpoint.AgentSpecHash,

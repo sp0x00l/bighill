@@ -132,6 +132,35 @@ spec:
               value: {{ .Values.env.embeddingChunkOverlap | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_REQUEST_TIMEOUT_SECONDS
               value: {{ .Values.env.embeddingRequestTimeoutSeconds | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED
+              value: {{ .Values.env.graphEnabled | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR
+              value: {{ .Values.env.graphExtractor | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_ENDPOINT
+              value: {{ .Values.env.graphExtractionEndpoint | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_AUTH_TOKEN
+{{- if .Values.env.graphExtractionAuthTokenSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.graphExtractionAuthTokenSecret.name | quote }}
+                  key: {{ .Values.env.graphExtractionAuthTokenSecret.key | quote }}
+{{- else }}
+              value: {{ .Values.env.graphExtractionAuthToken | quote }}
+{{- end }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL
+              value: {{ .Values.env.graphExtractionModel | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION
+              value: {{ .Values.env.graphExtractionPromptVersion | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION
+              value: {{ .Values.env.graphExtractionSchemaVersion | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.env.graphExtractionRequestTimeoutSeconds | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RESPONSE_BYTES
+              value: {{ .Values.env.graphExtractionMaxResponseBytes | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS
+              value: {{ .Values.env.graphExtractionMaxOutputTokens | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES
+              value: {{ .Values.env.graphExtractionMaxRetries | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_GRPC_ADDRESS
               value: {{ .Values.env.dataStreamGrpcAddress | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_REQUEST_TIMEOUT_SECONDS

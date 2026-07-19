@@ -146,6 +146,32 @@ var _ = Describe("HTTPGenerator", func() {
 		Expect(result.Content).To(Equal("generated from served model"))
 	})
 
+	It("uses the selected LoRA name as the OpenAI-compatible model", func() {
+		var received struct {
+			Model string `json:"model"`
+		}
+		generator := NewHTTPGenerator("OPENAI_CHAT_COMPLETIONS", time.Second, 128)
+		generator.client = httpGeneratorTestClient(`{"choices":[{"message":{"content":"generated from lora"}}]}`, func(r *http.Request) {
+			Expect(r.URL.Host).To(Equal("base-vllm.local"))
+			Expect(r.URL.Path).To(Equal("/v1/chat/completions"))
+			Expect(json.NewDecoder(r.Body).Decode(&received)).To(Succeed())
+		})
+
+		result, err := generator.Generate(context.Background(), model.GenerationRequest{
+			Query:  "question",
+			Prompt: "prompt text",
+			Model: &model.InferenceModel{
+				ServingTarget: "http://base-vllm.local",
+				ServingModel:  "base-model",
+			},
+			LoraName: "candidate-agent-lora",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Content).To(Equal("generated from lora"))
+		Expect(received.Model).To(Equal("candidate-agent-lora"))
+	})
+
 	It("does not serialize tool provenance into the model-facing OpenAI tool payload", func() {
 		var received map[string]any
 		generator := NewHTTPGenerator("OPENAI_CHAT_COMPLETIONS", time.Second, 128)

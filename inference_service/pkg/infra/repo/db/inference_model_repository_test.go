@@ -243,6 +243,17 @@ func assignScanValue(dest any, value any) {
 		*typed = value.([]string)
 	case *time.Time:
 		*typed = value.(time.Time)
+	case *pgtype.Timestamptz:
+		switch v := value.(type) {
+		case pgtype.Timestamptz:
+			*typed = v
+		case time.Time:
+			*typed = pgtype.Timestamptz{Time: v, Valid: true}
+		case nil:
+			*typed = pgtype.Timestamptz{}
+		default:
+			Fail(fmt.Sprintf("unsupported timestamptz scan value %T", value))
+		}
 	default:
 		Fail(fmt.Sprintf("unsupported scan destination %T", dest))
 	}

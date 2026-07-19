@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	DefaultGraphExtractionModel         = "cooccurrence-heuristic"
-	DefaultGraphExtractionPromptVersion = "none"
+	DefaultGraphExtractionModel         = ""
+	DefaultGraphExtractionPromptVersion = "graph_extraction_prompt_v1"
 	DefaultGraphExtractionSchemaVersion = "graph_extraction_v1"
 )
 

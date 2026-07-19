@@ -57,6 +57,9 @@ build()
     mkdir -p "$DATA_CONTRACT_ROOT/build/protobufs/schemas"
     cp "$DATA_CONTRACT_ROOT"/schemas/* "$DATA_CONTRACT_ROOT/build/protobufs/schemas/"
 
+    mkdir -p "$DATA_CONTRACT_ROOT/build/protobufs/prompts"
+    cp "$DATA_CONTRACT_ROOT"/prompts/* "$DATA_CONTRACT_ROOT/build/protobufs/prompts/"
+
     if [ "$BUILD_FOR" = "python" ]; then
         if [ -e "$DATA_CONTRACT_ROOT/build/python" ]; then
             rm -rf "$DATA_CONTRACT_ROOT/build/python"

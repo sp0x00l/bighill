@@ -82,9 +82,13 @@ func EmbeddingSnapshotIdempotencyKey(featureSnapshotID uuid.UUID, strategy model
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("embedding_snapshot:"+featureSnapshotID.String()+":"+strategy.CanonicalKey()))
 }
 
-func GraphSnapshotIdempotencyKey(embeddingSnapshotID uuid.UUID, strategy model.GraphExtractionStrategy) uuid.UUID {
+func GraphSnapshotIdempotencyKey(embeddingSnapshotID uuid.UUID, strategy model.GraphExtractionStrategy) (uuid.UUID, error) {
 	strategy = model.ApplyGraphExtractionStrategyDefaults(strategy)
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("graph_snapshot:"+embeddingSnapshotID.String()+":"+strategy.ExtractionModel+":"+strategy.ExtractionPromptVersion+":"+strategy.ExtractionSchemaVersion))
+	promptHash, err := graphPromptContentHash(strategy.ExtractionPromptVersion)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("graph_snapshot:"+embeddingSnapshotID.String()+":"+strategy.ExtractionModel+":"+strategy.ExtractionPromptVersion+":"+promptHash+":"+strategy.ExtractionSchemaVersion)), nil
 }
 
 func MaterializeWorkflow(ctx workflow.Context, input MaterializeWorkflowInput) (*MaterializeWorkflowResult, error) {
@@ -137,11 +141,15 @@ func MaterializeWorkflow(ctx workflow.Context, input MaterializeWorkflowInput) (
 		embeddingSnapshotID = embeddingSnapshot.EmbeddingSnapshotID
 		if input.GraphEnabled && featureSnapshot.ProcessingProfile.RequiresGraph() {
 			var graphSnapshot model.GraphSnapshot
+			graphIdempotencyKey, err := GraphSnapshotIdempotencyKey(embeddingSnapshot.EmbeddingSnapshotID, graphStrategy)
+			if err != nil {
+				return nil, err
+			}
 			if err := workflow.ExecuteActivity(ctx, MaterializeGraphActivityName, MaterializeGraphActivityInput{
 				EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
 				UserID:              embeddingSnapshot.UserID,
 				OrgID:               embeddingSnapshot.OrgID,
-				IdempotencyKey:      GraphSnapshotIdempotencyKey(embeddingSnapshot.EmbeddingSnapshotID, graphStrategy),
+				IdempotencyKey:      graphIdempotencyKey,
 				Strategy:            graphStrategy,
 			}).Get(ctx, &graphSnapshot); err != nil {
 				return nil, err

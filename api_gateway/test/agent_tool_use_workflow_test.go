@@ -23,11 +23,11 @@ import (
 )
 
 const (
-	defaultSocketURL                = "ws://127.0.0.1:8089/v1/socket"
-	defaultToolServiceGRPCAddress   = "127.0.0.1:7084"
-	toolServiceSecurityAllowedOrgID = "11111111-1111-1111-1111-111111111111"
-	agentE2ESocketTimeout           = 20 * time.Second
-	toolServiceE2ERequestTimeout    = 5 * time.Second
+	defaultSocketURL                         = "ws://127.0.0.1:8089/v1/socket"
+	defaultToolExecutionServiceGRPCAddress   = "127.0.0.1:7084"
+	toolExecutionServiceSecurityAllowedOrgID = "11111111-1111-1111-1111-111111111111"
+	agentE2ESocketTimeout                    = 20 * time.Second
+	toolExecutionServiceE2ERequestTimeout    = 5 * time.Second
 )
 
 var _ = Describe("Agent tool-use workflow", Label("agent"), func() {
@@ -135,22 +135,22 @@ var _ = Describe("Agent tool-use workflow", Label("agent"), func() {
 		Expect(eventTypes).To(ContainElement("agent.run.completed"))
 	})
 
-	It("denies unallowlisted tenants at the tool service boundary", func() {
+	It("denies unallowlisted tenants at the tool execution service boundary", func() {
 		err := invokeHTTPGetTool(uuid.NewString(), "http://example.com")
 
-		expectToolServiceError(err, codes.PermissionDenied, "allowlisted")
+		expectToolExecutionServiceError(err, codes.PermissionDenied, "allowlisted")
 	})
 
-	It("blocks SSRF targets at the tool service boundary", func() {
-		err := invokeHTTPGetTool(toolServiceSecurityAllowedOrgID, "http://127.0.0.1:11434/api/tags")
+	It("blocks SSRF targets at the tool execution service boundary", func() {
+		err := invokeHTTPGetTool(toolExecutionServiceSecurityAllowedOrgID, "http://127.0.0.1:11434/api/tags")
 
-		expectToolServiceError(err, codes.PermissionDenied, "blocked")
+		expectToolExecutionServiceError(err, codes.PermissionDenied, "blocked")
 	})
 
-	It("rejects malformed tool arguments at the tool service boundary", func() {
-		err := invokeToolRaw(toolServiceSecurityAllowedOrgID, "http_get", []byte(`{}`))
+	It("rejects malformed tool arguments at the tool execution service boundary", func() {
+		err := invokeToolRaw(toolExecutionServiceSecurityAllowedOrgID, "http_get", []byte(`{}`))
 
-		expectToolServiceError(err, codes.InvalidArgument, "validation")
+		expectToolExecutionServiceError(err, codes.InvalidArgument, "validation")
 	})
 })
 
@@ -232,12 +232,16 @@ func agentSpecPayloadForTool(modelID uuid.UUID, lineage string, toolName string,
 }
 
 func publishAgentEndpoint(user profileTestUser, modelID uuid.UUID, datasetID string, agentSpecHash string) uuid.UUID {
+	return publishAgentEndpointWithDisplayName(user, modelID, datasetID, agentSpecHash, "agent-tool-use-e2e-"+uuid.NewString()[:8])
+}
+
+func publishAgentEndpointWithDisplayName(user profileTestUser, modelID uuid.UUID, datasetID string, agentSpecHash string, displayName string) uuid.UUID {
 	status, body := doJSON(http.MethodPost, "/v1/private/inference/endpoints", map[string]any{
 		"model_id":        modelID.String(),
 		"dataset_ids":     []string{datasetID},
 		"mode":            "agent",
 		"agent_spec_hash": agentSpecHash,
-		"display_name":    "agent-tool-use-e2e-" + uuid.NewString()[:8],
+		"display_name":    displayName,
 		"merge_strategy":  "reranker",
 	}, user.Token, uuid.New())
 	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
@@ -344,10 +348,10 @@ func invokeHTTPGetTool(orgID string, targetURL string) error {
 }
 
 func invokeToolRaw(orgID string, toolName string, arguments []byte) error {
-	client, cleanup := newToolServiceClient()
+	client, cleanup := newToolExecutionServiceClient()
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(context.Background(), toolServiceE2ERequestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), toolExecutionServiceE2ERequestTimeout)
 	defer cancel()
 	_, err := client.Invoke(ctx, &toolspb.InvokeToolRequest{
 		ToolName:      toolName,
@@ -360,10 +364,10 @@ func invokeToolRaw(orgID string, toolName string, arguments []byte) error {
 	return err
 }
 
-func newToolServiceClient() (toolspb.ToolServiceClient, func()) {
-	address := strings.TrimSpace(os.Getenv("TOOL_SERVICE_GRPC_ADDRESS"))
+func newToolExecutionServiceClient() (toolspb.ToolServiceClient, func()) {
+	address := strings.TrimSpace(os.Getenv("TOOL_EXECUTION_SERVICE_GRPC_ADDRESS"))
 	if address == "" {
-		address = defaultToolServiceGRPCAddress
+		address = defaultToolExecutionServiceGRPCAddress
 	}
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	Expect(err).NotTo(HaveOccurred())
@@ -372,7 +376,7 @@ func newToolServiceClient() (toolspb.ToolServiceClient, func()) {
 	}
 }
 
-func expectToolServiceError(err error, code codes.Code, messageFragment string) {
+func expectToolExecutionServiceError(err error, code codes.Code, messageFragment string) {
 	Expect(err).To(HaveOccurred())
 	status, ok := grpcstatus.FromError(err)
 	Expect(ok).To(BeTrue())

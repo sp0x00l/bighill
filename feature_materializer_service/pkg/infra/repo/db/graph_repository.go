@@ -243,21 +243,42 @@ func (r *SnapshotRepository) MarkGraphReady(ctx context.Context, tx pgx.Tx, grap
 	return nil
 }
 
-func (r *SnapshotRepository) MarkGraphFailed(ctx context.Context, tx pgx.Tx, graphSnapshotID uuid.UUID, reason string) error {
+func (r *SnapshotRepository) MarkGraphFailed(ctx context.Context, tx pgx.Tx, graphSnapshot *model.GraphSnapshot, reason string) error {
 	log.Trace("SnapshotRepository MarkGraphFailed")
 
+	if graphSnapshot == nil {
+		return domain.ErrValidationFailed.Extend("graph snapshot is required")
+	}
 	tag, err := tx.Exec(ctx, `UPDATE `+r.Name+`.graph_snapshots
-		SET status = @status::snapshot_status_enum, active_for_retrieval = false, failure_reason = @failure_reason
+		SET status = @status::snapshot_status_enum,
+			active_for_retrieval = false,
+			provenance_hash = @provenance_hash,
+			extraction_model = @extraction_model,
+			extraction_prompt_version = @extraction_prompt_version,
+			extraction_schema_version = @extraction_schema_version,
+			chunk_count = @chunk_count,
+			chunks_processed = @chunks_processed,
+			entity_count = @entity_count,
+			edge_count = @edge_count,
+			failure_reason = @failure_reason
 		WHERE graph_snapshot_id = @graph_snapshot_id`, pgx.NamedArgs{
-		"graph_snapshot_id": pgtype.UUID{Bytes: graphSnapshotID, Valid: true},
-		"failure_reason":    reason,
-		"status":            model.SnapshotStatusFailed.String(),
+		"graph_snapshot_id":         pgtype.UUID{Bytes: graphSnapshot.GraphSnapshotID, Valid: true},
+		"provenance_hash":           graphSnapshot.ProvenanceHash,
+		"extraction_model":          graphSnapshot.ExtractionModel,
+		"extraction_prompt_version": graphSnapshot.ExtractionPromptVersion,
+		"extraction_schema_version": graphSnapshot.ExtractionSchemaVersion,
+		"chunk_count":               graphSnapshot.ChunkCount,
+		"chunks_processed":          graphSnapshot.ChunksProcessed,
+		"entity_count":              graphSnapshot.EntityCount,
+		"edge_count":                graphSnapshot.EdgeCount,
+		"failure_reason":            reason,
+		"status":                    model.SnapshotStatusFailed.String(),
 	})
 	if err != nil {
 		return fmt.Errorf("mark graph snapshot failed: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: graph_snapshot_id=%s", domain.ErrGraphSnapshotNotFound, graphSnapshotID)
+		return fmt.Errorf("%w: graph_snapshot_id=%s", domain.ErrGraphSnapshotNotFound, graphSnapshot.GraphSnapshotID)
 	}
 	return nil
 }

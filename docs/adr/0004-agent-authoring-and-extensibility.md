@@ -58,8 +58,8 @@ Use a governed capability model.
 | Capability | Port | Host / isolation boundary |
 |------------|------|---------------------------|
 | Built-in retrieval tool, such as `search_knowledge` | `ToolInvoker` | `inference_service`, only for data the platform already handles safely |
-| Custom tool / MCP server | `ToolInvoker` | `tool_service` sandbox |
-| Sub-agent | `ToolInvoker` as agent-as-tool | `tool_service` / agent host / future remote-agent adapter |
+| Custom tool / MCP server | `ToolInvoker` | `tool_execution_service` sandbox |
+| Sub-agent | `ToolInvoker` as agent-as-tool | `tool_execution_service` / agent host / future remote-agent adapter |
 | Durable or side-effecting activity | `DurableActivity` | Temporal worker, with approval/idempotency policy |
 | Memory | `MemoryPort` | `memory_service` |
 | Guardrail / policy | `PolicyPort` | `policy_service` |
@@ -107,14 +107,14 @@ sub-agent used by a run can be identified and compared.
 6. **Pick isolation by risk.**
 
 - Safe platform reads, such as vector search over tenant-owned retrieval data, can run locally.
-- External or world-acting tools run in `tool_service`.
+- External or world-acting tools run in `tool_execution_service`.
 - Long-running or side-effecting work runs through Temporal with approval and idempotency policy.
 - Arbitrary untrusted code runs in a stronger host, such as WASM or containers, when that host exists.
 
 The host follows the capability's risk, not whether the capability was written as code or config.
 
 7. **Use MCP as the first external-tool protocol.** MCP is a good fit for custom tools and external
-   tool servers. It should sit behind `tool_service`, and later behind `tool_catalog_service`. It is
+   tool servers. It should sit behind `tool_execution_service`, and later behind `tool_catalog_service`. It is
    not the whole SDK. It does not cover memory, policy, durable activities, streaming, trajectories,
    training attribution, or every future runtime.
 
@@ -138,8 +138,8 @@ The host follows the capability's risk, not whether the capability was written a
 |-------------------------|------------------|
 | Programmatic agent construction | Spec SDK/CLI plus managed runtime. Custom logic enters as governed capabilities. |
 | YAML agent/task configuration | `AgentSpec` is the publishable artifact. Task/workflow specs arrive as vertical slices. |
-| Custom tools | Tool SDK plus `tool_service`; later WASM/container hosts for arbitrary code. |
-| MCP servers | First external-tool protocol behind `tool_service`; later governed by catalog and tenant policy. |
+| Custom tools | Tool SDK plus `tool_execution_service`; later WASM/container hosts for arbitrary code. |
+| MCP servers | First external-tool protocol behind `tool_execution_service`; later governed by catalog and tenant policy. |
 | Memory backends | `MemoryPort` and `memory_service`; spec binds memory policy by ID |
 | Guardrails | `PolicyPort` and `policy_service`; local guardrails only while they are real and auditable. |
 | Sub-agents / agent-as-tool | Sub-agent references or remote-agent adapters through `ToolInvoker`. |
@@ -169,7 +169,7 @@ Land this in vertical slices:
    schema hashes only when their services exist.
 2. **Spec SDK/CLI:** validate, canonicalize, diff, publish, and bind `AgentSpec` artifacts.
 3. **Tool SDK:** generate manifests, JSON Schemas, test harnesses, MCP wrappers, and contract tests.
-4. **MCP bridge in `tool_service`:** register one config-pinned MCP endpoint first, then discover
+4. **MCP bridge in `tool_execution_service`:** register one config-pinned MCP endpoint first, then discover
    tools, invoke calls, normalize errors, and emit audit/events.
 5. **`tool_catalog_service`:** add dynamic tool definitions, versions, tenant enablement, credential
    bindings, MCP registrations, and catalog projections when the first design-partner path proves the

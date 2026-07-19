@@ -1,0 +1,185 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-registry-service.fullname" . }}
+  labels:
+    app: {{ include "agent-registry-service.fullname" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "agent-registry-service.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "agent-registry-service.fullname" . }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default "agent-registry-service" }}
+      {{- end }}
+      containers:
+        - name: {{ include "agent-registry-service.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: {{ .Values.env.environment | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.env.otelExporterEndpoint | quote }}
+            - name: KAFKA_BROKER
+              value: {{ .Values.env.kafkaBroker | quote }}
+            - name: AGENT_REGISTRY_SERVICE_NAME
+              value: {{ .Values.env.serviceName | quote }}
+            - name: AGENT_REGISTRY_SERVICE_BUILD_VERSION
+              value: {{ .Values.image.tag | quote }}
+            - name: AGENT_REGISTRY_SERVICE_DB_NAME
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.nameKey }}
+{{- else }}
+              value: {{ .Values.env.dbName | quote }}
+{{- end }}
+            - name: AGENT_REGISTRY_SERVICE_DB_USER
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.userKey }}
+{{- else }}
+              value: {{ .Values.env.dbUser | quote }}
+{{- end }}
+            - name: AGENT_REGISTRY_SERVICE_DB_PASSWORD
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.passwordKey }}
+{{- else }}
+              value: {{ .Values.env.dbPassword | quote }}
+{{- end }}
+            - name: AGENT_REGISTRY_SERVICE_DB_MAX_CONNECTIONS
+              value: {{ .Values.env.dbMaxConnections | quote }}
+            - name: PGHOST
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.hostKey }}
+{{- else }}
+              value: {{ .Values.env.pgHost | quote }}
+{{- end }}
+            - name: PGPORT
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.portKey }}
+{{- else }}
+              value: {{ .Values.env.pgPort | quote }}
+{{- end }}
+            - name: PGSSLMODE
+{{- if .Values.env.dbCredentialsSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.dbCredentialsSecret.name }}
+                  key: {{ .Values.env.dbCredentialsSecret.sslmodeKey }}
+{{- else }}
+              value: {{ .Values.env.pgSslMode | quote }}
+{{- end }}
+            - name: AGENT_REGISTRY_SERVICE_API_HTTP_PORT
+              value: {{ .Values.service.httpPort | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_PORT
+              value: {{ .Values.service.healthPort | quote }}
+            - name: AGENT_REGISTRY_SERVICE_DLQ
+              value: {{ .Values.env.dlq | quote }}
+            - name: AGENT_REGISTRY_SERVICE_KAFKA_BASE_GROUP_ID
+              value: {{ .Values.env.kafkaBaseGroupId | quote }}
+            - name: AGENT_REGISTRY_SERVICE_KAFKA_AUTO_OFFSET_RESET
+              value: {{ .Values.env.kafkaAutoOffsetReset | quote }}
+            - name: AGENT_REGISTRY_SERVICE_TOPIC
+              value: {{ .Values.env.topic | quote }}
+            - name: AGENT_REGISTRY_SERVICE_TRAINING_TOPIC
+              value: {{ .Values.env.trainingTopic | quote }}
+            - name: AGENT_REGISTRY_SERVICE_OUTBOX
+              value: {{ .Values.env.outbox | quote }}
+            - name: AGENT_REGISTRY_SERVICE_OUTBOX_RELAY_POLL_MS
+              value: {{ .Values.env.outboxRelayPollMs | quote }}
+            - name: AGENT_REGISTRY_SERVICE_OUTBOX_RELAY_BATCH_SIZE
+              value: {{ .Values.env.outboxRelayBatchSize | quote }}
+            - name: AGENT_REGISTRY_SERVICE_OUTBOX_RELAY_FAILURE_BACKOFF_MS
+              value: {{ .Values.env.outboxRelayFailureBackoffMs | quote }}
+            - name: AGENT_REGISTRY_SERVICE_INFERENCE_BASE_URL
+              value: {{ .Values.env.inferenceBaseUrl | quote }}
+            - name: AGENT_REGISTRY_SERVICE_INFERENCE_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.env.inferenceRequestTimeoutSeconds | quote }}
+            - name: AGENT_REGISTRY_SERVICE_INFERENCE_EVAL_POLL_INTERVAL_MS
+              value: {{ .Values.env.inferenceEvalPollIntervalMs | quote }}
+            - name: AGENT_REGISTRY_SERVICE_INFERENCE_EVAL_POLL_ATTEMPTS
+              value: {{ .Values.env.inferenceEvalPollAttempts | quote }}
+            - name: AGENT_REGISTRY_SERVICE_AGENT_TRAINING_DISPATCHER
+              value: {{ .Values.env.agentTrainingDispatcher | quote }}
+            - name: AGENT_REGISTRY_SERVICE_TRAINING_BASE_URL
+              value: {{ .Values.env.trainingBaseUrl | quote }}
+            - name: AGENT_REGISTRY_SERVICE_TRAINING_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.env.trainingRequestTimeoutSeconds | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_CPU_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckCpuThreshold | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_FREE_MEM_THRESHOLD_PERCENT
+              value: {{ .Values.env.healthcheckFreeMemThreshold | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_DB_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckDbLatencyThreshold | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_MSG_BROKER_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckMsgBrokerLatencyThreshold | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_SERVICE_LATENCY_THRESHOLD_SECONDS
+              value: {{ .Values.env.healthcheckServiceLatencyThreshold | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_POLL_SILENCE_SECONDS
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxPollSilenceSeconds | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_PROGRESS_SILENCE_SECONDS
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxProgressSilenceSeconds | quote }}
+            - name: AGENT_REGISTRY_SERVICE_HEALTHCHECK_MESSAGE_BROKER_SUBSCRIBER_MAX_LAG
+              value: {{ .Values.env.healthcheckMessageBrokerSubscriberMaxLag | quote }}
+            - name: AGENT_REGISTRY_SERVICE_LIFECYCLE_READINESS_TIMEOUT_SECONDS
+              value: {{ .Values.env.lifecycleReadinessTimeoutSeconds | quote }}
+            - name: AGENT_REGISTRY_SERVICE_LIFECYCLE_DRAIN_TIMEOUT_SECONDS
+              value: {{ .Values.env.lifecycleDrainTimeoutSeconds | quote }}
+            - name: AGENT_REGISTRY_SERVICE_LIFECYCLE_CLOSE_TIMEOUT_SECONDS
+              value: {{ .Values.env.lifecycleCloseTimeoutSeconds | quote }}
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory | quote }}
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | quote }}
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3

@@ -36,8 +36,8 @@ import (
 var Version string
 
 const (
-	graphExtractorDisabled  = "disabled"
-	graphExtractorHeuristic = "heuristic"
+	graphExtractorDisabled = "disabled"
+	graphExtractorModel    = "model_serving"
 )
 
 type materializerConfig struct {
@@ -89,11 +89,17 @@ type embeddingConfig struct {
 }
 
 type graphConfig struct {
-	Enabled                 bool
-	Extractor               string
-	ExtractionModel         string
-	ExtractionPromptVersion string
-	ExtractionSchemaVersion string
+	Enabled                    bool
+	Extractor                  string
+	ExtractionEndpoint         string
+	ExtractionAuthToken        string
+	ExtractionModel            string
+	ExtractionPromptVersion    string
+	ExtractionSchemaVersion    string
+	ExtractionRequestTimeout   time.Duration
+	ExtractionMaxResponseBytes int64
+	ExtractionMaxOutputTokens  int
+	ExtractionMaxRetries       int
 }
 
 type dataStreamConfig struct {
@@ -479,11 +485,17 @@ func readMaterializerConfig() materializerConfig {
 			RequestTimeout:   secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_REQUEST_TIMEOUT_SECONDS", "30"),
 		},
 		Graph: graphConfig{
-			Enabled:                 env.WithDefaultBool("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED", false),
-			Extractor:               env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR", graphExtractorDisabled),
-			ExtractionModel:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL", model.DefaultGraphExtractionModel),
-			ExtractionPromptVersion: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION", model.DefaultGraphExtractionPromptVersion),
-			ExtractionSchemaVersion: env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION", model.DefaultGraphExtractionSchemaVersion),
+			Enabled:                    env.WithDefaultBool("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED", false),
+			Extractor:                  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR", graphExtractorDisabled),
+			ExtractionEndpoint:         env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_ENDPOINT", ""),
+			ExtractionAuthToken:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_AUTH_TOKEN", ""),
+			ExtractionModel:            env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL", ""),
+			ExtractionPromptVersion:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION", ""),
+			ExtractionSchemaVersion:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION", ""),
+			ExtractionRequestTimeout:   secondsFromEnv("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_REQUEST_TIMEOUT_SECONDS", "30"),
+			ExtractionMaxResponseBytes: env.WithDefaultInt64("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RESPONSE_BYTES", "1048576"),
+			ExtractionMaxOutputTokens:  env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS", "512"),
+			ExtractionMaxRetries:       env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES", "2"),
 		},
 		DataStream: dataStreamConfig{
 			Address:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_GRPC_ADDRESS", "localhost:7070"),
@@ -635,24 +647,35 @@ func validateGraphConfig(cfg graphConfig) error {
 		return nil
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Extractor)) {
-	case graphExtractorHeuristic:
-		if !env.IsDevEnv() {
-			return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR=heuristic is only allowed in dev environments")
+	case graphExtractorModel:
+		if strings.TrimSpace(cfg.ExtractionEndpoint) == "" {
+			return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_ENDPOINT is required for model graph extraction")
 		}
 	case graphExtractorDisabled:
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR must not be disabled when graph materialization is enabled")
 	default:
 		return fmt.Errorf("unsupported FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR %q", cfg.Extractor)
 	}
-	strategy := graphStrategyFromConfig(cfg)
-	if strings.TrimSpace(strategy.ExtractionModel) == "" {
+	if strings.TrimSpace(cfg.ExtractionModel) == "" {
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL is required")
 	}
-	if strings.TrimSpace(strategy.ExtractionPromptVersion) == "" {
+	if strings.TrimSpace(cfg.ExtractionPromptVersion) == "" {
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_PROMPT_VERSION is required")
 	}
-	if strings.TrimSpace(strategy.ExtractionSchemaVersion) == "" {
+	if strings.TrimSpace(cfg.ExtractionSchemaVersion) == "" {
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_SCHEMA_VERSION is required")
+	}
+	if cfg.ExtractionRequestTimeout <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+	}
+	if cfg.ExtractionMaxResponseBytes <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RESPONSE_BYTES must be greater than zero")
+	}
+	if cfg.ExtractionMaxOutputTokens <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS must be greater than zero")
+	}
+	if cfg.ExtractionMaxRetries < 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES must be non-negative")
 	}
 	return nil
 }
@@ -664,8 +687,15 @@ func newGraphExtractor(cfg graphConfig) (usecase.GraphExtractor, error) {
 		return materialization.NewDisabledGraphExtractor(), nil
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Extractor)) {
-	case graphExtractorHeuristic:
-		return materialization.NewLocalGraphExtractor()
+	case graphExtractorModel:
+		return materialization.NewModelServingGraphExtractor(materialization.ModelServingGraphExtractorConfig{
+			Endpoint:         cfg.ExtractionEndpoint,
+			AuthToken:        cfg.ExtractionAuthToken,
+			Timeout:          cfg.ExtractionRequestTimeout,
+			MaxResponseBytes: cfg.ExtractionMaxResponseBytes,
+			MaxOutputTokens:  cfg.ExtractionMaxOutputTokens,
+			MaxRetries:       cfg.ExtractionMaxRetries,
+		})
 	default:
 		return nil, fmt.Errorf("unsupported FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTOR %q", cfg.Extractor)
 	}

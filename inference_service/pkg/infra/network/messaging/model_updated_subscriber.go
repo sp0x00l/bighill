@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	usecase "inference_service/pkg/app"
 	"inference_service/pkg/domain/model"
 
+	agentregistrypb "lib/data_contracts_lib/agent_registry"
 	datasetpb "lib/data_contracts_lib/data_registry"
 	modelregistrypb "lib/data_contracts_lib/model_registry"
 	msgConn "lib/shared_lib/messaging"
@@ -19,6 +21,7 @@ import (
 
 type InferenceTopics struct {
 	ModelRegistry     string
+	AgentRegistry     string
 	DataRegistry      string
 	PreferenceDataset string
 }
@@ -29,6 +32,9 @@ func (t InferenceTopics) List() []string {
 	topics := make([]string, 0, 2)
 	if strings.TrimSpace(t.ModelRegistry) != "" {
 		topics = append(topics, t.ModelRegistry)
+	}
+	if strings.TrimSpace(t.AgentRegistry) != "" {
+		topics = append(topics, t.AgentRegistry)
 	}
 	if strings.TrimSpace(t.DataRegistry) != "" {
 		topics = append(topics, t.DataRegistry)
@@ -61,6 +67,7 @@ func (s *modelUpdatedSubscriber) Start(ctx context.Context) error {
 
 	msgConn.AddListener(s.subscriber, NewModelUpdatedEventListener(s.usecase))
 	msgConn.AddListener(s.subscriber, NewDatasetUpdatedEventListener(s.usecase))
+	msgConn.AddListener(s.subscriber, NewAgentChampionUpdatedEventListener(s.usecase))
 	return s.subscriber.Subscribe(ctx, s.topics.List())
 }
 
@@ -131,6 +138,41 @@ func (l *datasetUpdatedEventListener) Handle(ctx context.Context, resourceKey uu
 		return msgConn.NonRetryable(err)
 	}
 	_, err = l.usecase.RecordDatasetUpdated(ctx, dataset, idempotencyKey)
+	return err
+}
+
+type agentChampionUpdatedEventListener struct {
+	usecase usecase.InferenceUsecase
+}
+
+func NewAgentChampionUpdatedEventListener(usecase usecase.InferenceUsecase) *agentChampionUpdatedEventListener {
+	log.Trace("NewAgentChampionUpdatedEventListener")
+
+	return &agentChampionUpdatedEventListener{
+		usecase: usecase,
+	}
+}
+
+func (l *agentChampionUpdatedEventListener) MsgType() msgConn.MsgType {
+	log.Trace("agentChampionUpdatedEventListener MsgType")
+
+	return msgConn.MsgTypeAgentChampionUpdated
+}
+
+func (l *agentChampionUpdatedEventListener) NewMessage() *agentregistrypb.AgentChampionUpdatedEvent {
+	log.Trace("agentChampionUpdatedEventListener NewMessage")
+
+	return &agentregistrypb.AgentChampionUpdatedEvent{}
+}
+
+func (l *agentChampionUpdatedEventListener) Handle(ctx context.Context, resourceKey uuid.UUID, payload *agentregistrypb.AgentChampionUpdatedEvent) error {
+	log.Trace("agentChampionUpdatedEventListener Handle")
+
+	update, err := agentChampionUpdatedEventToModel(resourceKey, payload)
+	if err != nil {
+		return msgConn.NonRetryable(err)
+	}
+	_, err = l.usecase.ApplyAgentChampionUpdate(ctx, update)
 	return err
 }
 
@@ -228,6 +270,58 @@ func modelUpdatedEventToModel(resourceKey uuid.UUID, payload *modelregistrypb.Mo
 		inferenceModel.EffectiveBaseID,
 	}, ":")))
 	return inferenceModel, idempotencyKey, nil
+}
+
+func agentChampionUpdatedEventToModel(resourceKey uuid.UUID, payload *agentregistrypb.AgentChampionUpdatedEvent) (model.AgentChampionUpdate, error) {
+	log.Trace("agentChampionUpdatedEventToModel")
+
+	if resourceKey == uuid.Nil {
+		return model.AgentChampionUpdate{}, fmt.Errorf("resource key is required")
+	}
+	if payload == nil {
+		return model.AgentChampionUpdate{}, fmt.Errorf("agent champion updated payload is required")
+	}
+	endpointID, err := msgConn.ParseUUID("endpoint_id", payload.GetEndpointId())
+	if err != nil {
+		return model.AgentChampionUpdate{}, err
+	}
+	if endpointID != resourceKey {
+		return model.AgentChampionUpdate{}, fmt.Errorf("endpoint id %s does not match resource key %s", endpointID, resourceKey)
+	}
+	orgID, err := msgConn.ParseUUID("org_id", payload.GetOrgId())
+	if err != nil {
+		return model.AgentChampionUpdate{}, err
+	}
+	decisionID, err := msgConn.ParseUUID("decision_id", payload.GetDecisionId())
+	if err != nil {
+		return model.AgentChampionUpdate{}, err
+	}
+	decidedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(payload.GetDecidedAt()))
+	if err != nil || decidedAt.IsZero() {
+		return model.AgentChampionUpdate{}, fmt.Errorf("decided_at is invalid")
+	}
+	agentLineage := strings.TrimSpace(payload.GetAgentLineage())
+	if agentLineage == "" {
+		return model.AgentChampionUpdate{}, fmt.Errorf("agent_lineage is required")
+	}
+	agentSpecHash := strings.TrimSpace(payload.GetAgentSpecHash())
+	if agentSpecHash == "" {
+		return model.AgentChampionUpdate{}, fmt.Errorf("agent_spec_hash is required")
+	}
+	servingModelID, err := msgConn.ParseOptionalUUID("serving_model_id", payload.GetServingModelId())
+	if err != nil {
+		return model.AgentChampionUpdate{}, err
+	}
+	return model.AgentChampionUpdate{
+		OrgID:                 orgID,
+		EndpointID:            endpointID,
+		AgentLineage:          agentLineage,
+		AgentSpecHash:         agentSpecHash,
+		ServingModelID:        servingModelID,
+		PreviousAgentSpecHash: strings.TrimSpace(payload.GetPreviousAgentSpecHash()),
+		DecisionID:            decisionID,
+		DecidedAt:             decidedAt,
+	}, nil
 }
 
 func modelKindFromEvent(value string) model.ModelKind {

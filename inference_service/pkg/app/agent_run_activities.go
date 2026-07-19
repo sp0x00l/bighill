@@ -31,11 +31,15 @@ func (u *inferenceUsecase) PrepareAgentRunActivity(ctx context.Context, input Pr
 	if endpoint.Mode != model.AgentEndpointModeAgent {
 		return AgentRunWorkflowState{}, domain.ErrValidationFailed.Extend("agent workflow requires an agent endpoint")
 	}
-	spec, err := u.agentSpecRepository.ReadAgentSpecByHash(ctx, request.OrgID, endpoint.AgentSpecHash)
+	agentSpecHash := strings.TrimSpace(input.AgentSpecHash)
+	if agentSpecHash == "" {
+		agentSpecHash = endpoint.AgentSpecHash
+	}
+	spec, err := u.agentSpecRepository.ReadAgentSpecByHash(ctx, request.OrgID, agentSpecHash)
 	if err != nil {
 		return AgentRunWorkflowState{}, err
 	}
-	inferenceModel, err := u.modelRepository.ReadByID(ctx, request.OrgID, endpoint.ModelID)
+	serving, request, err := u.resolveAgentServing(ctx, request, endpoint, spec)
 	if err != nil {
 		return AgentRunWorkflowState{}, err
 	}
@@ -48,24 +52,12 @@ func (u *inferenceUsecase) PrepareAgentRunActivity(ctx context.Context, input Pr
 		return AgentRunWorkflowState{}, domain.ErrDatasetNotReady.Extend("no endpoint datasets have materialized embeddings")
 	}
 	request.DatasetID = readyDatasets[0].DatasetID
-	request.ModelID = endpoint.ModelID
-	generationProtocol := strings.TrimSpace(inferenceModel.ServingProtocol.String())
-	generationModel := strings.TrimSpace(inferenceModel.ServingModel)
-	if inferenceModel.Status != model.ModelStatusReady {
-		return AgentRunWorkflowState{}, domain.ErrModelNotReady.Extend("model is not ready")
-	}
-	if inferenceModel.ServingLoadStatus != model.ModelLoadStatusLoaded {
-		inferenceModel, err = u.ensureServingModelLoaded(ctx, request.OrgID, inferenceModel)
-		if err != nil {
-			return AgentRunWorkflowState{}, err
-		}
-		generationProtocol = strings.TrimSpace(inferenceModel.ServingProtocol.String())
-		generationModel = strings.TrimSpace(inferenceModel.ServingModel)
-	}
+	generationProtocol := serving.Protocol
+	generationModel := serving.BaseModelName
 	if u.generationAdapters[generationProtocol] == nil {
 		return AgentRunWorkflowState{}, domain.ErrModelNotReady.Extend(fmt.Sprintf("serving protocol %q is not supported", generationProtocol))
 	}
-	effectiveBaseID := strings.TrimSpace(inferenceModel.EffectiveBaseID)
+	effectiveBaseID := strings.TrimSpace(serving.BaseModel.EffectiveBaseID)
 	if effectiveBaseID == "" {
 		return AgentRunWorkflowState{}, domain.ErrModelNotReady.Extend("model effective base is not available")
 	}
@@ -78,11 +70,13 @@ func (u *inferenceUsecase) PrepareAgentRunActivity(ctx context.Context, input Pr
 		RunID:           request.AgentRunID,
 		OrgID:           request.OrgID,
 		UserID:          request.UserID,
-		Endpoint:        endpoint,
+		Endpoint:        agentEndpointWithAdapter(endpoint, serving.ServingModelID),
 		Spec:            spec,
-		Model:           inferenceModel,
+		Model:           serving.BaseModel,
 		Datasets:        readyDatasets,
 		DataSnapshotSet: dataSnapshotSet,
+		LoraName:        serving.LoraName,
+		AdapterURI:      serving.AdapterURI,
 		Messages:        agentInitialMessages(spec, request.QueryText),
 		DecodingOptions: agentDecodingOptions(spec, request),
 	}
@@ -97,7 +91,7 @@ func (u *inferenceUsecase) PrepareAgentRunActivity(ctx context.Context, input Pr
 	return AgentRunWorkflowState{
 		Request:                   request,
 		EndpointID:                endpoint.EndpointID,
-		ModelID:                   endpoint.ModelID,
+		ModelID:                   serving.BaseModel.ModelID,
 		AgentSpecHash:             spec.ContentHash,
 		DatasetIDs:                datasetIDsFromModels(readyDatasets),
 		ToolsetHash:               toolsetHash,
@@ -109,7 +103,9 @@ func (u *inferenceUsecase) PrepareAgentRunActivity(ctx context.Context, input Pr
 		ToolBindings:              spec.ToolBindings,
 		ServingProtocol:           generationProtocol,
 		ServingModel:              generationModel,
-		ServingTarget:             strings.TrimSpace(inferenceModel.ServingTarget),
+		ServingTarget:             strings.TrimSpace(serving.BaseModel.ServingTarget),
+		LoraName:                  serving.LoraName,
+		AdapterURI:                serving.AdapterURI,
 		DecodingOptions:           session.DecodingOptions,
 		TransientToolFailureCount: map[string]int{},
 	}, nil
@@ -147,6 +143,8 @@ func (u *inferenceUsecase) GenerateAgentStepActivity(ctx context.Context, input 
 		Tools:      toolSpecs,
 		ToolChoice: input.ToolChoice,
 		Options:    input.Options,
+		LoraName:   input.State.LoraName,
+		AdapterURI: input.State.AdapterURI,
 	})
 	if err != nil {
 		return GenerateAgentStepActivityOutput{}, err
@@ -271,7 +269,7 @@ func (u *inferenceUsecase) recordAgentWorkflowInferenceRequest(ctx context.Conte
 		return err
 	}
 	modelForRecord := agentWorkflowModel(state)
-	return u.recordInferenceRequest(ctx, state.Request, datasets[0], modelForRecord, contexts, "", answer, startedAt, state.ServingProtocol, state.ServingModel, status, errorMessage)
+	return u.recordInferenceRequest(ctx, state.Request, datasets[0], modelForRecord, contexts, "", answer, startedAt, state.ServingProtocol, agentWorkflowGenerationModelName(state), status, errorMessage)
 }
 
 func (u *inferenceUsecase) agentWorkflowSession(ctx context.Context, state AgentRunWorkflowState) (*model.AgentSession, error) {
@@ -288,6 +286,8 @@ func (u *inferenceUsecase) agentWorkflowSession(ctx context.Context, state Agent
 		Model:             agentWorkflowModel(state),
 		Datasets:          datasets,
 		DataSnapshotSet:   state.DataSnapshotSet,
+		LoraName:          state.LoraName,
+		AdapterURI:        state.AdapterURI,
 		Messages:          nil,
 		ResolvedToolSpecs: nil,
 		ToolsetHash:       state.ToolsetHash,
@@ -393,14 +393,15 @@ func (u *inferenceUsecase) agentWorkflowDatasets(ctx context.Context, state Agen
 
 func agentWorkflowEndpoint(state AgentRunWorkflowState) *model.PublishedEndpoint {
 	return &model.PublishedEndpoint{
-		EndpointID:    state.EndpointID,
-		OrgID:         state.Request.OrgID,
-		ModelID:       state.ModelID,
-		Mode:          model.AgentEndpointModeAgent,
-		AgentSpecHash: state.AgentSpecHash,
-		DatasetIDs:    state.DatasetIDs,
-		MergeStrategy: state.MergeStrategy,
-		Status:        model.PublishedEndpointStatusReady,
+		EndpointID:     state.EndpointID,
+		OrgID:          state.Request.OrgID,
+		ModelID:        state.ModelID,
+		ServingModelID: state.Request.ServingModelID,
+		Mode:           model.AgentEndpointModeAgent,
+		AgentSpecHash:  state.AgentSpecHash,
+		DatasetIDs:     state.DatasetIDs,
+		MergeStrategy:  state.MergeStrategy,
+		Status:         model.PublishedEndpointStatusReady,
 	}
 }
 
@@ -411,6 +412,13 @@ func agentWorkflowSpec(state AgentRunWorkflowState) *model.AgentSpec {
 		ToolBindings: state.ToolBindings,
 		Budgets:      state.Budgets,
 	}
+}
+
+func agentWorkflowGenerationModelName(state AgentRunWorkflowState) string {
+	if value := strings.TrimSpace(state.LoraName); value != "" {
+		return value
+	}
+	return strings.TrimSpace(state.ServingModel)
 }
 
 func agentWorkflowModel(state AgentRunWorkflowState) *model.InferenceModel {

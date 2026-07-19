@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agent-registry-service.fullname" . }}
+  labels:
+    app: {{ include "agent-registry-service.fullname" . }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: health
+      port: {{ .Values.service.healthPort }}
+      targetPort: health
+      protocol: TCP
+    - name: http
+      port: {{ .Values.service.httpPort }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    app: {{ include "agent-registry-service.fullname" . }}

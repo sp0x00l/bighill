@@ -106,13 +106,15 @@ func topicList(raw string) []string {
 }
 
 func newKafkaAssertsSubscriber(ctx context.Context, topics []string) (msgConn.Subscriber, func(), context.CancelFunc) {
-	return newKafkaAssertsSubscriberWithOffset(ctx, topics, "earliest")
+	return newKafkaAssertsSubscriberWithOffset(ctx, topics, "latest")
 }
 
 func newKafkaAssertsSubscriberWithOffset(ctx context.Context, topics []string, autoOffsetReset string) (msgConn.Subscriber, func(), context.CancelFunc) {
 	brokers := env.WithDefaultString("KAFKA_BROKER", "localhost:9092")
 	dlqURL := env.WithDefaultString("KAFKA_DLQ_URL", "")
 	groupID := "api-gateway-asserts-" + uuid.NewString()[:8]
+
+	Expect(msgConn.CreateTopics(ctx, brokers, topics)).To(Succeed())
 
 	factory := msgConn.NewMessenger(msgConn.MessengerConfig{
 		DlqURL:          dlqURL,
@@ -134,8 +136,16 @@ func newKafkaAssertsSubscriberWithOffset(ctx context.Context, topics []string, a
 				Fail(fmt.Sprintf("kafka assert subscriber failed for topics %v: %v", topics, err))
 			}
 		}()
-		time.Sleep(500 * time.Millisecond)
+		waitForKafkaAssertSubscriberReady(subscriber, topics)
 	}
 
 	return subscriber, start, cancel
+}
+
+func waitForKafkaAssertSubscriberReady(subscriber msgConn.Subscriber, topics []string) {
+	Eventually(func() error {
+		return msgConn.CheckSubscriberHealth(context.Background(), subscriber, msgConn.SubscriberHealthCheckConfig{
+			RequireAssignment: true,
+		})
+	}, 30*time.Second, 100*time.Millisecond).Should(Succeed(), "Kafka assert subscriber was not ready for topics %v", topics)
 }

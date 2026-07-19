@@ -49,23 +49,32 @@ local_stop_temporal() {
 }
 
 local_stop_tei() {
-    local TEI_PID_FILE="$PROJECT_ROOT/tmp/tei-embeddings/tei-embeddings.pid"
-    local TEI_SCRIPT="$PROJECT_ROOT/scripts/docker/services/tei_stub.py"
+    local TEI_PID_FILE="$PROJECT_ROOT/tmp/tei/tei.pid"
 
     if [ -f "$TEI_PID_FILE" ]; then
-        echo "Stopping local TEI-compatible embedding endpoint..."
+        echo "Stopping local Text Embeddings Inference service..."
         kill "$(cat "$TEI_PID_FILE")" >/dev/null 2>&1 || true
         rm -f "$TEI_PID_FILE"
+    fi
+}
+
+local_stop_ray() {
+    if command -v ray >/dev/null 2>&1 && ray --version >/dev/null 2>&1; then
+        echo "Stopping local Ray head..."
+        ray stop --force >/dev/null 2>&1 || true
         return
     fi
 
-    if command -v pgrep >/dev/null 2>&1; then
-        pgrep -f "$TEI_SCRIPT" | xargs kill 2>/dev/null || true
+    if command -v pyenv >/dev/null 2>&1 &&
+        PYENV_VERSION="$TRAINING_SERVICE_RAY_PYENV_VERSION" pyenv exec ray --version >/dev/null 2>&1; then
+        echo "Stopping local Ray head..."
+        PYENV_VERSION="$TRAINING_SERVICE_RAY_PYENV_VERSION" pyenv exec ray stop --force >/dev/null 2>&1 || true
     fi
 }
 
 local_stop_services() {
     local_stop_tei
+    local_stop_ray
     local_stop_polaris
     local_stop_temporal
 
@@ -88,7 +97,7 @@ local_stop_services() {
 }
 
 cicd_stop_services() {
-    local_stop_tei
+    local_stop_ray
 
     if check_docker; then
         echo "Stopping docker-compose infra..."

@@ -90,6 +90,8 @@ func testRouter(client *routerHTTPClientMock) func(context.Context, events.APIGa
 		TenantServiceRoute:        "http://tenant.service",
 		TrainingServiceRoute:      "http://training.service",
 		SocketServiceRoute:        "http://socket.service",
+		AgentRegistryServiceRoute: "http://agent-registry.service",
+		ToolCatalogServiceRoute:   "http://tool-catalog.service",
 	})
 }
 
@@ -340,6 +342,7 @@ var _ = Describe("NewRouter", func() {
 	It("routes inference facade requests and enforces consumer-safe permissions", func() {
 		client.responses = []*http.Response{
 			responseWithBody(http.StatusOK, `{"endpoints":[]}`),
+			responseWithBody(http.StatusOK, `{"endpoint_id":"2ef65f05-dc98-4be8-b952-ff73c84e10f1"}`),
 			responseWithBody(http.StatusAccepted, `{"request_id":"req-1"}`),
 			responseWithBody(http.StatusOK, `{"feedback_id":"fb-1"}`),
 			responseWithBody(http.StatusCreated, `{"preference_dataset_id":"pref-1"}`),
@@ -357,6 +360,14 @@ var _ = Describe("NewRouter", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(listResp.StatusCode).To(Equal(http.StatusOK))
+
+		readEndpointResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodGet,
+			Path:           "/v1/private/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			RequestContext: authorizerContext(authz.PermissionInferenceEndpointsRead),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readEndpointResp.StatusCode).To(Equal(http.StatusOK))
 
 		invokeResp, err := handler(ctx, events.APIGatewayProxyRequest{
 			HTTPMethod: http.MethodPost,
@@ -448,24 +459,105 @@ var _ = Describe("NewRouter", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(deniedResp.StatusCode).To(Equal(http.StatusForbidden))
 
-		Expect(client.requests).To(HaveLen(8))
+		Expect(client.requests).To(HaveLen(9))
 		Expect(client.requests[0].url).To(Equal("http://inference.service/v1/inference/endpoints"))
 		Expect(client.requests[0].headers.Get(testUserHeader)).To(Equal("user-123"))
 		Expect(client.requests[0].headers.Get(testOrgHeader)).To(Equal("org-789"))
-		Expect(client.requests[1].url).To(Equal("http://inference.service/v1/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1/generations"))
-		Expect(client.requests[1].body).To(Equal(`{"query_text":"hello","top_k":5}`))
-		Expect(client.requests[1].headers.Get("X-Request-ID")).To(Equal("request-2"))
-		Expect(client.requests[2].url).To(Equal("http://inference.service/v1/inference/feedback"))
-		Expect(client.requests[2].body).To(Equal(`{"request_id":"2ef65f05-dc98-4be8-b952-ff73c84e10f1","accepted":true}`))
-		Expect(client.requests[2].headers.Get("X-Request-ID")).To(Equal("request-3"))
-		Expect(client.requests[3].url).To(Equal("http://inference.service/v1/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1/preference-datasets"))
-		Expect(client.requests[3].body).To(Equal(`{"min_examples":1}`))
-		Expect(client.requests[3].headers.Get("X-Request-ID")).To(Equal("request-4"))
-		Expect(client.requests[4].url).To(Equal("http://inference.service/v1/inference/preference-datasets?model_id=2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
-		Expect(client.requests[5].url).To(Equal("http://inference.service/v1/inference/preference-datasets/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
-		Expect(client.requests[6].url).To(Equal("http://inference.service/v1/inference/agent-specs"))
-		Expect(client.requests[6].body).To(Equal(`{"schema_version":"agent_spec_v1"}`))
-		Expect(client.requests[7].url).To(Equal("http://inference.service/v1/inference/agent-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[1].url).To(Equal("http://inference.service/v1/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[2].url).To(Equal("http://inference.service/v1/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1/generations"))
+		Expect(client.requests[2].body).To(Equal(`{"query_text":"hello","top_k":5}`))
+		Expect(client.requests[2].headers.Get("X-Request-ID")).To(Equal("request-2"))
+		Expect(client.requests[3].url).To(Equal("http://inference.service/v1/inference/feedback"))
+		Expect(client.requests[3].body).To(Equal(`{"request_id":"2ef65f05-dc98-4be8-b952-ff73c84e10f1","accepted":true}`))
+		Expect(client.requests[3].headers.Get("X-Request-ID")).To(Equal("request-3"))
+		Expect(client.requests[4].url).To(Equal("http://inference.service/v1/inference/endpoints/2ef65f05-dc98-4be8-b952-ff73c84e10f1/preference-datasets"))
+		Expect(client.requests[4].body).To(Equal(`{"min_examples":1}`))
+		Expect(client.requests[4].headers.Get("X-Request-ID")).To(Equal("request-4"))
+		Expect(client.requests[5].url).To(Equal("http://inference.service/v1/inference/preference-datasets?model_id=2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[6].url).To(Equal("http://inference.service/v1/inference/preference-datasets/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+		Expect(client.requests[7].url).To(Equal("http://inference.service/v1/inference/agent-specs"))
+		Expect(client.requests[7].body).To(Equal(`{"schema_version":"agent_spec_v1"}`))
+		Expect(client.requests[8].url).To(Equal("http://inference.service/v1/inference/agent-runs/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+	})
+
+	It("routes agent registry and tool catalog control-plane requests", func() {
+		client.responses = []*http.Response{
+			responseWithBody(http.StatusCreated, `{"agent_spec_hash":"hash-1"}`),
+			responseWithBody(http.StatusOK, `{"tasks":[]}`),
+			responseWithBody(http.StatusCreated, `{"capability_version_id":"cap-1"}`),
+			responseWithBody(http.StatusOK, `{"capability_version_id":"cap-1"}`),
+		}
+		handler := testRouter(client)
+
+		registerSpecResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodPost,
+			Path:           "/v1/private/agent-registry/spec-versions",
+			Body:           `{"agent_lineage":"support","agent_spec_hash":"hash-1"}`,
+			RequestContext: authorizerContext(authz.PermissionModelWrite),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(registerSpecResp.StatusCode).To(Equal(http.StatusCreated))
+
+		listTasksResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod: http.MethodGet,
+			Path:       "/v1/private/agent-registry/golden-tasks",
+			QueryStringParameters: map[string]string{
+				"agent_lineage": "support",
+				"split":         "promotion_holdout",
+				"split_version": "1",
+			},
+			RequestContext: authorizerContext(authz.PermissionModelRead),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listTasksResp.StatusCode).To(Equal(http.StatusOK))
+
+		publishCapabilityResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodPost,
+			Path:           "/v1/private/tool-catalog/capabilities",
+			Body:           `{"capability_id":"fixture.lookup","version":"2026-07-18","tool_name":"fixture_lookup","kind":"mcp","description":"fixture","parameters_json":{},"egress_hosts":["fixture.example"],"timeout_ms":1000,"max_response_bytes":1024}`,
+			RequestContext: authorizerContext(authz.PermissionToolCatalogPublish),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(publishCapabilityResp.StatusCode).To(Equal(http.StatusCreated))
+
+		readCapabilityResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodGet,
+			Path:           "/v1/private/tool-catalog/capabilities/2ef65f05-dc98-4be8-b952-ff73c84e10f1",
+			RequestContext: authorizerContext(authz.PermissionModelRead),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readCapabilityResp.StatusCode).To(Equal(http.StatusOK))
+
+		deniedResp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodPost,
+			Path:           "/v1/private/tool-catalog/grants",
+			Body:           `{"capability_version_id":"2ef65f05-dc98-4be8-b952-ff73c84e10f1"}`,
+			RequestContext: authorizerContext(authz.PermissionModelRead),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deniedResp.StatusCode).To(Equal(http.StatusForbidden))
+
+		Expect(client.requests).To(HaveLen(4))
+		Expect(client.requests[0].url).To(Equal("http://agent-registry.service/v1/agent-registry/spec-versions"))
+		Expect(client.requests[0].body).To(Equal(`{"agent_lineage":"support","agent_spec_hash":"hash-1"}`))
+		Expect(client.requests[1].url).To(Equal("http://agent-registry.service/v1/agent-registry/golden-tasks?agent_lineage=support&split=promotion_holdout&split_version=1"))
+		Expect(client.requests[2].url).To(Equal("http://tool-catalog.service/v1/tool-catalog/capabilities"))
+		Expect(client.requests[3].url).To(Equal("http://tool-catalog.service/v1/tool-catalog/capabilities/2ef65f05-dc98-4be8-b952-ff73c84e10f1"))
+	})
+
+	It("requires the tool catalog publish permission to publish capabilities", func() {
+		handler := testRouter(client)
+
+		resp, err := handler(ctx, events.APIGatewayProxyRequest{
+			HTTPMethod:     http.MethodPost,
+			Path:           "/v1/private/tool-catalog/capabilities",
+			Body:           `{"capability_id":"fixture.lookup","version":"2026-07-18","tool_name":"fixture_lookup","kind":"mcp","description":"fixture","parameters_json":{},"egress_hosts":["fixture.example"],"timeout_ms":1000,"max_response_bytes":1024}`,
+			RequestContext: authorizerContext(authz.PermissionModelWrite),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusForbidden))
+		Expect(client.requests).To(BeEmpty())
 	})
 
 	It("requires model write permission to build preference datasets", func() {

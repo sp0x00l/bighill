@@ -47,29 +47,29 @@ import (
 var Version string
 
 type inferenceConfig struct {
-	ServiceName         string
-	DBName              string
-	DBConnectionString  string
-	Messaging           messagingConn.MessengerConfig
-	OutboxBackend       string
-	OutboxRelay         messagingConn.OutboxRelayConfig
-	Topics              inferencemessaging.InferenceTopics
-	TenantTopic         string
-	FeatureMaterializer inferencegrpc.FeatureMaterializerClientConfig
-	ToolService         inferencetools.ToolServiceClientConfig
-	Generation          generationConfig
-	Reranker            rerankerConfig
-	QueryTransformer    queryTransformerConfig
-	ModelServing        modelServingConfig
-	Agent               agentConfig
-	Temporal            temporalConfig
-	UserEvents          userevents.Config
-	PreferenceDataset   preferenceDatasetConfig
-	GRPCPort            int
-	HTTPPort            int
-	HTTPServer          httpServerConfig
-	Health              healthConfig
-	Lifecycle           lifecycle.Config
+	ServiceName          string
+	DBName               string
+	DBConnectionString   string
+	Messaging            messagingConn.MessengerConfig
+	OutboxBackend        string
+	OutboxRelay          messagingConn.OutboxRelayConfig
+	Topics               inferencemessaging.InferenceTopics
+	TenantTopic          string
+	FeatureMaterializer  inferencegrpc.FeatureMaterializerClientConfig
+	ToolExecutionService inferencetools.ToolExecutionServiceClientConfig
+	Generation           generationConfig
+	Reranker             rerankerConfig
+	QueryTransformer     queryTransformerConfig
+	ModelServing         modelServingConfig
+	Agent                agentConfig
+	Temporal             temporalConfig
+	UserEvents           userevents.Config
+	PreferenceDataset    preferenceDatasetConfig
+	GRPCPort             int
+	HTTPPort             int
+	HTTPServer           httpServerConfig
+	Health               healthConfig
+	Lifecycle            lifecycle.Config
 }
 
 type generationConfig struct {
@@ -248,7 +248,7 @@ func main() {
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create feature materializer client")
 	}
-	toolInvoker, closeToolInvoker, err := newToolInvoker(cancelCtx, cfg.ToolService, retrievalClient)
+	toolInvoker, closeToolInvoker, err := newToolInvoker(cancelCtx, cfg.ToolExecutionService, retrievalClient)
 	if err != nil {
 		log.WithContext(cancelCtx).WithError(err).Fatal("unable to create tool invoker")
 	}
@@ -446,6 +446,9 @@ func main() {
 	startSubscriber("dataset-updated", []string{cfg.Topics.DataRegistry}, func(subscriber messagingConn.Subscriber) {
 		messagingConn.AddListener(subscriber, inferencemessaging.NewDatasetUpdatedEventListener(inferenceUsecase))
 	})
+	startSubscriber("agent-champion-updated", []string{cfg.Topics.AgentRegistry}, func(subscriber messagingConn.Subscriber) {
+		messagingConn.AddListener(subscriber, inferencemessaging.NewAgentChampionUpdatedEventListener(inferenceUsecase))
+	})
 	startSubscriber("tenant-created", []string{cfg.TenantTopic}, func(subscriber messagingConn.Subscriber) {
 		sharedTenant.ConfigureProfileProjectionErrorPolicy(subscriber)
 		messagingConn.AddListener(subscriber, sharedTenant.NewUserCreatedProjectionListener(tenantDB))
@@ -508,6 +511,7 @@ func readInferenceConfig() inferenceConfig {
 		},
 		Topics: inferencemessaging.InferenceTopics{
 			ModelRegistry:     env.WithDefaultString("INFERENCE_SERVICE_MODEL_REGISTRY_SUBSCRIBER_TOPIC", "model_registry"),
+			AgentRegistry:     env.WithDefaultString("INFERENCE_SERVICE_AGENT_REGISTRY_SUBSCRIBER_TOPIC", "agent_registry"),
 			DataRegistry:      env.WithDefaultString("INFERENCE_SERVICE_DATA_REGISTRY_SUBSCRIBER_TOPIC", "data_registry"),
 			PreferenceDataset: env.WithDefaultString("INFERENCE_SERVICE_PREFERENCE_DATASET_TOPIC", "inference"),
 		},
@@ -518,11 +522,11 @@ func readInferenceConfig() inferenceConfig {
 			CallTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_CALL_TIMEOUT_MS", "15000"),
 			RetryCount:    env.WithDefaultInt("INFERENCE_SERVICE_FEATURE_MATERIALIZER_GRPC_RETRY_COUNT", "3"),
 		},
-		ToolService: inferencetools.ToolServiceClientConfig{
-			Address:       env.WithDefaultString("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_ADDRESS", ""),
-			DialTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_DIAL_TIMEOUT_MS", "500"),
-			CallTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_CALL_TIMEOUT_MS", "5000"),
-			RetryCount:    env.WithDefaultInt("INFERENCE_SERVICE_TOOL_SERVICE_GRPC_RETRY_COUNT", "3"),
+		ToolExecutionService: inferencetools.ToolExecutionServiceClientConfig{
+			Address:       env.WithDefaultString("INFERENCE_SERVICE_TOOL_EXECUTION_GRPC_ADDRESS", ""),
+			DialTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_TOOL_EXECUTION_GRPC_DIAL_TIMEOUT_MS", "500"),
+			CallTimeoutMs: env.WithDefaultInt("INFERENCE_SERVICE_TOOL_EXECUTION_GRPC_CALL_TIMEOUT_MS", "5000"),
+			RetryCount:    env.WithDefaultInt("INFERENCE_SERVICE_TOOL_EXECUTION_GRPC_RETRY_COUNT", "3"),
 		},
 		Generation: generationConfig{
 			RequestTimeout:   secondsFromEnv("INFERENCE_SERVICE_GENERATION_REQUEST_TIMEOUT_SECONDS", "60"),
@@ -635,7 +639,7 @@ func validateInferenceConfig(cfg inferenceConfig) error {
 	if err := validateModelServingConfig(cfg.ModelServing); err != nil {
 		return err
 	}
-	if err := validateToolServiceConfig(cfg.ToolService); err != nil {
+	if err := validateToolExecutionServiceConfig(cfg.ToolExecutionService); err != nil {
 		return err
 	}
 	if err := validateAgentConfig(cfg.Agent); err != nil {
@@ -726,13 +730,13 @@ func validateModelServingConfig(cfg modelServingConfig) error {
 	return nil
 }
 
-func validateToolServiceConfig(cfg inferencetools.ToolServiceClientConfig) error {
-	log.Trace("validateToolServiceConfig")
+func validateToolExecutionServiceConfig(cfg inferencetools.ToolExecutionServiceClientConfig) error {
+	log.Trace("validateToolExecutionServiceConfig")
 
 	if strings.TrimSpace(cfg.Address) == "" {
 		return nil
 	}
-	return inferencetools.ValidateToolServiceClientConfig(cfg)
+	return inferencetools.ValidateToolExecutionServiceClientConfig(cfg)
 }
 
 func validateAgentConfig(cfg agentConfig) error {
@@ -830,7 +834,7 @@ func newGenerationAdapters(cfg generationConfig) map[string]app.GenerationAdapte
 	}
 }
 
-func newToolInvoker(ctx context.Context, cfg inferencetools.ToolServiceClientConfig, retrievalClient app.RetrievalClient) (app.ToolInvoker, func() error, error) {
+func newToolInvoker(ctx context.Context, cfg inferencetools.ToolExecutionServiceClientConfig, retrievalClient app.RetrievalClient) (app.ToolInvoker, func() error, error) {
 	log.Trace("newToolInvoker")
 
 	searchInvoker, err := inferencetools.NewSearchKnowledgeToolInvoker(retrievalClient)

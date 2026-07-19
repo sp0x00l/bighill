@@ -1,0 +1,17 @@
+syntax = "proto3";
+package agent_registry;
+option go_package = "lib/data_contracts_lib/agent_registry";
+
+message AgentChampionUpdatedEvent {
+  string event_id = 1;
+  string idempotency_key = 2;
+  string org_id = 3;
+  string agent_lineage = 4;
+  string endpoint_id = 5;
+  string agent_spec_hash = 6;
+  string previous_agent_spec_hash = 7;
+  string decision_id = 8;
+  string decided_at = 9;
+  string champion_adapter_id = 10;
+  string serving_model_id = 11;
+}
