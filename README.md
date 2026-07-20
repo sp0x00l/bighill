@@ -1,10 +1,14 @@
+<img align="right" width="200" src="logo.png" alt="BigHill logo" />
+
 # BigHill
 
-BigHill is a self-hosted platform for building, running, evaluating, improving, and serving governed AI agents.
+BigHill is a self-hosted platform for building governed AI systems: data ingestion, data streaming, retrieval, agents, training, evaluation, model registry, and serving.
 
 The repo implements the full operating loop:
 
-- ingest tenant data and build versioned retrieval and graph snapshots;
+- ingest tenant data and model artifacts;
+- query registered sources through a streaming data boundary;
+- build versioned raw, feature, embedding, and graph snapshots;
 - publish RAG endpoints or declarative agent specs;
 - run agents through Temporal with budgets, tool calls, progress events, and durable state;
 - govern tools through a catalog, tenant grants, schemas, credentials, egress policy, and audit;
@@ -14,15 +18,22 @@ The repo implements the full operating loop:
 
 The goal is concrete: a company should be able to see what an agent did, why it was allowed to do it, which artifacts produced the behavior, whether it met the business standard, and what changed before a new version was promoted.
 
+The governance use case is regulated or high-accountability work where agent actions must be authorized, observable, attributable, evaluated, and gated by evidence.
+
 ## What It Delivers
 
-- **Governed RAG and agents:** publish retrieval endpoints or declarative agent specs backed by company data.
-- **Safe tool use:** agents call approved tools through schema validation, tenant grants, credential injection, egress policy, timeouts, response caps, and durable audit.
-- **Observable runs:** every agent run records steps, tool calls, failures, data snapshots, model identity, adapter identity, and user-visible status events.
-- **Business-specific evaluation:** golden tasks, labels, holdouts, eval reports, and promotion gates define what "good" means for a tenant.
-- **Continuous improvement:** production trajectories become training data; new adapters are promoted only when they beat the champion.
-- **Efficient serving:** vLLM/Multi-LoRA serves many tenant or workflow adapters over shared base models.
-- **Grounded retrieval:** ingestion, snapshots, embeddings, pgvector retrieval, reranking, and graph retrieval support auditable data use.
+- **Tenant data catalog:** dataset/source records, lifecycle state, materialization progress, source metadata, and optional Polaris/Iceberg catalog identity.
+- **Object and artifact ingestion:** presigned uploads, validation, S3/MinIO storage, dataset files, Hugging Face/GGUF/LoRA model artifacts, and upload lifecycle events.
+- **Materialization pipeline:** raw snapshots, feature snapshots, embedding snapshots, graph snapshots, Parquet normalization, PDF/HTML/text extraction, chunking, embedding generation, pgvector storage, and GraphRAG search.
+- **Data streaming and query:** Arrow Flight APIs backed by registry metadata and a Rust DataFusion query engine, with framed Arrow IPC output for high-throughput reads.
+- **RAG inference:** multi-dataset retrieval, query transformation, reranking/merge strategies, token-aware context packing, generation, request audit, feedback, and preference dataset export.
+- **Agent runtime:** content-addressed declarative specs, Temporal-backed async runs, step budgets, tool calls, loop detection, trajectories, and WebSocket progress/error events.
+- **Tool governance:** tool catalog, capability manifests, tenant grants, credential references, MCP/http tool execution, schema validation, egress controls, response caps, timeouts, and durable invocation audit.
+- **Training and evaluation:** SFT, DPO, LoRA/QLoRA adapter training, Ray/KubeRay execution, Axolotl-style recipes, evaluation profiles, promotion evidence, and model comparison.
+- **Model registry and promotion:** candidate/champion state, effective-base identity, promotion gates, no-regression checks, serving intent, load status, and rollback-ready model facts.
+- **Model serving:** Kubernetes `ServedModel` reconciliation, vLLM/OpenAI-compatible serving, Multi-LoRA adapter loading, shared base runtimes, and local/Ollama-compatible validation paths.
+- **Agent improvement loop:** golden tasks, labels, trajectory-shaped datasets, adapter training dispatch, eval reports, promotion gates, and champion spec/adapter binding.
+- **Platform operations:** service-owned Postgres databases, transactional outbox, Kafka events, Redis-backed user events, Temporal workflows, OpenTelemetry, Docker Compose, Helm, Terraform/OpenTofu, and API Gateway.
 
 ## The Loop
 

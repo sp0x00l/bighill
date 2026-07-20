@@ -45,8 +45,8 @@ var _ = Describe("Configured graph extraction model", Label("graph", "integratio
 		Expect(err).NotTo(HaveOccurred())
 		Expect(extraction.Entities).NotTo(BeEmpty())
 		Expect(extraction.Relations).NotTo(BeEmpty())
-		Expect(graphEntityNames(extraction)).To(ContainElement(ContainSubstring("Aurora")))
-		Expect(graphEntityNames(extraction)).To(ContainElement(ContainSubstring("Beacon")))
+		Expect(graphEntityNamesContain(extraction, "Aurora Relay")).To(BeTrue(), "entity names: %v", graphEntityNames(extraction))
+		Expect(graphEntityNamesContain(extraction, "Beacon Hub")).To(BeTrue(), "entity names: %v", graphEntityNames(extraction))
 	})
 })
 
@@ -58,4 +58,24 @@ func graphEntityNames(extraction *model.GraphExtraction) []string {
 		names = append(names, entity.Name)
 	}
 	return names
+}
+
+func graphEntityNamesContain(extraction *model.GraphExtraction, expected string) bool {
+	log.Trace("graphEntityNamesContain")
+
+	expected = normalizeGraphEntityName(expected)
+	for _, name := range graphEntityNames(extraction) {
+		if strings.Contains(normalizeGraphEntityName(name), expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeGraphEntityName(value string) string {
+	log.Trace("normalizeGraphEntityName")
+
+	value = strings.ToLower(value)
+	value = strings.NewReplacer("_", " ", "-", " ", ".", " ", "/", " ").Replace(value)
+	return strings.Join(strings.Fields(value), " ")
 }
