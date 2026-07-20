@@ -16,6 +16,7 @@ test()
     CURRENT_DIR="$(pwd)"
     local BIGHILL_ROOT
     BIGHILL_ROOT="$(git rev-parse --show-toplevel)"
+    . "$BIGHILL_ROOT/scripts/common.sh"
 
     setup_cgo
 
@@ -25,6 +26,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/data_registry_service
     . ./scripts/config.sh $1
+    stop_service_binary_for_tests "data_registry_service" "$BIGHILL_ROOT"
     ginkgo -timeout=120s -r -v --output-dir=../test_results/data_registry_service -procs=1 -race
 
     cd $CURRENT_DIR

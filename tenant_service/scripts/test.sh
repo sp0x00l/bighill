@@ -19,6 +19,7 @@ run_tenant_service_tests() {
     local PROJECT_ROOT
     PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
     local OUTPUT_DIR="${PROJECT_ROOT}/test_results/tenant_service"
+    . "$PROJECT_ROOT/scripts/common.sh"
 
     setup_cgo
 
@@ -30,6 +31,7 @@ run_tenant_service_tests() {
     . "$PROJECT_ROOT/shared_lib/scripts/config.sh" "$ENV"
     cd "$PROJECT_ROOT/tenant_service"
     . ./scripts/config.sh "$ENV"
+    stop_service_binary_for_tests "tenant_service" "$PROJECT_ROOT"
 
     ginkgo -timeout=300s -r -v -procs=1 -race
 

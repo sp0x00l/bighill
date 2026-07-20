@@ -73,6 +73,50 @@ service_dir_to_binary() {
   echo "${SERVICE_DIR//_/-}"
 }
 
+service_binary_pids() {
+  local BINARY_PATH="$1"
+
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -f "$BINARY_PATH" || true
+    return
+  fi
+
+  ps -ef | awk -v binary_path="$BINARY_PATH" '$0 ~ binary_path && $0 !~ /awk/ {print $2}'
+}
+
+stop_service_binary_for_tests() {
+  local SERVICE_DIR="$1"
+  local PROJECT_ROOT="${2:-$(get_project_root)}"
+  local SERVICE_BINARY="${3:-$(service_dir_to_binary "$SERVICE_DIR")}"
+  local BINARY_PATH="${PROJECT_ROOT}/${SERVICE_DIR}/build/${SERVICE_BINARY}"
+  local PIDS
+
+  PIDS="$(service_binary_pids "$BINARY_PATH")"
+  if [ -z "$PIDS" ]; then
+    return 0
+  fi
+
+  echo "Stopping running ${SERVICE_BINARY} before tests"
+  kill $PIDS >/dev/null 2>&1 || true
+
+  local RETRIES=5
+  while [ "$RETRIES" -gt 0 ]; do
+    PIDS="$(service_binary_pids "$BINARY_PATH")"
+    if [ -z "$PIDS" ]; then
+      echo "${SERVICE_BINARY} stopped"
+      return 0
+    fi
+    sleep 1
+    RETRIES=$((RETRIES - 1))
+  done
+
+  PIDS="$(service_binary_pids "$BINARY_PATH")"
+  if [ -n "$PIDS" ]; then
+    echo "Force stopping ${SERVICE_BINARY} before tests"
+    kill -9 $PIDS >/dev/null 2>&1 || true
+  fi
+}
+
 first_env_value() {
   local VAR_NAME
   for VAR_NAME in "$@"; do

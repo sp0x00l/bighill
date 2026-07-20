@@ -1,14 +1,18 @@
 # BigHill
 
-BigHill is a self-hosted governed agent platform for companies that need AI systems to act on their data, tools, and rules - and prove what happened.
+BigHill is a self-hosted platform for building, running, evaluating, improving, and serving governed AI agents.
 
-RAG answers one question: can the model use our knowledge?
+The repo implements the full operating loop:
 
-BigHill asks the bigger question: can this system do real work inside our business, with the right data, tools, rules, evidence, approvals, and measurable outcomes?
+- ingest tenant data and build versioned retrieval and graph snapshots;
+- publish RAG endpoints or declarative agent specs;
+- run agents through Temporal with budgets, tool calls, progress events, and durable state;
+- govern tools through a catalog, tenant grants, schemas, credentials, egress policy, and audit;
+- record trajectories with the exact spec, tools, data snapshots, base model, and adapter used;
+- label runs, evaluate against golden tasks, train LoRA adapters, and promote only passing candidates;
+- serve promoted models through vLLM/Multi-LoRA in production-style infrastructure.
 
-This is not just bringing a model in-house. BigHill builds the machinery around the model: agent specs, tool governance, trajectories, evals, promotion gates, adapters, serving, and provenance.
-
-The bet: enterprise AI will not be won by choosing the best model once. It will be won by systems that continuously prove, govern, and improve model behavior against the business's own definition of good.
+The goal is concrete: a company should be able to see what an agent did, why it was allowed to do it, which artifacts produced the behavior, whether it met the business standard, and what changed before a new version was promoted.
 
 ## What It Delivers
 
