@@ -16,6 +16,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const kafkaAssertSubscriberReadyTimeout = 2 * time.Minute
+
 type kafkaEventCollector[T proto.Message] struct {
 	msgType    msgConn.MsgType
 	newMessage func() T
@@ -147,5 +149,5 @@ func waitForKafkaAssertSubscriberReady(subscriber msgConn.Subscriber, topics []s
 		return msgConn.CheckSubscriberHealth(context.Background(), subscriber, msgConn.SubscriberHealthCheckConfig{
 			RequireAssignment: true,
 		})
-	}, 30*time.Second, 100*time.Millisecond).Should(Succeed(), "Kafka assert subscriber was not ready for topics %v", topics)
+	}, kafkaAssertSubscriberReadyTimeout, 100*time.Millisecond).Should(Succeed(), "Kafka assert subscriber was not ready for topics %v", topics)
 }

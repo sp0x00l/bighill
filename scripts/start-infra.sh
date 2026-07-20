@@ -290,27 +290,35 @@ warm_ollama_model() {
     local MODEL_NAME="$2"
     local RETRIES="${3:-3}"
     local DELAY="${4:-2}"
+    local REQUEST_TIMEOUT="${5:-${FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_REQUEST_TIMEOUT_SECONDS:-120}}"
     local PAYLOAD
+    local CURL_ERROR_FILE
 
     if [ -z "$MODEL_NAME" ]; then
         echo "Error: Ollama model name is required"
         return 1
     fi
 
-    PAYLOAD="$(printf '{"model":"%s","prompt":"Return JSON {\"ok\":true}","stream":false,"options":{"temperature":0,"num_predict":8},"keep_alive":"10m"}' "$MODEL_NAME")"
-    until curl -fsS --max-time 60 \
-        -H "Content-Type: application/json" \
-        -X POST \
-        -d "$PAYLOAD" \
-        "http://localhost:${OLLAMA_PORT}/api/generate" >/dev/null 2>&1; do
+    PAYLOAD="$(printf '{"model":"%s","prompt":"Return ok.","stream":false,"options":{"temperature":0,"num_predict":8},"keep_alive":"10m"}' "$MODEL_NAME")"
+    CURL_ERROR_FILE="$(mktemp "${TMPDIR:-/tmp}/ollama-warmup.XXXXXX")"
+    until curl -4 -fsS --max-time "$REQUEST_TIMEOUT" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "http://127.0.0.1:${OLLAMA_PORT}/api/generate" >/dev/null 2>"$CURL_ERROR_FILE"; do
         RETRIES=$((RETRIES - 1))
         if [ "$RETRIES" -le 0 ]; then
             echo "Timeout warming Ollama model ${MODEL_NAME} on port ${OLLAMA_PORT}"
+            if [ -s "$CURL_ERROR_FILE" ]; then
+                echo "Last Ollama warm-up error:"
+                sed 's/^/  /' "$CURL_ERROR_FILE"
+            fi
+            rm -f "$CURL_ERROR_FILE"
             return 1
         fi
-        echo "Waiting for Ollama model ${MODEL_NAME} warm-up on port ${OLLAMA_PORT}... (${RETRIES} retries left)"
+        echo "Waiting for Ollama model ${MODEL_NAME} warm-up on port ${OLLAMA_PORT} with ${REQUEST_TIMEOUT}s timeout... (${RETRIES} retries left)"
         sleep "$DELAY"
     done
+    rm -f "$CURL_ERROR_FILE"
     echo "Ollama model ${MODEL_NAME} is warmed on port ${OLLAMA_PORT}"
 }
 
@@ -321,7 +329,7 @@ check_graph_extraction_model() {
     case "${FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_ENDPOINT:-}" in
         http://localhost:11434/*|http://127.0.0.1:11434/*)
             check_ollama_model_available 11434 "$FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL" 10 1
-            warm_ollama_model 11434 "$FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL" 3 2
+            warm_ollama_model 11434 "$FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MODEL" 3 2 "$FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_REQUEST_TIMEOUT_SECONDS"
             ;;
     esac
 }

@@ -46,6 +46,18 @@ def main() -> None:
 
 
 def root_token() -> str:
+    deadline = time.monotonic() + 120
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            return request_root_token()
+        except Exception as err:  # noqa: BLE001 - startup readiness includes transient token endpoint failures.
+            last_error = err
+            time.sleep(2)
+    raise RuntimeError(f"Polaris token endpoint did not become ready: {last_error}")
+
+
+def request_root_token() -> str:
     payload = urllib.parse.urlencode(
         {
             "grant_type": "client_credentials",
