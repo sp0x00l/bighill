@@ -334,9 +334,11 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 				msgConn.AddListener(msgSubscriber, listener)
 
 				cancelCtxSubscriber, cancelFtnSubscriber := context.WithCancel(context.Background())
+				defer cancelFtnSubscriber()
 				startSubscriberOrFail(cancelCtxSubscriber, "profile-assert", func(ctx context.Context) error {
 					return msgSubscriber.Subscribe(ctx, []string{kafkaPublisherTopic})
 				})
+				waitForSubscriberAssignment(ctx, msgSubscriber)
 
 				response, err := http.DefaultClient.Do(request)
 				Expect(err).ShouldNot(HaveOccurred())
@@ -973,7 +975,7 @@ func waitForSubscriberAssignment(ctx context.Context, subscriber msgConn.Subscri
 			RequireAssignment: true,
 			MaxPollSilence:    2 * time.Second,
 		})
-	}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+	}, 30*time.Second, 50*time.Millisecond).Should(Succeed())
 }
 
 func createProfileAccount(port int, profileAccount map[string]any) uuid.UUID {

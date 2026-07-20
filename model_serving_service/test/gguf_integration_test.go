@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +17,10 @@ import (
 	"testing"
 	"time"
 
+	localstore "lib/shared_lib/servedmodel"
+	"model_serving_service/pkg/app"
 	"model_serving_service/pkg/domain/model"
+	servingkubernetes "model_serving_service/pkg/infra/network/k8s"
 	"model_serving_service/pkg/infra/network/localserving"
 
 	"github.com/google/uuid"
@@ -102,6 +106,75 @@ var _ = Describe("GGUF local serving integration", func() {
 		Expect(definition.Template).To(SatisfyAny(ContainSubstring(".Messages"), ContainSubstring(".Prompt")))
 		Expect(definition.Template).NotTo(ContainSubstring("{%"))
 		Expect(strings.ToLower(definition.Parameters)).To(ContainSubstring("stop"))
+	})
+})
+
+var _ = Describe("Local served model controller integration", func() {
+	It("loads a pending base model when stale terminal failed adapter records exist", func() {
+		storePath := filepath.Join(GinkgoT().TempDir(), "served_models.json")
+		intentStore, err := localstore.NewStore(storePath)
+		Expect(err).NotTo(HaveOccurred())
+		failedAdapterID := uuid.New()
+		failedAdapterName := localstore.ResourceName(failedAdapterID.String(), 3)
+		Expect(intentStore.UpsertSpec(failedAdapterName, "default", localstore.Spec{
+			ModelID:      failedAdapterID.String(),
+			ModelKind:    "FINE_TUNED",
+			Name:         "stale-adapter",
+			ModelVersion: 3,
+			BaseModel:    "local-user-model:latest",
+		})).To(Succeed())
+		Expect(intentStore.UpdateStatus(failedAdapterName, localstore.Status{
+			ServingLoadStatus:  model.ModelLoadStatusFailed.String(),
+			FailureReason:      "validation failed: serving model is required for non-base local served models",
+			ObservedGeneration: 1,
+		})).To(Succeed())
+		modelID := uuid.New()
+		baseName := localstore.ResourceName(modelID.String(), 1)
+		Expect(intentStore.UpsertSpec(baseName, "default", localstore.Spec{
+			ModelID:        modelID.String(),
+			ModelKind:      "BASE",
+			Name:           "rag-e2e-uploaded-base",
+			ModelVersion:   1,
+			BaseModel:      "local-user-model:latest",
+			ArtifactFormat: "HF_MODEL",
+		})).To(Succeed())
+		ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/tags":
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"models":[{"name":"local-user-model:latest"}]}`))
+			case r.Method == http.MethodPost && r.URL.Path == "/api/generate":
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"response":"","done":true}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer ollama.Close()
+		store, err := localserving.NewStore("default", storePath)
+		Expect(err).NotTo(HaveOccurred())
+		runtime, err := localserving.NewRuntime("default", 8080, ollama.URL,
+			localserving.WithArtifactCache(GinkgoT().TempDir()),
+			localserving.WithGGUFInspectorCommand("sh -c true"),
+			localserving.WithCreateTimeout(time.Second),
+		)
+		Expect(err).NotTo(HaveOccurred())
+		reconciler := app.NewServedModelReconciler(runtime, store)
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
+
+		Expect(controller.ProcessOnce(context.Background())).To(Succeed())
+
+		served, err := store.Read(context.Background(), baseName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(served.Status.ServingLoadStatus).To(Equal(model.ModelLoadStatusLoaded))
+		Expect(served.Status.ServingModel).To(Equal("local-user-model:latest"))
+		failed, err := store.Read(context.Background(), failedAdapterName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(failed.Status.ServingLoadStatus).To(Equal(model.ModelLoadStatusFailed))
+		Expect(failed.Status.FailureReason).To(ContainSubstring("serving model is required"))
+		health := controller.Health()
+		Expect(health.KnownServedModels).To(Equal(2))
+		Expect(health.OutstandingServedModels).To(Equal(0))
 	})
 })
 

@@ -97,6 +97,77 @@ var _ = Describe("ServedModelController serialization", func() {
 		Expect(reconciler.maxActive).To(Equal(1))
 		Expect(reconciler.calls).To(Equal(2))
 	})
+
+	It("does not reconcile terminal failed resources from the current snapshot", func() {
+		resourceName := "served-model-terminal-failed"
+		servedModel := controllerServedModel(resourceName, "s3://models/failed")
+		servedModel.Status = &model.ServedModelStatus{
+			ServingLoadStatus:  model.ModelLoadStatusFailed,
+			ObservedGeneration: servedModel.Generation,
+			FailureReason:      "validation failed",
+		}
+		store := &controllerStoreStub{
+			namespace: "default",
+			listed:    []*model.ServedModel{servedModel},
+			latest:    map[string]*model.ServedModel{resourceName: servedModel},
+		}
+		reconciler := &controllerReconcilerStub{}
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
+
+		_, err := controller.ProcessSnapshot(context.Background())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reconciler.calls).To(Equal(0))
+	})
+
+	It("does not reconcile terminal failed resources from status-only watch events", func() {
+		resourceName := "served-model-terminal-failed-watch"
+		servedModel := controllerServedModel(resourceName, "s3://models/failed")
+		servedModel.Status = &model.ServedModelStatus{
+			ServingLoadStatus:  model.ModelLoadStatusFailed,
+			ObservedGeneration: servedModel.Generation,
+			FailureReason:      "validation failed",
+		}
+		store := &controllerStoreStub{
+			namespace: "default",
+			latest:    map[string]*model.ServedModel{resourceName: servedModel},
+		}
+		reconciler := &controllerReconcilerStub{}
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
+
+		err := controller.ProcessWatchEvent(context.Background(), watch.Event{Type: watch.Modified, Object: controllerServedModelObject(servedModel)})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reconciler.calls).To(Equal(0))
+	})
+
+	It("does not requeue a failed reconciliation after a terminal failed status is recorded", func() {
+		resourceName := "served-model-failed-once"
+		servedModel := controllerServedModel(resourceName, "s3://models/failed")
+		store := &controllerStoreStub{
+			namespace: "default",
+			listed:    []*model.ServedModel{servedModel},
+			latest:    map[string]*model.ServedModel{resourceName: servedModel},
+		}
+		reconciler := &controllerReconcilerStub{
+			status: &model.ServedModelStatus{
+				ServingLoadStatus:  model.ModelLoadStatusFailed,
+				ObservedGeneration: servedModel.Generation,
+				FailureReason:      "validation failed",
+			},
+			err: context.DeadlineExceeded,
+		}
+		controller := servingkubernetes.NewServedModelController(store, reconciler, time.Millisecond)
+
+		_, err := controller.ProcessSnapshot(context.Background())
+
+		Expect(err).NotTo(HaveOccurred())
+		Consistently(func() int {
+			reconciler.mu.Lock()
+			defer reconciler.mu.Unlock()
+			return reconciler.calls
+		}, 300*time.Millisecond, 25*time.Millisecond).Should(Equal(1))
+	})
 })
 
 type controllerStoreStub struct {
@@ -131,6 +202,8 @@ type controllerReconcilerStub struct {
 	maxActive   int
 	calls       int
 	delay       time.Duration
+	status      *model.ServedModelStatus
+	err         error
 	adapterURIs []string
 }
 
@@ -151,6 +224,9 @@ func (r *controllerReconcilerStub) Reconcile(_ context.Context, servedModel *mod
 	r.mu.Lock()
 	r.active--
 	r.mu.Unlock()
+	if r.status != nil || r.err != nil {
+		return r.status, r.err
+	}
 	return &model.ServedModelStatus{ServingLoadStatus: model.ModelLoadStatusLoaded}, nil
 }
 
@@ -194,6 +270,17 @@ func controllerServedModelObject(servedModel *model.ServedModel) *unstructured.U
 			"adapterRank":  int64(servedModel.AdapterRank),
 		},
 	}}
+	if servedModel.Status != nil {
+		obj.Object["status"] = map[string]any{
+			"servingLoadStatus":  servedModel.Status.ServingLoadStatus.String(),
+			"servingTarget":      servedModel.Status.ServingTarget,
+			"servingModel":       servedModel.Status.ServingModel,
+			"servingProtocol":    servedModel.Status.ServingProtocol.String(),
+			"failureReason":      servedModel.Status.FailureReason,
+			"observedGeneration": servedModel.Status.ObservedGeneration,
+			"readyReplicas":      int64(servedModel.Status.ReadyReplicas),
+		}
+	}
 	obj.SetGeneration(servedModel.Generation)
 	return obj
 }

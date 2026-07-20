@@ -292,6 +292,9 @@ func (c *ServedModelController) processSnapshot(ctx context.Context, requeuePend
 	c.setKnownResources(servedModels)
 	c.markActivity()
 	for _, servedModel := range servedModels {
+		if !servedModelNeedsReconcile(servedModel) {
+			continue
+		}
 		c.processResource(ctx, servedModel.ResourceName, requeuePending)
 	}
 	return resourceVersion, nil
@@ -319,6 +322,9 @@ func (c *ServedModelController) processWatchEvent(ctx context.Context, event wat
 			return nil
 		}
 		c.markResourceKnown(servedModel)
+		if !servedModelNeedsReconcile(servedModel) {
+			return nil
+		}
 		c.processResource(ctx, servedModel.ResourceName, requeuePending)
 	case watch.Deleted, watch.Bookmark:
 		c.markActivity()
@@ -373,7 +379,10 @@ func (c *ServedModelController) processResource(ctx context.Context, resourceNam
 	if err != nil {
 		c.markError(err)
 		log.WithContext(ctx).WithError(err).WithField("served_model", servedModel.ResourceName).Error("served model reconcile failed")
-		c.scheduleRequeue(ctx, resourceName)
+		c.markResourceReconcileStatus(resourceName, status)
+		if status == nil || statusNeedsReconcile(status) {
+			c.scheduleRequeue(ctx, resourceName)
+		}
 		return
 	}
 	c.markSuccessfulReconcile()
@@ -382,7 +391,7 @@ func (c *ServedModelController) processResource(ctx context.Context, resourceNam
 		c.clearRetry(resourceName)
 		return
 	}
-	if requeuePending && (status.ServingLoadStatus == model.ModelLoadStatusNotLoaded || status.ServingLoadStatus == model.ModelLoadStatusFailed) {
+	if requeuePending && statusNeedsReconcile(status) {
 		c.scheduleRequeue(ctx, resourceName)
 	}
 }
@@ -522,7 +531,7 @@ func statusNeedsReconcile(status *model.ServedModelStatus) bool {
 	if status.ServingLoadStatus == model.ModelLoadStatusNotLoaded && status.FailureReason == model.NotLoadedReasonCapacityEvicted {
 		return false
 	}
-	return status.ServingLoadStatus == model.ModelLoadStatusNotLoaded || status.ServingLoadStatus == model.ModelLoadStatusFailed
+	return status.ServingLoadStatus == model.ModelLoadStatusNotLoaded
 }
 
 func countOutstandingResources(resources map[string]bool) int {

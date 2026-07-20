@@ -35,7 +35,7 @@ var _ = Describe("Tool catalog workflow", Label("tool-catalog"), func() {
 			"credential_required": true,
 		}, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		capability := decodeSingleObject(body)
+		capability := decodeObject(body)
 		capabilityVersionID := stringField(capability, "capability_version_id")
 		Expect(capability["capability_id"]).To(Equal(capabilityID))
 		Expect(capability["tool_name"]).To(Equal(toolName))
@@ -46,7 +46,7 @@ var _ = Describe("Tool catalog workflow", Label("tool-catalog"), func() {
 
 		status, body = doJSON(http.MethodGet, "/v1/private/tool-catalog/capabilities/"+capabilityVersionID, nil, user.Token, uuid.Nil)
 		Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
-		readCapability := decodeSingleObject(body)
+		readCapability := decodeObject(body)
 		Expect(readCapability["capability_version_id"]).To(Equal(capabilityVersionID))
 		Expect(readCapability["content_hash"]).To(Equal(capability["content_hash"]))
 
@@ -54,7 +54,7 @@ var _ = Describe("Tool catalog workflow", Label("tool-catalog"), func() {
 			"capability_version_id": capabilityVersionID,
 		}, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		grant := decodeSingleObject(body)
+		grant := decodeObject(body)
 		Expect(grant["org_id"]).To(Equal(user.OrgID.String()))
 		Expect(grant["status"]).To(Equal("ACTIVE"))
 
@@ -63,7 +63,7 @@ var _ = Describe("Tool catalog workflow", Label("tool-catalog"), func() {
 			"credential_ref": "PARTNER_HTTP_TOKEN",
 		}, user.Token, uuid.New())
 		Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
-		binding := decodeSingleObject(body)
+		binding := decodeObject(body)
 		Expect(binding["org_id"]).To(Equal(user.OrgID.String()))
 		Expect(binding["capability_id"]).To(Equal(capabilityID))
 		Expect(binding["credential_ref"]).To(Equal("PARTNER_HTTP_TOKEN"))

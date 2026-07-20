@@ -150,4 +150,12 @@ func waitForKafkaAssertSubscriberReady(subscriber msgConn.Subscriber, topics []s
 			RequireAssignment: true,
 		})
 	}, kafkaAssertSubscriberReadyTimeout, 100*time.Millisecond).Should(Succeed(), "Kafka assert subscriber was not ready for topics %v", topics)
+
+	reporter, ok := subscriber.(msgConn.SubscriberHealthReporter)
+	Expect(ok).To(BeTrue(), "Kafka assert subscriber does not expose health")
+	assignedPollAttempts := reporter.Health().PollAttempts
+	Eventually(func() bool {
+		health := reporter.Health()
+		return health.AssignedPartitions > 0 && health.PollAttempts > assignedPollAttempts
+	}, kafkaAssertSubscriberReadyTimeout, 100*time.Millisecond).Should(BeTrue(), "Kafka assert subscriber did not poll after assignment for topics %v", topics)
 }
