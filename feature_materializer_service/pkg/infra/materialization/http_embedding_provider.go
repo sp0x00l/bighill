@@ -17,16 +17,17 @@ import (
 )
 
 const (
-	httpHeaderContentType    = "Content-Type"
-	jsonContentType          = "application/json"
-	embeddingProviderTEI     = "tei"
-	embeddingProviderOllama  = "ollama"
-	teiEmbeddingPath         = "/embed"
-	ollamaEmbeddingPath      = "/api/embed"
-	embeddingRequestInputs   = "inputs"
-	embeddingRequestModel    = "model"
-	embeddingRequestInput    = "input"
-	embeddingResponseVectors = "embeddings"
+	httpHeaderContentType     = "Content-Type"
+	jsonContentType           = "application/json"
+	embeddingProviderTEI      = "tei"
+	embeddingProviderOllama   = "ollama"
+	teiEmbeddingPath          = "/embed"
+	ollamaEmbeddingPath       = "/api/embed"
+	defaultEmbeddingBatchSize = 32
+	embeddingRequestInputs    = "inputs"
+	embeddingRequestModel     = "model"
+	embeddingRequestInput     = "input"
+	embeddingResponseVectors  = "embeddings"
 )
 
 type HTTPEmbeddingProvider struct {
@@ -35,22 +36,38 @@ type HTTPEmbeddingProvider struct {
 	endpoint   string
 	model      string
 	dimensions int
+	batchSize  int
 }
 
 func NewHTTPEmbeddingProvider(provider, endpoint, model string, dimensions int, timeout time.Duration) *HTTPEmbeddingProvider {
 	log.Trace("NewHTTPEmbeddingProvider")
 
+	return NewHTTPEmbeddingProviderWithBatchSize(provider, endpoint, model, dimensions, timeout, defaultEmbeddingBatchSize)
+}
+
+func NewHTTPEmbeddingProviderWithBatchSize(provider, endpoint, model string, dimensions int, timeout time.Duration, batchSize int) *HTTPEmbeddingProvider {
+	log.Trace("NewHTTPEmbeddingProviderWithBatchSize")
+
 	if timeout <= 0 {
 		log.Fatalf("NewHTTPEmbeddingProvider: timeout must be greater than zero")
 	}
-	return NewHTTPEmbeddingProviderWithClient(provider, endpoint, model, dimensions, newTracedHTTPClient(timeout))
+	return NewHTTPEmbeddingProviderWithClientAndBatchSize(provider, endpoint, model, dimensions, newTracedHTTPClient(timeout), batchSize)
 }
 
 func NewHTTPEmbeddingProviderWithClient(provider, endpoint, model string, dimensions int, client *http.Client) *HTTPEmbeddingProvider {
 	log.Trace("NewHTTPEmbeddingProviderWithClient")
 
+	return NewHTTPEmbeddingProviderWithClientAndBatchSize(provider, endpoint, model, dimensions, client, defaultEmbeddingBatchSize)
+}
+
+func NewHTTPEmbeddingProviderWithClientAndBatchSize(provider, endpoint, model string, dimensions int, client *http.Client, batchSize int) *HTTPEmbeddingProvider {
+	log.Trace("NewHTTPEmbeddingProviderWithClientAndBatchSize")
+
 	if client == nil {
 		log.Fatalf("NewHTTPEmbeddingProviderWithClient: client is required")
+	}
+	if batchSize <= 0 {
+		log.Fatalf("NewHTTPEmbeddingProviderWithClient: batch size must be greater than zero")
 	}
 	return &HTTPEmbeddingProvider{
 		client:     client,
@@ -58,6 +75,7 @@ func NewHTTPEmbeddingProviderWithClient(provider, endpoint, model string, dimens
 		endpoint:   strings.TrimRight(strings.TrimSpace(endpoint), "/"),
 		model:      strings.TrimSpace(model),
 		dimensions: dimensions,
+		batchSize:  batchSize,
 	}
 }
 
@@ -80,6 +98,28 @@ func (p *HTTPEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][]
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
+
+	batchSize := p.batchSize
+	if batchSize <= 0 {
+		batchSize = defaultEmbeddingBatchSize
+	}
+	vectors := make([][]float32, 0, len(texts))
+	for start := 0; start < len(texts); start += batchSize {
+		end := start + batchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		batchVectors, err := p.embedBatch(ctx, texts[start:end])
+		if err != nil {
+			return nil, err
+		}
+		vectors = append(vectors, batchVectors...)
+	}
+	return vectors, nil
+}
+
+func (p *HTTPEmbeddingProvider) embedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	log.Trace("HTTPEmbeddingProvider embedBatch")
 
 	switch p.provider {
 	case embeddingProviderTEI:

@@ -110,6 +110,8 @@ spec:
               value: {{ .Values.env.embeddingDimensions | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS
               value: {{ .Values.env.embeddingMaxRows | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_BATCH_SIZE
+              value: {{ .Values.env.embeddingBatchSize | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_VECTOR_STORE
               value: {{ .Values.env.embeddingVectorStore | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_EMBEDDING_STRATEGY_VERSION

@@ -8,9 +8,14 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 stop_brew_service()
 {
-    if brew services list | grep -q "postgresql@$POSTGRES_VERSION" | grep -q "started"; then
-        brew services stop postgresql@14
-        echo "brew Postgres service stopped. Postgres will be started with 'pg_ctl' command with a handle the data directory."
+    if ! command -v brew >/dev/null 2>&1; then
+        return
+    fi
+
+    local SERVICE="postgresql@$POSTGRES_VERSION"
+    if brew services list | awk -v service="$SERVICE" '$1 == service && $2 == "started" { found = 1 } END { exit !found }'; then
+        brew services stop "$SERVICE"
+        echo "brew $SERVICE service stopped. Postgres will be started with pg_ctl using the project data directory."
         sleep 3
     fi
 }
@@ -33,7 +38,8 @@ start_db()
 
     local FILE="$DATA_ROOT/postmaster.pid"
     if [ ! -f "$FILE" ]; then
-        pg_ctl start -l logfile -D "$DATA_ROOT" -o "-c config_file=$PROJECT_ROOT/database/conf/postgresql.conf"
+        stop_brew_service
+        pg_ctl start -l "$PROJECT_ROOT/database/logfile" -D "$DATA_ROOT" -o "-c config_file=$PROJECT_ROOT/database/conf/postgresql.conf"
         sleep 5
     fi
 }

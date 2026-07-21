@@ -16,7 +16,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Multi-LoRA serving control plane", Ordered, func() {
+var _ = Describe("Multi-LoRA serving heuristic control plane", Label("heuristic", "multi-lora"), Ordered, func() {
 	var user profileTestUser
 	var datasetID string
 	var baseModelID uuid.UUID

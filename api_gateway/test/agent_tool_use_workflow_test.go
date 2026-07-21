@@ -242,7 +242,7 @@ func publishAgentEndpointWithDisplayName(user profileTestUser, modelID uuid.UUID
 		"mode":            "agent",
 		"agent_spec_hash": agentSpecHash,
 		"display_name":    displayName,
-		"merge_strategy":  "reranker",
+		"merge_strategy":  "score_normalized",
 	}, user.Token, uuid.New())
 	Expect(status).To(Equal(http.StatusCreated), "body: %s", string(body))
 	endpoint := decodeSingleObject(body)

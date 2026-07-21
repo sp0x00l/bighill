@@ -1,4 +1,4 @@
-package integration_test
+package heuristic_test
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 	"k8s.io/client-go/dynamic/fake"
 )
 
-var _ = Describe("Multi-LoRA serving integration", func() {
+var _ = Describe("Multi-LoRA serving heuristic contract", Label("heuristic"), func() {
 	It("loads a fine-tuned adapter on a shared vLLM base runtime", func() {
 		servedModel := integrationServedModel(16)
 		workloadName := servingkubernetes.SharedRuntimeWorkloadName(servedModel)

@@ -53,6 +53,7 @@ env:
   embeddingModel: "bge-small-en-v1.5"
   embeddingDimensions: "384"
   embeddingMaxRows: "1000"
+  embeddingBatchSize: "32"
   embeddingVectorStore: "pgvector"
   embeddingStrategyVersion: "rag-v1"
   extractorName: "go-document-extractor-suite"

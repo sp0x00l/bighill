@@ -75,6 +75,7 @@ type embeddingConfig struct {
 	Model            string
 	Dimensions       int
 	MaxRows          int
+	BatchSize        int
 	VectorStore      string
 	StrategyVersion  string
 	ExtractorName    string
@@ -472,6 +473,7 @@ func readMaterializerConfig() materializerConfig {
 			Model:            env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MODEL", model.DefaultEmbeddingModel),
 			Dimensions:       env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_DIMENSIONS", strconv.Itoa(model.DefaultEmbeddingDimensions)),
 			MaxRows:          env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS", "1000"),
+			BatchSize:        env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_BATCH_SIZE", "32"),
 			VectorStore:      env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_VECTOR_STORE", "pgvector"),
 			StrategyVersion:  env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_STRATEGY_VERSION", model.DefaultEmbeddingStrategyVersion),
 			ExtractorName:    env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_EXTRACTOR_NAME", model.DefaultExtractorName),
@@ -743,6 +745,9 @@ func validateEmbeddingConfig(cfg embeddingConfig) error {
 	if cfg.MaxRows <= 0 {
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_MAX_ROWS must be greater than zero")
 	}
+	if cfg.BatchSize <= 0 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_BATCH_SIZE must be greater than zero")
+	}
 	if strings.TrimSpace(cfg.VectorStore) == "" {
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_EMBEDDING_VECTOR_STORE is required")
 	}
@@ -819,7 +824,7 @@ func newEmbeddingProvider(cfg embeddingConfig) (materialization.EmbeddingProvide
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	switch provider {
 	case "tei", "ollama":
-		return materialization.NewHTTPEmbeddingProvider(provider, cfg.URL, cfg.Model, cfg.Dimensions, cfg.RequestTimeout), nil
+		return materialization.NewHTTPEmbeddingProviderWithBatchSize(provider, cfg.URL, cfg.Model, cfg.Dimensions, cfg.RequestTimeout, cfg.BatchSize), nil
 	case "":
 		return nil, fmt.Errorf("embedding provider is required")
 	default:

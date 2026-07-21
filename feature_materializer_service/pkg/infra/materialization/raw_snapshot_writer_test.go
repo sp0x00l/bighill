@@ -642,6 +642,39 @@ var _ = Describe("Materialization adapters", func() {
 		Expect(vectors).To(Equal([][]float32{{0.1, 0.2}, {0.3, 0.4}}))
 	})
 
+	It("batches TEI-compatible embedding requests without reordering vectors", func() {
+		requests := [][]string{}
+		provider := materialization.NewHTTPEmbeddingProviderWithClientAndBatchSize("tei", "http://embedding-service", "bge-small", 2, &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				Expect(req.URL.Path).To(Equal("/embed"))
+				body, err := io.ReadAll(req.Body)
+				Expect(err).NotTo(HaveOccurred())
+
+				var payload struct {
+					Inputs []string `json:"inputs"`
+				}
+				Expect(json.Unmarshal(body, &payload)).To(Succeed())
+				Expect(len(payload.Inputs)).To(BeNumerically("<=", 2))
+				requests = append(requests, append([]string(nil), payload.Inputs...))
+
+				vectors := make([][]float32, len(payload.Inputs))
+				for i, text := range payload.Inputs {
+					vectors[i] = []float32{float32(len(requests)), float32(len(text))}
+				}
+				responseBody, err := json.Marshal(vectors)
+				Expect(err).NotTo(HaveOccurred())
+				return embeddingHTTPResponse(http.StatusOK, string(responseBody)), nil
+			}),
+			Timeout: time.Second,
+		}, 2)
+
+		vectors, err := provider.Embed(context.Background(), []string{"first", "second", "third", "fourth", "fifth"})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(requests).To(Equal([][]string{{"first", "second"}, {"third", "fourth"}, {"fifth"}}))
+		Expect(vectors).To(Equal([][]float32{{1, 5}, {1, 6}, {2, 5}, {2, 6}, {3, 5}}))
+	})
+
 	It("embeds through an Ollama-compatible HTTP service", func() {
 		provider := materialization.NewHTTPEmbeddingProviderWithClient("ollama", "http://embedding-service", "bge-small", 2, &http.Client{
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

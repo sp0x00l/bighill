@@ -25,7 +25,8 @@ run_api_gateway_tests()
 
     cd "$GATEWAY_ROOT"
     if [ "${API_GATEWAY_RUN_CORE_TESTS:-true}" = "true" ]; then
-        ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1 --label-filter='!real-huggingface && !external-datasource'
+        ginkgo -timeout=1800s -r -v --output-dir=../test_results/api_gateway_tests -procs=1 --label-filter='!real-huggingface && !external-datasource && !heuristic'
+        ginkgo -timeout=1800s -v --output-dir=../test_results/api_gateway_tests/heuristic -procs=1 --label-filter='heuristic && !real-huggingface && !external-datasource' ./test
     fi
 
     if [ "${API_GATEWAY_RUN_DATASOURCE_TESTS:-true}" = "true" ]; then
