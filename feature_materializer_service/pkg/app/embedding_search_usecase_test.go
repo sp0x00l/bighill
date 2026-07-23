@@ -21,6 +21,7 @@ type embeddingSearchRepoStub struct {
 	datasetID      uuid.UUID
 	queryVector    []float32
 	topK           int
+	policy         model.RetrievalPolicy
 	records        []model.EmbeddingRecord
 }
 
@@ -37,6 +38,16 @@ func (s *embeddingSearchRepoStub) SearchEmbeddingRecords(_ context.Context, _ *m
 	s.queryVector = queryVector
 	s.topK = topK
 	return s.records, nil
+}
+
+func (s *embeddingSearchRepoStub) SearchEmbeddingRecordsWithPolicy(_ context.Context, _ *model.EmbeddingSnapshot, queryVector []float32, topK int, policy model.RetrievalPolicy) (*model.EmbeddingRecordSearchResult, error) {
+	s.queryVector = queryVector
+	s.topK = topK
+	s.policy = policy
+	return &model.EmbeddingRecordSearchResult{
+		Records:    s.records,
+		Disclosure: model.NewRetrievalDisclosure(policy, topK, len(s.records)),
+	}, nil
 }
 
 type queryEmbeddingProviderStub struct {

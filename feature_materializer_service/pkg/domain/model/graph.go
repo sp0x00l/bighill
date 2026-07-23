@@ -114,6 +114,7 @@ type GraphNode struct {
 	Type            string
 	Description     string
 	MentionCount    int
+	AssertionStatus AssertionStatus
 }
 
 type GraphEdge struct {
@@ -129,6 +130,7 @@ type GraphEdge struct {
 	RelationType    string
 	Description     string
 	Weight          float64
+	AssertionStatus AssertionStatus
 }
 
 type GraphNodeChunk struct {
@@ -143,6 +145,7 @@ type GraphNodeChunk struct {
 	OrgID               uuid.UUID
 	ChunkIndex          int
 	SourceText          string
+	AssertionStatus     AssertionStatus
 }
 
 type GraphNodeAlias struct {
@@ -153,6 +156,7 @@ type GraphNodeAlias struct {
 	SourceEntityKey    string
 	Alias              string
 	Type               string
+	AssertionStatus    AssertionStatus
 	DatasetID          uuid.UUID
 	UserID             uuid.UUID
 	OrgID              uuid.UUID
@@ -169,6 +173,7 @@ type GraphNodeEmbedding struct {
 	OrgID                uuid.UUID
 	EmbeddingText        string
 	Vector               []float32
+	AssertionStatus      AssertionStatus
 }
 
 type GraphMaterialization struct {
@@ -211,6 +216,7 @@ type GraphSearchResult struct {
 	MatchedEntities  []GraphMatchedEntity
 	Paths            []GraphPath
 	CommunityReports []GraphCommunityReportMatch
+	Disclosure       RetrievalDisclosure
 }
 
 type GraphSearchSeed struct {
@@ -234,6 +240,7 @@ type GraphCommunity struct {
 	Rank             float64
 	EntityCount      int
 	EdgeCount        int
+	AssertionStatus  AssertionStatus
 }
 
 type GraphCommunityMember struct {
@@ -246,6 +253,7 @@ type GraphCommunityMember struct {
 	DatasetID              uuid.UUID
 	UserID                 uuid.UUID
 	OrgID                  uuid.UUID
+	AssertionStatus        AssertionStatus
 }
 
 type GraphCommunityReport struct {
@@ -265,6 +273,7 @@ type GraphCommunityReport struct {
 	ReportVersion          string
 	EmbeddingText          string
 	Vector                 []float32
+	AssertionStatus        AssertionStatus
 }
 
 type GraphCommunityReportMatch struct {
@@ -280,6 +289,7 @@ type GraphCommunityReportMatch struct {
 	ReportText             string
 	Rank                   float64
 	Score                  float64
+	AssertionStatus        AssertionStatus
 }
 
 type GraphRetrievedContext struct {
@@ -292,14 +302,16 @@ type GraphRetrievedContext struct {
 	SourceText          string
 	Score               float64
 	OrgID               uuid.UUID
+	AssertionStatus     AssertionStatus
 }
 
 type GraphMatchedEntity struct {
-	GraphNodeID uuid.UUID
-	Name        string
-	Type        string
-	Description string
-	Score       float64
+	GraphNodeID     uuid.UUID
+	Name            string
+	Type            string
+	Description     string
+	Score           float64
+	AssertionStatus AssertionStatus
 }
 
 type GraphPath struct {

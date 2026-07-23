@@ -27,15 +27,21 @@ type embeddingSearchUsecaseStub struct {
 	datasetID uuid.UUID
 	queryText string
 	topK      int
+	policy    model.RetrievalPolicy
 	result    *model.EmbeddingSearchResult
 	err       error
 }
 
 func (s *embeddingSearchUsecaseStub) SearchEmbeddings(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int) (*model.EmbeddingSearchResult, error) {
+	return s.SearchEmbeddingsWithPolicy(context.Background(), userID, datasetID, queryText, topK, model.RetrievalPolicy{})
+}
+
+func (s *embeddingSearchUsecaseStub) SearchEmbeddingsWithPolicy(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, policy model.RetrievalPolicy) (*model.EmbeddingSearchResult, error) {
 	s.userID = userID
 	s.datasetID = datasetID
 	s.queryText = queryText
 	s.topK = topK
+	s.policy = policy
 	return s.result, s.err
 }
 
@@ -46,26 +52,30 @@ type graphSearchUsecaseStub struct {
 	topK      int
 	maxHops   int
 	mode      model.GraphSearchMode
+	policy    model.RetrievalPolicy
 	result    *model.GraphSearchResult
 	err       error
 }
 
 func (s *graphSearchUsecaseStub) SearchGraph(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int) (*model.GraphSearchResult, error) {
-	s.userID = userID
-	s.datasetID = datasetID
-	s.queryText = queryText
-	s.topK = topK
-	s.maxHops = maxHops
-	return s.result, s.err
+	return s.SearchGraphWithModeAndPolicy(context.Background(), userID, datasetID, queryText, topK, maxHops, model.GraphSearchModeLocal, model.RetrievalPolicy{})
 }
 
 func (s *graphSearchUsecaseStub) SearchGraphWithMode(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode model.GraphSearchMode) (*model.GraphSearchResult, error) {
+	return s.SearchGraphWithModeAndPolicy(context.Background(), userID, datasetID, queryText, topK, maxHops, mode, model.RetrievalPolicy{})
+}
+
+func (s *graphSearchUsecaseStub) SearchGraphWithModeAndPolicy(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode model.GraphSearchMode, policy model.RetrievalPolicy) (*model.GraphSearchResult, error) {
 	s.userID = userID
 	s.datasetID = datasetID
 	s.queryText = queryText
 	s.topK = topK
 	s.maxHops = maxHops
 	s.mode = mode
+	s.policy = policy
+	if s.err != nil {
+		return nil, s.err
+	}
 	if s.result != nil {
 		return s.result, nil
 	}
@@ -80,6 +90,9 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		embeddingSnapshotID := uuid.New()
 		featureSnapshotID := uuid.New()
 		recordID := uuid.New()
+		allowedID := uuid.New()
+		deniedID := uuid.New()
+		asOf := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 		uc := &embeddingSearchUsecaseStub{
 			result: &model.EmbeddingSearchResult{
 				EmbeddingSnapshot: &model.EmbeddingSnapshot{
@@ -108,7 +121,21 @@ var _ = Describe("FeatureMaterializerServer", func() {
 					SourceText:          "result chunk",
 					Distance:            0.2,
 					Similarity:          0.8,
+					AssertionStatus:     model.AssertionStatusAdmitted,
 				}},
+				Disclosure: model.RetrievalDisclosure{
+					Mode:            model.RetrievalModeExactAuthorized,
+					PolicyID:        "policy-123",
+					PolicyHash:      "sha256:abc",
+					PrincipalID:     userID,
+					Purpose:         "answer",
+					AsOf:            asOf,
+					ScanBudget:      9,
+					CandidateCount:  1,
+					AuthorizedCount: 1,
+					ResultCount:     1,
+					Underfilled:     true,
+				},
 			},
 		}
 		server := featuregrpc.NewFeatureMaterializerGrpcServer(uc, &graphSearchUsecaseStub{})
@@ -119,6 +146,18 @@ var _ = Describe("FeatureMaterializerServer", func() {
 			OrgId:     orgID.String(),
 			QueryText: " query ",
 			TopK:      9,
+			RetrievalPolicy: &featurepb.RetrievalPolicy{
+				Mode:               model.RetrievalModeExactAuthorized.String(),
+				PolicyId:           "policy-123",
+				PolicyHash:         "sha256:abc",
+				PrincipalId:        userID.String(),
+				Purpose:            "answer",
+				Context:            map[string]string{"classification": "internal"},
+				AsOf:               asOf.Format(time.RFC3339Nano),
+				AllowedResourceIds: []string{allowedID.String()},
+				DeniedResourceIds:  []string{deniedID.String()},
+				ScanBudget:         9,
+			},
 		})
 
 		Expect(err).NotTo(HaveOccurred())
@@ -126,6 +165,16 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		Expect(uc.datasetID).To(Equal(datasetID))
 		Expect(uc.queryText).To(Equal("query"))
 		Expect(uc.topK).To(Equal(9))
+		Expect(uc.policy.Mode).To(Equal(model.RetrievalModeExactAuthorized))
+		Expect(uc.policy.PolicyID).To(Equal("policy-123"))
+		Expect(uc.policy.PolicyHash).To(Equal("sha256:abc"))
+		Expect(uc.policy.PrincipalID).To(Equal(userID))
+		Expect(uc.policy.Purpose).To(Equal("answer"))
+		Expect(uc.policy.Context).To(HaveKeyWithValue("classification", "internal"))
+		Expect(uc.policy.AsOf).To(Equal(asOf))
+		Expect(uc.policy.AllowedResourceIDs).To(Equal([]uuid.UUID{allowedID}))
+		Expect(uc.policy.DeniedResourceIDs).To(Equal([]uuid.UUID{deniedID}))
+		Expect(uc.policy.ScanBudget).To(Equal(9))
 		Expect(response.GetEmbeddingSnapshotId()).To(Equal(embeddingSnapshotID.String()))
 		Expect(response.GetOrgId()).To(Equal(orgID.String()))
 		Expect(response.GetFeatureSnapshotId()).To(Equal(featureSnapshotID.String()))
@@ -135,6 +184,11 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		Expect(response.GetMatches()[0].GetOrgId()).To(Equal(orgID.String()))
 		Expect(response.GetMatches()[0].GetDistance()).To(Equal(0.2))
 		Expect(response.GetMatches()[0].GetSimilarity()).To(Equal(0.8))
+		Expect(response.GetMatches()[0].GetAssertionStatus()).To(Equal(model.AssertionStatusAdmitted.String()))
+		Expect(response.GetRetrievalDisclosure().GetMode()).To(Equal(model.RetrievalModeExactAuthorized.String()))
+		Expect(response.GetRetrievalDisclosure().GetPolicyId()).To(Equal("policy-123"))
+		Expect(response.GetRetrievalDisclosure().GetAsOf()).To(Equal(asOf.Format(time.RFC3339Nano)))
+		Expect(response.GetRetrievalDisclosure().GetUnderfilled()).To(BeTrue())
 	})
 
 	It("rejects invalid requests", func() {

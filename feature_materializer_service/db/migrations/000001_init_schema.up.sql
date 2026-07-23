@@ -18,6 +18,7 @@ CREATE TYPE processing_profile_enum AS ENUM (
     'TEXT_RAG_PROCESSING_PROFILE',
     'INSTRUCTION_TUNING_PROCESSING_PROFILE'
 );
+CREATE TYPE assertion_status_enum AS ENUM ('candidate', 'admitted', 'rejected', 'revoked');
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.tenants (
     id uuid PRIMARY KEY,
@@ -169,6 +170,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.embedding_records (
     chunk_index integer NOT NULL DEFAULT 0,
     source_text text NOT NULL,
     embedding vector NOT NULL,
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -176,6 +178,7 @@ CREATE INDEX IF NOT EXISTS index_embedding_records_snapshot_id ON bighill_featur
 CREATE INDEX IF NOT EXISTS index_embedding_records_dataset_id ON bighill_feature_materializer_db.embedding_records(dataset_id);
 CREATE INDEX IF NOT EXISTS index_embedding_records_user_id ON bighill_feature_materializer_db.embedding_records(user_id);
 CREATE INDEX IF NOT EXISTS index_embedding_records_org_id ON bighill_feature_materializer_db.embedding_records(org_id);
+CREATE INDEX IF NOT EXISTS index_embedding_records_assertion_status ON bighill_feature_materializer_db.embedding_records(embedding_snapshot_id, assertion_status);
 -- Retrieval queries must use embedding::vector(384), cosine distance, and vector_dims(embedding) = 384 to use this partial ANN index.
 CREATE INDEX IF NOT EXISTS index_embedding_records_embedding_384_hnsw
 ON bighill_feature_materializer_db.embedding_records
@@ -240,6 +243,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_nodes (
     entity_type text NOT NULL,
     description text NOT NULL DEFAULT '',
     mention_count integer NOT NULL DEFAULT 0 CHECK (mention_count >= 0),
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (graph_snapshot_id, entity_key)
 );
@@ -247,6 +251,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_nodes (
 CREATE INDEX IF NOT EXISTS index_graph_nodes_dataset_id ON bighill_feature_materializer_db.graph_nodes(dataset_id);
 CREATE INDEX IF NOT EXISTS index_graph_nodes_org_id ON bighill_feature_materializer_db.graph_nodes(org_id);
 CREATE INDEX IF NOT EXISTS index_graph_nodes_name_type ON bighill_feature_materializer_db.graph_nodes(lower(name), lower(entity_type));
+CREATE INDEX IF NOT EXISTS index_graph_nodes_assertion_status ON bighill_feature_materializer_db.graph_nodes(graph_snapshot_id, assertion_status);
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_aliases (
     graph_node_alias_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -258,12 +263,14 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_aliases (
     source_entity_key text NOT NULL,
     alias text NOT NULL,
     entity_type text NOT NULL,
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (graph_snapshot_id, graph_node_id, source_entity_key)
 );
 
 CREATE INDEX IF NOT EXISTS index_graph_node_aliases_snapshot_alias_type ON bighill_feature_materializer_db.graph_node_aliases(graph_snapshot_id, lower(alias), lower(entity_type));
 CREATE INDEX IF NOT EXISTS index_graph_node_aliases_org_id ON bighill_feature_materializer_db.graph_node_aliases(org_id);
+CREATE INDEX IF NOT EXISTS index_graph_node_aliases_assertion_status ON bighill_feature_materializer_db.graph_node_aliases(graph_snapshot_id, assertion_status);
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_embeddings (
     graph_node_embedding_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -275,12 +282,14 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_embeddings
     org_id uuid NOT NULL,
     embedding_text text NOT NULL,
     embedding vector NOT NULL,
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (graph_node_id, embedding_snapshot_id)
 );
 
 CREATE INDEX IF NOT EXISTS index_graph_node_embeddings_snapshot_id ON bighill_feature_materializer_db.graph_node_embeddings(graph_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_graph_node_embeddings_org_id ON bighill_feature_materializer_db.graph_node_embeddings(org_id);
+CREATE INDEX IF NOT EXISTS index_graph_node_embeddings_assertion_status ON bighill_feature_materializer_db.graph_node_embeddings(graph_snapshot_id, assertion_status);
 -- Graph semantic seeding must use embedding::vector(384), cosine distance, and vector_dims(embedding) = 384 to use this partial ANN index.
 CREATE INDEX IF NOT EXISTS index_graph_node_embeddings_embedding_384_hnsw
 ON bighill_feature_materializer_db.graph_node_embeddings
@@ -298,12 +307,14 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_edges (
     relation_type text NOT NULL,
     description text NOT NULL DEFAULT '',
     weight double precision NOT NULL DEFAULT 1 CHECK (weight >= 0),
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS index_graph_edges_snapshot_source ON bighill_feature_materializer_db.graph_edges(graph_snapshot_id, source_node_id);
 CREATE INDEX IF NOT EXISTS index_graph_edges_snapshot_target ON bighill_feature_materializer_db.graph_edges(graph_snapshot_id, target_node_id);
 CREATE INDEX IF NOT EXISTS index_graph_edges_org_id ON bighill_feature_materializer_db.graph_edges(org_id);
+CREATE INDEX IF NOT EXISTS index_graph_edges_assertion_status ON bighill_feature_materializer_db.graph_edges(graph_snapshot_id, assertion_status);
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_chunks (
     graph_node_chunk_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -316,6 +327,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_chunks (
     org_id uuid NOT NULL,
     chunk_index integer NOT NULL DEFAULT 0,
     source_text text NOT NULL,
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (graph_node_id, embedding_record_id)
 );
@@ -323,6 +335,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_chunks (
 CREATE INDEX IF NOT EXISTS index_graph_node_chunks_snapshot_id ON bighill_feature_materializer_db.graph_node_chunks(graph_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_graph_node_chunks_node_id ON bighill_feature_materializer_db.graph_node_chunks(graph_node_id);
 CREATE INDEX IF NOT EXISTS index_graph_node_chunks_org_id ON bighill_feature_materializer_db.graph_node_chunks(org_id);
+CREATE INDEX IF NOT EXISTS index_graph_node_chunks_assertion_status ON bighill_feature_materializer_db.graph_node_chunks(graph_snapshot_id, assertion_status);
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_communities (
     graph_community_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -338,6 +351,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_communities (
     rank double precision NOT NULL DEFAULT 0 CHECK (rank >= 0),
     entity_count integer NOT NULL DEFAULT 0 CHECK (entity_count >= 0),
     edge_count integer NOT NULL DEFAULT 0 CHECK (edge_count >= 0),
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (graph_snapshot_id, community_key)
 );
@@ -345,6 +359,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_communities (
 CREATE INDEX IF NOT EXISTS index_graph_communities_snapshot_id ON bighill_feature_materializer_db.graph_communities(graph_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_graph_communities_org_id ON bighill_feature_materializer_db.graph_communities(org_id);
 CREATE INDEX IF NOT EXISTS index_graph_communities_title ON bighill_feature_materializer_db.graph_communities(graph_snapshot_id, lower(title));
+CREATE INDEX IF NOT EXISTS index_graph_communities_assertion_status ON bighill_feature_materializer_db.graph_communities(graph_snapshot_id, assertion_status);
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_community_members (
     graph_community_member_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -356,6 +371,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_community_membe
     org_id uuid NOT NULL,
     community_key text NOT NULL,
     entity_key text NOT NULL,
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (graph_snapshot_id, graph_node_id)
 );
@@ -363,6 +379,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_community_membe
 CREATE INDEX IF NOT EXISTS index_graph_community_members_community_id ON bighill_feature_materializer_db.graph_community_members(graph_community_id);
 CREATE INDEX IF NOT EXISTS index_graph_community_members_snapshot_id ON bighill_feature_materializer_db.graph_community_members(graph_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_graph_community_members_org_id ON bighill_feature_materializer_db.graph_community_members(org_id);
+CREATE INDEX IF NOT EXISTS index_graph_community_members_assertion_status ON bighill_feature_materializer_db.graph_community_members(graph_snapshot_id, assertion_status);
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_community_reports (
     graph_community_report_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -381,6 +398,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_community_repor
     report_version text NOT NULL,
     embedding_text text NOT NULL,
     embedding vector,
+    assertion_status assertion_status_enum NOT NULL DEFAULT 'admitted',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (graph_community_id, report_version)
 );
@@ -388,6 +406,7 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_community_repor
 CREATE INDEX IF NOT EXISTS index_graph_community_reports_snapshot_id ON bighill_feature_materializer_db.graph_community_reports(graph_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_graph_community_reports_org_id ON bighill_feature_materializer_db.graph_community_reports(org_id);
 CREATE INDEX IF NOT EXISTS index_graph_community_reports_title ON bighill_feature_materializer_db.graph_community_reports(graph_snapshot_id, lower(title));
+CREATE INDEX IF NOT EXISTS index_graph_community_reports_assertion_status ON bighill_feature_materializer_db.graph_community_reports(graph_snapshot_id, assertion_status);
 -- Global graph search must use embedding::vector(384), cosine distance, and vector_dims(embedding) = 384 to use this partial ANN index.
 CREATE INDEX IF NOT EXISTS index_graph_community_reports_embedding_384_hnsw
 ON bighill_feature_materializer_db.graph_community_reports

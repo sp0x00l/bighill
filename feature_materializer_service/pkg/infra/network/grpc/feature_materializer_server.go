@@ -163,8 +163,12 @@ func (s *FeatureMaterializerServer) SearchEmbeddings(ctx context.Context, req *f
 	if topK <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "top_k must be greater than zero")
 	}
+	policy, err := retrievalPolicyFromPB(req.GetRetrievalPolicy(), userID)
+	if err != nil {
+		return nil, err
+	}
 
-	result, err := s.searchUsecase.SearchEmbeddings(ctx, userID, datasetID, queryText, topK)
+	result, err := s.searchUsecase.SearchEmbeddingsWithPolicy(ctx, userID, datasetID, queryText, topK, policy)
 	if err != nil {
 		return nil, embeddingSearchStatusError(err)
 	}
@@ -206,7 +210,11 @@ func (s *FeatureMaterializerServer) SearchGraph(ctx context.Context, req *featur
 	if !mode.IsValid() {
 		return nil, status.Error(codes.InvalidArgument, "mode must be local or global")
 	}
-	result, err := s.graphSearchUsecase.SearchGraphWithMode(ctx, userID, datasetID, queryText, topK, maxHops, mode)
+	policy, err := retrievalPolicyFromPB(req.GetRetrievalPolicy(), userID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.graphSearchUsecase.SearchGraphWithModeAndPolicy(ctx, userID, datasetID, queryText, topK, maxHops, mode, policy)
 	if err != nil {
 		return nil, graphSearchStatusError(err)
 	}
@@ -231,6 +239,7 @@ func embeddingSearchResultToPB(result *model.EmbeddingSearchResult) *featurepb.S
 			SourceText:          match.SourceText,
 			Distance:            match.Distance,
 			Similarity:          match.Similarity,
+			AssertionStatus:     match.AssertionStatus.String(),
 		}
 	}
 
@@ -250,6 +259,7 @@ func embeddingSearchResultToPB(result *model.EmbeddingSearchResult) *featurepb.S
 		EmbeddingProvider:   snapshot.EmbeddingProvider,
 		EmbeddingModel:      snapshot.EmbeddingModel,
 		Matches:             matches,
+		RetrievalDisclosure: retrievalDisclosureToPB(result.Disclosure),
 	}
 }
 
@@ -272,16 +282,18 @@ func graphSearchResultToPB(result *model.GraphSearchResult) *featurepb.SearchGra
 			ChunkIndex:          int32(context.ChunkIndex),
 			SourceText:          context.SourceText,
 			Score:               context.Score,
+			AssertionStatus:     context.AssertionStatus.String(),
 		}
 	}
 	entities := make([]*featurepb.GraphMatchedEntity, len(result.MatchedEntities))
 	for i, entity := range result.MatchedEntities {
 		entities[i] = &featurepb.GraphMatchedEntity{
-			GraphNodeId: entity.GraphNodeID.String(),
-			Name:        entity.Name,
-			Type:        entity.Type,
-			Description: entity.Description,
-			Score:       entity.Score,
+			GraphNodeId:     entity.GraphNodeID.String(),
+			Name:            entity.Name,
+			Type:            entity.Type,
+			Description:     entity.Description,
+			Score:           entity.Score,
+			AssertionStatus: entity.AssertionStatus.String(),
 		}
 	}
 	paths := make([]*featurepb.GraphPath, len(result.Paths))
@@ -311,6 +323,7 @@ func graphSearchResultToPB(result *model.GraphSearchResult) *featurepb.SearchGra
 			ReportText:             report.ReportText,
 			Rank:                   report.Rank,
 			Score:                  report.Score,
+			AssertionStatus:        report.AssertionStatus.String(),
 		}
 	}
 	return &featurepb.SearchGraphResponse{
@@ -325,6 +338,99 @@ func graphSearchResultToPB(result *model.GraphSearchResult) *featurepb.SearchGra
 		MatchedEntities:     entities,
 		Paths:               paths,
 		CommunityReports:    communityReports,
+		RetrievalDisclosure: retrievalDisclosureToPB(result.Disclosure),
+	}
+}
+
+func retrievalPolicyFromPB(pb *featurepb.RetrievalPolicy, fallbackPrincipalID uuid.UUID) (model.RetrievalPolicy, error) {
+	log.Trace("retrievalPolicyFromPB")
+
+	if pb == nil {
+		return model.RetrievalPolicy{PrincipalID: fallbackPrincipalID}, nil
+	}
+	mode := model.ParseRetrievalMode(pb.GetMode())
+	if !mode.IsValid() {
+		return model.RetrievalPolicy{}, status.Error(codes.InvalidArgument, "retrieval_policy.mode must be ann_iterative or exact_authorized")
+	}
+	principalID := fallbackPrincipalID
+	if strings.TrimSpace(pb.GetPrincipalId()) != "" {
+		parsed, err := uuid.Parse(pb.GetPrincipalId())
+		if err != nil || parsed == uuid.Nil {
+			return model.RetrievalPolicy{}, status.Error(codes.InvalidArgument, "retrieval_policy.principal_id is invalid")
+		}
+		principalID = parsed
+	}
+	asOf := time.Time{}
+	if strings.TrimSpace(pb.GetAsOf()) != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, pb.GetAsOf())
+		if err != nil {
+			return model.RetrievalPolicy{}, status.Error(codes.InvalidArgument, "retrieval_policy.as_of must be RFC3339")
+		}
+		asOf = parsed.UTC()
+	}
+	allowedResourceIDs, err := retrievalPolicyUUIDsFromPB(pb.GetAllowedResourceIds(), "retrieval_policy.allowed_resource_ids")
+	if err != nil {
+		return model.RetrievalPolicy{}, err
+	}
+	deniedResourceIDs, err := retrievalPolicyUUIDsFromPB(pb.GetDeniedResourceIds(), "retrieval_policy.denied_resource_ids")
+	if err != nil {
+		return model.RetrievalPolicy{}, err
+	}
+	policyContext := map[string]string{}
+	for key, value := range pb.GetContext() {
+		policyContext[key] = value
+	}
+	return model.RetrievalPolicy{
+		Mode:               mode,
+		PolicyID:           strings.TrimSpace(pb.GetPolicyId()),
+		PolicyHash:         strings.TrimSpace(pb.GetPolicyHash()),
+		PrincipalID:        principalID,
+		Purpose:            strings.TrimSpace(pb.GetPurpose()),
+		Context:            policyContext,
+		AsOf:               asOf,
+		AllowedResourceIDs: allowedResourceIDs,
+		DeniedResourceIDs:  deniedResourceIDs,
+		ScanBudget:         int(pb.GetScanBudget()),
+	}, nil
+}
+
+func retrievalPolicyUUIDsFromPB(values []string, fieldName string) ([]uuid.UUID, error) {
+	log.Trace("retrievalPolicyUUIDsFromPB")
+
+	out := make([]uuid.UUID, 0, len(values))
+	for _, value := range values {
+		parsed, err := uuid.Parse(value)
+		if err != nil || parsed == uuid.Nil {
+			return nil, status.Errorf(codes.InvalidArgument, "%s contains an invalid resource id", fieldName)
+		}
+		out = append(out, parsed)
+	}
+	return out, nil
+}
+
+func retrievalDisclosureToPB(disclosure model.RetrievalDisclosure) *featurepb.RetrievalDisclosure {
+	log.Trace("retrievalDisclosureToPB")
+
+	asOf := ""
+	if !disclosure.AsOf.IsZero() {
+		asOf = disclosure.AsOf.UTC().Format(time.RFC3339Nano)
+	}
+	principalID := ""
+	if disclosure.PrincipalID != uuid.Nil {
+		principalID = disclosure.PrincipalID.String()
+	}
+	return &featurepb.RetrievalDisclosure{
+		Mode:            disclosure.Mode.String(),
+		PolicyId:        disclosure.PolicyID,
+		PolicyHash:      disclosure.PolicyHash,
+		PrincipalId:     principalID,
+		Purpose:         disclosure.Purpose,
+		AsOf:            asOf,
+		ScanBudget:      int32(disclosure.ScanBudget),
+		CandidateCount:  int32(disclosure.CandidateCount),
+		AuthorizedCount: int32(disclosure.AuthorizedCount),
+		ResultCount:     int32(disclosure.ResultCount),
+		Underfilled:     disclosure.Underfilled,
 	}
 }
 

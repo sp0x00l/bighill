@@ -11,6 +11,7 @@ type EmbeddingRecord struct {
 	ChunkIndex          int
 	SourceText          string
 	Vector              []float32
+	AssertionStatus     AssertionStatus
 	Distance            float64
 	Similarity          float64
 }

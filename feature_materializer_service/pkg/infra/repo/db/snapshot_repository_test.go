@@ -441,6 +441,7 @@ type embeddingRecordSearchRow struct {
 	ChunkIndex          int
 	SourceText          string
 	Distance            float64
+	AssertionStatus     string
 }
 
 func (r embeddingRecordSearchRow) Scan(dest ...any) error {
@@ -450,6 +451,7 @@ func (r embeddingRecordSearchRow) Scan(dest ...any) error {
 	*(dest[3].(*int)) = r.ChunkIndex
 	*(dest[4].(*string)) = r.SourceText
 	*(dest[5].(*float64)) = r.Distance
+	*(dest[6].(*string)) = selectedAssertionStatus(r.AssertionStatus)
 	return nil
 }
 
@@ -463,6 +465,7 @@ type graphRetrievedContextRow struct {
 	SourceText          string
 	Score               float64
 	OrgID               uuid.UUID
+	AssertionStatus     string
 }
 
 func (r graphRetrievedContextRow) Scan(dest ...any) error {
@@ -475,15 +478,17 @@ func (r graphRetrievedContextRow) Scan(dest ...any) error {
 	*(dest[6].(*string)) = r.SourceText
 	*(dest[7].(*float64)) = r.Score
 	*(dest[8].(*string)) = r.OrgID.String()
+	*(dest[9].(*string)) = selectedAssertionStatus(r.AssertionStatus)
 	return nil
 }
 
 type graphMatchedEntityRow struct {
-	GraphNodeID uuid.UUID
-	Name        string
-	Type        string
-	Description string
-	Score       float64
+	GraphNodeID     uuid.UUID
+	Name            string
+	Type            string
+	Description     string
+	Score           float64
+	AssertionStatus string
 }
 
 func (r graphMatchedEntityRow) Scan(dest ...any) error {
@@ -492,6 +497,7 @@ func (r graphMatchedEntityRow) Scan(dest ...any) error {
 	*(dest[2].(*string)) = r.Type
 	*(dest[3].(*string)) = r.Description
 	*(dest[4].(*float64)) = r.Score
+	*(dest[5].(*string)) = selectedAssertionStatus(r.AssertionStatus)
 	return nil
 }
 
@@ -521,6 +527,7 @@ type graphCommunityReportMatchRow struct {
 	ReportText             string
 	Rank                   float64
 	Score                  float64
+	AssertionStatus        string
 }
 
 func (r graphCommunityReportMatchRow) Scan(dest ...any) error {
@@ -536,7 +543,15 @@ func (r graphCommunityReportMatchRow) Scan(dest ...any) error {
 	*(dest[9].(*string)) = r.ReportText
 	*(dest[10].(*float64)) = r.Rank
 	*(dest[11].(*float64)) = r.Score
+	*(dest[12].(*string)) = selectedAssertionStatus(r.AssertionStatus)
 	return nil
+}
+
+func selectedAssertionStatus(value string) string {
+	if value == "" {
+		return model.AssertionStatusAdmitted.String()
+	}
+	return value
 }
 
 var _ = Describe("SnapshotRepository", func() {
@@ -1045,15 +1060,70 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(records[0].Distance).To(Equal(0.25))
 			Expect(records[0].Similarity).To(Equal(0.75))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("embedding_snapshot_id = @embedding_snapshot_id"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH candidates AS"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("embedding::vector(384)"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("vector_dims(embedding) = 384"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("double precision AS distance"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("assertion_status = @assertion_status_admitted::assertion_status_enum"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("LIMIT @scan_budget"))
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("user_id", pgtype.UUID{Bytes: userID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: activeSnapshot.OrgID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("scan_budget", 24))
 			Expect(args).To(HaveKeyWithValue("limit", 3))
+		})
+
+		It("supports exact-authorized embedding search by filtering before ranking", func() {
+			allowedID := uuid.New()
+			deniedID := uuid.New()
+			poolMock.NextQueryRows = &testRows{rows: []pgx.Row{
+				embeddingRecordSearchRow{
+					EmbeddingRecordID:   allowedID,
+					EmbeddingSnapshotID: embeddingID,
+					DatasetID:           datasetID,
+					ChunkIndex:          4,
+					SourceText:          "authorized nearest chunk",
+					Distance:            0.1,
+				},
+			}}
+			activeSnapshot := newEmbeddingSnapshotRow(embeddingID, featureID, datasetID, userID, orgID)
+
+			result, err := repository.SearchEmbeddingRecordsWithPolicy(ctx, &model.EmbeddingSnapshot{
+				EmbeddingSnapshotID: activeSnapshot.EmbeddingSnapshotID,
+				UserID:              activeSnapshot.UserID,
+				OrgID:               activeSnapshot.OrgID,
+				DatasetID:           activeSnapshot.DatasetID,
+				EmbeddingDimensions: activeSnapshot.EmbeddingDimensions,
+			}, make([]float32, activeSnapshot.EmbeddingDimensions), 2, model.RetrievalPolicy{
+				Mode:               model.RetrievalModeExactAuthorized,
+				PrincipalID:        userID,
+				Purpose:            "answer",
+				AllowedResourceIDs: []uuid.UUID{allowedID},
+				DeniedResourceIDs:  []uuid.UUID{deniedID},
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Records).To(HaveLen(1))
+			Expect(result.Records[0].EmbeddingRecordID).To(Equal(allowedID))
+			Expect(result.Records[0].AssertionStatus).To(Equal(model.AssertionStatusAdmitted))
+			Expect(result.Disclosure.Mode).To(Equal(model.RetrievalModeExactAuthorized))
+			Expect(result.Disclosure.PrincipalID).To(Equal(userID))
+			Expect(result.Disclosure.Purpose).To(Equal("answer"))
+			Expect(result.Disclosure.ResultCount).To(Equal(1))
+			Expect(result.Disclosure.Underfilled).To(BeTrue())
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH authorized AS MATERIALIZED"))
+			Expect(poolMock.QueryCalls[0]).NotTo(ContainSubstring("WITH candidates AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("AND assertion_status = @assertion_status_admitted::assertion_status_enum"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("embedding_record_id = ANY(@allow_resource_ids::uuid[])"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("embedding_record_id = ANY(@deny_resource_ids::uuid[])"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("allow_resource_filter_disabled", false))
+			Expect(args).To(HaveKeyWithValue("allow_resource_ids", []string{allowedID.String()}))
+			Expect(args).To(HaveKeyWithValue("deny_resource_ids", []string{deniedID.String()}))
+			Expect(args).To(HaveKeyWithValue("scan_budget", 2))
+			Expect(args).To(HaveKeyWithValue("limit", 2))
 		})
 	})
 
@@ -1527,18 +1597,27 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(result.Contexts).To(HaveLen(1))
 			Expect(result.Contexts[0].GraphNodeChunkID).To(Equal(nodeChunkID))
 			Expect(result.Contexts[0].SourceText).To(ContainSubstring("Beta Corp"))
+			Expect(result.Contexts[0].AssertionStatus).To(Equal(model.AssertionStatusAdmitted))
 			Expect(result.MatchedEntities).To(HaveLen(1))
 			Expect(result.MatchedEntities[0].GraphNodeID).To(Equal(nodeA))
+			Expect(result.MatchedEntities[0].AssertionStatus).To(Equal(model.AssertionStatusAdmitted))
 			Expect(result.Paths).To(HaveLen(1))
 			Expect(result.Paths[0].GraphNodeIDs).To(Equal([]uuid.UUID{nodeA, nodeB, nodeC}))
 			Expect(result.Paths[0].RelationTypes).To(Equal([]string{"WORKS_WITH", "INTRODUCED_TO"}))
-			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH RECURSIVE semantic_nodes"))
+			Expect(result.Disclosure.Mode).To(Equal(model.RetrievalModeANNIterative))
+			Expect(result.Disclosure.ResultCount).To(Equal(1))
+			Expect(result.Disclosure.Underfilled).To(BeTrue())
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH RECURSIVE semantic_node_candidates AS"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.graph_node_embeddings gne"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY gne.embedding::vector(3) <=> @query_embedding::vector(3)"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("LIMIT @scan_budget"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("semantic_chunks AS"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.embedding_records er"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY er.embedding::vector(3) <=> @query_embedding::vector(3)"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("LIMIT @semantic_chunk_limit"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("assertion_status = @assertion_status_admitted::assertion_status_enum"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("allow_resource_filter_disabled"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("deny_resource_ids"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("semantic_chunk_seed AS"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("semantic_seed AS"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("JOIN test_db.graph_node_chunks gnc"))
@@ -1563,8 +1642,58 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("lexical_patterns", []string{"%how do alice%", "%alice%"}))
 			Expect(args).To(HaveKeyWithValue("seed_limit", 10))
 			Expect(args).To(HaveKeyWithValue("semantic_chunk_limit", 80))
+			Expect(args).To(HaveKeyWithValue("assertion_status_admitted", model.AssertionStatusAdmitted.String()))
+			Expect(args).To(HaveKeyWithValue("allow_resource_filter_disabled", true))
+			Expect(args).To(HaveKeyWithValue("allow_resource_ids", []string{}))
+			Expect(args).To(HaveKeyWithValue("deny_resource_ids", []string{}))
+			Expect(args).To(HaveKeyWithValue("scan_budget", 40))
 			Expect(args).To(HaveKeyWithValue("limit", 5))
 			Expect(args).To(HaveKeyWithValue("max_hops", 2))
+		})
+
+		It("supports exact-authorized graph search by filtering seed rows before vector ranking", func() {
+			graphSnapshotID := uuid.New()
+			allowedNodeID := uuid.New()
+			deniedChunkID := uuid.New()
+			poolMock.NextQueryRowsQueue = []pgx.Rows{
+				&testRows{},
+				&testRows{},
+				&testRows{},
+			}
+
+			result, err := repository.SearchGraphWithPolicy(ctx, &model.GraphSnapshot{
+				GraphSnapshotID:     graphSnapshotID,
+				FeatureSnapshotID:   featureID,
+				EmbeddingSnapshotID: embeddingID,
+				DatasetID:           datasetID,
+				OrgID:               orgID,
+			}, model.GraphSearchSeed{
+				QueryText:           "route packets",
+				QueryVector:         []float32{0.3, 0.4, 0.5},
+				EmbeddingDimensions: 3,
+			}, 2, 1, model.RetrievalPolicy{
+				Mode:               model.RetrievalModeExactAuthorized,
+				AllowedResourceIDs: []uuid.UUID{allowedNodeID},
+				DeniedResourceIDs:  []uuid.UUID{deniedChunkID},
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Contexts).To(BeEmpty())
+			Expect(result.Disclosure.Mode).To(Equal(model.RetrievalModeExactAuthorized))
+			Expect(result.Disclosure.ScanBudget).To(Equal(2))
+			Expect(result.Disclosure.Underfilled).To(BeTrue())
+			Expect(poolMock.QueryCalls).To(HaveLen(3))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("semantic_node_authorized AS MATERIALIZED"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("semantic_chunk_authorized AS MATERIALIZED"))
+			Expect(poolMock.QueryCalls[0]).NotTo(ContainSubstring("semantic_node_candidates AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("gne.graph_node_id = ANY(@allow_resource_ids::uuid[])"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("er.embedding_record_id = ANY(@allow_resource_ids::uuid[])"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("chunk.graph_node_chunk_id = ANY(@deny_resource_ids::uuid[])"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("allow_resource_filter_disabled", false))
+			Expect(args).To(HaveKeyWithValue("allow_resource_ids", []string{allowedNodeID.String()}))
+			Expect(args).To(HaveKeyWithValue("deny_resource_ids", []string{deniedChunkID.String()}))
+			Expect(args).To(HaveKeyWithValue("scan_budget", 2))
 		})
 
 		It("returns global community reports from the graph community report index", func() {
@@ -1612,10 +1741,15 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(result.CommunityReports[0].GraphCommunityReportID).To(Equal(reportID))
 			Expect(result.CommunityReports[0].Title).To(Equal("Aurora Relay / Beacon Hub"))
 			Expect(result.CommunityReports[0].Score).To(Equal(0.91))
+			Expect(result.CommunityReports[0].AssertionStatus).To(Equal(model.AssertionStatusAdmitted))
+			Expect(result.Disclosure.Mode).To(Equal(model.RetrievalModeANNIterative))
+			Expect(result.Disclosure.ResultCount).To(Equal(1))
 			Expect(poolMock.QueryCalls).To(HaveLen(1))
-			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH semantic_reports AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH semantic_report_candidates AS"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.graph_community_reports report"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY report.embedding::vector(3) <=> @query_embedding::vector(3)"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("LIMIT @scan_budget"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("assertion_status = @assertion_status_admitted::assertion_status_enum"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("community_seed AS"))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("lower(report_text) LIKE ANY(@lexical_patterns::text[])"))
 			args := namedArgs(poolMock.QueryArgs[0])
@@ -1623,6 +1757,7 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("query_embedding", "[0.1,0.2,0.3]"))
 			Expect(args).To(HaveKeyWithValue("seed_limit", 10))
+			Expect(args).To(HaveKeyWithValue("scan_budget", 24))
 			Expect(args).To(HaveKeyWithValue("limit", 3))
 		})
 	})

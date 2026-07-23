@@ -22,6 +22,7 @@ type graphSearchRepoStub struct {
 	searchedSeed    model.GraphSearchSeed
 	searchedTopK    int
 	searchedMaxHops int
+	searchedPolicy  model.RetrievalPolicy
 	result          *model.GraphSearchResult
 }
 
@@ -35,10 +36,15 @@ func (s *graphSearchRepoStub) ReadEmbeddingSnapshot(_ context.Context, embedding
 }
 
 func (s *graphSearchRepoStub) SearchGraph(_ context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, topK int, maxHops int) (*model.GraphSearchResult, error) {
+	return s.SearchGraphWithPolicy(context.Background(), graphSnapshot, seed, topK, maxHops, model.RetrievalPolicy{})
+}
+
+func (s *graphSearchRepoStub) SearchGraphWithPolicy(_ context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, topK int, maxHops int, policy model.RetrievalPolicy) (*model.GraphSearchResult, error) {
 	s.searchedGraph = graphSnapshot
 	s.searchedSeed = seed
 	s.searchedTopK = topK
 	s.searchedMaxHops = maxHops
+	s.searchedPolicy = policy
 	if s.result != nil {
 		return s.result, nil
 	}

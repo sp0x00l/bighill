@@ -87,6 +87,7 @@ message SearchEmbeddingsRequest {
   int32 top_k = 4;
   map<string, string> metadata_filters = 5;
   string org_id = 6;
+  RetrievalPolicy retrieval_policy = 7;
 }
 
 message SearchEmbeddingsResponse {
@@ -105,6 +106,7 @@ message SearchEmbeddingsResponse {
   string embedding_model = 13;
   repeated EmbeddingSearchMatch matches = 14;
   string org_id = 15;
+  RetrievalDisclosure retrieval_disclosure = 16;
 }
 
 message EmbeddingSearchMatch {
@@ -116,6 +118,34 @@ message EmbeddingSearchMatch {
   double distance = 6;
   double similarity = 7;
   string org_id = 8;
+  string assertion_status = 9;
+}
+
+message RetrievalPolicy {
+  string mode = 1;
+  string policy_id = 2;
+  string policy_hash = 3;
+  string principal_id = 4;
+  string purpose = 5;
+  map<string, string> context = 6;
+  string as_of = 7;
+  repeated string allowed_resource_ids = 8;
+  repeated string denied_resource_ids = 9;
+  int32 scan_budget = 10;
+}
+
+message RetrievalDisclosure {
+  string mode = 1;
+  string policy_id = 2;
+  string policy_hash = 3;
+  string principal_id = 4;
+  string purpose = 5;
+  string as_of = 6;
+  int32 scan_budget = 7;
+  int32 candidate_count = 8;
+  int32 authorized_count = 9;
+  int32 result_count = 10;
+  bool underfilled = 11;
 }
 
 message SearchGraphRequest {
@@ -126,6 +156,7 @@ message SearchGraphRequest {
   int32 top_k = 5;
   int32 max_hops = 6;
   string mode = 7;
+  RetrievalPolicy retrieval_policy = 8;
 }
 
 message SearchGraphResponse {
@@ -140,6 +171,7 @@ message SearchGraphResponse {
   string org_id = 9;
   string mode = 10;
   repeated GraphCommunityReport community_reports = 11;
+  RetrievalDisclosure retrieval_disclosure = 12;
 }
 
 message GraphRetrievedContext {
@@ -152,6 +184,7 @@ message GraphRetrievedContext {
   string source_text = 7;
   double score = 8;
   string org_id = 9;
+  string assertion_status = 10;
 }
 
 message GraphMatchedEntity {
@@ -160,6 +193,7 @@ message GraphMatchedEntity {
   string type = 3;
   string description = 4;
   double score = 5;
+  string assertion_status = 6;
 }
 
 message GraphPath {
@@ -181,4 +215,5 @@ message GraphCommunityReport {
   string report_text = 10;
   double rank = 11;
   double score = 12;
+  string assertion_status = 13;
 }

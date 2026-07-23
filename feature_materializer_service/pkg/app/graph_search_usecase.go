@@ -17,6 +17,7 @@ import (
 type GraphSearchUsecase interface {
 	SearchGraph(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int) (*model.GraphSearchResult, error)
 	SearchGraphWithMode(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode model.GraphSearchMode) (*model.GraphSearchResult, error)
+	SearchGraphWithModeAndPolicy(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode model.GraphSearchMode, policy model.RetrievalPolicy) (*model.GraphSearchResult, error)
 }
 
 type graphSearchUsecase struct {
@@ -42,14 +43,25 @@ func (u *graphSearchUsecase) SearchGraph(ctx context.Context, userID uuid.UUID, 
 func (u *graphSearchUsecase) SearchGraphWithMode(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode model.GraphSearchMode) (result *model.GraphSearchResult, err error) {
 	log.Trace("GraphSearchUsecase SearchGraph")
 
+	return u.SearchGraphWithModeAndPolicy(ctx, userID, datasetID, queryText, topK, maxHops, mode, model.RetrievalPolicy{})
+}
+
+func (u *graphSearchUsecase) SearchGraphWithModeAndPolicy(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode model.GraphSearchMode, policy model.RetrievalPolicy) (result *model.GraphSearchResult, err error) {
+	log.Trace("GraphSearchUsecase SearchGraphWithModeAndPolicy")
+
 	mode = model.ParseGraphSearchMode(mode.String())
 	if !mode.IsValid() {
 		return nil, domain.ErrGraphSearch.Extend("graph search mode must be local or global")
+	}
+	policy = model.NormalizeRetrievalPolicy(policy, topK)
+	if !policy.Mode.IsValid() {
+		return nil, domain.ErrValidationFailed.Extend("retrieval mode must be ann_iterative or exact_authorized")
 	}
 	ctx, span := startFeatureMaterializerSpan(ctx, "feature_materializer_service/app", "graph.search",
 		attribute.String("user_id", userID.String()),
 		attribute.String("dataset_id", datasetID.String()),
 		attribute.String("mode", mode.String()),
+		attribute.String("retrieval_mode", policy.Mode.String()),
 		attribute.Int("top_k", topK),
 		attribute.Int("max_hops", maxHops),
 	)
@@ -92,5 +104,5 @@ func (u *graphSearchUsecase) SearchGraphWithMode(ctx context.Context, userID uui
 		EmbeddingDimensions: embeddingSnapshot.EmbeddingDimensions,
 		Mode:                mode,
 	}
-	return u.repository.SearchGraph(ctx, activeSnapshot, seed, topK, maxHops)
+	return u.repository.SearchGraphWithPolicy(ctx, activeSnapshot, seed, topK, maxHops, policy)
 }

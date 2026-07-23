@@ -16,6 +16,7 @@ import (
 
 type EmbeddingSearchUsecase interface {
 	SearchEmbeddings(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int) (*model.EmbeddingSearchResult, error)
+	SearchEmbeddingsWithPolicy(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, policy model.RetrievalPolicy) (*model.EmbeddingSearchResult, error)
 }
 
 type QueryEmbeddingProvider interface {
@@ -42,9 +43,20 @@ func NewEmbeddingSearchUsecase(repository EmbeddingSearchRepository, providerFac
 func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int) (result *model.EmbeddingSearchResult, err error) {
 	log.Trace("EmbeddingSearchUsecase SearchEmbeddings")
 
+	return u.SearchEmbeddingsWithPolicy(ctx, userID, datasetID, queryText, topK, model.RetrievalPolicy{})
+}
+
+func (u *embeddingSearchUsecase) SearchEmbeddingsWithPolicy(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, policy model.RetrievalPolicy) (result *model.EmbeddingSearchResult, err error) {
+	log.Trace("EmbeddingSearchUsecase SearchEmbeddingsWithPolicy")
+
+	policy = model.NormalizeRetrievalPolicy(policy, topK)
+	if !policy.Mode.IsValid() {
+		return nil, domain.ErrValidationFailed.Extend("retrieval mode must be ann_iterative or exact_authorized")
+	}
 	ctx, span := startFeatureMaterializerSpan(ctx, "feature_materializer_service/app", "embedding.search",
 		attribute.String("user_id", userID.String()),
 		attribute.String("dataset_id", datasetID.String()),
+		attribute.String("retrieval_mode", policy.Mode.String()),
 		attribute.Int("top_k", topK),
 	)
 	defer endFeatureMaterializerSpanOnReturn(ctx, span, &err)
@@ -71,13 +83,14 @@ func (u *embeddingSearchUsecase) SearchEmbeddings(ctx context.Context, userID uu
 		return nil, domain.ErrEmbeddingSearch.Extend("query embedding provider returned unexpected vector count")
 	}
 	queryVector := normalizeVector(vectors[0])
-	records, err := u.repository.SearchEmbeddingRecords(ctx, activeSnapshot, queryVector, topK)
+	searchResult, err := u.repository.SearchEmbeddingRecordsWithPolicy(ctx, activeSnapshot, queryVector, topK, policy)
 	if err != nil {
 		return nil, err
 	}
 	return &model.EmbeddingSearchResult{
 		EmbeddingSnapshot: activeSnapshot,
-		Matches:           records,
+		Matches:           searchResult.Records,
+		Disclosure:        searchResult.Disclosure,
 	}, nil
 }
 

@@ -394,9 +394,9 @@ func (r *SnapshotRepository) SaveEmbeddingRecords(ctx context.Context, tx pgx.Tx
 	}
 
 	query := `INSERT INTO ` + r.Name + `.embedding_records (
-		embedding_snapshot_id, dataset_id, user_id, org_id, chunk_index, source_text, embedding
+		embedding_snapshot_id, dataset_id, user_id, org_id, chunk_index, source_text, embedding, assertion_status
 	) VALUES (
-		@embedding_snapshot_id, @dataset_id, @user_id, @org_id, @chunk_index, @source_text, @embedding
+		@embedding_snapshot_id, @dataset_id, @user_id, @org_id, @chunk_index, @source_text, @embedding, @assertion_status::assertion_status_enum
 	)`
 
 	for _, record := range records {
@@ -408,6 +408,7 @@ func (r *SnapshotRepository) SaveEmbeddingRecords(ctx context.Context, tx pgx.Tx
 			"chunk_index":           record.ChunkIndex,
 			"source_text":           record.SourceText,
 			"embedding":             vectorLiteral(record.Vector),
+			"assertion_status":      assertionStatusValue(record.AssertionStatus),
 		}); err != nil {
 			if coreDB.IsForeignKeyViolation(err) {
 				return domain.ErrValidationFailed.Extend("tenant projection is not ready")
@@ -596,6 +597,16 @@ func (r *SnapshotRepository) ReadActiveEmbeddingSnapshot(ctx context.Context, us
 func (r *SnapshotRepository) SearchEmbeddingRecords(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, queryVector []float32, topK int) ([]model.EmbeddingRecord, error) {
 	log.Trace("SnapshotRepository SearchEmbeddingRecords")
 
+	result, err := r.SearchEmbeddingRecordsWithPolicy(ctx, embeddingSnapshot, queryVector, topK, model.RetrievalPolicy{})
+	if err != nil {
+		return nil, err
+	}
+	return result.Records, nil
+}
+
+func (r *SnapshotRepository) SearchEmbeddingRecordsWithPolicy(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, queryVector []float32, topK int, policy model.RetrievalPolicy) (*model.EmbeddingRecordSearchResult, error) {
+	log.Trace("SnapshotRepository SearchEmbeddingRecordsWithPolicy")
+
 	if embeddingSnapshot == nil {
 		return nil, domain.ErrEmbeddingSnapshotNotFound.Extend("active embedding snapshot is required")
 	}
@@ -605,26 +616,25 @@ func (r *SnapshotRepository) SearchEmbeddingRecords(ctx context.Context, embeddi
 	if len(queryVector) != embeddingSnapshot.EmbeddingDimensions {
 		return nil, domain.ErrValidationFailed.Extend("query vector dimensions do not match active embedding snapshot")
 	}
+	if topK <= 0 {
+		topK = 5
+	}
 
+	policy = normalizeRetrievalPolicy(policy, topK)
+	if !policy.Mode.IsValid() {
+		return nil, domain.ErrValidationFailed.Extend("retrieval mode must be ann_iterative or exact_authorized")
+	}
 	dimensions := embeddingSnapshot.EmbeddingDimensions
-	query := fmt.Sprintf(`SELECT embedding_record_id::text, embedding_snapshot_id::text, dataset_id::text, chunk_index, source_text,
-			(embedding::vector(%d) <=> @query_embedding::vector(%d))::double precision AS distance
-		FROM `+r.Name+`.embedding_records
-		WHERE embedding_snapshot_id = @embedding_snapshot_id
-			AND dataset_id = @dataset_id
-			AND org_id = @org_id
-			AND vector_dims(embedding) = %d
-		ORDER BY embedding::vector(%d) <=> @query_embedding::vector(%d)
-		LIMIT @limit`, dimensions, dimensions, dimensions, dimensions, dimensions)
+	query := r.embeddingSearchQuery(dimensions, policy)
 
-	rows, err := r.Pool.Query(ctx, query, pgx.NamedArgs{
+	rows, err := r.Pool.Query(ctx, query, mergeNamedArgs(pgx.NamedArgs{
 		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshot.EmbeddingSnapshotID, Valid: true},
 		"dataset_id":            pgtype.UUID{Bytes: embeddingSnapshot.DatasetID, Valid: true},
 		"user_id":               pgtype.UUID{Bytes: embeddingSnapshot.UserID, Valid: true},
 		"org_id":                pgtype.UUID{Bytes: embeddingSnapshot.OrgID, Valid: embeddingSnapshot.OrgID != uuid.Nil},
 		"query_embedding":       vectorLiteral(queryVector),
 		"limit":                 topK,
-	})
+	}, retrievalPolicyNamedArgs(policy, topK)))
 	if err != nil {
 		r.LogPoolStatsOnError(ctx, "search embedding records failed", err)
 		return nil, fmt.Errorf("search embedding records: %w", err)
@@ -644,7 +654,52 @@ func (r *SnapshotRepository) SearchEmbeddingRecords(ctx context.Context, embeddi
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read embedding search rows: %w", err)
 	}
-	return records, nil
+	return &model.EmbeddingRecordSearchResult{
+		Records:    records,
+		Disclosure: retrievalDisclosure(policy, topK, len(records)),
+	}, nil
+}
+
+func (r *SnapshotRepository) embeddingSearchQuery(dimensions int, policy model.RetrievalPolicy) string {
+	log.Trace("SnapshotRepository embeddingSearchQuery")
+
+	authorizedPredicate := retrievalAuthorizationPredicate("embedding_record_id", "assertion_status")
+	if policy.Mode == model.RetrievalModeExactAuthorized {
+		return fmt.Sprintf(`WITH authorized AS MATERIALIZED (
+			SELECT embedding_record_id, embedding_snapshot_id, dataset_id, chunk_index, source_text, assertion_status,
+				(embedding::vector(%d) <=> @query_embedding::vector(%d))::double precision AS distance
+			FROM `+r.Name+`.embedding_records
+			WHERE embedding_snapshot_id = @embedding_snapshot_id
+				AND dataset_id = @dataset_id
+				AND org_id = @org_id
+				AND vector_dims(embedding) = %d
+				AND `+authorizedPredicate+`
+		)
+		SELECT embedding_record_id::text, embedding_snapshot_id::text, dataset_id::text, chunk_index, source_text, distance, assertion_status::text
+		FROM authorized
+		ORDER BY distance
+		LIMIT @limit`, dimensions, dimensions, dimensions)
+	}
+	return fmt.Sprintf(`WITH candidates AS (
+			SELECT embedding_record_id, embedding_snapshot_id, dataset_id, chunk_index, source_text, assertion_status,
+				(embedding::vector(%d) <=> @query_embedding::vector(%d))::double precision AS distance
+			FROM `+r.Name+`.embedding_records
+			WHERE embedding_snapshot_id = @embedding_snapshot_id
+				AND dataset_id = @dataset_id
+				AND org_id = @org_id
+				AND vector_dims(embedding) = %d
+			ORDER BY embedding::vector(%d) <=> @query_embedding::vector(%d)
+			LIMIT @scan_budget
+		),
+		authorized AS (
+			SELECT *
+			FROM candidates
+			WHERE `+authorizedPredicate+`
+		)
+		SELECT embedding_record_id::text, embedding_snapshot_id::text, dataset_id::text, chunk_index, source_text, distance, assertion_status::text
+		FROM authorized
+		ORDER BY distance
+		LIMIT @limit`, dimensions, dimensions, dimensions, dimensions, dimensions)
 }
 
 func (r *SnapshotRepository) resolveRawSnapshotIdempotencyConflict(ctx context.Context, tx pgx.Tx, idempotencyKey uuid.UUID) (*model.RawSnapshot, error) {
@@ -963,6 +1018,7 @@ func validateEmbeddingSnapshotStrategy(snapshot *model.EmbeddingSnapshot) error 
 func scanEmbeddingRecordSearchRow(row pgx.Row) (model.EmbeddingRecord, error) {
 	var embeddingRecordID, embeddingSnapshotID, datasetID string
 	var distance float64
+	var assertionStatus string
 	record := model.EmbeddingRecord{}
 	if err := row.Scan(
 		&embeddingRecordID,
@@ -971,6 +1027,7 @@ func scanEmbeddingRecordSearchRow(row pgx.Row) (model.EmbeddingRecord, error) {
 		&record.ChunkIndex,
 		&record.SourceText,
 		&distance,
+		&assertionStatus,
 	); err != nil {
 		return model.EmbeddingRecord{}, err
 	}
@@ -979,6 +1036,7 @@ func scanEmbeddingRecordSearchRow(row pgx.Row) (model.EmbeddingRecord, error) {
 	record.DatasetID = uuid.MustParse(datasetID)
 	record.Distance = distance
 	record.Similarity = 1 - distance
+	record.AssertionStatus = model.ParseAssertionStatus(assertionStatus)
 	return record, nil
 }
 

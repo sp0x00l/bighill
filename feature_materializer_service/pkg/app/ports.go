@@ -68,12 +68,14 @@ type SnapshotEventBuilder interface {
 type EmbeddingSearchRepository interface {
 	ReadActiveEmbeddingSnapshot(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.EmbeddingSnapshot, error)
 	SearchEmbeddingRecords(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, queryVector []float32, topK int) ([]model.EmbeddingRecord, error)
+	SearchEmbeddingRecordsWithPolicy(ctx context.Context, embeddingSnapshot *model.EmbeddingSnapshot, queryVector []float32, topK int, policy model.RetrievalPolicy) (*model.EmbeddingRecordSearchResult, error)
 }
 
 type GraphSearchRepository interface {
 	ReadActiveGraphSnapshot(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.GraphSnapshot, error)
 	ReadEmbeddingSnapshot(ctx context.Context, embeddingSnapshotID uuid.UUID) (*model.EmbeddingSnapshot, error)
 	SearchGraph(ctx context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, topK int, maxHops int) (*model.GraphSearchResult, error)
+	SearchGraphWithPolicy(ctx context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, topK int, maxHops int, policy model.RetrievalPolicy) (*model.GraphSearchResult, error)
 }
 
 type EmbeddingWriter interface {
