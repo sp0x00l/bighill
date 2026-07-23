@@ -79,6 +79,8 @@ env:
   graphExtractionMaxResponseBytes: "1048576"
   graphExtractionMaxOutputTokens: "512"
   graphExtractionMaxRetries: "2"
+  graphEntityResolutionThreshold: "0.92"
+  graphCommunityReportsEnabled: "false"
   dataStreamGrpcAddress: "data-stream-service:7070"
   dataStreamRequestTimeoutSeconds: "60"
   dataStreamAuthToken: ""

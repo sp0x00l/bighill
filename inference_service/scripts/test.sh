@@ -17,7 +17,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/inference_service
     . ./scripts/config.sh $1
-    stop_service_binary_for_tests "inference_service" "$BIGHILL_ROOT"
+    stop_service "inference_service"
     ginkgo -timeout=120s -r -v --output-dir=../test_results/inference_service -procs=1 -race
 
     echo "inference service test complete"

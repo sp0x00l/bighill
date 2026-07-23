@@ -1,4 +1,4 @@
-.PHONY: test build release-prod release-staging lint run install
+.PHONY: test test-ollama build release-prod release-staging lint run install
 .DEFAULT_GOAL := run
 SHELL         := /bin/bash
 
@@ -6,6 +6,9 @@ ENV ?= local-dev
 
 test:
 	@scripts/test.sh $(ENV)
+
+test-ollama:
+	@GGUF="$(GGUF)" OLLAMA_ENDPOINT="$(OLLAMA_ENDPOINT)" scripts/test-ollama.sh $(ENV)
 
 build:
 	@scripts/install.sh

@@ -14,7 +14,7 @@ test()
     . "$BIGHILL_ROOT/shared_lib/scripts/config.sh" "$1"
     cd "$BIGHILL_ROOT/tool_execution_service"
     . ./scripts/config.sh "$1"
-    stop_service_binary_for_tests "tool_execution_service" "$BIGHILL_ROOT"
+    stop_service "tool_execution_service"
     go test ./...
 
     echo "tool execution service test complete"

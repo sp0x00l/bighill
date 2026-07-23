@@ -7,8 +7,13 @@ DROP TRIGGER IF EXISTS dataset_materialization_event_state_updated_at ON bighill
 DROP TRIGGER IF EXISTS tenants_updated_at ON bighill_feature_materializer_db.tenants;
 
 DROP TABLE IF EXISTS bighill_feature_materializer_db.outbox_messages;
+DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_community_reports;
+DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_community_members;
+DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_communities;
 DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_node_chunks;
 DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_edges;
+DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_node_embeddings;
+DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_node_aliases;
 DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_nodes;
 DROP TABLE IF EXISTS bighill_feature_materializer_db.graph_snapshots;
 DROP TABLE IF EXISTS bighill_feature_materializer_db.embedding_records;

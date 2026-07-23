@@ -17,7 +17,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/training_service
     . ./scripts/config.sh $1
-    stop_service_binary_for_tests "training_service" "$BIGHILL_ROOT"
+    stop_service "training_service"
     ginkgo -timeout=120s -r -v --output-dir=../test_results/training_service -procs=1 -race
     PYTHONPATH="$BIGHILL_ROOT/shared_py:$BIGHILL_ROOT/training_service/training_jobs" python3 -m unittest discover -s "$BIGHILL_ROOT/training_service/test/training_jobs/tests" -p '*_test.py'
 

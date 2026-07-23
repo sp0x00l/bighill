@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"feature_materializer_service/pkg/domain"
 	"feature_materializer_service/pkg/domain/model"
+	"lib/shared_lib/ctxutil"
 	coreDB "lib/shared_lib/db"
 
 	"github.com/google/uuid"
@@ -15,6 +17,46 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	log "github.com/sirupsen/logrus"
 )
+
+const (
+	graphLexicalExactNameScore = 0.98
+	graphLexicalExactTypeScore = 0.90
+	graphLexicalPartialScore   = 0.85
+	graphHybridMatchBoost      = 0.05
+	graphHybridSemanticFloor   = 0.70
+	graphMinimumSeedLimit      = 10
+	graphSemanticChunkFanout   = 8
+	graphMinimumLexicalToken   = 3
+)
+
+var graphLexicalStopwords = map[string]struct{}{
+	"about":   {},
+	"across":  {},
+	"and":     {},
+	"are":     {},
+	"can":     {},
+	"could":   {},
+	"did":     {},
+	"does":    {},
+	"for":     {},
+	"from":    {},
+	"get":     {},
+	"how":     {},
+	"into":    {},
+	"please":  {},
+	"show":    {},
+	"tell":    {},
+	"the":     {},
+	"through": {},
+	"what":    {},
+	"when":    {},
+	"where":   {},
+	"which":   {},
+	"who":     {},
+	"why":     {},
+	"with":    {},
+	"would":   {},
+}
 
 func (r *SnapshotRepository) SavePendingGraphSnapshot(ctx context.Context, tx pgx.Tx, embeddingSnapshotID, idempotencyKey uuid.UUID, strategy model.GraphExtractionStrategy) (*model.GraphSnapshot, error) {
 	log.Trace("SnapshotRepository SavePendingGraphSnapshot")
@@ -124,9 +166,59 @@ func (r *SnapshotRepository) SaveGraphMaterialization(ctx context.Context, tx pg
 			"mention_count":     node.MentionCount,
 		}).Scan(&idRaw)
 		if err != nil {
-			return fmt.Errorf("insert graph node: %w", err)
+			return graphPersistenceError("insert graph node", err)
 		}
 		nodeIDs[node.EntityKey] = uuid.MustParse(idRaw)
+	}
+	for _, alias := range materialization.NodeAliases {
+		nodeID := nodeIDs[alias.CanonicalEntityKey]
+		if nodeID == uuid.Nil {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO `+r.Name+`.graph_node_aliases (
+				graph_snapshot_id, graph_node_id, dataset_id, user_id, org_id, source_entity_key, alias, entity_type
+			) VALUES (
+				@graph_snapshot_id, @graph_node_id, @dataset_id, @user_id, @org_id, @source_entity_key, @alias, @entity_type
+			)
+			ON CONFLICT (graph_snapshot_id, graph_node_id, source_entity_key) DO UPDATE SET
+				alias = EXCLUDED.alias,
+				entity_type = EXCLUDED.entity_type`, pgx.NamedArgs{
+			"graph_snapshot_id": pgtype.UUID{Bytes: materialization.Snapshot.GraphSnapshotID, Valid: true},
+			"graph_node_id":     pgtype.UUID{Bytes: nodeID, Valid: true},
+			"dataset_id":        pgtype.UUID{Bytes: alias.DatasetID, Valid: true},
+			"user_id":           pgtype.UUID{Bytes: alias.UserID, Valid: true},
+			"org_id":            pgtype.UUID{Bytes: alias.OrgID, Valid: alias.OrgID != uuid.Nil},
+			"source_entity_key": alias.SourceEntityKey,
+			"alias":             alias.Alias,
+			"entity_type":       alias.Type,
+		}); err != nil {
+			return graphPersistenceError("insert graph node alias", err)
+		}
+	}
+	for _, embedding := range materialization.NodeEmbeddings {
+		nodeID := nodeIDs[embedding.EntityKey]
+		if nodeID == uuid.Nil {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO `+r.Name+`.graph_node_embeddings (
+				graph_snapshot_id, graph_node_id, embedding_snapshot_id, dataset_id, user_id, org_id, embedding_text, embedding
+			) VALUES (
+				@graph_snapshot_id, @graph_node_id, @embedding_snapshot_id, @dataset_id, @user_id, @org_id, @embedding_text, @embedding
+			)
+			ON CONFLICT (graph_node_id, embedding_snapshot_id) DO UPDATE SET
+				embedding_text = EXCLUDED.embedding_text,
+				embedding = EXCLUDED.embedding`, pgx.NamedArgs{
+			"graph_snapshot_id":     pgtype.UUID{Bytes: materialization.Snapshot.GraphSnapshotID, Valid: true},
+			"graph_node_id":         pgtype.UUID{Bytes: nodeID, Valid: true},
+			"embedding_snapshot_id": pgtype.UUID{Bytes: embedding.EmbeddingSnapshotID, Valid: true},
+			"dataset_id":            pgtype.UUID{Bytes: embedding.DatasetID, Valid: true},
+			"user_id":               pgtype.UUID{Bytes: embedding.UserID, Valid: true},
+			"org_id":                pgtype.UUID{Bytes: embedding.OrgID, Valid: embedding.OrgID != uuid.Nil},
+			"embedding_text":        embedding.EmbeddingText,
+			"embedding":             vectorLiteral(embedding.Vector),
+		}); err != nil {
+			return graphPersistenceError("insert graph node embedding", err)
+		}
 	}
 	for _, chunk := range materialization.NodeChunks {
 		nodeID := nodeIDs[chunk.EntityKey]
@@ -151,7 +243,7 @@ func (r *SnapshotRepository) SaveGraphMaterialization(ctx context.Context, tx pg
 			"chunk_index":           chunk.ChunkIndex,
 			"source_text":           chunk.SourceText,
 		}); err != nil {
-			return fmt.Errorf("insert graph node chunk: %w", err)
+			return graphPersistenceError("insert graph node chunk", err)
 		}
 	}
 	for _, edge := range materialization.Edges {
@@ -181,10 +273,131 @@ func (r *SnapshotRepository) SaveGraphMaterialization(ctx context.Context, tx pg
 			"description":       edge.Description,
 			"weight":            edge.Weight,
 		}); err != nil {
-			return fmt.Errorf("insert graph edge: %w", err)
+			return graphPersistenceError("insert graph edge", err)
+		}
+	}
+	communityIDs := make(map[string]uuid.UUID, len(materialization.Communities))
+	for _, community := range materialization.Communities {
+		var idRaw string
+		err := tx.QueryRow(ctx, `INSERT INTO `+r.Name+`.graph_communities (
+				graph_snapshot_id, dataset_id, user_id, org_id, community_key, algorithm,
+				community_level, title, summary, rank, entity_count, edge_count
+			) VALUES (
+				@graph_snapshot_id, @dataset_id, @user_id, @org_id, @community_key, @algorithm,
+				@community_level, @title, @summary, @rank, @entity_count, @edge_count
+			)
+			ON CONFLICT (graph_snapshot_id, community_key) DO UPDATE SET
+				algorithm = EXCLUDED.algorithm,
+				community_level = EXCLUDED.community_level,
+				title = EXCLUDED.title,
+				summary = EXCLUDED.summary,
+				rank = EXCLUDED.rank,
+				entity_count = EXCLUDED.entity_count,
+				edge_count = EXCLUDED.edge_count
+			RETURNING graph_community_id::text`, pgx.NamedArgs{
+			"graph_snapshot_id": pgtype.UUID{Bytes: materialization.Snapshot.GraphSnapshotID, Valid: true},
+			"dataset_id":        pgtype.UUID{Bytes: community.DatasetID, Valid: true},
+			"user_id":           pgtype.UUID{Bytes: community.UserID, Valid: true},
+			"org_id":            pgtype.UUID{Bytes: community.OrgID, Valid: community.OrgID != uuid.Nil},
+			"community_key":     community.CommunityKey,
+			"algorithm":         community.Algorithm,
+			"community_level":   community.Level,
+			"title":             community.Title,
+			"summary":           community.Summary,
+			"rank":              community.Rank,
+			"entity_count":      community.EntityCount,
+			"edge_count":        community.EdgeCount,
+		}).Scan(&idRaw)
+		if err != nil {
+			return graphPersistenceError("insert graph community", err)
+		}
+		communityIDs[community.CommunityKey] = uuid.MustParse(idRaw)
+	}
+	for _, member := range materialization.CommunityMembers {
+		communityID := communityIDs[member.CommunityKey]
+		nodeID := nodeIDs[member.EntityKey]
+		if communityID == uuid.Nil || nodeID == uuid.Nil {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO `+r.Name+`.graph_community_members (
+				graph_community_id, graph_snapshot_id, graph_node_id, dataset_id, user_id, org_id, community_key, entity_key
+			) VALUES (
+				@graph_community_id, @graph_snapshot_id, @graph_node_id, @dataset_id, @user_id, @org_id, @community_key, @entity_key
+			)
+			ON CONFLICT (graph_snapshot_id, graph_node_id) DO UPDATE SET
+				graph_community_id = EXCLUDED.graph_community_id,
+				community_key = EXCLUDED.community_key,
+				entity_key = EXCLUDED.entity_key`, pgx.NamedArgs{
+			"graph_community_id": pgtype.UUID{Bytes: communityID, Valid: true},
+			"graph_snapshot_id":  pgtype.UUID{Bytes: materialization.Snapshot.GraphSnapshotID, Valid: true},
+			"graph_node_id":      pgtype.UUID{Bytes: nodeID, Valid: true},
+			"dataset_id":         pgtype.UUID{Bytes: member.DatasetID, Valid: true},
+			"user_id":            pgtype.UUID{Bytes: member.UserID, Valid: true},
+			"org_id":             pgtype.UUID{Bytes: member.OrgID, Valid: member.OrgID != uuid.Nil},
+			"community_key":      member.CommunityKey,
+			"entity_key":         member.EntityKey,
+		}); err != nil {
+			return graphPersistenceError("insert graph community member", err)
+		}
+	}
+	for _, report := range materialization.CommunityReports {
+		communityID := communityIDs[report.CommunityKey]
+		if communityID == uuid.Nil {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO `+r.Name+`.graph_community_reports (
+				graph_community_id, graph_snapshot_id, embedding_snapshot_id, dataset_id, user_id, org_id,
+				community_key, community_level, title, summary, report_text, rank, report_version, embedding_text, embedding
+			) VALUES (
+				@graph_community_id, @graph_snapshot_id, @embedding_snapshot_id, @dataset_id, @user_id, @org_id,
+				@community_key, @community_level, @title, @summary, @report_text, @rank, @report_version, @embedding_text, @embedding
+			)
+			ON CONFLICT (graph_community_id, report_version) DO UPDATE SET
+				community_level = EXCLUDED.community_level,
+				title = EXCLUDED.title,
+				summary = EXCLUDED.summary,
+				report_text = EXCLUDED.report_text,
+				rank = EXCLUDED.rank,
+				embedding_text = EXCLUDED.embedding_text,
+				embedding = EXCLUDED.embedding`, pgx.NamedArgs{
+			"graph_community_id":    pgtype.UUID{Bytes: communityID, Valid: true},
+			"graph_snapshot_id":     pgtype.UUID{Bytes: materialization.Snapshot.GraphSnapshotID, Valid: true},
+			"embedding_snapshot_id": pgtype.UUID{Bytes: report.EmbeddingSnapshotID, Valid: true},
+			"dataset_id":            pgtype.UUID{Bytes: report.DatasetID, Valid: true},
+			"user_id":               pgtype.UUID{Bytes: report.UserID, Valid: true},
+			"org_id":                pgtype.UUID{Bytes: report.OrgID, Valid: report.OrgID != uuid.Nil},
+			"community_key":         report.CommunityKey,
+			"community_level":       report.Level,
+			"title":                 report.Title,
+			"summary":               report.Summary,
+			"report_text":           report.ReportText,
+			"rank":                  report.Rank,
+			"report_version":        report.ReportVersion,
+			"embedding_text":        report.EmbeddingText,
+			"embedding":             nullableVectorLiteral(report.Vector),
+		}); err != nil {
+			return graphPersistenceError("insert graph community report", err)
 		}
 	}
 	return nil
+}
+
+func nullableVectorLiteral(vector []float32) any {
+	log.Trace("nullableVectorLiteral")
+
+	if len(vector) == 0 {
+		return nil
+	}
+	return vectorLiteral(vector)
+}
+
+func graphPersistenceError(operation string, err error) error {
+	log.Trace("graphPersistenceError")
+
+	if coreDB.IsForeignKeyViolation(err) || coreDB.IsRowLevelSecurityViolation(err) {
+		return fmt.Errorf("%w: %s: %w", domain.ErrValidationFailed.Extend("tenant projection is not ready"), operation, err)
+	}
+	return fmt.Errorf("%w: %s: %w", domain.ErrGraphPersistence, operation, err)
 }
 
 func (r *SnapshotRepository) MarkGraphReady(ctx context.Context, tx pgx.Tx, graphSnapshot *model.GraphSnapshot) error {
@@ -314,11 +527,15 @@ func (r *SnapshotRepository) ReadActiveGraphSnapshot(ctx context.Context, userID
 	return graphSnapshot, nil
 }
 
-func (r *SnapshotRepository) SearchGraph(ctx context.Context, graphSnapshot *model.GraphSnapshot, queryText string, topK int, maxHops int) (*model.GraphSearchResult, error) {
+func (r *SnapshotRepository) SearchGraph(ctx context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, topK int, maxHops int) (*model.GraphSearchResult, error) {
 	log.Trace("SnapshotRepository SearchGraph")
 
 	if graphSnapshot == nil {
 		return nil, domain.ErrGraphSnapshotNotFound.Extend("active graph snapshot is required")
+	}
+	seed, lexicalTerms, lexicalPatterns, lexicalEnabled, err := normalizeGraphSearchSeed(seed)
+	if err != nil {
+		return nil, err
 	}
 	if topK <= 0 {
 		topK = 5
@@ -326,20 +543,10 @@ func (r *SnapshotRepository) SearchGraph(ctx context.Context, graphSnapshot *mod
 	if maxHops <= 0 {
 		maxHops = 2
 	}
-	needle := "%" + strings.ToLower(strings.TrimSpace(queryText)) + "%"
-	query := `WITH RECURSIVE seed AS (
-			SELECT graph_node_id, name, entity_type, description, 1.0::double precision AS score
-			FROM ` + r.Name + `.graph_nodes
-			WHERE graph_snapshot_id = @graph_snapshot_id
-				AND org_id = @org_id
-				AND (
-					lower(name) LIKE @needle
-					OR lower(entity_type) LIKE @needle
-					OR lower(description) LIKE @needle
-				)
-			ORDER BY name
-			LIMIT @limit
-		),
+	if seed.Mode == model.GraphSearchModeGlobal {
+		return r.searchGraphGlobal(ctx, graphSnapshot, seed, lexicalTerms, lexicalPatterns, lexicalEnabled, topK)
+	}
+	query := r.graphSeedCTE(seed.EmbeddingDimensions, true) + `,
 		walk(node_id, path, relation_types, depth, score) AS (
 			SELECT graph_node_id, ARRAY[graph_node_id], ARRAY[]::text[], 0, score FROM seed
 			UNION ALL
@@ -369,13 +576,7 @@ func (r *SnapshotRepository) SearchGraph(ctx context.Context, graphSnapshot *mod
 		JOIN ` + r.Name + `.graph_node_chunks chunk ON chunk.graph_node_id = connected.node_id
 		ORDER BY connected.depth ASC, connected.score DESC, chunk.chunk_index ASC
 		LIMIT @limit`
-	rows, err := r.Pool.Query(ctx, query, pgx.NamedArgs{
-		"graph_snapshot_id": pgtype.UUID{Bytes: graphSnapshot.GraphSnapshotID, Valid: true},
-		"org_id":            pgtype.UUID{Bytes: graphSnapshot.OrgID, Valid: graphSnapshot.OrgID != uuid.Nil},
-		"needle":            needle,
-		"limit":             topK,
-		"max_hops":          maxHops,
-	})
+	rows, err := r.Pool.Query(ctx, query, graphSearchNamedArgs(graphSnapshot, seed, lexicalTerms, lexicalPatterns, lexicalEnabled, topK, maxHops))
 	if err != nil {
 		return nil, fmt.Errorf("search graph contexts: %w", err)
 	}
@@ -391,39 +592,77 @@ func (r *SnapshotRepository) SearchGraph(ctx context.Context, graphSnapshot *mod
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read graph context rows: %w", err)
 	}
-	entities, err := r.searchGraphMatchedEntities(ctx, graphSnapshot, needle, topK)
+	entities, err := r.searchGraphMatchedEntities(ctx, graphSnapshot, seed, lexicalTerms, lexicalPatterns, lexicalEnabled, topK)
 	if err != nil {
 		return nil, err
 	}
-	paths, err := r.searchGraphPaths(ctx, graphSnapshot, needle, topK, maxHops)
+	paths, err := r.searchGraphPaths(ctx, graphSnapshot, seed, lexicalTerms, lexicalPatterns, lexicalEnabled, topK, maxHops)
 	if err != nil {
 		return nil, err
 	}
 	return &model.GraphSearchResult{
 		GraphSnapshot:   graphSnapshot,
+		Mode:            model.GraphSearchModeLocal,
 		Contexts:        contexts,
 		MatchedEntities: entities,
 		Paths:           paths,
 	}, nil
 }
 
-func (r *SnapshotRepository) searchGraphMatchedEntities(ctx context.Context, graphSnapshot *model.GraphSnapshot, needle string, topK int) ([]model.GraphMatchedEntity, error) {
-	rows, err := r.Pool.Query(ctx, `SELECT graph_node_id::text, name, entity_type, description, 1.0::double precision
-		FROM `+r.Name+`.graph_nodes
-		WHERE graph_snapshot_id = @graph_snapshot_id
-			AND org_id = @org_id
-			AND (
-				lower(name) LIKE @needle
-				OR lower(entity_type) LIKE @needle
-				OR lower(description) LIKE @needle
-			)
-		ORDER BY name
-		LIMIT @limit`, pgx.NamedArgs{
-		"graph_snapshot_id": pgtype.UUID{Bytes: graphSnapshot.GraphSnapshotID, Valid: true},
-		"org_id":            pgtype.UUID{Bytes: graphSnapshot.OrgID, Valid: graphSnapshot.OrgID != uuid.Nil},
-		"needle":            needle,
-		"limit":             topK,
-	})
+func (r *SnapshotRepository) searchGraphGlobal(ctx context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, lexicalTerms []string, lexicalPatterns []string, lexicalEnabled bool, topK int) (*model.GraphSearchResult, error) {
+	log.Trace("SnapshotRepository searchGraphGlobal")
+
+	rows, err := r.Pool.Query(ctx, r.graphCommunityReportSeedCTE(seed.EmbeddingDimensions)+`
+		SELECT report.graph_community_report_id::text,
+			report.graph_community_id::text,
+			report.graph_snapshot_id::text,
+			report.dataset_id::text,
+			report.org_id::text,
+			report.community_key,
+			report.community_level,
+			report.title,
+			report.summary,
+			report.report_text,
+			report.rank,
+			community_seed.score::double precision
+		FROM community_seed
+		JOIN `+r.Name+`.graph_community_reports report
+			ON report.graph_community_report_id = community_seed.graph_community_report_id
+			AND report.graph_snapshot_id = @graph_snapshot_id
+			AND report.embedding_snapshot_id = @embedding_snapshot_id
+			AND report.dataset_id = @dataset_id
+			AND report.org_id = @org_id
+		ORDER BY community_seed.score DESC, report.rank DESC, report.title
+		LIMIT @limit`, graphSearchNamedArgs(graphSnapshot, seed, lexicalTerms, lexicalPatterns, lexicalEnabled, topK, 0))
+	if err != nil {
+		return nil, fmt.Errorf("search graph community reports: %w", err)
+	}
+	defer rows.Close()
+
+	reports := []model.GraphCommunityReportMatch{}
+	for rows.Next() {
+		report, err := scanGraphCommunityReportMatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		reports = append(reports, report)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read graph community report rows: %w", err)
+	}
+	return &model.GraphSearchResult{
+		GraphSnapshot:    graphSnapshot,
+		Mode:             model.GraphSearchModeGlobal,
+		CommunityReports: reports,
+	}, nil
+}
+
+func (r *SnapshotRepository) searchGraphMatchedEntities(ctx context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, lexicalTerms []string, lexicalPatterns []string, lexicalEnabled bool, topK int) ([]model.GraphMatchedEntity, error) {
+	rows, err := r.Pool.Query(ctx, r.graphSeedCTE(seed.EmbeddingDimensions, false)+`
+		SELECT graph_node_id::text, name, entity_type, description, score::double precision
+		FROM seed
+		ORDER BY score DESC, name
+		LIMIT @limit`, graphSearchNamedArgs(graphSnapshot, seed, lexicalTerms, lexicalPatterns, lexicalEnabled, topK, 0))
 	if err != nil {
 		return nil, fmt.Errorf("search graph matched entities: %w", err)
 	}
@@ -444,20 +683,8 @@ func (r *SnapshotRepository) searchGraphMatchedEntities(ctx context.Context, gra
 	return out, nil
 }
 
-func (r *SnapshotRepository) searchGraphPaths(ctx context.Context, graphSnapshot *model.GraphSnapshot, needle string, topK int, maxHops int) ([]model.GraphPath, error) {
-	rows, err := r.Pool.Query(ctx, `WITH RECURSIVE seed AS (
-			SELECT graph_node_id, name, 1.0::double precision AS score
-			FROM `+r.Name+`.graph_nodes
-			WHERE graph_snapshot_id = @graph_snapshot_id
-				AND org_id = @org_id
-				AND (
-					lower(name) LIKE @needle
-					OR lower(entity_type) LIKE @needle
-					OR lower(description) LIKE @needle
-				)
-			ORDER BY name
-			LIMIT @limit
-		),
+func (r *SnapshotRepository) searchGraphPaths(ctx context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, lexicalTerms []string, lexicalPatterns []string, lexicalEnabled bool, topK int, maxHops int) ([]model.GraphPath, error) {
+	rows, err := r.Pool.Query(ctx, r.graphSeedCTE(seed.EmbeddingDimensions, true)+`,
 		walk(node_id, path, relation_types, depth, score) AS (
 			SELECT graph_node_id, ARRAY[graph_node_id], ARRAY[]::text[], 0, score FROM seed
 			UNION ALL
@@ -480,13 +707,7 @@ func (r *SnapshotRepository) searchGraphPaths(ctx context.Context, graphSnapshot
 		FROM walk
 		WHERE depth > 0
 		ORDER BY depth ASC, score DESC
-		LIMIT @limit`, pgx.NamedArgs{
-		"graph_snapshot_id": pgtype.UUID{Bytes: graphSnapshot.GraphSnapshotID, Valid: true},
-		"org_id":            pgtype.UUID{Bytes: graphSnapshot.OrgID, Valid: graphSnapshot.OrgID != uuid.Nil},
-		"needle":            needle,
-		"limit":             topK,
-		"max_hops":          maxHops,
-	})
+		LIMIT @limit`, graphSearchNamedArgs(graphSnapshot, seed, lexicalTerms, lexicalPatterns, lexicalEnabled, topK, maxHops))
 	if err != nil {
 		return nil, fmt.Errorf("search graph paths: %w", err)
 	}
@@ -513,10 +734,20 @@ func (r *SnapshotRepository) searchGraphPaths(ctx context.Context, graphSnapshot
 	return out, nil
 }
 
+func (r *SnapshotRepository) ReadEmbeddingSnapshot(ctx context.Context, embeddingSnapshotID uuid.UUID) (*model.EmbeddingSnapshot, error) {
+	log.Trace("SnapshotRepository ReadEmbeddingSnapshot")
+
+	return r.readEmbeddingSnapshot(ctx, r.Pool, embeddingSnapshotID)
+}
+
 func (r *SnapshotRepository) readEmbeddingSnapshot(ctx context.Context, queryer rowQuerier, embeddingSnapshotID uuid.UUID) (*model.EmbeddingSnapshot, error) {
-	query := `SELECT ` + embeddingSnapshotColumns() + ` FROM ` + r.Name + `.embedding_snapshots WHERE embedding_snapshot_id = @embedding_snapshot_id`
+	query := `SELECT ` + embeddingSnapshotColumns() + ` FROM ` + r.Name + `.embedding_snapshots
+		WHERE embedding_snapshot_id = @embedding_snapshot_id
+			AND (@system_context::boolean OR org_id = @org_id)`
 	embeddingSnapshot, err := scanEmbeddingSnapshot(queryer.QueryRow(ctx, query, pgx.NamedArgs{
 		"embedding_snapshot_id": pgtype.UUID{Bytes: embeddingSnapshotID, Valid: true},
+		"org_id":                pgtype.UUID{Bytes: orgIDFromContext(ctx), Valid: orgIDFromContext(ctx) != uuid.Nil},
+		"system_context":        ctxutil.IsSystemContext(ctx),
 	}))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -525,6 +756,317 @@ func (r *SnapshotRepository) readEmbeddingSnapshot(ctx context.Context, queryer 
 		return nil, fmt.Errorf("read embedding snapshot: %w", err)
 	}
 	return embeddingSnapshot, nil
+}
+
+func normalizeGraphSearchSeed(seed model.GraphSearchSeed) (model.GraphSearchSeed, []string, []string, bool, error) {
+	if seed.EmbeddingDimensions <= 0 {
+		return seed, nil, nil, false, domain.ErrValidationFailed.Extend("embedding dimensions are required")
+	}
+	if len(seed.QueryVector) != seed.EmbeddingDimensions {
+		return seed, nil, nil, false, domain.ErrValidationFailed.Extend("query vector dimensions do not match graph embedding snapshot")
+	}
+	seed.QueryText = strings.TrimSpace(seed.QueryText)
+	seed.Mode = model.ParseGraphSearchMode(seed.Mode.String())
+	if !seed.Mode.IsValid() {
+		return seed, nil, nil, false, domain.ErrValidationFailed.Extend("graph search mode must be local or global")
+	}
+	lexicalTerms, lexicalPatterns := graphLexicalTermsAndPatterns(seed.QueryText)
+	return seed, lexicalTerms, lexicalPatterns, len(lexicalTerms) > 0 && len(lexicalPatterns) > 0, nil
+}
+
+func graphLexicalTermsAndPatterns(queryText string) ([]string, []string) {
+	tokens := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(queryText)), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	normalizedPhrase := strings.Join(tokens, " ")
+	if normalizedPhrase == "" {
+		return nil, nil
+	}
+	terms := []string{normalizedPhrase}
+	seen := map[string]struct{}{normalizedPhrase: {}}
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		if len(token) < graphMinimumLexicalToken {
+			continue
+		}
+		if _, stopword := graphLexicalStopwords[token]; stopword {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		terms = append(terms, token)
+	}
+	patterns := make([]string, 0, len(terms))
+	for _, term := range terms {
+		patterns = append(patterns, "%"+term+"%")
+	}
+	return terms, patterns
+}
+
+func graphSearchNamedArgs(graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, lexicalTerms []string, lexicalPatterns []string, lexicalEnabled bool, topK int, maxHops int) pgx.NamedArgs {
+	seedLimit := graphSeedLimit(topK)
+	return pgx.NamedArgs{
+		"graph_snapshot_id":     pgtype.UUID{Bytes: graphSnapshot.GraphSnapshotID, Valid: true},
+		"embedding_snapshot_id": pgtype.UUID{Bytes: graphSnapshot.EmbeddingSnapshotID, Valid: true},
+		"dataset_id":            pgtype.UUID{Bytes: graphSnapshot.DatasetID, Valid: true},
+		"org_id":                pgtype.UUID{Bytes: graphSnapshot.OrgID, Valid: graphSnapshot.OrgID != uuid.Nil},
+		"query_embedding":       vectorLiteral(seed.QueryVector),
+		"lexical_enabled":       lexicalEnabled,
+		"lexical_terms":         lexicalTerms,
+		"lexical_patterns":      lexicalPatterns,
+		"seed_limit":            seedLimit,
+		"semantic_chunk_limit":  graphSemanticChunkLimit(seedLimit),
+		"limit":                 topK,
+		"max_hops":              maxHops,
+	}
+}
+
+func graphSeedLimit(resultLimit int) int {
+	if resultLimit < graphMinimumSeedLimit {
+		return graphMinimumSeedLimit
+	}
+	return resultLimit
+}
+
+func graphSemanticChunkLimit(seedLimit int) int {
+	if seedLimit <= 0 {
+		return 0
+	}
+	return seedLimit * graphSemanticChunkFanout
+}
+
+func (r *SnapshotRepository) graphSeedCTE(dimensions int, recursive bool) string {
+	with := "WITH"
+	if recursive {
+		with = "WITH RECURSIVE"
+	}
+	return fmt.Sprintf(`%s semantic_nodes AS (
+			SELECT gne.graph_node_id,
+				GREATEST(1 - (gne.embedding::vector(%d) <=> @query_embedding::vector(%d)), 0)::double precision AS semantic_score
+			FROM %s.graph_node_embeddings gne
+			WHERE gne.graph_snapshot_id = @graph_snapshot_id
+				AND gne.embedding_snapshot_id = @embedding_snapshot_id
+				AND gne.dataset_id = @dataset_id
+				AND gne.org_id = @org_id
+				AND vector_dims(gne.embedding) = %d
+			ORDER BY gne.embedding::vector(%d) <=> @query_embedding::vector(%d)
+			LIMIT @seed_limit
+		),
+		semantic_chunks AS (
+			SELECT er.embedding_record_id,
+				GREATEST(1 - (er.embedding::vector(%d) <=> @query_embedding::vector(%d)), 0)::double precision AS semantic_score
+			FROM %s.embedding_records er
+			WHERE er.embedding_snapshot_id = @embedding_snapshot_id
+				AND er.dataset_id = @dataset_id
+				AND er.org_id = @org_id
+				AND vector_dims(er.embedding) = %d
+			ORDER BY er.embedding::vector(%d) <=> @query_embedding::vector(%d)
+			LIMIT @semantic_chunk_limit
+		),
+		semantic_chunk_seed AS (
+			SELECT gnc.graph_node_id,
+				MAX(sc.semantic_score)::double precision AS semantic_score
+			FROM semantic_chunks sc
+			JOIN %s.graph_node_chunks gnc
+				ON gnc.embedding_record_id = sc.embedding_record_id
+				AND gnc.graph_snapshot_id = @graph_snapshot_id
+				AND gnc.embedding_snapshot_id = @embedding_snapshot_id
+				AND gnc.dataset_id = @dataset_id
+				AND gnc.org_id = @org_id
+			GROUP BY gnc.graph_node_id
+			ORDER BY semantic_score DESC
+			LIMIT @seed_limit
+		),
+		semantic_seed AS (
+			SELECT graph_node_id,
+				MAX(semantic_score)::double precision AS semantic_score
+			FROM (
+				SELECT graph_node_id, semantic_score FROM semantic_nodes
+				UNION ALL
+				SELECT graph_node_id, semantic_score FROM semantic_chunk_seed
+			) semantic_candidates
+			GROUP BY graph_node_id
+			ORDER BY semantic_score DESC
+			LIMIT @seed_limit
+		),
+		lexical_seed AS (
+			SELECT graph_node_id,
+				MAX(lexical_score) AS lexical_score
+			FROM (
+				SELECT graph_node_id,
+					CASE
+						WHEN lower(name) = ANY(@lexical_terms::text[]) THEN %.2f::double precision
+						WHEN lower(entity_type) = ANY(@lexical_terms::text[]) THEN %.2f::double precision
+						ELSE %.2f::double precision
+					END AS lexical_score
+				FROM %s.graph_nodes
+				WHERE graph_snapshot_id = @graph_snapshot_id
+					AND dataset_id = @dataset_id
+					AND org_id = @org_id
+					AND @lexical_enabled::boolean
+					AND (
+						lower(name) = ANY(@lexical_terms::text[])
+						OR lower(entity_type) = ANY(@lexical_terms::text[])
+						OR lower(name) LIKE ANY(@lexical_patterns::text[])
+						OR lower(entity_type) LIKE ANY(@lexical_patterns::text[])
+					)
+				UNION ALL
+				SELECT graph_node_id,
+					CASE
+						WHEN lower(alias) = ANY(@lexical_terms::text[]) THEN %.2f::double precision
+						WHEN lower(entity_type) = ANY(@lexical_terms::text[]) THEN %.2f::double precision
+						ELSE %.2f::double precision
+					END AS lexical_score
+				FROM %s.graph_node_aliases
+				WHERE graph_snapshot_id = @graph_snapshot_id
+					AND dataset_id = @dataset_id
+					AND org_id = @org_id
+					AND @lexical_enabled::boolean
+					AND (
+						lower(alias) = ANY(@lexical_terms::text[])
+						OR lower(entity_type) = ANY(@lexical_terms::text[])
+						OR lower(alias) LIKE ANY(@lexical_patterns::text[])
+						OR lower(entity_type) LIKE ANY(@lexical_patterns::text[])
+					)
+			) lexical_candidates
+			GROUP BY graph_node_id
+			ORDER BY lexical_score DESC, graph_node_id
+			LIMIT @seed_limit
+		),
+		seed_scores AS (
+			SELECT graph_node_id, MAX(semantic_score) AS semantic_score, MAX(lexical_score) AS lexical_score
+			FROM (
+				SELECT graph_node_id, semantic_score, NULL::double precision AS lexical_score FROM semantic_seed
+				UNION ALL
+				SELECT graph_node_id, NULL::double precision AS semantic_score, lexical_score FROM lexical_seed
+			) candidates
+			GROUP BY graph_node_id
+		),
+		seed AS (
+			SELECT node.graph_node_id, node.name, node.entity_type, node.description,
+				LEAST(1.0::double precision,
+					GREATEST(COALESCE(seed_scores.semantic_score, 0), COALESCE(seed_scores.lexical_score, 0)) +
+					CASE
+						WHEN COALESCE(seed_scores.semantic_score, 0) >= %.2f::double precision
+							AND seed_scores.lexical_score IS NOT NULL THEN %.2f::double precision
+						ELSE 0::double precision
+					END
+				)::double precision AS score
+			FROM seed_scores
+			JOIN %s.graph_nodes node
+				ON node.graph_node_id = seed_scores.graph_node_id
+				AND node.graph_snapshot_id = @graph_snapshot_id
+				AND node.dataset_id = @dataset_id
+				AND node.org_id = @org_id
+			ORDER BY score DESC, node.name
+			LIMIT @seed_limit
+		)`,
+		with,
+		dimensions,
+		dimensions,
+		r.Name,
+		dimensions,
+		dimensions,
+		dimensions,
+		dimensions,
+		dimensions,
+		r.Name,
+		dimensions,
+		dimensions,
+		dimensions,
+		r.Name,
+		graphLexicalExactNameScore,
+		graphLexicalExactTypeScore,
+		graphLexicalPartialScore,
+		r.Name,
+		graphLexicalExactNameScore,
+		graphLexicalExactTypeScore,
+		graphLexicalPartialScore,
+		r.Name,
+		graphHybridSemanticFloor,
+		graphHybridMatchBoost,
+		r.Name,
+	)
+}
+
+func (r *SnapshotRepository) graphCommunityReportSeedCTE(dimensions int) string {
+	log.Trace("SnapshotRepository graphCommunityReportSeedCTE")
+
+	return fmt.Sprintf(`WITH semantic_reports AS (
+			SELECT report.graph_community_report_id,
+				GREATEST(1 - (report.embedding::vector(%d) <=> @query_embedding::vector(%d)), 0)::double precision AS semantic_score
+			FROM %s.graph_community_reports report
+			WHERE report.graph_snapshot_id = @graph_snapshot_id
+				AND report.embedding_snapshot_id = @embedding_snapshot_id
+				AND report.dataset_id = @dataset_id
+				AND report.org_id = @org_id
+				AND vector_dims(report.embedding) = %d
+			ORDER BY report.embedding::vector(%d) <=> @query_embedding::vector(%d)
+			LIMIT @seed_limit
+		),
+		lexical_reports AS (
+			SELECT graph_community_report_id,
+				MAX(lexical_score) AS lexical_score
+			FROM (
+				SELECT graph_community_report_id,
+					CASE
+						WHEN lower(title) = ANY(@lexical_terms::text[]) THEN %.2f::double precision
+						ELSE %.2f::double precision
+					END AS lexical_score
+				FROM %s.graph_community_reports
+				WHERE graph_snapshot_id = @graph_snapshot_id
+					AND embedding_snapshot_id = @embedding_snapshot_id
+					AND dataset_id = @dataset_id
+					AND org_id = @org_id
+					AND @lexical_enabled::boolean
+					AND (
+						lower(title) = ANY(@lexical_terms::text[])
+						OR lower(title) LIKE ANY(@lexical_patterns::text[])
+						OR lower(summary) LIKE ANY(@lexical_patterns::text[])
+						OR lower(report_text) LIKE ANY(@lexical_patterns::text[])
+					)
+			) lexical_candidates
+			GROUP BY graph_community_report_id
+			ORDER BY lexical_score DESC, graph_community_report_id
+			LIMIT @seed_limit
+		),
+		community_report_scores AS (
+			SELECT graph_community_report_id, MAX(semantic_score) AS semantic_score, MAX(lexical_score) AS lexical_score
+			FROM (
+				SELECT graph_community_report_id, semantic_score, NULL::double precision AS lexical_score FROM semantic_reports
+				UNION ALL
+				SELECT graph_community_report_id, NULL::double precision AS semantic_score, lexical_score FROM lexical_reports
+			) candidates
+			GROUP BY graph_community_report_id
+		),
+		community_seed AS (
+			SELECT graph_community_report_id,
+				LEAST(1.0::double precision,
+					GREATEST(COALESCE(semantic_score, 0), COALESCE(lexical_score, 0)) +
+					CASE
+						WHEN COALESCE(semantic_score, 0) >= %.2f::double precision
+							AND lexical_score IS NOT NULL THEN %.2f::double precision
+						ELSE 0::double precision
+					END
+				)::double precision AS score
+			FROM community_report_scores
+			ORDER BY score DESC, graph_community_report_id
+			LIMIT @seed_limit
+		)`,
+		dimensions,
+		dimensions,
+		r.Name,
+		dimensions,
+		dimensions,
+		dimensions,
+		graphLexicalExactNameScore,
+		graphLexicalPartialScore,
+		r.Name,
+		graphHybridSemanticFloor,
+		graphHybridMatchBoost,
+	)
 }
 
 func (r *SnapshotRepository) readGraphByIdempotencyKey(ctx context.Context, queryer rowQuerier, idempotencyKey uuid.UUID) (*model.GraphSnapshot, error) {
@@ -644,6 +1186,35 @@ func scanGraphRetrievedContext(row pgx.Row) (model.GraphRetrievedContext, error)
 	context.DatasetID = uuid.MustParse(datasetID)
 	context.OrgID = uuid.MustParse(orgID)
 	return context, nil
+}
+
+func scanGraphCommunityReportMatch(row pgx.Row) (model.GraphCommunityReportMatch, error) {
+	log.Trace("scanGraphCommunityReportMatch")
+
+	var reportID, communityID, snapshotID, datasetID, orgID string
+	match := model.GraphCommunityReportMatch{}
+	if err := row.Scan(
+		&reportID,
+		&communityID,
+		&snapshotID,
+		&datasetID,
+		&orgID,
+		&match.CommunityKey,
+		&match.Level,
+		&match.Title,
+		&match.Summary,
+		&match.ReportText,
+		&match.Rank,
+		&match.Score,
+	); err != nil {
+		return model.GraphCommunityReportMatch{}, err
+	}
+	match.GraphCommunityReportID = uuid.MustParse(reportID)
+	match.GraphCommunityID = uuid.MustParse(communityID)
+	match.GraphSnapshotID = uuid.MustParse(snapshotID)
+	match.DatasetID = uuid.MustParse(datasetID)
+	match.OrgID = uuid.MustParse(orgID)
+	return match, nil
 }
 
 func parseUUIDCSV(value string) ([]uuid.UUID, error) {

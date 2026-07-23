@@ -45,6 +45,7 @@ type graphSearchUsecaseStub struct {
 	queryText string
 	topK      int
 	maxHops   int
+	mode      model.GraphSearchMode
 	result    *model.GraphSearchResult
 	err       error
 }
@@ -56,6 +57,19 @@ func (s *graphSearchUsecaseStub) SearchGraph(_ context.Context, userID uuid.UUID
 	s.topK = topK
 	s.maxHops = maxHops
 	return s.result, s.err
+}
+
+func (s *graphSearchUsecaseStub) SearchGraphWithMode(_ context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode model.GraphSearchMode) (*model.GraphSearchResult, error) {
+	s.userID = userID
+	s.datasetID = datasetID
+	s.queryText = queryText
+	s.topK = topK
+	s.maxHops = maxHops
+	s.mode = mode
+	if s.result != nil {
+		return s.result, nil
+	}
+	return &model.GraphSearchResult{}, nil
 }
 
 var _ = Describe("FeatureMaterializerServer", func() {
@@ -134,6 +148,69 @@ var _ = Describe("FeatureMaterializerServer", func() {
 		})
 
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+	})
+
+	It("maps global graph search requests and community reports", func() {
+		userID := uuid.New()
+		orgID := uuid.New()
+		datasetID := uuid.New()
+		graphSnapshotID := uuid.New()
+		featureSnapshotID := uuid.New()
+		embeddingSnapshotID := uuid.New()
+		reportID := uuid.New()
+		communityID := uuid.New()
+		uc := &graphSearchUsecaseStub{
+			result: &model.GraphSearchResult{
+				GraphSnapshot: &model.GraphSnapshot{
+					GraphSnapshotID:     graphSnapshotID,
+					FeatureSnapshotID:   featureSnapshotID,
+					EmbeddingSnapshotID: embeddingSnapshotID,
+					DatasetID:           datasetID,
+					OrgID:               orgID,
+					ProvenanceHash:      "graph-hash",
+				},
+				Mode: model.GraphSearchModeGlobal,
+				CommunityReports: []model.GraphCommunityReportMatch{{
+					GraphCommunityReportID: reportID,
+					GraphCommunityID:       communityID,
+					GraphSnapshotID:        graphSnapshotID,
+					DatasetID:              datasetID,
+					OrgID:                  orgID,
+					CommunityKey:           "community:001:system:aurora relay",
+					Level:                  0,
+					Title:                  "Aurora Relay / Beacon Hub",
+					Summary:                "Routing community",
+					ReportText:             "Aurora Relay routes to Beacon Hub.",
+					Rank:                   4,
+					Score:                  0.91,
+				}},
+			},
+		}
+		server := featuregrpc.NewFeatureMaterializerGrpcServer(&embeddingSearchUsecaseStub{}, uc)
+
+		response, err := server.SearchGraph(context.Background(), &featurepb.SearchGraphRequest{
+			DatasetId: datasetID.String(),
+			UserId:    userID.String(),
+			OrgId:     orgID.String(),
+			QueryText: " routing ",
+			TopK:      3,
+			MaxHops:   2,
+			Mode:      "global",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(uc.userID).To(Equal(userID))
+		Expect(uc.datasetID).To(Equal(datasetID))
+		Expect(uc.queryText).To(Equal("routing"))
+		Expect(uc.topK).To(Equal(3))
+		Expect(uc.maxHops).To(Equal(2))
+		Expect(uc.mode).To(Equal(model.GraphSearchModeGlobal))
+		Expect(response.GetGraphSnapshotId()).To(Equal(graphSnapshotID.String()))
+		Expect(response.GetMode()).To(Equal("global"))
+		Expect(response.GetCommunityReports()).To(HaveLen(1))
+		Expect(response.GetCommunityReports()[0].GetGraphCommunityReportId()).To(Equal(reportID.String()))
+		Expect(response.GetCommunityReports()[0].GetTitle()).To(Equal("Aurora Relay / Beacon Hub"))
+		Expect(response.GetCommunityReports()[0].GetScore()).To(Equal(0.91))
 	})
 
 	It("requires top-k at the boundary", func() {

@@ -508,6 +508,37 @@ func (r graphPathRow) Scan(dest ...any) error {
 	return nil
 }
 
+type graphCommunityReportMatchRow struct {
+	GraphCommunityReportID uuid.UUID
+	GraphCommunityID       uuid.UUID
+	GraphSnapshotID        uuid.UUID
+	DatasetID              uuid.UUID
+	OrgID                  uuid.UUID
+	CommunityKey           string
+	Level                  int
+	Title                  string
+	Summary                string
+	ReportText             string
+	Rank                   float64
+	Score                  float64
+}
+
+func (r graphCommunityReportMatchRow) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.GraphCommunityReportID.String()
+	*(dest[1].(*string)) = r.GraphCommunityID.String()
+	*(dest[2].(*string)) = r.GraphSnapshotID.String()
+	*(dest[3].(*string)) = r.DatasetID.String()
+	*(dest[4].(*string)) = r.OrgID.String()
+	*(dest[5].(*string)) = r.CommunityKey
+	*(dest[6].(*int)) = r.Level
+	*(dest[7].(*string)) = r.Title
+	*(dest[8].(*string)) = r.Summary
+	*(dest[9].(*string)) = r.ReportText
+	*(dest[10].(*float64)) = r.Rank
+	*(dest[11].(*float64)) = r.Score
+	return nil
+}
+
 var _ = Describe("SnapshotRepository", func() {
 	var (
 		ctx            context.Context
@@ -1045,7 +1076,12 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(graphSnapshot.GraphSnapshotID).To(Equal(graphSnapshotID))
 			Expect(graphSnapshot.Status).To(Equal(model.SnapshotStatusPending))
 			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
-			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.embedding_snapshots WHERE embedding_snapshot_id = @embedding_snapshot_id"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.embedding_snapshots"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("embedding_snapshot_id = @embedding_snapshot_id"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("OR org_id = @org_id"))
+			readArgs := namedArgs(poolMock.QueryArgs[0])
+			Expect(readArgs).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
+			Expect(readArgs).To(HaveKeyWithValue("system_context", false))
 			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("INSERT INTO test_db.graph_snapshots"))
 			Expect(poolMock.QueryCalls[1]).To(ContainSubstring("ON CONFLICT (idempotency_key) DO NOTHING"))
 			args := namedArgs(poolMock.QueryArgs[1])
@@ -1133,16 +1169,36 @@ var _ = Describe("SnapshotRepository", func() {
 			graphSnapshotID := uuid.New()
 			nodeA := uuid.New()
 			nodeB := uuid.New()
+			communityID := uuid.New()
 			recordID := uuid.New()
-			poolMock.NextRows = []pgx.Row{uuidTextRow{value: nodeA}, uuidTextRow{value: nodeB}}
+			poolMock.NextRows = []pgx.Row{uuidTextRow{value: nodeA}, uuidTextRow{value: nodeB}, uuidTextRow{value: communityID}}
 			materialization := &model.GraphMaterialization{
 				Snapshot: &model.GraphSnapshot{
-					GraphSnapshotID: graphSnapshotID,
+					GraphSnapshotID:     graphSnapshotID,
+					EmbeddingSnapshotID: embeddingID,
 				},
 				Nodes: []model.GraphNode{
 					{DatasetID: datasetID, UserID: userID, OrgID: orgID, EntityKey: "person:alice", Name: "Alice", Type: "person", Description: "Alice entity", MentionCount: 2},
 					{DatasetID: datasetID, UserID: userID, OrgID: orgID, EntityKey: "company:beta", Name: "Beta Corp", Type: "company", Description: "Beta entity", MentionCount: 1},
 				},
+				NodeAliases: []model.GraphNodeAlias{{
+					CanonicalEntityKey: "person:alice",
+					SourceEntityKey:    "person:ada",
+					Alias:              "Ada Lovelace",
+					Type:               "person",
+					DatasetID:          datasetID,
+					UserID:             userID,
+					OrgID:              orgID,
+				}},
+				NodeEmbeddings: []model.GraphNodeEmbedding{{
+					EntityKey:           "person:alice",
+					EmbeddingSnapshotID: embeddingID,
+					DatasetID:           datasetID,
+					UserID:              userID,
+					OrgID:               orgID,
+					EmbeddingText:       "name: Alice",
+					Vector:              []float32{0.6, 0.8},
+				}},
 				NodeChunks: []model.GraphNodeChunk{{
 					EntityKey:           "person:alice",
 					EmbeddingRecordID:   recordID,
@@ -1163,29 +1219,135 @@ var _ = Describe("SnapshotRepository", func() {
 					Description:     "founded",
 					Weight:          0.8,
 				}},
+				Communities: []model.GraphCommunity{{
+					GraphSnapshotID: graphSnapshotID,
+					DatasetID:       datasetID,
+					UserID:          userID,
+					OrgID:           orgID,
+					CommunityKey:    "community:001:person:alice",
+					Algorithm:       model.GraphCommunityAlgorithmConnectedComponents,
+					Level:           0,
+					Title:           "Alice / Beta Corp",
+					Summary:         "Alice and Beta Corp are connected.",
+					Rank:            3,
+					EntityCount:     2,
+					EdgeCount:       1,
+				}},
+				CommunityMembers: []model.GraphCommunityMember{{
+					EntityKey:    "person:alice",
+					CommunityKey: "community:001:person:alice",
+					DatasetID:    datasetID,
+					UserID:       userID,
+					OrgID:        orgID,
+				}},
+				CommunityReports: []model.GraphCommunityReport{{
+					EmbeddingSnapshotID: embeddingID,
+					DatasetID:           datasetID,
+					UserID:              userID,
+					OrgID:               orgID,
+					CommunityKey:        "community:001:person:alice",
+					Level:               0,
+					Title:               "Alice / Beta Corp",
+					Summary:             "Alice and Beta Corp are connected.",
+					ReportText:          "Alice founded Beta Corp.",
+					Rank:                3,
+					ReportVersion:       model.GraphCommunityReportExtractiveV1,
+					EmbeddingText:       "Alice founded Beta Corp.",
+					Vector:              []float32{0.7, 0.7},
+				}},
 			}
 
 			err := repository.SaveGraphMaterialization(ctx, tx, materialization)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(poolMock.QueryRowCalledCount).To(Equal(2))
-			Expect(poolMock.ExecCalls).To(HaveLen(2))
+			Expect(poolMock.QueryRowCalledCount).To(Equal(3))
+			Expect(poolMock.ExecCalls).To(HaveLen(6))
 			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("INSERT INTO test_db.graph_nodes"))
-			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("INSERT INTO test_db.graph_node_chunks"))
-			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("INSERT INTO test_db.graph_edges"))
-			chunkArgs := namedArgs(poolMock.ExecArgs[0])
+			Expect(poolMock.ExecCalls[0]).To(ContainSubstring("INSERT INTO test_db.graph_node_aliases"))
+			Expect(poolMock.ExecCalls[1]).To(ContainSubstring("INSERT INTO test_db.graph_node_embeddings"))
+			Expect(poolMock.ExecCalls[2]).To(ContainSubstring("INSERT INTO test_db.graph_node_chunks"))
+			Expect(poolMock.ExecCalls[3]).To(ContainSubstring("INSERT INTO test_db.graph_edges"))
+			Expect(poolMock.QueryCalls[2]).To(ContainSubstring("INSERT INTO test_db.graph_communities"))
+			Expect(poolMock.ExecCalls[4]).To(ContainSubstring("INSERT INTO test_db.graph_community_members"))
+			Expect(poolMock.ExecCalls[5]).To(ContainSubstring("INSERT INTO test_db.graph_community_reports"))
+			aliasArgs := namedArgs(poolMock.ExecArgs[0])
+			Expect(aliasArgs).To(SatisfyAll(
+				HaveKeyWithValue("graph_node_id", pgtype.UUID{Bytes: nodeA, Valid: true}),
+				HaveKeyWithValue("source_entity_key", "person:ada"),
+				HaveKeyWithValue("alias", "Ada Lovelace"),
+			))
+			embeddingArgs := namedArgs(poolMock.ExecArgs[1])
+			Expect(embeddingArgs).To(SatisfyAll(
+				HaveKeyWithValue("graph_node_id", pgtype.UUID{Bytes: nodeA, Valid: true}),
+				HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}),
+				HaveKeyWithValue("embedding_text", "name: Alice"),
+				HaveKeyWithValue("embedding", "[0.6,0.8]"),
+			))
+			chunkArgs := namedArgs(poolMock.ExecArgs[2])
 			Expect(chunkArgs).To(SatisfyAll(
 				HaveKeyWithValue("graph_snapshot_id", pgtype.UUID{Bytes: graphSnapshotID, Valid: true}),
 				HaveKeyWithValue("graph_node_id", pgtype.UUID{Bytes: nodeA, Valid: true}),
 				HaveKeyWithValue("embedding_record_id", pgtype.UUID{Bytes: recordID, Valid: true}),
 				HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}),
 			))
-			edgeArgs := namedArgs(poolMock.ExecArgs[1])
+			edgeArgs := namedArgs(poolMock.ExecArgs[3])
 			Expect(edgeArgs).To(SatisfyAll(
 				HaveKeyWithValue("source_node_id", pgtype.UUID{Bytes: nodeA, Valid: true}),
 				HaveKeyWithValue("target_node_id", pgtype.UUID{Bytes: nodeB, Valid: true}),
 				HaveKeyWithValue("relation_type", "RELATED_TO"),
 			))
+			communityArgs := namedArgs(poolMock.QueryArgs[2])
+			Expect(communityArgs).To(SatisfyAll(
+				HaveKeyWithValue("community_key", "community:001:person:alice"),
+				HaveKeyWithValue("algorithm", model.GraphCommunityAlgorithmConnectedComponents),
+				HaveKeyWithValue("entity_count", 2),
+			))
+			memberArgs := namedArgs(poolMock.ExecArgs[4])
+			Expect(memberArgs).To(SatisfyAll(
+				HaveKeyWithValue("graph_community_id", pgtype.UUID{Bytes: communityID, Valid: true}),
+				HaveKeyWithValue("graph_node_id", pgtype.UUID{Bytes: nodeA, Valid: true}),
+				HaveKeyWithValue("entity_key", "person:alice"),
+			))
+			reportArgs := namedArgs(poolMock.ExecArgs[5])
+			Expect(reportArgs).To(SatisfyAll(
+				HaveKeyWithValue("graph_community_id", pgtype.UUID{Bytes: communityID, Valid: true}),
+				HaveKeyWithValue("report_version", model.GraphCommunityReportExtractiveV1),
+				HaveKeyWithValue("embedding", "[0.7,0.7]"),
+			))
+		})
+
+		It("wraps graph node embedding insert failures with the graph persistence domain error", func() {
+			graphSnapshotID := uuid.New()
+			nodeA := uuid.New()
+			insertErr := errors.New("insert failed")
+			poolMock.NextRows = []pgx.Row{uuidTextRow{value: nodeA}}
+			poolMock.NextExecErrors = []error{insertErr}
+			materialization := &model.GraphMaterialization{
+				Snapshot: &model.GraphSnapshot{GraphSnapshotID: graphSnapshotID},
+				Nodes: []model.GraphNode{{
+					DatasetID: datasetID,
+					UserID:    userID,
+					OrgID:     orgID,
+					EntityKey: "person:alice",
+					Name:      "Alice",
+					Type:      "person",
+				}},
+				NodeEmbeddings: []model.GraphNodeEmbedding{{
+					EntityKey:           "person:alice",
+					EmbeddingSnapshotID: embeddingID,
+					DatasetID:           datasetID,
+					UserID:              userID,
+					OrgID:               orgID,
+					EmbeddingText:       "name: Alice",
+					Vector:              []float32{1, 0},
+				}},
+			}
+
+			err := repository.SaveGraphMaterialization(ctx, tx, materialization)
+
+			Expect(errors.Is(err, domain.ErrGraphPersistence)).To(BeTrue())
+			Expect(errors.Is(err, insertErr)).To(BeTrue())
+			Expect(err).To(MatchError(ContainSubstring("insert graph node embedding")))
 		})
 
 		It("rejects nil graph materializations before querying", func() {
@@ -1355,7 +1517,11 @@ var _ = Describe("SnapshotRepository", func() {
 				EmbeddingSnapshotID: embeddingID,
 				DatasetID:           datasetID,
 				OrgID:               orgID,
-			}, "Alice", 5, 2)
+			}, model.GraphSearchSeed{
+				QueryText:           "How do Alice?",
+				QueryVector:         []float32{0.1, 0.2, 0.3},
+				EmbeddingDimensions: 3,
+			}, 5, 2)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Contexts).To(HaveLen(1))
@@ -1366,13 +1532,98 @@ var _ = Describe("SnapshotRepository", func() {
 			Expect(result.Paths).To(HaveLen(1))
 			Expect(result.Paths[0].GraphNodeIDs).To(Equal([]uuid.UUID{nodeA, nodeB, nodeC}))
 			Expect(result.Paths[0].RelationTypes).To(Equal([]string{"WORKS_WITH", "INTRODUCED_TO"}))
-			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH RECURSIVE seed"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH RECURSIVE semantic_nodes"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.graph_node_embeddings gne"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY gne.embedding::vector(3) <=> @query_embedding::vector(3)"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("semantic_chunks AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.embedding_records er"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY er.embedding::vector(3) <=> @query_embedding::vector(3)"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("LIMIT @semantic_chunk_limit"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("semantic_chunk_seed AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("semantic_seed AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("JOIN test_db.graph_node_chunks gnc"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("lexical_seed AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("lower(name) = ANY(@lexical_terms::text[])"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("lower(name) LIKE ANY(@lexical_patterns::text[])"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.graph_node_aliases"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("lower(alias) = ANY(@lexical_terms::text[])"))
+			Expect(poolMock.QueryCalls[0]).NotTo(ContainSubstring("lower(description) LIKE"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("COALESCE(seed_scores.semantic_score, 0) >= 0.70::double precision"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("embedding::vector(3)"))
+			Expect(poolMock.QueryCalls[0]).NotTo(ContainSubstring("embedding::vector(384)"))
 			Expect(poolMock.QueryCalls[2]).To(ContainSubstring("array_to_string(path, ',')"))
 			args := namedArgs(poolMock.QueryArgs[0])
 			Expect(args).To(HaveKeyWithValue("graph_snapshot_id", pgtype.UUID{Bytes: graphSnapshotID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("dataset_id", pgtype.UUID{Bytes: datasetID, Valid: true}))
 			Expect(args).To(HaveKeyWithValue("org_id", pgtype.UUID{Bytes: orgID, Valid: true}))
-			Expect(args).To(HaveKeyWithValue("needle", "%alice%"))
+			Expect(args).To(HaveKeyWithValue("query_embedding", "[0.1,0.2,0.3]"))
+			Expect(args).To(HaveKeyWithValue("lexical_enabled", true))
+			Expect(args).To(HaveKeyWithValue("lexical_terms", []string{"how do alice", "alice"}))
+			Expect(args).To(HaveKeyWithValue("lexical_patterns", []string{"%how do alice%", "%alice%"}))
+			Expect(args).To(HaveKeyWithValue("seed_limit", 10))
+			Expect(args).To(HaveKeyWithValue("semantic_chunk_limit", 80))
+			Expect(args).To(HaveKeyWithValue("limit", 5))
 			Expect(args).To(HaveKeyWithValue("max_hops", 2))
+		})
+
+		It("returns global community reports from the graph community report index", func() {
+			graphSnapshotID := uuid.New()
+			reportID := uuid.New()
+			communityID := uuid.New()
+			poolMock.NextQueryRowsQueue = []pgx.Rows{
+				&testRows{rows: []pgx.Row{
+					graphCommunityReportMatchRow{
+						GraphCommunityReportID: reportID,
+						GraphCommunityID:       communityID,
+						GraphSnapshotID:        graphSnapshotID,
+						DatasetID:              datasetID,
+						OrgID:                  orgID,
+						CommunityKey:           "community:001:system:aurora relay",
+						Level:                  0,
+						Title:                  "Aurora Relay / Beacon Hub",
+						Summary:                "Routing community",
+						ReportText:             "Aurora Relay routes to Beacon Hub.",
+						Rank:                   4,
+						Score:                  0.91,
+					},
+				}},
+			}
+
+			result, err := repository.SearchGraph(ctx, &model.GraphSnapshot{
+				GraphSnapshotID:     graphSnapshotID,
+				FeatureSnapshotID:   featureID,
+				EmbeddingSnapshotID: embeddingID,
+				DatasetID:           datasetID,
+				OrgID:               orgID,
+			}, model.GraphSearchSeed{
+				QueryText:           "How does Aurora routing work?",
+				QueryVector:         []float32{0.1, 0.2, 0.3},
+				EmbeddingDimensions: 3,
+				Mode:                model.GraphSearchModeGlobal,
+			}, 3, 2)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Mode).To(Equal(model.GraphSearchModeGlobal))
+			Expect(result.Contexts).To(BeEmpty())
+			Expect(result.MatchedEntities).To(BeEmpty())
+			Expect(result.Paths).To(BeEmpty())
+			Expect(result.CommunityReports).To(HaveLen(1))
+			Expect(result.CommunityReports[0].GraphCommunityReportID).To(Equal(reportID))
+			Expect(result.CommunityReports[0].Title).To(Equal("Aurora Relay / Beacon Hub"))
+			Expect(result.CommunityReports[0].Score).To(Equal(0.91))
+			Expect(poolMock.QueryCalls).To(HaveLen(1))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("WITH semantic_reports AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("FROM test_db.graph_community_reports report"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("ORDER BY report.embedding::vector(3) <=> @query_embedding::vector(3)"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("community_seed AS"))
+			Expect(poolMock.QueryCalls[0]).To(ContainSubstring("lower(report_text) LIKE ANY(@lexical_patterns::text[])"))
+			args := namedArgs(poolMock.QueryArgs[0])
+			Expect(args).To(HaveKeyWithValue("graph_snapshot_id", pgtype.UUID{Bytes: graphSnapshotID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("embedding_snapshot_id", pgtype.UUID{Bytes: embeddingID, Valid: true}))
+			Expect(args).To(HaveKeyWithValue("query_embedding", "[0.1,0.2,0.3]"))
+			Expect(args).To(HaveKeyWithValue("seed_limit", 10))
+			Expect(args).To(HaveKeyWithValue("limit", 3))
 		})
 	})
 })

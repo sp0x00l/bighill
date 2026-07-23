@@ -101,6 +101,8 @@ type graphConfig struct {
 	ExtractionMaxResponseBytes int64
 	ExtractionMaxOutputTokens  int
 	ExtractionMaxRetries       int
+	EntityResolutionThreshold  float64
+	CommunityReportsEnabled    bool
 }
 
 type dataStreamConfig struct {
@@ -273,9 +275,15 @@ func main() {
 	rawSnapshotUsecase := usecase.NewRawSnapshotUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, rawDispatcher)
 	featureSnapshotUsecase := usecase.NewFeatureSnapshotUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, snapshotRepo, featureDispatcher)
 	embeddingUsecase := usecase.NewEmbeddingMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, snapshotRepo, embeddingDispatcher)
-	graphUsecase := usecase.NewGraphMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, graphExtractor, usecase.WithGraphUserEventPublisher(userEventPublisher))
-	embeddingSearchUsecase := usecase.NewEmbeddingSearchUsecase(snapshotRepo, newQueryEmbeddingProviderFactory(cfg.Embedding))
-	graphSearchUsecase := usecase.NewGraphSearchUsecase(snapshotRepo)
+	queryEmbeddingProviderFactory := newQueryEmbeddingProviderFactory(cfg.Embedding)
+	graphEntityResolver := usecase.NewEmbeddingGraphEntityResolver(queryEmbeddingProviderFactory, cfg.Graph.EntityResolutionThreshold)
+	graphCommunityReporter := usecase.NewDisabledGraphCommunityReporter()
+	if cfg.Graph.CommunityReportsEnabled {
+		graphCommunityReporter = usecase.NewEmbeddingGraphCommunityReporter(queryEmbeddingProviderFactory)
+	}
+	graphUsecase := usecase.NewGraphMaterializationUsecase(snapshotRepo, snapshotUnitOfWork, snapshotEventBuilder, graphExtractor, usecase.WithGraphUserEventPublisher(userEventPublisher), usecase.WithGraphEntityResolver(graphEntityResolver), usecase.WithGraphCommunityReporter(graphCommunityReporter))
+	embeddingSearchUsecase := usecase.NewEmbeddingSearchUsecase(snapshotRepo, queryEmbeddingProviderFactory)
+	graphSearchUsecase := usecase.NewGraphSearchUsecase(snapshotRepo, queryEmbeddingProviderFactory)
 	activities := featuretemporal.NewMaterializationActivities(rawSnapshotUsecase, featureSnapshotUsecase, embeddingUsecase, graphUsecase)
 	materializationWorker := featuretemporal.NewMaterializationWorker(temporalClient, cfg.Temporal.TaskQueue, activities)
 
@@ -498,6 +506,8 @@ func readMaterializerConfig() materializerConfig {
 			ExtractionMaxResponseBytes: env.WithDefaultInt64("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RESPONSE_BYTES", "1048576"),
 			ExtractionMaxOutputTokens:  env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_OUTPUT_TOKENS", "512"),
 			ExtractionMaxRetries:       env.WithDefaultInt("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES", "2"),
+			EntityResolutionThreshold:  float64FromEnv("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENTITY_RESOLUTION_THRESHOLD", "0.92"),
+			CommunityReportsEnabled:    env.WithDefaultBool("FEATURE_MATERIALIZER_SERVICE_GRAPH_COMMUNITY_REPORTS_ENABLED", false),
 		},
 		DataStream: dataStreamConfig{
 			Address:        env.WithDefaultString("FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_GRPC_ADDRESS", "localhost:7070"),
@@ -645,6 +655,9 @@ func validateMaterializerConfig(cfg materializerConfig) error {
 func validateGraphConfig(cfg graphConfig) error {
 	log.Trace("validateGraphConfig")
 
+	if cfg.CommunityReportsEnabled && !cfg.Enabled {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_COMMUNITY_REPORTS_ENABLED requires FEATURE_MATERIALIZER_SERVICE_GRAPH_ENABLED=true")
+	}
 	if !cfg.Enabled {
 		return nil
 	}
@@ -678,6 +691,9 @@ func validateGraphConfig(cfg graphConfig) error {
 	}
 	if cfg.ExtractionMaxRetries < 0 {
 		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES must be non-negative")
+	}
+	if cfg.EntityResolutionThreshold <= 0 || cfg.EntityResolutionThreshold > 1 {
+		return fmt.Errorf("FEATURE_MATERIALIZER_SERVICE_GRAPH_ENTITY_RESOLUTION_THRESHOLD must be greater than zero and less than or equal to one")
 	}
 	return nil
 }
@@ -779,6 +795,17 @@ func newHealthCheckConfig(cfg healthConfig) coreHealthCheck.HealthCheckConfig {
 
 func secondsFromEnv(key, defaultValue string) time.Duration {
 	return time.Duration(env.WithDefaultInt(key, defaultValue)) * time.Second
+}
+
+func float64FromEnv(key, defaultValue string) float64 {
+	log.Trace("float64FromEnv")
+
+	value, err := strconv.ParseFloat(strings.TrimSpace(env.WithDefaultString(key, defaultValue)), 64)
+	if err != nil {
+		fallback, _ := strconv.ParseFloat(defaultValue, 64)
+		return fallback
+	}
+	return value
 }
 
 func embeddingStrategyFromConfig(cfg embeddingConfig) model.EmbeddingStrategy {

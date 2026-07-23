@@ -45,6 +45,9 @@ var (
 	ErrEmbeddingMaterialize        = &ServiceError{Code: "embedding_materialize_failed", Message: "embedding materialize failed"}
 	ErrEmbeddingSearch             = &ServiceError{Code: "embedding_search_failed", Message: "embedding search failed"}
 	ErrGraphMaterialize            = &ServiceError{Code: "graph_materialize_failed", Message: "graph materialize failed"}
+	ErrGraphPersistence            = &ServiceError{Code: "graph_persistence_failed", Message: "graph persistence failed"}
+	ErrGraphEntityResolution       = &ServiceError{Code: "graph_entity_resolution_failed", Message: "graph entity resolution failed"}
+	ErrGraphCommunityReport        = &ServiceError{Code: "graph_community_report_failed", Message: "graph community report failed"}
 	ErrGraphExtractionInvalid      = &ServiceError{Code: "graph_extraction_invalid_document", Message: "graph extraction document invalid"}
 	ErrGraphSearch                 = &ServiceError{Code: "graph_search_failed", Message: "graph search failed"}
 	ErrArtifactRead                = &ServiceError{Code: "artifact_read_failed", Message: "artifact read failed"}

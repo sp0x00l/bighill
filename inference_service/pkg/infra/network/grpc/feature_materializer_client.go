@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	usecase "inference_service/pkg/app"
@@ -105,6 +106,12 @@ func (c *featureMaterializerClient) SearchEmbeddings(ctx context.Context, userID
 func (c *featureMaterializerClient) SearchGraph(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int) ([]model.RetrievedContext, error) {
 	log.Trace("featureMaterializerClient SearchGraph")
 
+	return c.SearchGraphWithMode(ctx, userID, datasetID, queryText, topK, maxHops, "local")
+}
+
+func (c *featureMaterializerClient) SearchGraphWithMode(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode string) ([]model.RetrievedContext, error) {
+	log.Trace("featureMaterializerClient SearchGraphWithMode")
+
 	orgID, ok := ctxutil.OrgID(ctx)
 	if !ok {
 		return nil, fmt.Errorf("org id is required")
@@ -116,10 +123,18 @@ func (c *featureMaterializerClient) SearchGraph(ctx context.Context, userID uuid
 		QueryText: queryText,
 		TopK:      int32(topK),
 		MaxHops:   int32(maxHops),
+		Mode:      mode,
 	})
 	if err != nil {
 		log.WithContext(ctx).WithError(err).Error("feature materializer search graph failed")
 		return nil, fmt.Errorf("search graph: %w", rpcLib.ExtractGRPCErrMsg(err))
+	}
+	if strings.EqualFold(resp.GetMode(), "global") {
+		contexts, err := graphSearchCommunityReportsToRetrievedContexts(resp)
+		if err != nil {
+			return nil, err
+		}
+		return contexts, nil
 	}
 	contexts, err := graphSearchContextsToRetrievedContexts(resp.GetContexts())
 	if err != nil {
@@ -192,6 +207,40 @@ func graphSearchContextsToRetrievedContexts(matches []*featurepb.GraphRetrievedC
 			ChunkIndex:          int(match.GetChunkIndex()),
 			SourceText:          match.GetSourceText(),
 			Similarity:          match.GetScore(),
+		})
+	}
+	return contexts, nil
+}
+
+func graphSearchCommunityReportsToRetrievedContexts(resp *featurepb.SearchGraphResponse) ([]model.RetrievedContext, error) {
+	log.Trace("graphSearchCommunityReportsToRetrievedContexts")
+
+	if resp == nil {
+		return nil, nil
+	}
+	embeddingSnapshotID, err := uuid.Parse(resp.GetEmbeddingSnapshotId())
+	if err != nil || embeddingSnapshotID == uuid.Nil {
+		return nil, fmt.Errorf("feature materializer returned invalid embedding_snapshot_id")
+	}
+	contexts := make([]model.RetrievedContext, 0, len(resp.GetCommunityReports()))
+	for _, report := range resp.GetCommunityReports() {
+		if report == nil {
+			continue
+		}
+		reportID, err := uuid.Parse(report.GetGraphCommunityReportId())
+		if err != nil || reportID == uuid.Nil {
+			return nil, fmt.Errorf("feature materializer returned invalid graph_community_report_id")
+		}
+		datasetID, err := uuid.Parse(report.GetDatasetId())
+		if err != nil || datasetID == uuid.Nil {
+			return nil, fmt.Errorf("feature materializer returned invalid dataset_id")
+		}
+		contexts = append(contexts, model.RetrievedContext{
+			EmbeddingRecordID:   reportID,
+			EmbeddingSnapshotID: embeddingSnapshotID,
+			DatasetID:           datasetID,
+			SourceText:          report.GetReportText(),
+			Similarity:          report.GetScore(),
 		})
 	}
 	return contexts, nil

@@ -17,7 +17,7 @@ test()
     . "$BIGHILL_ROOT/shared_lib/scripts/config.sh" "$1"
     cd "$BIGHILL_ROOT/tool_catalog_service"
     . ./scripts/config.sh "$1"
-    stop_service_binary_for_tests "tool_catalog_service" "$BIGHILL_ROOT"
+    stop_service "tool_catalog_service"
     ginkgo -timeout=120s -r -v --output-dir=../test_results/tool_catalog_service -procs=1 -race
 
     echo "tool catalog service test complete"

@@ -25,14 +25,24 @@ var _ = Describe("feature materializer migration policy", func() {
 			"embedding_records",
 			"graph_snapshots",
 			"graph_nodes",
+			"graph_node_aliases",
+			"graph_node_embeddings",
 			"graph_edges",
 			"graph_node_chunks",
+			"graph_communities",
+			"graph_community_members",
+			"graph_community_reports",
 		} {
 			Expect(content).To(ContainSubstring("ALTER TABLE bighill_feature_materializer_db." + table + " FORCE ROW LEVEL SECURITY"))
 			Expect(content).To(ContainSubstring("CREATE POLICY " + table + "_tenant_isolation"))
 		}
 		Expect(content).To(ContainSubstring("current_setting('app.system_context', true) = 'true'"))
 		Expect(content).To(ContainSubstring("NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id"))
+		Expect(content).To(ContainSubstring("index_graph_node_embeddings_embedding_384_hnsw"))
+		Expect(content).To(ContainSubstring("ON bighill_feature_materializer_db.graph_node_embeddings"))
+		Expect(content).To(ContainSubstring("USING hnsw ((embedding::vector(384)) vector_cosine_ops)"))
+		Expect(content).To(ContainSubstring("index_graph_community_reports_embedding_384_hnsw"))
+		Expect(content).To(ContainSubstring("ON bighill_feature_materializer_db.graph_community_reports"))
 		Expect(strings.Contains(content, "COALESCE(NULLIF(current_setting('app.current_user_id'")).To(BeFalse())
 		Expect(strings.Contains(content, "COALESCE(NULLIF(current_setting('app.current_org_id'")).To(BeFalse())
 		Expect(strings.Contains(content, "user_id = user_id")).To(BeFalse())

@@ -55,6 +55,8 @@ type graphMaterializationUsecase struct {
 	unitOfWork         SnapshotUnitOfWorkAdapter
 	eventBuilder       SnapshotEventBuilder
 	extractor          GraphExtractor
+	entityResolver     GraphEntityResolver
+	communityReporter  GraphCommunityReporter
 	userEventPublisher UserEventPublisher
 	encoder            *serializers.Encoder
 }
@@ -67,6 +69,26 @@ func WithGraphUserEventPublisher(publisher UserEventPublisher) GraphMaterializat
 	}
 }
 
+func WithGraphEntityResolver(resolver GraphEntityResolver) GraphMaterializationOption {
+	log.Trace("WithGraphEntityResolver")
+
+	return func(u *graphMaterializationUsecase) {
+		if resolver != nil {
+			u.entityResolver = resolver
+		}
+	}
+}
+
+func WithGraphCommunityReporter(reporter GraphCommunityReporter) GraphMaterializationOption {
+	log.Trace("WithGraphCommunityReporter")
+
+	return func(u *graphMaterializationUsecase) {
+		if reporter != nil {
+			u.communityReporter = reporter
+		}
+	}
+}
+
 func NewGraphMaterializationUsecase(repo GraphSnapshotRepository, unitOfWork SnapshotUnitOfWorkAdapter, eventBuilder SnapshotEventBuilder, extractor GraphExtractor, opts ...GraphMaterializationOption) GraphMaterializationUsecase {
 	log.Trace("NewGraphMaterializationUsecase")
 
@@ -75,6 +97,8 @@ func NewGraphMaterializationUsecase(repo GraphSnapshotRepository, unitOfWork Sna
 		unitOfWork:         unitOfWork,
 		eventBuilder:       eventBuilder,
 		extractor:          extractor,
+		entityResolver:     NewNoopGraphEntityResolver(),
+		communityReporter:  NewDisabledGraphCommunityReporter(),
 		userEventPublisher: userevents.NewNoopPublisher(),
 		encoder:            serializers.NewJSONSerializer(),
 	}
@@ -125,8 +149,32 @@ func (u *graphMaterializationUsecase) MaterializeGraph(ctx context.Context, embe
 		return nil, outErr
 	}
 	materialization := graphMaterializationFromExtraction(graphSnapshot, chunks, extraction)
-	if err := u.markGraphReady(ctx, materialization); err != nil {
+	embeddingSnapshot, err := u.repo.ReadEmbeddingSnapshot(ctx, graphSnapshot.EmbeddingSnapshotID)
+	if err != nil {
 		return nil, err
+	}
+	materialization, err = u.entityResolver.ResolveGraphEntities(ctx, materialization, embeddingSnapshot)
+	if err != nil {
+		outErr := fmt.Errorf("%w: resolve graph entities: %w", domain.ErrGraphMaterialize, err)
+		failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), graphFailureRecordTimeout)
+		defer cancel()
+		if markErr := u.markGraphFailed(failureCtx, graphSnapshot, err); markErr != nil {
+			return nil, errors.Join(outErr, fmt.Errorf("mark graph snapshot failed: %w", markErr))
+		}
+		return nil, outErr
+	}
+	materialization, err = u.communityReporter.BuildGraphCommunities(ctx, materialization, embeddingSnapshot)
+	if err != nil {
+		outErr := fmt.Errorf("%w: build graph community reports: %w", domain.ErrGraphMaterialize, err)
+		failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), graphFailureRecordTimeout)
+		defer cancel()
+		if markErr := u.markGraphFailed(failureCtx, graphSnapshot, err); markErr != nil {
+			return nil, errors.Join(outErr, fmt.Errorf("mark graph snapshot failed: %w", markErr))
+		}
+		return nil, outErr
+	}
+	if err := u.markGraphReady(ctx, materialization); err != nil {
+		return nil, fmt.Errorf("%w: mark graph snapshot ready: %w", domain.ErrGraphMaterialize, err)
 	}
 	return materialization.Snapshot, nil
 }

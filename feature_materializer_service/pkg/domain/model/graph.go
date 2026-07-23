@@ -10,7 +10,44 @@ const (
 	DefaultGraphExtractionModel         = ""
 	DefaultGraphExtractionPromptVersion = "graph_extraction_prompt_v1"
 	DefaultGraphExtractionSchemaVersion = "graph_extraction_v1"
+
+	GraphSearchModeLocal  GraphSearchMode = "local"
+	GraphSearchModeGlobal GraphSearchMode = "global"
+
+	GraphCommunityAlgorithmConnectedComponents = "connected_components_v1"
+	GraphCommunityAlgorithmLeidenV2            = "leiden_v2"
+	GraphCommunityReportExtractiveV1           = "graph_community_report_extractive_v1"
+	GraphCommunityReportModelServingV2         = "graph_community_report_model_serving_v2"
 )
+
+type GraphSearchMode string
+
+func ParseGraphSearchMode(value string) GraphSearchMode {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", string(GraphSearchModeLocal):
+		return GraphSearchModeLocal
+	case string(GraphSearchModeGlobal):
+		return GraphSearchModeGlobal
+	default:
+		return GraphSearchMode(strings.ToLower(strings.TrimSpace(value)))
+	}
+}
+
+func (m GraphSearchMode) String() string {
+	if m == "" {
+		return string(GraphSearchModeLocal)
+	}
+	return string(m)
+}
+
+func (m GraphSearchMode) IsValid() bool {
+	switch m {
+	case "", GraphSearchModeLocal, GraphSearchModeGlobal:
+		return true
+	default:
+		return false
+	}
+}
 
 type GraphExtractionStrategy struct {
 	ExtractionModel         string
@@ -108,11 +145,42 @@ type GraphNodeChunk struct {
 	SourceText          string
 }
 
+type GraphNodeAlias struct {
+	GraphNodeAliasID   uuid.UUID
+	GraphSnapshotID    uuid.UUID
+	GraphNodeID        uuid.UUID
+	CanonicalEntityKey string
+	SourceEntityKey    string
+	Alias              string
+	Type               string
+	DatasetID          uuid.UUID
+	UserID             uuid.UUID
+	OrgID              uuid.UUID
+}
+
+type GraphNodeEmbedding struct {
+	GraphNodeEmbeddingID uuid.UUID
+	GraphSnapshotID      uuid.UUID
+	GraphNodeID          uuid.UUID
+	EntityKey            string
+	EmbeddingSnapshotID  uuid.UUID
+	DatasetID            uuid.UUID
+	UserID               uuid.UUID
+	OrgID                uuid.UUID
+	EmbeddingText        string
+	Vector               []float32
+}
+
 type GraphMaterialization struct {
-	Snapshot   *GraphSnapshot
-	Nodes      []GraphNode
-	Edges      []GraphEdge
-	NodeChunks []GraphNodeChunk
+	Snapshot         *GraphSnapshot
+	Nodes            []GraphNode
+	Edges            []GraphEdge
+	NodeChunks       []GraphNodeChunk
+	NodeAliases      []GraphNodeAlias
+	NodeEmbeddings   []GraphNodeEmbedding
+	Communities      []GraphCommunity
+	CommunityMembers []GraphCommunityMember
+	CommunityReports []GraphCommunityReport
 }
 
 type GraphExtractionEntity struct {
@@ -137,10 +205,81 @@ type GraphExtraction struct {
 }
 
 type GraphSearchResult struct {
-	GraphSnapshot   *GraphSnapshot
-	Contexts        []GraphRetrievedContext
-	MatchedEntities []GraphMatchedEntity
-	Paths           []GraphPath
+	GraphSnapshot    *GraphSnapshot
+	Mode             GraphSearchMode
+	Contexts         []GraphRetrievedContext
+	MatchedEntities  []GraphMatchedEntity
+	Paths            []GraphPath
+	CommunityReports []GraphCommunityReportMatch
+}
+
+type GraphSearchSeed struct {
+	QueryText           string
+	QueryVector         []float32
+	EmbeddingDimensions int
+	Mode                GraphSearchMode
+}
+
+type GraphCommunity struct {
+	GraphCommunityID uuid.UUID
+	GraphSnapshotID  uuid.UUID
+	DatasetID        uuid.UUID
+	UserID           uuid.UUID
+	OrgID            uuid.UUID
+	CommunityKey     string
+	Algorithm        string
+	Level            int
+	Title            string
+	Summary          string
+	Rank             float64
+	EntityCount      int
+	EdgeCount        int
+}
+
+type GraphCommunityMember struct {
+	GraphCommunityMemberID uuid.UUID
+	GraphCommunityID       uuid.UUID
+	GraphSnapshotID        uuid.UUID
+	GraphNodeID            uuid.UUID
+	EntityKey              string
+	CommunityKey           string
+	DatasetID              uuid.UUID
+	UserID                 uuid.UUID
+	OrgID                  uuid.UUID
+}
+
+type GraphCommunityReport struct {
+	GraphCommunityReportID uuid.UUID
+	GraphCommunityID       uuid.UUID
+	GraphSnapshotID        uuid.UUID
+	EmbeddingSnapshotID    uuid.UUID
+	DatasetID              uuid.UUID
+	UserID                 uuid.UUID
+	OrgID                  uuid.UUID
+	CommunityKey           string
+	Level                  int
+	Title                  string
+	Summary                string
+	ReportText             string
+	Rank                   float64
+	ReportVersion          string
+	EmbeddingText          string
+	Vector                 []float32
+}
+
+type GraphCommunityReportMatch struct {
+	GraphCommunityReportID uuid.UUID
+	GraphCommunityID       uuid.UUID
+	GraphSnapshotID        uuid.UUID
+	DatasetID              uuid.UUID
+	OrgID                  uuid.UUID
+	CommunityKey           string
+	Level                  int
+	Title                  string
+	Summary                string
+	ReportText             string
+	Rank                   float64
+	Score                  float64
 }
 
 type GraphRetrievedContext struct {

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,13 +29,15 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var ollamaGGUFPath = flag.String("gguf-path", "", "GGUF artifact for the Ollama provisioning integration")
+
 func TestModelServingIntegration(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Model serving integration test suite")
 }
 
 var _ = Describe("GGUF local serving integration", func() {
-	It("validates a real GGUF file through the production inspector command", func() {
+	It("validates a GGUF file through the production inspector command", func() {
 		ggufPath := filepath.Join(GinkgoT().TempDir(), "tiny-llama3.gguf")
 		writeTinyGGUF(ggufPath, llama3JinjaChatTemplate())
 
@@ -48,7 +51,7 @@ var _ = Describe("GGUF local serving integration", func() {
 		Expect(inspection["tensor_count"]).To(BeNumerically(">", 0))
 	})
 
-	It("rejects a real GGUF chat artifact when tokenizer.chat_template is missing", func() {
+	It("rejects a GGUF chat artifact when tokenizer.chat_template is missing", func() {
 		ggufPath := filepath.Join(GinkgoT().TempDir(), "tiny-base.gguf")
 		writeTinyGGUF(ggufPath, "")
 
@@ -58,15 +61,12 @@ var _ = Describe("GGUF local serving integration", func() {
 		Expect(stderr).To(ContainSubstring("tokenizer.chat_template"))
 	})
 
-	It("provisions a real GGUF artifact into real Ollama when explicitly configured", Label("real-ollama"), func() {
-		configuredArtifactPath := strings.TrimSpace(os.Getenv("BIGHILL_MODEL_SERVING_REAL_OLLAMA_GGUF_PATH"))
-		if configuredArtifactPath == "" {
-			Fail("set BIGHILL_MODEL_SERVING_REAL_OLLAMA_GGUF_PATH to run real Ollama GGUF provisioning integration")
-		}
-		artifactPath, err := filepath.Abs(configuredArtifactPath)
+	It("provisions a GGUF artifact into Ollama", Label("ollama"), func() {
+		artifactPath, err := filepath.Abs(defaultOllamaGGUFPath())
 		Expect(err).NotTo(HaveOccurred())
+		Expect(artifactPath).To(BeAnExistingFile())
 		endpoint := strings.TrimRight(envOrDefault("MODEL_SERVING_SERVICE_LOCAL_OLLAMA_ENDPOINT", "http://localhost:11434"), "/")
-		requireRealOllama(endpoint)
+		requireOllama(endpoint)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
@@ -89,7 +89,7 @@ var _ = Describe("GGUF local serving integration", func() {
 		state, err := runtime.EnsureServedModel(ctx, &model.ServedModel{
 			ModelID:          modelID,
 			ModelKind:        "BASE",
-			Name:             "real-ollama-gguf",
+			Name:             "ollama-gguf",
 			ModelVersion:     1,
 			BaseModel:        filepath.Base(artifactPath),
 			ArtifactLocation: "file://" + artifactPath,
@@ -246,13 +246,20 @@ func llama3JinjaChatTemplate() string {
 	return "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\\n\\n' }}{% endif %}"
 }
 
-func requireRealOllama(endpoint string) {
+func defaultOllamaGGUFPath() string {
+	if path := strings.TrimSpace(*ollamaGGUFPath); path != "" {
+		return path
+	}
+	return filepath.Join(repoRoot(), "model_serving_service", "test", "data", "ollama-chat.gguf")
+}
+
+func requireOllama(endpoint string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/api/version", nil)
 	Expect(err).NotTo(HaveOccurred())
 	resp, err := http.DefaultClient.Do(req)
-	Expect(err).NotTo(HaveOccurred(), "real Ollama must be running at %s", endpoint)
+	Expect(err).NotTo(HaveOccurred(), "Ollama must be running at %s", endpoint)
 	defer resp.Body.Close()
 	Expect(resp.StatusCode).To(Equal(http.StatusOK))
 }

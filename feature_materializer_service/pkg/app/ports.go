@@ -47,6 +47,7 @@ type EmbeddingSnapshotRepository interface {
 type GraphSnapshotRepository interface {
 	SavePendingGraphSnapshot(ctx context.Context, tx pgx.Tx, embeddingSnapshotID, idempotencyKey uuid.UUID, strategy model.GraphExtractionStrategy) (*model.GraphSnapshot, error)
 	ReadEmbeddingChunks(ctx context.Context, embeddingSnapshotID uuid.UUID) ([]model.GraphChunk, error)
+	ReadEmbeddingSnapshot(ctx context.Context, embeddingSnapshotID uuid.UUID) (*model.EmbeddingSnapshot, error)
 	SaveGraphMaterialization(ctx context.Context, tx pgx.Tx, materialization *model.GraphMaterialization) error
 	MarkGraphReady(ctx context.Context, tx pgx.Tx, graphSnapshot *model.GraphSnapshot) error
 	MarkGraphFailed(ctx context.Context, tx pgx.Tx, graphSnapshot *model.GraphSnapshot, reason string) error
@@ -71,7 +72,8 @@ type EmbeddingSearchRepository interface {
 
 type GraphSearchRepository interface {
 	ReadActiveGraphSnapshot(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID) (*model.GraphSnapshot, error)
-	SearchGraph(ctx context.Context, graphSnapshot *model.GraphSnapshot, queryText string, topK int, maxHops int) (*model.GraphSearchResult, error)
+	ReadEmbeddingSnapshot(ctx context.Context, embeddingSnapshotID uuid.UUID) (*model.EmbeddingSnapshot, error)
+	SearchGraph(ctx context.Context, graphSnapshot *model.GraphSnapshot, seed model.GraphSearchSeed, topK int, maxHops int) (*model.GraphSearchResult, error)
 }
 
 type EmbeddingWriter interface {
@@ -80,6 +82,14 @@ type EmbeddingWriter interface {
 
 type GraphExtractor interface {
 	ExtractGraph(context.Context, []model.GraphChunk, model.GraphExtractionStrategy) (*model.GraphExtraction, error)
+}
+
+type GraphEntityResolver interface {
+	ResolveGraphEntities(context.Context, *model.GraphMaterialization, *model.EmbeddingSnapshot) (*model.GraphMaterialization, error)
+}
+
+type GraphCommunityReporter interface {
+	BuildGraphCommunities(context.Context, *model.GraphMaterialization, *model.EmbeddingSnapshot) (*model.GraphMaterialization, error)
 }
 
 type FeatureSnapshotReader interface {

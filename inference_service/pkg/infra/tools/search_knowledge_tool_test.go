@@ -27,6 +27,7 @@ type retrievalClientStub struct {
 	queryText       string
 	topK            int
 	maxHops         int
+	mode            string
 	metadataFilters map[string]string
 	contexts        []model.RetrievedContext
 	graphContexts   []model.RetrievedContext
@@ -55,6 +56,11 @@ func (s *retrievalClientStub) SearchGraph(ctx context.Context, userID uuid.UUID,
 		contexts = s.contexts
 	}
 	return contexts, s.err
+}
+
+func (s *retrievalClientStub) SearchGraphWithMode(ctx context.Context, userID uuid.UUID, datasetID uuid.UUID, queryText string, topK int, maxHops int, mode string) ([]model.RetrievedContext, error) {
+	s.mode = mode
+	return s.SearchGraph(ctx, userID, datasetID, queryText, topK, maxHops)
 }
 
 func (s *retrievalClientStub) Close() error {
@@ -186,6 +192,49 @@ var _ = Describe("GraphSearchToolInvoker", func() {
 		Expect(retrieval.queryText).To(Equal("Acme"))
 		Expect(retrieval.topK).To(Equal(3))
 		Expect(retrieval.maxHops).To(Equal(2))
+		Expect(result.Content).To(ContainSubstring(`"mode":"local"`))
+	})
+
+	It("forwards global mode to the graph retrieval client", func() {
+		datasetID := uuid.New()
+		userID := uuid.New()
+		retrieval := &retrievalClientStub{graphContexts: []model.RetrievedContext{{
+			EmbeddingRecordID: uuid.New(),
+			DatasetID:         datasetID,
+			SourceText:        "community report context",
+			Similarity:        0.92,
+		}}}
+		invoker, err := NewGraphSearchToolInvoker(retrieval)
+		Expect(err).NotTo(HaveOccurred())
+		invocation := app.ToolInvocationContext{UserID: userID, Datasets: []*model.InferenceDataset{{
+			DatasetID:           datasetID,
+			ProcessingState:     model.DatasetProcessingGraphMaterialized,
+			GraphSnapshotID:     uuid.New(),
+			GraphProvenanceHash: "graph-hash",
+			EmbeddingSnapshotID: uuid.New(),
+			EmbeddingProvider:   "ollama",
+			EmbeddingModel:      "nomic-embed-text",
+			EmbeddingDimensions: 384,
+			EmbeddingCount:      12,
+		}}}
+
+		result, err := invoker.Invoke(context.Background(), invocation, model.ToolCall{
+			ID:        "call-graph-global",
+			Name:      GraphSearchToolName,
+			Arguments: []byte(`{"query_text":"routing overview","top_k":2,"max_hops":1,"mode":"global"}`),
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.IsError).To(BeFalse())
+		Expect(result.Contexts).To(HaveLen(1))
+		Expect(result.Contexts[0].SourceText).To(Equal("community report context"))
+		Expect(result.Content).To(ContainSubstring(`"mode":"global"`))
+		Expect(retrieval.mode).To(Equal(graphSearchModeGlobal))
+		Expect(retrieval.userID).To(Equal(userID))
+		Expect(retrieval.datasetID).To(Equal(datasetID))
+		Expect(retrieval.queryText).To(Equal("routing overview"))
+		Expect(retrieval.topK).To(Equal(2))
+		Expect(retrieval.maxHops).To(Equal(1))
 	})
 })
 

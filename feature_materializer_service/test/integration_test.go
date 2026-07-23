@@ -40,6 +40,8 @@ func TestFeatureMaterializerIntegration(t *testing.T) {
 	RunSpecs(t, "Feature materializer integration test suite")
 }
 
+const graphNodeSemanticSeedDistractorCount = 80
+
 var _ = Describe("Feature materializer integration", Ordered, func() {
 	var (
 		ctx         context.Context
@@ -162,6 +164,334 @@ var _ = Describe("Feature materializer integration", Ordered, func() {
 		readEmbedding, err := snapshots.ReadEmbeddingByIdempotencyKey(tenantCtx, embeddingIdempotencyKey)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readEmbedding.VectorStore).To(Equal("pgvector"))
+	})
+
+	It("seeds graph search semantically through pgvector when query text does not match entity names", func() {
+		datasetFile := validIntegrationDatasetFile()
+		Expect(upsertFeatureMaterializerTenant(ctx, database, datasetFile.UserID)).To(Succeed())
+		tenantCtx := ctxutil.WithActorOrg(ctx, datasetFile.UserID, datasetFile.OrgID)
+
+		rawSnapshot, err := rawUsecase.MaterializeRawSnapshot(tenantCtx, datasetFile, uuid.New())
+		Expect(err).NotTo(HaveOccurred())
+
+		var featureSnapshot *model.FeatureSnapshot
+		err = snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			out, err := snapshots.SavePendingFeatureSnapshot(ctx, tx, rawSnapshot.RawSnapshotID, uuid.New())
+			if err != nil {
+				return err
+			}
+			featureSnapshot = out
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		featureSnapshot.StorageLocation = "s3://local-dev-bucket/lakehouse/features/semantic-graph.parquet"
+		featureSnapshot.SchemaVersion = 1
+		featureSnapshot.SchemaMetadata = "{}"
+		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			return snapshots.MarkFeatureReady(ctx, tx, featureSnapshot)
+		})).To(Succeed())
+
+		embeddingStrategy := integrationEmbeddingStrategy()
+		embeddingStrategy.EmbeddingDimensions = 3
+		embeddingStrategy.EmbeddingModel = "semantic-seed-test-model"
+		var embeddingSnapshot *model.EmbeddingSnapshot
+		err = snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			out, err := snapshots.SavePendingEmbeddingSnapshot(ctx, tx, featureSnapshot.FeatureSnapshotID, uuid.New(), embeddingStrategy)
+			if err != nil {
+				return err
+			}
+			embeddingSnapshot = out
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		embeddingSnapshot.VectorStore = "pgvector"
+		embeddingSnapshot.CollectionName = "semantic-graph"
+		embeddingSnapshot.EmbeddingDimensions = 3
+		embeddingSnapshot.EmbeddingCount = 3 + graphNodeSemanticSeedDistractorCount
+		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			embeddingRecords := []model.EmbeddingRecord{
+				{
+					EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+					DatasetID:           embeddingSnapshot.DatasetID,
+					UserID:              embeddingSnapshot.UserID,
+					OrgID:               embeddingSnapshot.OrgID,
+					ChunkIndex:          0,
+					SourceText:          "Aurora Relay connects Beacon Hub.",
+					Vector:              []float32{0, 1, 0},
+				},
+				{
+					EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+					DatasetID:           embeddingSnapshot.DatasetID,
+					UserID:              embeddingSnapshot.UserID,
+					OrgID:               embeddingSnapshot.OrgID,
+					ChunkIndex:          1,
+					SourceText:          "Beacon Hub receives traffic.",
+					Vector:              []float32{0, 1, 0},
+				},
+				{
+					EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+					DatasetID:           embeddingSnapshot.DatasetID,
+					UserID:              embeddingSnapshot.UserID,
+					OrgID:               embeddingSnapshot.OrgID,
+					ChunkIndex:          2,
+					SourceText:          "Citadel Index stores audit state.",
+					Vector:              []float32{0, 1, 0},
+				},
+			}
+			for i := 0; i < graphNodeSemanticSeedDistractorCount; i++ {
+				embeddingRecords = append(embeddingRecords, model.EmbeddingRecord{
+					EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+					DatasetID:           embeddingSnapshot.DatasetID,
+					UserID:              embeddingSnapshot.UserID,
+					OrgID:               embeddingSnapshot.OrgID,
+					ChunkIndex:          i + 3,
+					SourceText:          fmt.Sprintf("Unmapped semantic distractor %d", i),
+					Vector:              []float32{1, 0, 0},
+				})
+			}
+			if err := snapshots.SaveEmbeddingRecords(ctx, tx, embeddingRecords); err != nil {
+				return err
+			}
+			return snapshots.MarkEmbeddingReady(ctx, tx, embeddingSnapshot)
+		})).To(Succeed())
+
+		auroraRecordID := readIntegrationEmbeddingRecordID(tenantCtx, database, embeddingSnapshot.EmbeddingSnapshotID, 0)
+		beaconRecordID := readIntegrationEmbeddingRecordID(tenantCtx, database, embeddingSnapshot.EmbeddingSnapshotID, 1)
+		citadelRecordID := readIntegrationEmbeddingRecordID(tenantCtx, database, embeddingSnapshot.EmbeddingSnapshotID, 2)
+
+		var graphSnapshot *model.GraphSnapshot
+		err = snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			out, err := snapshots.SavePendingGraphSnapshot(ctx, tx, embeddingSnapshot.EmbeddingSnapshotID, uuid.New(), model.GraphExtractionStrategy{
+				ExtractionModel:         "graph-model",
+				ExtractionPromptVersion: model.DefaultGraphExtractionPromptVersion,
+				ExtractionSchemaVersion: model.DefaultGraphExtractionSchemaVersion,
+			})
+			if err != nil {
+				return err
+			}
+			graphSnapshot = out
+			return snapshots.SaveGraphMaterialization(ctx, tx, &model.GraphMaterialization{
+				Snapshot: graphSnapshot,
+				Nodes: []model.GraphNode{
+					{
+						GraphSnapshotID: graphSnapshot.GraphSnapshotID,
+						DatasetID:       graphSnapshot.DatasetID,
+						UserID:          graphSnapshot.UserID,
+						OrgID:           graphSnapshot.OrgID,
+						EntityKey:       "system:aurora relay",
+						Name:            "Aurora Relay",
+						Type:            "system",
+						Description:     "Primary route",
+						MentionCount:    1,
+					},
+					{
+						GraphSnapshotID: graphSnapshot.GraphSnapshotID,
+						DatasetID:       graphSnapshot.DatasetID,
+						UserID:          graphSnapshot.UserID,
+						OrgID:           graphSnapshot.OrgID,
+						EntityKey:       "system:beacon hub",
+						Name:            "Beacon Hub",
+						Type:            "system",
+						Description:     "Downstream endpoint",
+						MentionCount:    1,
+					},
+					{
+						GraphSnapshotID: graphSnapshot.GraphSnapshotID,
+						DatasetID:       graphSnapshot.DatasetID,
+						UserID:          graphSnapshot.UserID,
+						OrgID:           graphSnapshot.OrgID,
+						EntityKey:       "system:citadel index",
+						Name:            "Citadel Index",
+						Type:            "system",
+						Description:     "Audit store",
+						MentionCount:    1,
+					},
+				},
+				Edges: []model.GraphEdge{{
+					GraphSnapshotID: graphSnapshot.GraphSnapshotID,
+					DatasetID:       graphSnapshot.DatasetID,
+					UserID:          graphSnapshot.UserID,
+					OrgID:           graphSnapshot.OrgID,
+					SourceEntityKey: "system:aurora relay",
+					TargetEntityKey: "system:beacon hub",
+					RelationType:    "CONNECTS_TO",
+					Description:     "Routes traffic to",
+					Weight:          1,
+				}},
+				NodeAliases: []model.GraphNodeAlias{{
+					GraphSnapshotID:    graphSnapshot.GraphSnapshotID,
+					CanonicalEntityKey: "system:beacon hub",
+					SourceEntityKey:    "system:lighthouse hub",
+					Alias:              "Lighthouse Hub",
+					Type:               "system",
+					DatasetID:          graphSnapshot.DatasetID,
+					UserID:             graphSnapshot.UserID,
+					OrgID:              graphSnapshot.OrgID,
+				}},
+				NodeEmbeddings: []model.GraphNodeEmbedding{
+					{
+						GraphSnapshotID:     graphSnapshot.GraphSnapshotID,
+						EntityKey:           "system:aurora relay",
+						EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+						DatasetID:           graphSnapshot.DatasetID,
+						UserID:              graphSnapshot.UserID,
+						OrgID:               graphSnapshot.OrgID,
+						EmbeddingText:       "name: Aurora Relay\ntype: system\ndescription: Primary route",
+						Vector:              []float32{1, 0, 0},
+					},
+					{
+						GraphSnapshotID:     graphSnapshot.GraphSnapshotID,
+						EntityKey:           "system:beacon hub",
+						EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+						DatasetID:           graphSnapshot.DatasetID,
+						UserID:              graphSnapshot.UserID,
+						OrgID:               graphSnapshot.OrgID,
+						EmbeddingText:       "name: Beacon Hub\ntype: system\ndescription: Downstream endpoint",
+						Vector:              []float32{0, 1, 0},
+					},
+					{
+						GraphSnapshotID:     graphSnapshot.GraphSnapshotID,
+						EntityKey:           "system:citadel index",
+						EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+						DatasetID:           graphSnapshot.DatasetID,
+						UserID:              graphSnapshot.UserID,
+						OrgID:               graphSnapshot.OrgID,
+						EmbeddingText:       "name: Citadel Index\ntype: system\ndescription: Audit store",
+						Vector:              []float32{0, 1, 0},
+					},
+				},
+				NodeChunks: []model.GraphNodeChunk{
+					{
+						GraphSnapshotID:     graphSnapshot.GraphSnapshotID,
+						EntityKey:           "system:aurora relay",
+						EmbeddingRecordID:   auroraRecordID,
+						EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+						DatasetID:           graphSnapshot.DatasetID,
+						UserID:              graphSnapshot.UserID,
+						OrgID:               graphSnapshot.OrgID,
+						ChunkIndex:          0,
+						SourceText:          "Aurora Relay connects Beacon Hub.",
+					},
+					{
+						GraphSnapshotID:     graphSnapshot.GraphSnapshotID,
+						EntityKey:           "system:beacon hub",
+						EmbeddingRecordID:   beaconRecordID,
+						EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+						DatasetID:           graphSnapshot.DatasetID,
+						UserID:              graphSnapshot.UserID,
+						OrgID:               graphSnapshot.OrgID,
+						ChunkIndex:          1,
+						SourceText:          "Beacon Hub receives traffic.",
+					},
+					{
+						GraphSnapshotID:     graphSnapshot.GraphSnapshotID,
+						EntityKey:           "system:citadel index",
+						EmbeddingRecordID:   citadelRecordID,
+						EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+						DatasetID:           graphSnapshot.DatasetID,
+						UserID:              graphSnapshot.UserID,
+						OrgID:               graphSnapshot.OrgID,
+						ChunkIndex:          2,
+						SourceText:          "Citadel Index stores audit state.",
+					},
+				},
+				Communities: []model.GraphCommunity{{
+					GraphSnapshotID: graphSnapshot.GraphSnapshotID,
+					DatasetID:       graphSnapshot.DatasetID,
+					UserID:          graphSnapshot.UserID,
+					OrgID:           graphSnapshot.OrgID,
+					CommunityKey:    "community:001:system:aurora relay",
+					Algorithm:       model.GraphCommunityAlgorithmConnectedComponents,
+					Level:           0,
+					Title:           "Aurora Relay / Beacon Hub",
+					Summary:         "Aurora Relay and Beacon Hub form a routing community.",
+					Rank:            3,
+					EntityCount:     2,
+					EdgeCount:       1,
+				}},
+				CommunityMembers: []model.GraphCommunityMember{
+					{
+						GraphSnapshotID: graphSnapshot.GraphSnapshotID,
+						EntityKey:       "system:aurora relay",
+						CommunityKey:    "community:001:system:aurora relay",
+						DatasetID:       graphSnapshot.DatasetID,
+						UserID:          graphSnapshot.UserID,
+						OrgID:           graphSnapshot.OrgID,
+					},
+					{
+						GraphSnapshotID: graphSnapshot.GraphSnapshotID,
+						EntityKey:       "system:beacon hub",
+						CommunityKey:    "community:001:system:aurora relay",
+						DatasetID:       graphSnapshot.DatasetID,
+						UserID:          graphSnapshot.UserID,
+						OrgID:           graphSnapshot.OrgID,
+					},
+				},
+				CommunityReports: []model.GraphCommunityReport{{
+					GraphSnapshotID:     graphSnapshot.GraphSnapshotID,
+					EmbeddingSnapshotID: embeddingSnapshot.EmbeddingSnapshotID,
+					DatasetID:           graphSnapshot.DatasetID,
+					UserID:              graphSnapshot.UserID,
+					OrgID:               graphSnapshot.OrgID,
+					CommunityKey:        "community:001:system:aurora relay",
+					Level:               0,
+					Title:               "Aurora Relay / Beacon Hub",
+					Summary:             "Aurora Relay and Beacon Hub form a routing community.",
+					ReportText:          "Aurora Relay routes traffic to Beacon Hub. Evidence: Aurora Relay connects Beacon Hub.",
+					Rank:                3,
+					ReportVersion:       model.GraphCommunityReportExtractiveV1,
+					EmbeddingText:       "Aurora Relay routes traffic to Beacon Hub. Evidence: Aurora Relay connects Beacon Hub.",
+					Vector:              []float32{1, 0, 0},
+				}},
+			})
+		})
+		Expect(err).NotTo(HaveOccurred())
+		graphSnapshot.ChunkCount = 3
+		graphSnapshot.ChunksProcessed = 3
+		graphSnapshot.EntityCount = 3
+		graphSnapshot.EdgeCount = 1
+		graphSnapshot.ProvenanceHash = "semantic-seed-test"
+		Expect(snapshotUOW.Do(tenantCtx, func(ctx context.Context, tx pgx.Tx, _ shareduow.EnqueueFunc) error {
+			return snapshots.MarkGraphReady(ctx, tx, graphSnapshot)
+		})).To(Succeed())
+
+		result, err := snapshots.SearchGraph(tenantCtx, graphSnapshot, model.GraphSearchSeed{
+			QueryText:           "how do payloads travel across services",
+			QueryVector:         []float32{1, 0, 0},
+			EmbeddingDimensions: 3,
+		}, 1, 1)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Contexts).NotTo(BeEmpty())
+		Expect(result.Contexts[0].SourceText).To(ContainSubstring("Aurora Relay"))
+		Expect(result.MatchedEntities).NotTo(BeEmpty())
+		Expect(result.MatchedEntities[0].Name).To(Equal("Aurora Relay"))
+		Expect(result.Paths).NotTo(BeEmpty())
+		Expect(result.Paths[0].RelationTypes).To(Equal([]string{"CONNECTS_TO"}))
+
+		hybridResult, err := snapshots.SearchGraph(tenantCtx, graphSnapshot, model.GraphSearchSeed{
+			QueryText:           "Lighthouse Hub",
+			QueryVector:         []float32{1, 0, 0},
+			EmbeddingDimensions: 3,
+		}, 2, 1)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(graphMatchedEntityNames(hybridResult)).To(ContainElements("Aurora Relay", "Beacon Hub"))
+		Expect(graphMatchedEntityNames(hybridResult)).NotTo(ContainElement("Citadel Index"))
+
+		globalResult, err := snapshots.SearchGraph(tenantCtx, graphSnapshot, model.GraphSearchSeed{
+			QueryText:           "routing community overview",
+			QueryVector:         []float32{1, 0, 0},
+			EmbeddingDimensions: 3,
+			Mode:                model.GraphSearchModeGlobal,
+		}, 1, 1)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(globalResult.Mode).To(Equal(model.GraphSearchModeGlobal))
+		Expect(globalResult.Contexts).To(BeEmpty())
+		Expect(globalResult.CommunityReports).To(HaveLen(1))
+		Expect(globalResult.CommunityReports[0].Title).To(Equal("Aurora Relay / Beacon Hub"))
+		Expect(globalResult.CommunityReports[0].ReportText).To(ContainSubstring("Aurora Relay routes traffic"))
 	})
 
 	It("materializes an uploaded dataset file through Kafka", func() {
@@ -530,11 +860,38 @@ func integrationEmbeddingVector(dimensions int) []float32 {
 	return vector
 }
 
+func readIntegrationEmbeddingRecordID(ctx context.Context, database *dbconn.Database, embeddingSnapshotID uuid.UUID, chunkIndex int) uuid.UUID {
+	var rawID string
+	err := database.Pool.QueryRow(ctx, `
+		SELECT embedding_record_id::text
+		FROM `+database.Name+`.embedding_records
+		WHERE embedding_snapshot_id = $1 AND chunk_index = $2
+	`, embeddingSnapshotID, chunkIndex).Scan(&rawID)
+	Expect(err).NotTo(HaveOccurred())
+	return uuid.MustParse(rawID)
+}
+
+func graphMatchedEntityNames(result *model.GraphSearchResult) []string {
+	if result == nil {
+		return nil
+	}
+	names := make([]string, 0, len(result.MatchedEntities))
+	for _, entity := range result.MatchedEntities {
+		names = append(names, entity.Name)
+	}
+	return names
+}
+
 func truncateSnapshots(ctx context.Context, database *dbconn.Database) error {
 	for _, table := range []string{
 		"outbox_messages",
+		"graph_community_reports",
+		"graph_community_members",
+		"graph_communities",
 		"graph_node_chunks",
 		"graph_edges",
+		"graph_node_embeddings",
+		"graph_node_aliases",
 		"graph_nodes",
 		"graph_snapshots",
 		"embedding_records",

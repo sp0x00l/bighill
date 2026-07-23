@@ -202,7 +202,11 @@ func (s *FeatureMaterializerServer) SearchGraph(ctx context.Context, req *featur
 	if maxHops <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "max_hops must be greater than zero")
 	}
-	result, err := s.graphSearchUsecase.SearchGraph(ctx, userID, datasetID, queryText, topK, maxHops)
+	mode := model.ParseGraphSearchMode(req.GetMode())
+	if !mode.IsValid() {
+		return nil, status.Error(codes.InvalidArgument, "mode must be local or global")
+	}
+	result, err := s.graphSearchUsecase.SearchGraphWithMode(ctx, userID, datasetID, queryText, topK, maxHops, mode)
 	if err != nil {
 		return nil, graphSearchStatusError(err)
 	}
@@ -292,6 +296,23 @@ func graphSearchResultToPB(result *model.GraphSearchResult) *featurepb.SearchGra
 			Score:         path.Score,
 		}
 	}
+	communityReports := make([]*featurepb.GraphCommunityReport, len(result.CommunityReports))
+	for i, report := range result.CommunityReports {
+		communityReports[i] = &featurepb.GraphCommunityReport{
+			GraphCommunityReportId: report.GraphCommunityReportID.String(),
+			GraphCommunityId:       report.GraphCommunityID.String(),
+			GraphSnapshotId:        report.GraphSnapshotID.String(),
+			DatasetId:              report.DatasetID.String(),
+			OrgId:                  report.OrgID.String(),
+			CommunityKey:           report.CommunityKey,
+			Level:                  int32(report.Level),
+			Title:                  report.Title,
+			Summary:                report.Summary,
+			ReportText:             report.ReportText,
+			Rank:                   report.Rank,
+			Score:                  report.Score,
+		}
+	}
 	return &featurepb.SearchGraphResponse{
 		DatasetId:           snapshot.DatasetID.String(),
 		OrgId:               snapshot.OrgID.String(),
@@ -299,9 +320,11 @@ func graphSearchResultToPB(result *model.GraphSearchResult) *featurepb.SearchGra
 		FeatureSnapshotId:   snapshot.FeatureSnapshotID.String(),
 		EmbeddingSnapshotId: snapshot.EmbeddingSnapshotID.String(),
 		ProvenanceHash:      snapshot.ProvenanceHash,
+		Mode:                result.Mode.String(),
 		Contexts:            contexts,
 		MatchedEntities:     entities,
 		Paths:               paths,
+		CommunityReports:    communityReports,
 	}
 }
 

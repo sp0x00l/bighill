@@ -26,7 +26,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/data_stream_service
     . ./scripts/config.sh $1
-    stop_service_binary_for_tests "data_stream_service" "$BIGHILL_ROOT"
+    stop_service "data_stream_service"
     if [ "${DATA_STREAM_RUN_CORE_TESTS:-true}" = "true" ]; then
         ginkgo -timeout=120s -r -v --output-dir=../test_results/data_stream_service -procs=1 -race --label-filter='!external-data-source'
     fi

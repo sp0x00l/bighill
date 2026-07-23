@@ -17,7 +17,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/model_registry_service
     . ./scripts/config.sh $1
-    stop_service_binary_for_tests "model_registry_service" "$BIGHILL_ROOT"
+    stop_service "model_registry_service"
     ginkgo -timeout=120s -r -v --output-dir=../test_results/model_registry_service -procs=1 -race
 
     echo "model registry service test complete"

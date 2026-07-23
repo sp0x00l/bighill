@@ -38,4 +38,13 @@ The GGUF chat-template path is deliberately fail-closed:
 - If Ollama inference does not produce a usable chat definition, local serving deletes that attempted tag and falls back only for recognized chat formats: Llama 3, ChatML/Qwen-style, Mistral/Mixtral Instruct, Gemma, Phi, and Llama 2 chat.
 - Stop tokens discovered from GGUF tokenizer metadata are unioned with family defaults before create.
 
+Run the opt-in Ollama GGUF provisioning integration locally with:
+
+```bash
+make start-infra
+make test-ollama
+```
+
+The default fixture path is `model_serving_service/test/data/ollama-chat.gguf`. Use `GGUF=/path/to/chat-model.gguf` for a specific artifact, and `OLLAMA_ENDPOINT=http://host:11434` if Ollama is not on the default local endpoint. The GGUF artifact must be chat-capable and include `tokenizer.chat_template`; missing chat metadata is a test failure, not a skip.
+
 Raw `HF_PEFT_ADAPTER` directories are not local-compatible serving artifacts; they must be represented as validated `GGUF_LORA_ADAPTER` artifacts for local adapter serving.

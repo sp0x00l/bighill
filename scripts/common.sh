@@ -84,10 +84,12 @@ service_binary_pids() {
   ps -ef | awk -v binary_path="$BINARY_PATH" '$0 ~ binary_path && $0 !~ /awk/ {print $2}'
 }
 
-stop_service_binary_for_tests() {
+stop_service() {
   local SERVICE_DIR="$1"
-  local PROJECT_ROOT="${2:-$(get_project_root)}"
-  local SERVICE_BINARY="${3:-$(service_dir_to_binary "$SERVICE_DIR")}"
+  local PROJECT_ROOT
+  PROJECT_ROOT="$(get_project_root)"
+  local SERVICE_BINARY
+  SERVICE_BINARY="$(service_dir_to_binary "$SERVICE_DIR")"
   local BINARY_PATH="${PROJECT_ROOT}/${SERVICE_DIR}/build/${SERVICE_BINARY}"
   local PIDS
 

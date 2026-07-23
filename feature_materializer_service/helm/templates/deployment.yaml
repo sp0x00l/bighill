@@ -163,6 +163,10 @@ spec:
               value: {{ .Values.env.graphExtractionMaxOutputTokens | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_EXTRACTION_MAX_RETRIES
               value: {{ .Values.env.graphExtractionMaxRetries | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_ENTITY_RESOLUTION_THRESHOLD
+              value: {{ .Values.env.graphEntityResolutionThreshold | quote }}
+            - name: FEATURE_MATERIALIZER_SERVICE_GRAPH_COMMUNITY_REPORTS_ENABLED
+              value: {{ .Values.env.graphCommunityReportsEnabled | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_GRPC_ADDRESS
               value: {{ .Values.env.dataStreamGrpcAddress | quote }}
             - name: FEATURE_MATERIALIZER_SERVICE_DATA_STREAM_REQUEST_TIMEOUT_SECONDS

@@ -31,7 +31,7 @@ run_tenant_service_tests() {
     . "$PROJECT_ROOT/shared_lib/scripts/config.sh" "$ENV"
     cd "$PROJECT_ROOT/tenant_service"
     . ./scripts/config.sh "$ENV"
-    stop_service_binary_for_tests "tenant_service" "$PROJECT_ROOT"
+    stop_service "tenant_service"
 
     ginkgo -timeout=300s -r -v -procs=1 -race
 

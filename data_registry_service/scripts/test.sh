@@ -26,7 +26,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/data_registry_service
     . ./scripts/config.sh $1
-    stop_service_binary_for_tests "data_registry_service" "$BIGHILL_ROOT"
+    stop_service "data_registry_service"
     ginkgo -timeout=120s -r -v --output-dir=../test_results/data_registry_service -procs=1 -race
 
     cd $CURRENT_DIR

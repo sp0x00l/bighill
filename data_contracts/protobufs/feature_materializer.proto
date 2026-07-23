@@ -125,6 +125,7 @@ message SearchGraphRequest {
   string query_text = 4;
   int32 top_k = 5;
   int32 max_hops = 6;
+  string mode = 7;
 }
 
 message SearchGraphResponse {
@@ -137,6 +138,8 @@ message SearchGraphResponse {
   repeated GraphMatchedEntity matched_entities = 7;
   repeated GraphPath paths = 8;
   string org_id = 9;
+  string mode = 10;
+  repeated GraphCommunityReport community_reports = 11;
 }
 
 message GraphRetrievedContext {
@@ -163,4 +166,19 @@ message GraphPath {
   repeated string graph_node_ids = 1;
   repeated string relation_types = 2;
   double score = 3;
+}
+
+message GraphCommunityReport {
+  string graph_community_report_id = 1;
+  string graph_community_id = 2;
+  string graph_snapshot_id = 3;
+  string dataset_id = 4;
+  string org_id = 5;
+  string community_key = 6;
+  int32 level = 7;
+  string title = 8;
+  string summary = 9;
+  string report_text = 10;
+  double rank = 11;
+  double score = 12;
 }

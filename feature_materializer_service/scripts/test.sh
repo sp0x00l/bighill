@@ -29,7 +29,7 @@ test()
     . $BIGHILL_ROOT/shared_lib/scripts/config.sh $1
     cd $BIGHILL_ROOT/feature_materializer_service
     . ./scripts/config.sh $1
-    stop_service_binary_for_tests "feature_materializer_service" "$BIGHILL_ROOT"
+    stop_service "feature_materializer_service"
     ginkgo -timeout=120s -r -v --output-dir=../test_results/feature_materializer_service -procs=1 -race
 
     echo "feature materializer service test complete"

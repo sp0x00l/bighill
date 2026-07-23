@@ -2,6 +2,7 @@ ENV ?= local-dev
 ARCH ?= arm64
 START_MODE ?= run
 BUILD_MODE ?= prebuilt
+API_TEST_START_MODE ?= build
 EXCLUDE_SERVICES ?=
 CI_TEST_EXCLUDE_SERVICES ?=
 GO_BIN ?= $(shell go env GOPATH)/bin
@@ -10,7 +11,7 @@ export PATH := $(GO_BIN):$(PATH)
 
 SERVICE_TEST_DIRS := shared_lib socket_service pdf_extractor_lib tenant_service ingestion_service data_registry_service feature_materializer_service data_stream_service inference_service model_registry_service model_serving_service training_service tool_execution_service tool_catalog_service agent_registry_service
 
-.PHONY: install install-dev install-all build-all build-query-engine test test-query-engine test-hf start start-test stop restart start-servers stop-servers stop-services start-infra stop-infra start-data-sources stop-data-sources test-servers test-api test-api-data-sources test-api-w-hf kafka-clean kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka k8s-validate k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
+.PHONY: install install-dev install-all build-all build-query-engine test test-query-engine test-hf test-ollama start start-test stop restart start-servers stop-servers stop-services start-infra stop-infra start-data-sources stop-data-sources test-servers test-api test-api-data-sources test-api-w-hf kafka-clean kafka-restart kafka-error kafka-test docker-build docker-clean docker-start docker-start-intel docker-start-services docker-stop docker-stop-services reinstall-kafka k8s-validate k8s-deploy k8s-deploy-infra k8s-deploy-services k8s-deploy-service
 
 install: install-all
 
@@ -29,10 +30,13 @@ test:
 		echo "==> make test -C $$service"; \
 		$(MAKE) -C $$service test ENV=$(ENV); \
 	done; \
-	$(MAKE) test-api ENV=$(ENV) START_MODE=$(START_MODE) CI_TEST_EXCLUDE_SERVICES="$(CI_TEST_EXCLUDE_SERVICES)"
+	$(MAKE) test-api ENV=$(ENV) API_TEST_START_MODE=$(API_TEST_START_MODE) CI_TEST_EXCLUDE_SERVICES="$(CI_TEST_EXCLUDE_SERVICES)"
 
 test-hf:
 	@$(MAKE) -C "$(CURDIR)/ingestion_service" test-hf ENV=$(ENV)
+
+test-ollama:
+	@$(MAKE) -C "$(CURDIR)/model_serving_service" test-ollama ENV=$(ENV) GGUF="$(GGUF)" OLLAMA_ENDPOINT="$(OLLAMA_ENDPOINT)"
 
 build-query-engine:
 	@$(MAKE) -C data_stream_service/internal/infra/queryengine build
@@ -101,7 +105,7 @@ test-api:
 	cd "$(CURDIR)" && scripts/kafka/kafka-clean-topics.sh $(ENV); \
 	cd "$(CURDIR)" && scripts/kafka/kafka-create-topics.sh $(ENV); \
 	cd "$(CURDIR)" && api_gateway/scripts/check-docker.sh; \
-	cd "$(CURDIR)" && CI_TEST_EXCLUDE_SERVICES="$(CI_TEST_EXCLUDE_SERVICES)" scripts/start-servers.sh $(START_MODE) $(ENV); \
+	cd "$(CURDIR)" && CI_TEST_EXCLUDE_SERVICES="$(CI_TEST_EXCLUDE_SERVICES)" scripts/start-servers.sh $(API_TEST_START_MODE) $(ENV); \
 	cd "$(CURDIR)/api_gateway" && ./scripts/run.sh; \
 	$(MAKE) -C "$(CURDIR)/api_gateway" test ENV=$(ENV)
 
@@ -117,7 +121,7 @@ test-api-data-sources:
 	cd "$(CURDIR)" && scripts/kafka/kafka-clean-topics.sh $(ENV); \
 	cd "$(CURDIR)" && scripts/kafka/kafka-create-topics.sh $(ENV); \
 	cd "$(CURDIR)" && api_gateway/scripts/check-docker.sh; \
-	cd "$(CURDIR)" && CI_TEST_EXCLUDE_SERVICES="$(CI_TEST_EXCLUDE_SERVICES)" scripts/start-servers.sh $(START_MODE) $(ENV); \
+	cd "$(CURDIR)" && CI_TEST_EXCLUDE_SERVICES="$(CI_TEST_EXCLUDE_SERVICES)" scripts/start-servers.sh $(API_TEST_START_MODE) $(ENV); \
 	cd "$(CURDIR)/api_gateway" && ./scripts/run.sh; \
 	cd "$(CURDIR)/api_gateway" && API_GATEWAY_RUN_CORE_TESTS=false API_GATEWAY_RUN_DATASOURCE_TESTS=true $(MAKE) test ENV=$(ENV)
 

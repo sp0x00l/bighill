@@ -248,6 +248,45 @@ CREATE INDEX IF NOT EXISTS index_graph_nodes_dataset_id ON bighill_feature_mater
 CREATE INDEX IF NOT EXISTS index_graph_nodes_org_id ON bighill_feature_materializer_db.graph_nodes(org_id);
 CREATE INDEX IF NOT EXISTS index_graph_nodes_name_type ON bighill_feature_materializer_db.graph_nodes(lower(name), lower(entity_type));
 
+CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_aliases (
+    graph_node_alias_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    graph_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_snapshots(graph_snapshot_id) ON DELETE CASCADE,
+    graph_node_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_nodes(graph_node_id) ON DELETE CASCADE,
+    dataset_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
+    source_entity_key text NOT NULL,
+    alias text NOT NULL,
+    entity_type text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (graph_snapshot_id, graph_node_id, source_entity_key)
+);
+
+CREATE INDEX IF NOT EXISTS index_graph_node_aliases_snapshot_alias_type ON bighill_feature_materializer_db.graph_node_aliases(graph_snapshot_id, lower(alias), lower(entity_type));
+CREATE INDEX IF NOT EXISTS index_graph_node_aliases_org_id ON bighill_feature_materializer_db.graph_node_aliases(org_id);
+
+CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_embeddings (
+    graph_node_embedding_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    graph_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_snapshots(graph_snapshot_id) ON DELETE CASCADE,
+    graph_node_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_nodes(graph_node_id) ON DELETE CASCADE,
+    embedding_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.embedding_snapshots(embedding_snapshot_id) ON DELETE CASCADE,
+    dataset_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
+    embedding_text text NOT NULL,
+    embedding vector NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (graph_node_id, embedding_snapshot_id)
+);
+
+CREATE INDEX IF NOT EXISTS index_graph_node_embeddings_snapshot_id ON bighill_feature_materializer_db.graph_node_embeddings(graph_snapshot_id);
+CREATE INDEX IF NOT EXISTS index_graph_node_embeddings_org_id ON bighill_feature_materializer_db.graph_node_embeddings(org_id);
+-- Graph semantic seeding must use embedding::vector(384), cosine distance, and vector_dims(embedding) = 384 to use this partial ANN index.
+CREATE INDEX IF NOT EXISTS index_graph_node_embeddings_embedding_384_hnsw
+ON bighill_feature_materializer_db.graph_node_embeddings
+USING hnsw ((embedding::vector(384)) vector_cosine_ops)
+WHERE vector_dims(embedding) = 384;
+
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_edges (
     graph_edge_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     graph_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_snapshots(graph_snapshot_id) ON DELETE CASCADE,
@@ -284,6 +323,76 @@ CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_node_chunks (
 CREATE INDEX IF NOT EXISTS index_graph_node_chunks_snapshot_id ON bighill_feature_materializer_db.graph_node_chunks(graph_snapshot_id);
 CREATE INDEX IF NOT EXISTS index_graph_node_chunks_node_id ON bighill_feature_materializer_db.graph_node_chunks(graph_node_id);
 CREATE INDEX IF NOT EXISTS index_graph_node_chunks_org_id ON bighill_feature_materializer_db.graph_node_chunks(org_id);
+
+CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_communities (
+    graph_community_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    graph_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_snapshots(graph_snapshot_id) ON DELETE CASCADE,
+    dataset_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
+    community_key text NOT NULL,
+    algorithm text NOT NULL,
+    community_level integer NOT NULL DEFAULT 0 CHECK (community_level >= 0),
+    title text NOT NULL,
+    summary text NOT NULL DEFAULT '',
+    rank double precision NOT NULL DEFAULT 0 CHECK (rank >= 0),
+    entity_count integer NOT NULL DEFAULT 0 CHECK (entity_count >= 0),
+    edge_count integer NOT NULL DEFAULT 0 CHECK (edge_count >= 0),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (graph_snapshot_id, community_key)
+);
+
+CREATE INDEX IF NOT EXISTS index_graph_communities_snapshot_id ON bighill_feature_materializer_db.graph_communities(graph_snapshot_id);
+CREATE INDEX IF NOT EXISTS index_graph_communities_org_id ON bighill_feature_materializer_db.graph_communities(org_id);
+CREATE INDEX IF NOT EXISTS index_graph_communities_title ON bighill_feature_materializer_db.graph_communities(graph_snapshot_id, lower(title));
+
+CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_community_members (
+    graph_community_member_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    graph_community_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_communities(graph_community_id) ON DELETE CASCADE,
+    graph_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_snapshots(graph_snapshot_id) ON DELETE CASCADE,
+    graph_node_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_nodes(graph_node_id) ON DELETE CASCADE,
+    dataset_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
+    community_key text NOT NULL,
+    entity_key text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (graph_snapshot_id, graph_node_id)
+);
+
+CREATE INDEX IF NOT EXISTS index_graph_community_members_community_id ON bighill_feature_materializer_db.graph_community_members(graph_community_id);
+CREATE INDEX IF NOT EXISTS index_graph_community_members_snapshot_id ON bighill_feature_materializer_db.graph_community_members(graph_snapshot_id);
+CREATE INDEX IF NOT EXISTS index_graph_community_members_org_id ON bighill_feature_materializer_db.graph_community_members(org_id);
+
+CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.graph_community_reports (
+    graph_community_report_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    graph_community_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_communities(graph_community_id) ON DELETE CASCADE,
+    graph_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.graph_snapshots(graph_snapshot_id) ON DELETE CASCADE,
+    embedding_snapshot_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.embedding_snapshots(embedding_snapshot_id) ON DELETE CASCADE,
+    dataset_id uuid NOT NULL,
+    user_id uuid NOT NULL REFERENCES bighill_feature_materializer_db.tenants(id),
+    org_id uuid NOT NULL,
+    community_key text NOT NULL,
+    community_level integer NOT NULL DEFAULT 0 CHECK (community_level >= 0),
+    title text NOT NULL,
+    summary text NOT NULL DEFAULT '',
+    report_text text NOT NULL,
+    rank double precision NOT NULL DEFAULT 0 CHECK (rank >= 0),
+    report_version text NOT NULL,
+    embedding_text text NOT NULL,
+    embedding vector,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (graph_community_id, report_version)
+);
+
+CREATE INDEX IF NOT EXISTS index_graph_community_reports_snapshot_id ON bighill_feature_materializer_db.graph_community_reports(graph_snapshot_id);
+CREATE INDEX IF NOT EXISTS index_graph_community_reports_org_id ON bighill_feature_materializer_db.graph_community_reports(org_id);
+CREATE INDEX IF NOT EXISTS index_graph_community_reports_title ON bighill_feature_materializer_db.graph_community_reports(graph_snapshot_id, lower(title));
+-- Global graph search must use embedding::vector(384), cosine distance, and vector_dims(embedding) = 384 to use this partial ANN index.
+CREATE INDEX IF NOT EXISTS index_graph_community_reports_embedding_384_hnsw
+ON bighill_feature_materializer_db.graph_community_reports
+USING hnsw ((embedding::vector(384)) vector_cosine_ops)
+WHERE vector_dims(embedding) = 384;
 
 CREATE TABLE IF NOT EXISTS bighill_feature_materializer_db.outbox_messages (
     outbox_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -416,6 +525,30 @@ WITH CHECK (
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
 );
 
+ALTER TABLE bighill_feature_materializer_db.graph_node_aliases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_feature_materializer_db.graph_node_aliases FORCE ROW LEVEL SECURITY;
+CREATE POLICY graph_node_aliases_tenant_isolation ON bighill_feature_materializer_db.graph_node_aliases
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_feature_materializer_db.graph_node_embeddings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_feature_materializer_db.graph_node_embeddings FORCE ROW LEVEL SECURITY;
+CREATE POLICY graph_node_embeddings_tenant_isolation ON bighill_feature_materializer_db.graph_node_embeddings
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
 ALTER TABLE bighill_feature_materializer_db.graph_edges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bighill_feature_materializer_db.graph_edges FORCE ROW LEVEL SECURITY;
 CREATE POLICY graph_edges_tenant_isolation ON bighill_feature_materializer_db.graph_edges
@@ -431,6 +564,42 @@ WITH CHECK (
 ALTER TABLE bighill_feature_materializer_db.graph_node_chunks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bighill_feature_materializer_db.graph_node_chunks FORCE ROW LEVEL SECURITY;
 CREATE POLICY graph_node_chunks_tenant_isolation ON bighill_feature_materializer_db.graph_node_chunks
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_feature_materializer_db.graph_communities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_feature_materializer_db.graph_communities FORCE ROW LEVEL SECURITY;
+CREATE POLICY graph_communities_tenant_isolation ON bighill_feature_materializer_db.graph_communities
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_feature_materializer_db.graph_community_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_feature_materializer_db.graph_community_members FORCE ROW LEVEL SECURITY;
+CREATE POLICY graph_community_members_tenant_isolation ON bighill_feature_materializer_db.graph_community_members
+USING (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+)
+WITH CHECK (
+    current_setting('app.system_context', true) = 'true'
+    OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id
+);
+
+ALTER TABLE bighill_feature_materializer_db.graph_community_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bighill_feature_materializer_db.graph_community_reports FORCE ROW LEVEL SECURITY;
+CREATE POLICY graph_community_reports_tenant_isolation ON bighill_feature_materializer_db.graph_community_reports
 USING (
     current_setting('app.system_context', true) = 'true'
     OR NULLIF(current_setting('app.current_org_id', true), '')::uuid = org_id

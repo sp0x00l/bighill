@@ -17,7 +17,7 @@ test()
     . "$BIGHILL_ROOT/shared_lib/scripts/config.sh" "$1"
     cd "$BIGHILL_ROOT/agent_registry_service"
     . ./scripts/config.sh "$1"
-    stop_service_binary_for_tests "agent_registry_service" "$BIGHILL_ROOT"
+    stop_service "agent_registry_service"
     ginkgo -timeout=120s -r -v --output-dir=../test_results/agent_registry_service -procs=1 -race --skip-package=heuristic --label-filter='!heuristic'
     ginkgo -timeout=120s -v --output-dir=../test_results/agent_registry_service/heuristic -procs=1 -race --label-filter='heuristic' ./test/heuristic
 
