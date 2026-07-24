@@ -658,7 +658,7 @@ func expectPromotionDelta(raw string, metric string, expected float64) {
 
 func truncateModelRegistry(ctx context.Context, database *dbconn.Database) error {
 	ctx = ctxutil.WithSystemContext(ctx)
-	for _, table := range []string{"outbox_messages", "published_inference_endpoints", "models", "tenants"} {
+	for _, table := range []string{"outbox_messages", "published_inference_endpoints", "effective_base_versions", "models", "tenants"} {
 		if _, err := database.Pool.Exec(ctx, "DELETE FROM "+database.Name+"."+table); err != nil {
 			return err
 		}

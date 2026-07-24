@@ -18,6 +18,7 @@ import (
 type MockKafkaProducer struct {
 	MessagesMap  map[string][]byte
 	ErrorProduce error
+	DeliveryErr  error
 	mu           sync.Mutex
 }
 
@@ -43,7 +44,7 @@ func NewMockKafkaProducer() *MockKafkaProducer {
 	}
 }
 
-func (m *MockKafkaProducer) Produce(msg *kafka.Message, _ chan kafka.Event) error {
+func (m *MockKafkaProducer) Produce(msg *kafka.Message, deliveryChan chan kafka.Event) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -51,6 +52,16 @@ func (m *MockKafkaProducer) Produce(msg *kafka.Message, _ chan kafka.Event) erro
 		return m.ErrorProduce
 	}
 	m.MessagesMap[string(*msg.TopicPartition.Topic)] = msg.Value
+	if deliveryChan != nil {
+		deliveryChan <- &kafka.Message{
+			TopicPartition: kafka.TopicPartition{
+				Topic:     msg.TopicPartition.Topic,
+				Partition: 0,
+				Offset:    1,
+				Error:     m.DeliveryErr,
+			},
+		}
+	}
 
 	return nil
 }
@@ -115,6 +126,20 @@ var _ = Describe("Kafka Publisher", func() {
 		It("should still succeed with outbox enabled", func() {
 			err := publisher.Publish(ctx, topic, message, nil)
 			Expect(err).To(BeNil())
+		})
+	})
+
+	Context("when direct kafka delivery fails asynchronously", func() {
+		It("returns the delivery error instead of reporting the publish as successful", func() {
+			directPublisher, err := messaging.NewPublisher("test-brokers", messaging.WithProducer(mockKafkaProducer))
+			Expect(err).NotTo(HaveOccurred())
+			mockKafkaProducer.DeliveryErr = kafka.NewError(kafka.ErrAllBrokersDown, "broker down", false)
+
+			err = directPublisher.Publish(ctx, topic, message, nil)
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("delivery"))
+			Expect(err.Error()).To(ContainSubstring("broker down"))
 		})
 	})
 

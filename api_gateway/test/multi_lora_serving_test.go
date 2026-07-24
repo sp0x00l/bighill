@@ -34,6 +34,7 @@ var _ = Describe("Multi-LoRA serving heuristic control plane", Label("heuristic"
 
 	It("serves a tenant-owned base model before adapter loading", func() {
 		endpointID := waitForPublishedEndpoint(user.Token, "rag-e2e-uploaded-base")
+		configureEndpointMergeStrategy(user.Token, endpointID, "score_normalized")
 
 		var response map[string]any
 		var lastErr error
@@ -122,6 +123,16 @@ var _ = Describe("Multi-LoRA serving heuristic control plane", Label("heuristic"
 		Expect(status).To(BeElementOf(http.StatusForbidden, http.StatusNotFound), "body: %s", string(body))
 	})
 })
+
+func configureEndpointMergeStrategy(token string, endpointID uuid.UUID, mergeStrategy string) {
+	status, body := doJSON(http.MethodPut, "/v1/private/inference/endpoints/"+endpointID.String()+"/merge-strategy", map[string]any{
+		"merge_strategy": mergeStrategy,
+	}, token, uuid.New())
+	Expect(status).To(Equal(http.StatusOK), "body: %s", string(body))
+	endpoint := decodeSingleObject(body)
+	Expect(endpoint["endpoint_id"]).To(Equal(endpointID.String()))
+	Expect(endpoint["merge_strategy"]).To(Equal(mergeStrategy))
+}
 
 func uploadPEFTAdapterThroughIngestion(user profileTestUser, datasetID string, baseModel string, name string, version string) uuid.UUID {
 	archive := minimalPEFTAdapterArchive(16)

@@ -1467,7 +1467,7 @@ func (u *inferenceUsecase) upsertEndpointProjection(ctx context.Context, inferen
 	if err != nil {
 		return err
 	}
-	_, err = u.endpointRepository.UpsertEndpoint(ctx, &model.PublishedEndpoint{
+	_, err = u.endpointRepository.UpsertEndpointProjection(ctx, &model.PublishedEndpoint{
 		OrgID:           inferenceModel.OrgID,
 		ModelID:         inferenceModel.ModelID,
 		Mode:            model.AgentEndpointModeRAG,

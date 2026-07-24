@@ -40,17 +40,13 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		httpServer          *transport.HttpServer
 		dtoProfileAdapter   rest.ProfilesDTOAdapter
 		database            *dbConn.Database
-		messagingFactory    msgConn.Messenger
 		kafkaPublisherTopic string
 		redisClient         rueidis.Client
 
 		port    int
 		baseURL string
 
-		ctx                context.Context
-		cancelCtxPublisher context.Context
-		cancelFtnPublisher context.CancelFunc
-		relayDone          chan struct{}
+		ctx context.Context
 
 		// Test data
 		email       string
@@ -65,7 +61,6 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 		kafkaPublisherTopic = env.WithDefaultString("TENANT_SERVICE_KAFKA_PUBLISHER_TOPIC", "tenant")
 
 		ctx = context.Background()
-		purgeTopic(ctx, "localhost:9092", kafkaPublisherTopic)
 
 		dbConfig := dbConn.DatabaseConfig{}
 		dbConfig.WithDbName("TENANT_SERVICE_DB_NAME", "bighill_tenant_db")
@@ -88,41 +83,11 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 	BeforeEach(func() {
 		port = freeProfileIntegrationPort()
 		baseURL = fmt.Sprintf("http://localhost:%d", port)
-		cancelCtxPublisher, cancelFtnPublisher = context.WithCancel(context.Background())
-		groupID := "profile-login-test-" + uuid.New().String()
-		messagingFactory = msgConn.NewMessenger(msgConn.MessengerConfig{
-			DlqURL:  "http://localhost:4566/tenant-dev-env-queue/",
-			GroupID: groupID,
-			Brokers: "localhost:9092",
-		}, cancelFtnPublisher)
-
-		msgPublisher, err := messagingFactory.Publisher(cancelCtxPublisher)
-		Expect(err).ShouldNot(HaveOccurred())
 		outboxWriter, err := msgConn.NewPostgresOutbox(database.Pool, database.Name, "")
 		Expect(err).ShouldNot(HaveOccurred())
 		orderedOutbox, ok := outboxWriter.(msgConn.OrderedOutbox)
 		Expect(ok).To(BeTrue())
 		outboxSignal := make(chan struct{}, 1)
-		signaledOutbox := msgConn.NewSignaledOutbox(outboxWriter, outboxSignal)
-		relayOutbox, ok := signaledOutbox.(msgConn.RelayOutbox)
-		Expect(ok).To(BeTrue())
-		relayPublisher, ok := msgPublisher.(msgConn.RelayPublisher)
-		Expect(ok).To(BeTrue())
-		relay := msgConn.NewOutboxRelay(relayOutbox, relayPublisher, msgConn.OutboxRelayConfig{
-			PollInterval:   25 * time.Millisecond,
-			FailureBackoff: 25 * time.Millisecond,
-			BatchSize:      10,
-			Signal:         outboxSignal,
-		})
-		relayDone = make(chan struct{})
-		go func() {
-			defer GinkgoRecover()
-			defer close(relayDone)
-			err := relay.Run(cancelCtxPublisher)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				Fail(fmt.Sprintf("profile outbox relay failed: %v", err))
-			}
-		}()
 		profileUnitOfWork := shareduow.New(database.Pool,
 			shareduow.WithTransactionalOutbox(orderedOutbox),
 			shareduow.WithOutboxSignal(func() { msgConn.NotifyOutboxSignal(outboxSignal) }),
@@ -183,12 +148,6 @@ var _ = Describe("Login/Logout Integration Tests", Ordered, func() {
 	AfterEach(func() {
 		if httpServer != nil {
 			httpServer.Close()
-		}
-		if cancelFtnPublisher != nil {
-			cancelFtnPublisher()
-		}
-		if relayDone != nil {
-			Eventually(relayDone, 5*time.Second).Should(BeClosed())
 		}
 		if redisClient != nil {
 			redisClient.Close()

@@ -74,6 +74,62 @@ func (r *PublishedEndpointRepository) UpsertEndpoint(ctx context.Context, endpoi
 	return record, nil
 }
 
+func (r *PublishedEndpointRepository) UpsertEndpointProjection(ctx context.Context, endpoint *model.PublishedEndpoint) (*model.PublishedEndpoint, error) {
+	log.Trace("PublishedEndpointRepository UpsertEndpointProjection")
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin published endpoint projection transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	insertQuery := `INSERT INTO ` + r.Name + `.published_inference_endpoints (
+		org_id, model_id, mode, agent_spec_id, agent_spec_hash, status, rag_merge_strategy, display_name, created_by_user_id
+	) VALUES (
+		@org_id, @model_id, @mode::agent_endpoint_mode_enum, @agent_spec_id, @agent_spec_hash, @status, @rag_merge_strategy, @display_name, @created_by_user_id
+	)
+	ON CONFLICT (org_id, model_id) DO NOTHING
+	RETURNING endpoint_id::text`
+
+	args := endpointArgs(endpoint)
+	var endpointIDText string
+	err = tx.QueryRow(ctx, insertQuery, args).Scan(&endpointIDText)
+	inserted := true
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			if coreDB.IsForeignKeyViolation(err) {
+				return nil, domain.ErrValidationFailed.Extend("tenant projection is not ready")
+			}
+			return nil, fmt.Errorf("insert published endpoint projection: %w", err)
+		}
+		inserted = false
+		updateQuery := `UPDATE ` + r.Name + `.published_inference_endpoints
+			SET status = @status
+			WHERE org_id = @org_id AND model_id = @model_id
+			RETURNING endpoint_id::text`
+		if err := tx.QueryRow(ctx, updateQuery, args).Scan(&endpointIDText); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, domain.ErrModelNotFound
+			}
+			return nil, fmt.Errorf("update published endpoint projection: %w", err)
+		}
+	}
+	endpointID := uuid.MustParse(endpointIDText)
+	if inserted && endpoint.DatasetIDs != nil {
+		if err := replaceEndpointDatasets(ctx, tx, r.Name, endpointID, endpoint.DatasetIDs); err != nil {
+			return nil, err
+		}
+	}
+	record, err := readEndpointTx(ctx, tx, r.Name, endpoint.OrgID, endpointID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit published endpoint projection transaction: %w", err)
+	}
+	return record, nil
+}
+
 func (r *PublishedEndpointRepository) SetEndpointDatasets(ctx context.Context, orgID uuid.UUID, endpointID uuid.UUID, datasetIDs []uuid.UUID) (*model.PublishedEndpoint, error) {
 	log.Trace("PublishedEndpointRepository SetEndpointDatasets")
 

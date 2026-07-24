@@ -25,9 +25,12 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/rueidis"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/protobuf/proto"
 
 	dbConn "lib/shared_lib/db"
 	env "lib/shared_lib/env"
@@ -148,7 +151,6 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 
 		dtoProfileAdapter rest.ProfilesDTOAdapter
 
-		messagingFactory    msgConn.Messenger
 		kafkaPublisherTopic string
 
 		port        int
@@ -157,10 +159,7 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 		request     *http.Request
 		redisClient rueidis.Client
 
-		ctx                context.Context
-		cancelCtxPublisher context.Context
-		cancelFtnPublisher context.CancelFunc
-		relayDone          chan struct{}
+		ctx context.Context
 
 		userIDSuccssful uuid.UUID
 		phoneSuccessful string
@@ -172,7 +171,6 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			kafkaPublisherTopic = env.WithDefaultString("TENANT_SERVICE_KAFKA_PUBLISHER_TOPIC", "tenant")
 
 			ctx = context.Background()
-			purgeTopic(ctx, "localhost:9092", kafkaPublisherTopic)
 
 			dbConfig := dbConn.DatabaseConfig{}
 			dbConfig.WithDbName("TENANT_SERVICE_DB_NAME", "bighill_tenant_db")
@@ -192,42 +190,11 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 
 		BeforeEach(func() {
 			port = freeProfileIntegrationPort()
-			cancelCtxPublisher, cancelFtnPublisher = context.WithCancel(context.Background())
-			groupID := "tenant-group" + uuid.New().String()
-			messagingFactory = msgConn.NewMessenger(msgConn.MessengerConfig{
-				DlqURL:  "http://localhost:4566/tenant-dev-env-queue/",
-				GroupID: groupID,
-				Brokers: "localhost:9092",
-			}, cancelFtnPublisher)
-
-			msgPublisher, err := messagingFactory.Publisher(cancelCtxPublisher)
-			Expect(err).ShouldNot(HaveOccurred())
 			outboxWriter, err := msgConn.NewPostgresOutbox(database.Pool, database.Name, "")
 			Expect(err).ShouldNot(HaveOccurred())
 			orderedOutbox, ok := outboxWriter.(msgConn.OrderedOutbox)
 			Expect(ok).To(BeTrue())
 			outboxSignal := make(chan struct{}, 1)
-			signaledOutbox := msgConn.NewSignaledOutbox(outboxWriter, outboxSignal)
-			relayOutbox, ok := signaledOutbox.(msgConn.RelayOutbox)
-			Expect(ok).To(BeTrue())
-			relayPublisher, ok := msgPublisher.(msgConn.RelayPublisher)
-			Expect(ok).To(BeTrue())
-			relayConfig := msgConn.OutboxRelayConfig{
-				PollInterval:   25 * time.Millisecond,
-				FailureBackoff: 25 * time.Millisecond,
-				BatchSize:      10,
-				Signal:         outboxSignal,
-			}
-			relay := msgConn.NewOutboxRelay(relayOutbox, relayPublisher, relayConfig)
-			relayDone = make(chan struct{})
-			go func() {
-				defer GinkgoRecover()
-				defer close(relayDone)
-				err := relay.Run(cancelCtxPublisher)
-				if err != nil && !errors.Is(err, context.Canceled) {
-					Fail(fmt.Sprintf("profile outbox relay failed: %v", err))
-				}
-			}()
 			profileUnitOfWork := shareduow.New(database.Pool,
 				shareduow.WithTransactionalOutbox(orderedOutbox),
 				shareduow.WithOutboxSignal(func() { msgConn.NotifyOutboxSignal(outboxSignal) }),
@@ -293,10 +260,6 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 		})
 
 		AfterEach(func() {
-			cancelFtnPublisher()
-			if relayDone != nil {
-				Eventually(relayDone, 5*time.Second).Should(BeClosed())
-			}
 			if httpServer != nil {
 				httpServer.Close()
 			}
@@ -327,19 +290,6 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			})
 
 			It("creates a new profile without error, returning a 201-StatusCode", func() {
-				msgSubscriber, err := messagingFactory.Subscriber(ctx)
-				Expect(err).ShouldNot(HaveOccurred())
-
-				listener := &userCreatedEventListener{}
-				msgConn.AddListener(msgSubscriber, listener)
-
-				cancelCtxSubscriber, cancelFtnSubscriber := context.WithCancel(context.Background())
-				defer cancelFtnSubscriber()
-				startSubscriberOrFail(cancelCtxSubscriber, "profile-assert", func(ctx context.Context) error {
-					return msgSubscriber.Subscribe(ctx, []string{kafkaPublisherTopic})
-				})
-				waitForSubscriberAssignment(ctx, msgSubscriber)
-
 				response, err := http.DefaultClient.Do(request)
 				Expect(err).ShouldNot(HaveOccurred())
 				defer response.Body.Close()
@@ -367,13 +317,11 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 				emailSuccessful = email
 
 				Eventually(func() error {
-					listener.mu.Lock()
-					defer listener.mu.Unlock()
-					payload, ok := listener.payloads[userIDSuccssful]
-					if !ok {
-						return errors.New("user created event not seen yet")
+					payload := &profileeventpb.UserCreatedEvent{}
+					if err := readProfileOutboxEvent(ctx, database, kafkaPublisherTopic, msgConn.MsgTypeUserCreated, userIDSuccssful, payload); err != nil {
+						return err
 					}
-					if payload == nil || payload.UserId != userIDSuccssful.String() {
+					if payload.UserId != userIDSuccssful.String() {
 						return fmt.Errorf("unexpected payload: %#v", payload)
 					}
 					if payload.Email != email {
@@ -392,10 +340,9 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 					if verified {
 						return fmt.Errorf("unexpected verified email flag on create event")
 					}
-					cancelFtnSubscriber()
 
 					return nil
-				}, 15*time.Second, 50*time.Millisecond).Should(Succeed())
+				}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
 			})
 
 			It("returns a 400 BadRequest when the request is missing a header", func() {
@@ -681,9 +628,6 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			})
 
 			It("publishes a user updated event after verification", func() {
-				updatedListener, cancelUpdated := newUserUpdatedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-				defer cancelUpdated()
-
 				email := fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0])
 				profileID := createProfileAccount(port, newProfileAccountDTO(email, uniqueGBPhone()))
 				verifyToken := stagingEmailVerifyToken(email)
@@ -700,16 +644,20 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 				Expect(verifyResp.StatusCode).To(Equal(http.StatusNoContent))
 				verifyResp.Body.Close()
 
-				Eventually(func() bool {
-					updatedListener.mu.Lock()
-					defer updatedListener.mu.Unlock()
-					payload, ok := updatedListener.payloads[profileID]
-					if !ok || payload == nil {
-						return false
+				Eventually(func() error {
+					payload := &profileeventpb.UserUpdatedEvent{}
+					if err := readProfileOutboxEvent(ctx, database, kafkaPublisherTopic, msgConn.MsgTypeUserUpdated, profileID, payload); err != nil {
+						return err
 					}
 					verified, err := msgConn.EmailVerificationStatusFromProfileEventProto("user updated", payload.EmailVerificationStatus)
-					return err == nil && verified
-				}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+					if err != nil {
+						return err
+					}
+					if !verified {
+						return fmt.Errorf("expected user updated event to mark email verified")
+					}
+					return nil
+				}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
 			})
 
 			It("returns 404 for an invalid token and leaves the profile unverified", func() {
@@ -811,9 +759,6 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 			})
 
 			It("publishes a user deleted event", func() {
-				deletedListener, cancelDeleted := newUserDeletedEventCapture(ctx, messagingFactory, kafkaPublisherTopic)
-				defer cancelDeleted()
-
 				profileID := createProfileAccount(port, newProfileAccountDTO(fmt.Sprintf("%s@test.com", strings.Split(uuid.New().String(), "-")[0]), uniqueGBPhone()))
 
 				req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("http://localhost:%d/private/v1/profiles", port), nil)
@@ -824,11 +769,16 @@ var _ = Describe("Profile server entry points", Ordered, func() {
 				Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
 				resp.Body.Close()
 
-				Eventually(func() bool {
-					deletedListener.mu.Lock()
-					defer deletedListener.mu.Unlock()
-					return deletedListener.deleted[profileID]
-				}, 5*time.Second, 50*time.Millisecond).Should(BeTrue())
+				Eventually(func() error {
+					payload := &profileeventpb.UserDeletedEvent{}
+					if err := readProfileOutboxEvent(ctx, database, kafkaPublisherTopic, msgConn.MsgTypeUserDeleted, profileID, payload); err != nil {
+						return err
+					}
+					if payload.GetUserId() != profileID.String() {
+						return fmt.Errorf("unexpected user deleted event payload: %#v", payload)
+					}
+					return nil
+				}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
 			})
 
 			It("allows recreating a deleted profile with the same email", func() {
@@ -976,6 +926,42 @@ func waitForSubscriberAssignment(ctx context.Context, subscriber msgConn.Subscri
 			MaxPollSilence:    2 * time.Second,
 		})
 	}, 30*time.Second, 50*time.Millisecond).Should(Succeed())
+}
+
+func readProfileOutboxEvent(ctx context.Context, database *dbConn.Database, topic string, msgType msgConn.MsgType, resourceKey uuid.UUID, payload proto.Message) error {
+	query := fmt.Sprintf(`
+		SELECT payload
+		FROM %s.outbox_messages
+		WHERE topic = @topic
+		  AND event_type = @event_type
+		  AND resource_key = @resource_key
+		ORDER BY created_at DESC
+		LIMIT 1`, database.Name)
+
+	var envelopeBytes []byte
+	err := database.Pool.QueryRow(ctx, query, pgx.NamedArgs{
+		"topic":        topic,
+		"event_type":   msgType.String(),
+		"resource_key": pgtype.UUID{Bytes: resourceKey, Valid: true},
+	}).Scan(&envelopeBytes)
+	if err != nil {
+		return fmt.Errorf("read profile outbox event: %w", err)
+	}
+
+	var envelope msgConn.Message
+	if err := envelope.Deserialize(ctx, envelopeBytes); err != nil {
+		return fmt.Errorf("decode profile outbox envelope: %w", err)
+	}
+	if envelope.MsgType != msgType {
+		return fmt.Errorf("unexpected outbox event type: got %s want %s", envelope.MsgType.String(), msgType.String())
+	}
+	if envelope.ResourceKey != resourceKey {
+		return fmt.Errorf("unexpected outbox resource key: got %s want %s", envelope.ResourceKey, resourceKey)
+	}
+	if err := proto.Unmarshal(envelope.Payload, payload); err != nil {
+		return fmt.Errorf("decode profile outbox payload: %w", err)
+	}
+	return nil
 }
 
 func createProfileAccount(port int, profileAccount map[string]any) uuid.UUID {

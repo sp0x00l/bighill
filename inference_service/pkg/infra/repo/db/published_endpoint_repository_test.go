@@ -85,6 +85,60 @@ var _ = Describe("PublishedEndpointRepository", func() {
 		})
 	})
 
+	Describe("UpsertEndpointProjection", func() {
+		It("inserts an implicit endpoint and dataset bindings when no endpoint exists", func() {
+			pool.nextRows = []pgx.Row{
+				&repositoryRow{values: []any{endpoint.EndpointID.String()}},
+				publishedEndpointRow(endpoint),
+			}
+
+			record, err := repository.UpsertEndpointProjection(ctx, endpoint)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(record).To(Equal(endpoint))
+			Expect(pool.commitCalled).To(BeTrue())
+			Expect(pool.queries[0]).To(ContainSubstring("ON CONFLICT (org_id, model_id) DO NOTHING"))
+			Expect(pool.queries[1]).To(ContainSubstring("DELETE FROM test_db.published_endpoint_datasets"))
+			Expect(pool.queries[2]).To(ContainSubstring("INSERT INTO test_db.published_endpoint_datasets"))
+			Expect(pool.queries[4]).To(ContainSubstring("FROM test_db.published_inference_endpoints endpoint"))
+		})
+
+		It("updates readiness without overwriting user-owned endpoint configuration", func() {
+			configured := *endpoint
+			configured.Mode = model.AgentEndpointModeRAG
+			configured.AgentSpecID = uuid.Nil
+			configured.AgentSpecHash = ""
+			configured.MergeStrategy = model.RAGMergeStrategyScoreNormalized
+			configured.DisplayName = "User configured RAG endpoint"
+			updated := configured
+			updated.Status = model.PublishedEndpointStatusDisabled
+			projection := configured
+			projection.Mode = model.AgentEndpointModeRAG
+			projection.MergeStrategy = model.RAGMergeStrategyReranker
+			projection.Status = model.PublishedEndpointStatusDisabled
+			projection.DisplayName = "Projected model name"
+			projection.DatasetIDs = []uuid.UUID{uuid.New()}
+			pool.nextRows = []pgx.Row{
+				&repositoryRow{err: pgx.ErrNoRows},
+				&repositoryRow{values: []any{configured.EndpointID.String()}},
+				publishedEndpointRow(&updated),
+			}
+
+			record, err := repository.UpsertEndpointProjection(ctx, &projection)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(record.MergeStrategy).To(Equal(model.RAGMergeStrategyScoreNormalized))
+			Expect(record.DisplayName).To(Equal("User configured RAG endpoint"))
+			Expect(record.DatasetIDs).To(Equal(configured.DatasetIDs))
+			Expect(record.Status).To(Equal(model.PublishedEndpointStatusDisabled))
+			Expect(pool.commitCalled).To(BeTrue())
+			Expect(pool.execCalled).To(BeFalse())
+			Expect(pool.queries[1]).To(ContainSubstring("SET status = @status"))
+			Expect(pool.queries[1]).NotTo(ContainSubstring("rag_merge_strategy"))
+			Expect(pool.queries[1]).NotTo(ContainSubstring("display_name"))
+		})
+	})
+
 	Describe("SetEndpointDatasets", func() {
 		It("rejects nil dataset ids after verifying the endpoint exists", func() {
 			pool.nextRows = []pgx.Row{publishedEndpointRow(endpoint)}

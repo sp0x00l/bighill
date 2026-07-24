@@ -511,17 +511,26 @@ func (s *agentSpecRepositoryStub) ReadAgentSpecByHash(_ context.Context, orgID u
 }
 
 type publishedEndpointRepositoryStub struct {
-	endpoint       *model.PublishedEndpoint
-	upserted       *model.PublishedEndpoint
-	championUpdate model.AgentChampionUpdate
-	datasetIDs     []uuid.UUID
-	readOrgID      uuid.UUID
-	readEndpointID uuid.UUID
-	err            error
+	endpoint           *model.PublishedEndpoint
+	upserted           *model.PublishedEndpoint
+	projectionUpserted *model.PublishedEndpoint
+	championUpdate     model.AgentChampionUpdate
+	datasetIDs         []uuid.UUID
+	readOrgID          uuid.UUID
+	readEndpointID     uuid.UUID
+	err                error
 }
 
 func (s *publishedEndpointRepositoryStub) UpsertEndpoint(_ context.Context, endpoint *model.PublishedEndpoint) (*model.PublishedEndpoint, error) {
 	s.upserted = endpoint
+	if s.err != nil {
+		return nil, s.err
+	}
+	return endpoint, nil
+}
+
+func (s *publishedEndpointRepositoryStub) UpsertEndpointProjection(_ context.Context, endpoint *model.PublishedEndpoint) (*model.PublishedEndpoint, error) {
+	s.projectionUpserted = endpoint
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -708,12 +717,31 @@ var _ = Describe("InferenceUsecase", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(recorded.ModelID).To(Equal(repository.upsertedModel.ModelID))
 		Expect(repository.idempotencyKey).To(Equal(idempotencyKey))
-		Expect(endpointRepository.upserted).NotTo(BeNil())
-		Expect(endpointRepository.upserted.OrgID).To(Equal(inferenceModel.OrgID))
-		Expect(endpointRepository.upserted.ModelID).To(Equal(inferenceModel.ModelID))
-		Expect(endpointRepository.upserted.DatasetIDs).To(Equal([]uuid.UUID{inferenceModel.DatasetID}))
-		Expect(endpointRepository.upserted.Status).To(Equal(model.PublishedEndpointStatusReady))
+		Expect(endpointRepository.upserted).To(BeNil())
+		Expect(endpointRepository.projectionUpserted).NotTo(BeNil())
+		Expect(endpointRepository.projectionUpserted.OrgID).To(Equal(inferenceModel.OrgID))
+		Expect(endpointRepository.projectionUpserted.ModelID).To(Equal(inferenceModel.ModelID))
+		Expect(endpointRepository.projectionUpserted.DatasetIDs).To(Equal([]uuid.UUID{inferenceModel.DatasetID}))
+		Expect(endpointRepository.projectionUpserted.Status).To(Equal(model.PublishedEndpointStatusReady))
 		Expect(capabilityRepository.recorded).To(BeNil())
+	})
+
+	It("uses the projection endpoint upsert for model status projections", func() {
+		repository := &inferenceModelRepositoryStub{}
+		endpointRepository := &publishedEndpointRepositoryStub{}
+		uc := app.NewInferenceUsecase(
+			repository,
+			app.WithPublishedEndpointRepository(endpointRepository),
+			app.WithDefaultRAGMergeStrategy(model.RAGMergeStrategyReranker),
+		)
+		inferenceModel := validInferenceModel()
+
+		_, err := uc.RecordModelUpdated(context.Background(), inferenceModel, uuid.New())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(endpointRepository.upserted).To(BeNil())
+		Expect(endpointRepository.projectionUpserted).NotTo(BeNil())
+		Expect(endpointRepository.projectionUpserted.MergeStrategy).To(Equal(model.RAGMergeStrategyReranker))
 	})
 
 	It("does not fabricate capability reports during model projection", func() {

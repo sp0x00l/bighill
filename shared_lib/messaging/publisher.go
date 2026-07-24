@@ -167,18 +167,19 @@ func (pc *publisher) publishRaw(ctx context.Context, topic string, payload []byt
 		Headers:        headers,
 	}
 
-	errProduce := pc.publishWithRetry(kafkaMsg)
+	deliveryChan := make(chan kafka.Event, 1)
+	errProduce := pc.publishWithRetry(kafkaMsg, deliveryChan)
 	if errProduce != nil {
 		log.WithContext(ctx).WithError(errProduce).Errorf("failed raw publish to topic: %s", topic)
 		return errProduce
 	}
-	return nil
+	return pc.waitForDelivery(ctx, deliveryChan)
 }
 
-func (pc *publisher) publishWithRetry(kafkaMsg *kafka.Message) error {
+func (pc *publisher) publishWithRetry(kafkaMsg *kafka.Message, deliveryChan chan kafka.Event) error {
 	var lastErr error
 	for attempt := 0; attempt <= queueFullMaxRetries; attempt++ {
-		errProduce := pc.Producer.Produce(kafkaMsg, nil)
+		errProduce := pc.Producer.Produce(kafkaMsg, deliveryChan)
 		if errProduce == nil {
 			return nil
 		}
@@ -189,6 +190,27 @@ func (pc *publisher) publishWithRetry(kafkaMsg *kafka.Message) error {
 		time.Sleep(time.Duration(25*(attempt+1)) * time.Millisecond)
 	}
 	return lastErr
+}
+
+func (pc *publisher) waitForDelivery(ctx context.Context, deliveryChan <-chan kafka.Event) error {
+	timer := time.NewTimer(time.Duration(timeoutMillisecond) * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return kafka.NewError(kafka.ErrTimedOut, "delivery report timed out", false)
+	case event := <-deliveryChan:
+		message, ok := event.(*kafka.Message)
+		if !ok {
+			return fmt.Errorf("unexpected kafka delivery event %T", event)
+		}
+		if message.TopicPartition.Error != nil {
+			return fmt.Errorf("kafka delivery failed: %w", message.TopicPartition.Error)
+		}
+		return nil
+	}
 }
 
 func isQueueFullError(err error) bool {
